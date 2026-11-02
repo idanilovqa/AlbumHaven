@@ -431,3 +431,71 @@ async def account_capture_history(request: Request):
         return _error(error.code,error.status)
     except Exception:
         return _error('capture_unavailable',503)
+
+
+
+def _rate_enabled(request):
+    config = _position_enabled(request)
+    if config.get('ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED') is not True:
+        raise CaptureError('capture_unavailable', 503)
+    return config
+
+
+async def _rate_capture_transport(request, *, checkpoint):
+    """Isolated native protocol; a failure never dispatches to legacy storage."""
+    from music_app.services.playback_rate_evidence import PROTOCOL as RATE_PROTOCOL
+    from music_app.services.playback_rate_capture_postgres import parse_rate_capture_body, record_rate_checkpoint
+    from music_app.services.playback_rate_observation import check_rate_capture_context
+    try:
+        context, constraints, database_url, scope = await _authority(request)
+        config = _rate_enabled(request)
+        if request.query_params:
+            raise CaptureError()
+        if checkpoint:
+            supplied = request.headers.getlist('x-playback-capture-scope')
+            if (len(supplied) != 1 or not supplied[0].isascii()
+                    or not hmac.compare_digest(supplied[0], scope)):
+                raise CaptureError('capture_scope_changed', 409)
+            body = bytearray()
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > BODY_LIMIT:
+                    raise CaptureError('capture_too_large', 413)
+                body.extend(chunk)
+            envelope = parse_rate_capture_body(body)
+            result = await run_in_threadpool(record_rate_checkpoint,
+                database_url, context, envelope, expected_scope=scope,
+                constraints=constraints,
+                enabled=lambda: _rate_enabled(request) is not None)
+        else:
+            async for chunk in request.stream():
+                if chunk:
+                    raise CaptureError()
+            selections = await run_in_threadpool(check_rate_capture_context,
+                database_url, context, constraints=constraints,
+                selections=config.get('ALBUM_HAVEN_LISTENING_SELECTIONS_ENABLED') is True)
+            result = dict(ok=True, protocol=RATE_PROTOCOL, expected_scope=scope,
+                native_rate_capture_available=True,
+                listening_selections_available=selections)
+        _rate_enabled(request)
+        _context, _constraints, _url, fresh_scope = await _authority(request)
+        if fresh_scope != scope:
+            raise CaptureError('capture_scope_changed', 409)
+        return JSONResponse(result, headers=_HEADERS)
+    except HTTPException as error:
+        return _error('authentication_required' if error.status_code == 401 else 'capture_forbidden', error.status_code)
+    except PrivateLibraryAuthorityError:
+        return _error('capture_forbidden', 403)
+    except CaptureError as error:
+        return _error(error.code, error.status)
+    except Exception:
+        return _error('capture_unavailable', 503)
+
+
+@router.get('/playback/capture/rate/context')
+async def playback_rate_context(request: Request):
+    return await _rate_capture_transport(request, checkpoint=False)
+
+
+@router.post('/playback/capture/rate/checkpoint')
+async def playback_rate_checkpoint(request: Request):
+    return await _rate_capture_transport(request, checkpoint=True)

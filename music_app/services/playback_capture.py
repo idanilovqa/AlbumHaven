@@ -11,7 +11,8 @@ from uuid import UUID
 
 PROTOCOL = 'app-rendered-position-v1'
 POSITION_PROTOCOL = 'app-rendered-position-v2'
-SUPPORTED_PROTOCOLS = (PROTOCOL, POSITION_PROTOCOL)
+NATIVE_POSITION_PROTOCOL = 'app-rendered-position-v3'
+SUPPORTED_PROTOCOLS = (PROTOCOL, POSITION_PROTOCOL, NATIVE_POSITION_PROTOCOL)
 MAX_INTEGER = 9_007_199_254_740_991
 BODY_LIMIT = 32_768
 MAX_TRACK_PATH_CHARACTERS = 32_768
@@ -96,6 +97,27 @@ def _run(value, *, protocol=PROTOCOL):
     return result
 
 
+def _native_run(value):
+    """Native-rate assertions only; an observation UUID is not decoder proof."""
+    counters = ('decoded_start_frame', 'frames', 'output_start_frame',
+                'ordinal_start_frame', 'epoch', 'binding_serial', 'generation',
+                'stream_id', 'continuity_serial')
+    _object(value, counters + ('observation_ref', 'anchor_before', 'anchor_after', 'quality'))
+    starts = ('decoded_start_frame', 'output_start_frame', 'ordinal_start_frame')
+    result = {key: _integer(value[key], 0 if key in starts else 1) for key in counters}
+    for key in starts:
+        _integer(result[key] + result['frames'])
+    result['observation_ref'] = _uuid(value['observation_ref'])
+    if UUID(result['observation_ref']).int == 0:
+        raise CaptureError()
+    result.update({key: _anchor_ref(value[key], result['epoch'])
+                   for key in ('anchor_before', 'anchor_after')})
+    result['quality'] = _quality(value['quality'])
+    if result['quality'] == 'bounded' and (result['anchor_before'] is None or result['anchor_after'] is None):
+        raise CaptureError()
+    return result
+
+
 def _anchor(value):
     keys = ('epoch', 'probe_id', 'output_frame', 'utc_lower_ms', 'utc_upper_ms',
             'monotonic_probe_span_ms', 'max_quantum_frames', 'quality')
@@ -129,21 +151,25 @@ def _gap(value):
     return result
 
 
-def _validate_position_lineage(runs):
-    """Reject contradictions visible within one bounded v2 envelope.
+def _validate_position_lineage(runs, *, protocol=POSITION_PROTOCOL):
+    """Reject contradictions visible within one bounded position envelope.
 
     This is not cross-parent/session validation and does not certify continuity.
     Missing intervals can contain another track parent's evidence. Aggregate loss
     envelopes are not exact missing ranges and must not be expanded or filled.
     """
+    native = protocol == NATIVE_POSITION_PROTOCOL
+    ordinal_key = 'ordinal_start_frame' if native else 'ordinal_start'
+    output_key = 'output_start_frame' if native else 'output_start'
+    identity_key = 'observation_ref' if native else 'source_base48'
     bindings = {}
     before = None
     for run in runs:
-        lineage = (run['generation'], run['stream_id'], run['source_base48'])
+        lineage = (run['generation'], run['stream_id'], run[identity_key])
         serial = run['binding_serial']
         # Serial starts at one and advances at most once per captured positive
         # frame, never for uncaptured frames or barriers alone.
-        if run['continuity_serial'] > run['ordinal_start'] + 1:
+        if run['continuity_serial'] > run[ordinal_key] + 1:
             raise CaptureError()
         if serial in bindings and bindings[serial] != lineage:
             raise CaptureError()
@@ -155,14 +181,14 @@ def _validate_position_lineage(runs):
                 raise CaptureError()
             if run['generation'] != before['generation'] and run['epoch'] <= before['epoch']:
                 raise CaptureError()
-            omitted_positive = run['ordinal_start'] - before['ordinal_start'] - before['frames']
+            omitted_positive = run[ordinal_key] - before[ordinal_key] - before['frames']
             if run['continuity_serial'] - before['continuity_serial'] > omitted_positive + 1:
                 raise CaptureError()
             if run['continuity_serial'] == before['continuity_serial']:
                 # A producer reset breaks continuity. Equal output/ordinal gaps
                 # are necessary, not sufficient, for a shared continuity serial.
-                output_gap = run['output_start'] - before['output_start'] - before['frames']
-                ordinal_gap = run['ordinal_start'] - before['ordinal_start'] - before['frames']
+                output_gap = run[output_key] - before[output_key] - before['frames']
+                ordinal_gap = run[ordinal_key] - before[ordinal_key] - before['frames']
                 if run['generation'] != before['generation'] or output_gap != ordinal_gap:
                     raise CaptureError()
         before = run
@@ -175,14 +201,21 @@ def _normalize_capture_envelope(value):
     protocol = value['protocol']
     if type(protocol) is not str or protocol not in SUPPORTED_PROTOCOLS:
         raise CaptureError('unsupported_capture_version')
-    extra = ('owner_uuid',) if protocol == POSITION_PROTOCOL else ()
+    native = protocol == NATIVE_POSITION_PROTOCOL
+    position = protocol in (POSITION_PROTOCOL, NATIVE_POSITION_PROTOCOL)
+    extra = ('owner_uuid',) if position else ()
+    if native:
+        extra += ('graph_rate_hz',)
     evidence = _object(value['evidence'], ('runs', 'anchors', 'gaps', 'terminal', 'terminal_reason') + extra)
     owner_uuid = None
     if extra:
         owner_uuid = _uuid(evidence['owner_uuid'])
         if UUID(owner_uuid).int == 0:
             raise CaptureError()
-    runs = [_run(row, protocol=protocol) for row in _array(evidence['runs'], 256)]
+    if native and _integer(evidence['graph_rate_hz']) not in (44100, 48000):
+        raise CaptureError()
+    runs = [_native_run(row) if native else _run(row, protocol=protocol)
+            for row in _array(evidence['runs'], 256)]
     anchors = [_anchor(row) for row in _array(evidence['anchors'], 8)]
     gaps = [_gap(row) for row in _array(evidence['gaps'], 8)]
     if type(evidence['terminal']) is not bool:
@@ -195,11 +228,13 @@ def _normalize_capture_envelope(value):
         raise CaptureError()
     if not runs and not gaps and not anchors and not evidence['terminal']:
         raise CaptureError()
+    ordinal_key = 'ordinal_start_frame' if native else 'ordinal_start'
+    output_key = 'output_start_frame' if native else 'output_start'
     for before, after in zip(runs, runs[1:]):
-        if before['ordinal_start'] + before['frames'] > after['ordinal_start'] or before['output_start'] + before['frames'] > after['output_start']:
+        if before[ordinal_key] + before['frames'] > after[ordinal_key] or before[output_key] + before['frames'] > after[output_key]:
             raise CaptureError()
-    if protocol == POSITION_PROTOCOL:
-        _validate_position_lineage(runs)
+    if position:
+        _validate_position_lineage(runs, protocol=protocol)
     # Loss envelopes are not continuous missing ranges. They can overlap runs
     # and earlier summaries; exact positive counts are app assertions, applied
     # once under immutable parent/sequence identity.
@@ -212,6 +247,8 @@ def _normalize_capture_envelope(value):
                                     terminal=evidence['terminal'], terminal_reason=reason))
     if owner_uuid is not None:
         normalized['evidence']['owner_uuid'] = owner_uuid
+    if native:
+        normalized['evidence']['graph_rate_hz'] = evidence['graph_rate_hz']
     if 'v1_session_uuid' in value:
         normalized['v1_session_uuid'] = _uuid(value['v1_session_uuid'])
     if 'initial_path' in value:

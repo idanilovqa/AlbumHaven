@@ -360,6 +360,63 @@ jobs:
           "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Accept Windows tracking admission and provisioning
+        id: windows_tracking_native
+        timeout-minutes: 12
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PYTEST_ADDOPTS = $null
+          $env:PYTEST_PLUGINS = $null
+          $env:PYTHONPATH = $null
+          $env:PYTHONHOME = $null
+          $env:PYTHONSTARTUP = $null
+          $env:PYTHONINSPECT = $null
+          python -I -B tests/windows_native/test_tracking_ci_admission.py --ci
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows tracking admission acceptance failed."
+          }
+
+      - name: Upload Windows tracking admission evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tracking-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-tracking-native-${{ github.run_id }}-${{ github.run_attempt }}\evidence
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Provision tracking rollback PostgreSQL cohort
+        run: |
+          $env:PGPASSWORD = $null
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -TrackingCohort tracking-rollback `
+            -MigrationThrough 153 `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "tr169_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-tracking-tracking-rollback-${{ github.run_id }}-${{ github.run_attempt }}\state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Provision historical 0153 PostgreSQL cohort
+        run: |
+          $env:PGPASSWORD = $null
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -TrackingCohort historical-0153 `
+            -MigrationThrough 153 `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "hist153_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-tracking-historical-0153-${{ github.run_id }}-${{ github.run_attempt }}\state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
       - name: Collect Python test inventory
         env:
           ALBUM_HAVEN_FAVORITES_TEST_MODE: favorites_windows17
@@ -383,6 +440,46 @@ jobs:
       - name: Validate Python skip policy
         if: ${{ !cancelled() }}
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-junit=${{ runner.temp }}\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json
+
+      - name: Teardown historical 0153 PostgreSQL cohort
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-tracking-historical-0153-${{ github.run_id }}-${{ github.run_attempt }}\state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            . .\scripts\ci\tracking-postgres-admission.ps1
+            Assert-TrackingCleanupEvidence -Cohort historical-0153
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -TrackingCohort historical-0153 `
+              -MigrationThrough 153 `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "hist153_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath `
+              -AppPrivilegeMode Inherited `
+              -SkipFixtureLoad
+          }
+
+      - name: Teardown tracking rollback PostgreSQL cohort
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-tracking-tracking-rollback-${{ github.run_id }}-${{ github.run_attempt }}\state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            . .\scripts\ci\tracking-postgres-admission.ps1
+            Assert-TrackingCleanupEvidence -Cohort tracking-rollback
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -TrackingCohort tracking-rollback `
+              -MigrationThrough 153 `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "tr169_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath `
+              -AppPrivilegeMode Inherited `
+              -SkipFixtureLoad
+          }
 
       - name: Teardown pristine PostgreSQL for persistent Python contracts
         if: ${{ always() }}

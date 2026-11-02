@@ -130,6 +130,7 @@ test('loaded track uses its resolved album cover when the track payload omits ar
     style: { backgroundImage: '' },
     textContent: '',
     classList: {
+      add() {},
       toggle() {},
       remove() {},
     },
@@ -238,7 +239,24 @@ function loadRuntime(overrides = {}) {
     console,
   };
   Object.assign(context, overrides);
+  const shell = { dataset: {
+    nativeAccountId: 'fixture-account', nativeLibraryId: 'fixture-library',
+    privateUiContext: 'a'.repeat(64),
+  } };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'app-shell' ? shell : getElementById(id);
+  const storage = new Map();
+  context.window.localStorage = {
+    getItem: key => storage.get(String(key)) ?? null,
+    setItem: (key, value) => storage.set(String(key), String(value)),
+    removeItem: key => storage.delete(String(key)),
+  };
+  context.clearTimeout = clearTimeout;
   vm.createContext(context);
+  for (const file of ['browser-storage-helpers.js', 'private-ui-transport.js', 'playback-ownership-helpers.js']) {
+    const filename = path.join(path.dirname(waveformPath), file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+  }
   vm.runInContext(waveformSource, context, { filename: waveformPath });
   vm.runInContext(loopSource, context, { filename: loopPath });
   return { context };

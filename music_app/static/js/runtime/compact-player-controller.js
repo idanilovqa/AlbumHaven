@@ -364,6 +364,7 @@ function syncCompactPlayerUi(snapshot = {}) {
   const els = compactPlayerElements();
   if (!els.player) return;
   const playback = snapshot.playback || getPlayerPlaybackSnapshot();
+  const presentationPaused = snapshot.presentationPaused ?? playback.paused;
   const locked = snapshot.lockedByAnotherTab ?? isPlaybackLockedByAnotherTab();
   const track = locked ? (Object.prototype.hasOwnProperty.call(snapshot, 'displayTrack') ? snapshot.displayTrack : getMirroredPlaybackTrack())
     : (snapshot.displayTrack || state.player.current);
@@ -396,8 +397,8 @@ function syncCompactPlayerUi(snapshot = {}) {
     els.cover.setAttribute('aria-label', openLabel);
   }
   if (els.play) {
-    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
-    els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
+    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', presentationPaused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
+    els.play.setAttribute('aria-label', presentationPaused ? 'Play' : 'Pause');
     els.play.disabled = !hasTrack || locked;
   }
   const queue = state.player.playbackQueue;

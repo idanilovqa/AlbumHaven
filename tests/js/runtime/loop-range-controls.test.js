@@ -1149,3 +1149,46 @@ test('main compound control stacks above timeline and foreground range handles f
   assert.ok(layer('.player-play-cluster') > layer('.player-timeline-wrap.is-waveform .player-timeline'), 'main compound must clear its sibling timeline');
   assert.ok(layer('.player-play-cluster') > layer('[data-loop-range-front="end"] .loop-range-handle.is-end'), 'main compound must clear foreground range handles');
 });
+
+test('restore absolute range reconciliation retains supplied seconds across duration correction and clamps to measured bounds', () => {
+  const harness = loadSharedControls(), root = createRangeRoot();
+  let duration = 30;
+  const controller = harness.context.createLoopRangeController({root,
+    getDuration: () => duration, getRange: () => ({startSeconds: 0, endSeconds: 30})});
+  try {
+    duration = 181;
+    assert.deepEqual({...controller.render({startSeconds: 0, endSeconds: 30}, {preserveAbsoluteRange: true})},
+      {startSeconds: 0, endSeconds: 30});
+    assert.equal(root.endTime.textContent, 'T30.000');
+    duration = 200;
+    assert.deepEqual({...controller.render({startSeconds: 7, endSeconds: 19}, {preserveAbsoluteRange: true})},
+      {startSeconds: 7, endSeconds: 19});
+    duration = 10;
+    assert.deepEqual({...controller.render({startSeconds: 7, endSeconds: 19}, {preserveAbsoluteRange: true})},
+      {startSeconds: 7, endSeconds: 10});
+    assert.equal(root.end.getAttribute('aria-valuemax'), '10');
+    assert.equal(root.end.getAttribute('aria-valuenow'), '10');
+  } finally { controller.destroy(); }
+});
+
+test('restore absolute reconciliation is per-call and subsequent active editing retains ordinary fractional rescaling', () => {
+  const harness = loadSharedControls(), root = createRangeRoot();
+  let duration = 30, range = {startSeconds: 0, endSeconds: 30};
+  const controller = harness.context.createLoopRangeController({root,
+    getDuration: () => duration, getRange: () => range,
+    onRangePreview(next) { range = {...next}; }, onRangeCommit(next) { range = {...next}; }});
+  try {
+    duration = 181;
+    range = {...controller.render(range, {preserveAbsoluteRange: true})};
+    assert.deepEqual(range, {startSeconds: 0, endSeconds: 30});
+    root.end.dispatch('pointerdown', {clientX: 150});
+    harness.dispatchDocument('pointermove', {clientX: 150, pointerId: 1});
+    harness.flushAnimationFrame();
+    harness.dispatchDocument('pointerup', {clientX: 150, pointerId: 1});
+    assert.deepEqual(range, {startSeconds: 0, endSeconds: 45.25});
+    duration = 362;
+    range = {...controller.render(range)};
+    assert.deepEqual(range, {startSeconds: 0, endSeconds: 90.5}, 'default active editor still preserves selected fractions');
+    assert.equal(root.endTime.textContent, 'T90.500');
+  } finally { controller.destroy(); }
+});

@@ -232,10 +232,11 @@ function createLoopRangeController({
     elementListeners.push([element, name, handler]);
   };
 
-  const render = (range = currentRange) => {
+  const render = (range = currentRange, options = {}) => {
     const duration = Math.max(0, Number(getDuration?.()) || 0);
     let candidate = range;
-    if (currentDuration > 0 && duration > 0 && Math.abs(duration - currentDuration) > 0.001) {
+    if (options.preserveAbsoluteRange !== true && currentDuration > 0 && duration > 0
+      && Math.abs(duration - currentDuration) > 0.001) {
       const scale = duration / currentDuration;
       candidate = {
         startSeconds: Number(range?.startSeconds) * scale,

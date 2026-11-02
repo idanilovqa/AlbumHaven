@@ -16,6 +16,184 @@ const helperPath = path.join(
   'player-loop-playback.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+// Diagnostic infrastructure only: unchanged cases may still fail their original
+// contracts. Existing boolean providers never qualify actual playback authority.
+const subjectDeclarations = new Set([...helperSource.matchAll(
+  /^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm,
+)].map(match => match[1]));
+const runtimeFixtureCleanups = [];
+const runtimeFixtureOwners = new WeakMap();
+test.after(async () => {
+  const failures = [];
+  for (const cleanup of runtimeFixtureCleanups.reverse()) {
+    try { await cleanup(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Loop diagnostic fixture cleanup failed');
+});
+
+
+
+function ownActualClickAdmission(context) {
+  const owners = runtimeFixtureOwners.get(context);
+  const work = [], thrown = [], handles = [];
+  owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(work);
+    const errors = [...thrown, ...settled.filter(row => row.status === 'rejected').map(row => row.reason)];
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Owned admitted click failed');
+  });
+  const retain = callback => (...args) => {
+    let result;
+    try { result = callback(...args); }
+    catch (error) { thrown.push(error); throw error; }
+    work.push(result);
+    void Promise.resolve(result).catch(() => {});
+    return result;
+  };
+  // These two cases assert the legacy audio stays stopped: it is not the
+  // streaming transport or its snapshot. Use both genuine dependencies.
+  context.getPlayerPlaybackSnapshot = owners.getPlayerPlaybackSnapshot;
+  context.resumeStreamingPlayback = retain(owners.resumeStreamingPlayback);
+  context.startStreamingTrack = retain(context.startStreamingTrack);
+  context.playTrackFromPayload = retain(context.playTrackFromPayload);
+  context.canStartPlaybackInThisTab = (...args) => {
+    const handle = owners.canStartPlaybackInThisTab(...args);
+    handles.push(handle);
+    return handle;
+  };
+  const engine = context.streamingEngineState();
+  const scope = context.capturePlaybackOwnershipScope();
+  const shell = context.document.getElementById('app-shell');
+  assert.ok(shell);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(context.state.player.current, null);
+  assert.equal(engine.roles.current, null);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, true);
+  return track => {
+    assert.strictEqual(context.document.getElementById('app-shell'), shell);
+    assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+    const role = engine.roles.current;
+    const attempt = context.captureStreamingPlaybackAttempt();
+    const selection = vm.runInContext('playerSelectionOwnership', context);
+    const handle = context.getActivePlaybackOwnershipHandle();
+    assert.equal(handles.length, 1);
+    assert.ok(handle);
+    assert.strictEqual(handles[0], handle);
+    assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.strictEqual(selection.handle, handle);
+    assert.strictEqual(selection.attempt, attempt);
+    assert.equal(selection.admitted, true);
+    assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+    assert.strictEqual(role.track, track);
+    assert.strictEqual(context.state.player.current, track);
+    assert.equal(engine.context.state, 'running');
+    assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+    assert.equal(context.successfulPlaybackClaim(handle), false);
+    assert.notEqual(role.firstFrameNotified, true);
+    assert.equal(engine.diagnostics.firstFrameAtMs, 0);
+  };
+}
+
+async function prepareLocalPlayingControl(context) {
+  const owners = runtimeFixtureOwners.get(context);
+  const track = context.state.player.current;
+  assert.equal(track.src, '/track?path=song.flac');
+  assert.equal(Object.hasOwn(track, 'path'), false);
+  track.path = 'C:/Music/song.flac';
+  const scope = context.capturePlaybackOwnershipScope();
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  const originalResume = context.resumeStreamingPlayback;
+  let attempt, role;
+  // Setup must run the actual local engine resume, not the action observer.
+  context.resumeStreamingPlayback = owners.resumeStreamingPlayback;
+  try {
+    role = await owners.startStreamingTrack(track, {
+      autoplay: true, startSeconds: 12,
+      onStartAttempt(value) { attempt = value; },
+    });
+  } finally { context.resumeStreamingPlayback = originalResume; }
+  const engine = context.streamingEngineState();
+  assert.ok(role);
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(engine.snapshot.paused, false);
+  assert.equal(engine.snapshot.currentTime, 12);
+  assert.notEqual(role.firstFrameNotified, true);
+  assert.equal(engine.diagnostics.firstFrameAtMs, 0);
+  return { owners, track, scope, attempt, role, engine };
+}
+
+async function preparePositiveFocusControl(context) {
+  const owners = runtimeFixtureOwners.get(context);
+  const track = context.state.player.current;
+  assert.equal(track.src, '/track?path=song.flac');
+  assert.equal(Object.hasOwn(track, 'path'), false);
+  // Explicit same-song fixture metadata, not a URL-derived authorization claim.
+  track.path = 'C:/Music/song.flac';
+  const scope = context.capturePlaybackOwnershipScope();
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  if (context.window.AlbumHavenCapabilities) {
+    assert.equal(context.window.AlbumHavenCapabilities.allows('library.media.read'), true);
+  }
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  let attempt;
+  const role = await owners.startStreamingTrack(track, {
+    autoplay: false, startSeconds: 12,
+    onStartAttempt(value) { attempt = value; },
+  });
+  const engine = context.streamingEngineState();
+  assert.strictEqual(context.state.player.current, track);
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'suspended');
+  assert.equal(engine.snapshot.paused, true);
+  assert.equal(engine.snapshot.currentTime, 12);
+  assert.notEqual(role.firstFrameNotified, true);
+  const observer = context.resumeStreamingPlayback;
+  const observed = { work: [], thrown: [] };
+  owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(observed.work);
+    const errors = [...observed.thrown, ...settled.filter(row => row.status === 'rejected').map(row => row.reason)];
+    if (errors.length) throw new AggregateError(errors, 'Owned focus resume failed');
+  });
+  context.resumeStreamingPlayback = (...args) => {
+    observer(...args);
+    let work;
+    try { work = owners.resumeStreamingPlayback(...args); }
+    catch (error) { observed.thrown.push(error); throw error; }
+    observed.work.push(work);
+    // Observe rejection immediately, but return the EXACT actual work promise.
+    // Teardown separately awaits it and reports failures; no action wait added.
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  return { track, role, attempt, scope, engine, observed };
+}
+
+function mountOriginalTrackModal(context, originalButton) {
+  const button = context.document.createElement('button');
+  for (const [name, value] of Object.entries(originalButton.attributes)) button.setAttribute(name, value);
+  button.hidden = originalButton.hidden;
+  button.disabled = originalButton.disabled;
+  button.dispatch = (type, values = {}) => {
+    const event = new context.Event(type);
+    Object.assign(event, values);
+    return button.dispatchEvent(event);
+  };
+  const modal = context.document.createElement('div');
+  modal.id = 'track-modal';
+  modal.hidden = false;
+  context.document.body.appendChild(modal);
+  modal.appendChild(button);
+  assert.equal(modal.contains(button), true);
+  assert.equal(modal.contains(context.document.createElement('button')), false);
+  for (const [name, value] of Object.entries(originalButton.attributes)) assert.equal(button.getAttribute(name), value);
+  return { button, modal };
+}
 
 test('player glyph preserves the mounted SVG across audio ticks despite browser serialization', () => {
   const { context } = loadHelper();
@@ -145,7 +323,7 @@ class FakeAudioElement extends FakeElement {
   }
 }
 
-function loadHelper(overrides = {}) {
+function loadHelper(overrides = {}, { bootstrapAllowedActions, observeLoopExpiry = false } = {}) {
   const audio = overrides.audio || new FakeAudioElement({
     currentTime: 0,
     duration: 60,
@@ -271,9 +449,177 @@ function loadHelper(overrides = {}) {
     timeline,
     playButton,
   });
-  vm.createContext(context);
-  vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, audio, timeline, playButton };
+  const listener = require('./search-native-fixtures/listener-search.cjs');
+  const { world } = require('./search-native-fixtures/ownership-platform.cjs');
+  const platform = world().createTab();
+  const fixtureCleanups = [];
+  const observerCleanups = [];
+  let runtimeContext, actualStop, actualRelease, actualDispose;
+  runtimeFixtureCleanups.push(async () => {
+    const failures = [];
+    let capturedHandle;
+    try {
+      capturedHandle = runtimeContext?.getActivePlaybackOwnershipHandle?.();
+      runtimeContext?.retirePlayerSelectionOwnership?.('test-teardown');
+      runtimeContext?.retirePlayerRestoreAttempt?.('test-teardown');
+    } catch (error) { failures.push(error); }
+    try {
+      if (capturedHandle) actualRelease('stopped', capturedHandle);
+    } catch (error) { failures.push(error); }
+    try { if (actualStop) await actualStop('test-teardown'); } catch (error) { failures.push(error); }
+    try {
+      if (capturedHandle) {
+        assert.notStrictEqual(runtimeContext.getActivePlaybackOwnershipHandle(), capturedHandle);
+        const lease = runtimeContext.readPlaybackOwnershipRecord();
+        assert.equal(Boolean(lease && lease.tab_id === capturedHandle.tab_id
+          && lease.claim_revision === capturedHandle.claim_revision), false);
+      }
+    } catch (error) { failures.push(error); }
+    try { actualDispose?.(); } catch (error) { failures.push(error); }
+    for (const cleanup of observerCleanups.reverse()) {
+      try { await cleanup(); } catch (error) { failures.push(error); }
+    }
+    try { platform.dispose(); } catch (error) { failures.push(error); }
+    for (const cleanup of fixtureCleanups.reverse()) {
+      try { await cleanup(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Loop runtime cleanup failed');
+  });
+  const h = listener.fixture({ after(cleanup) { fixtureCleanups.push(cleanup); } }, {
+    beforeRuntimePlatform: (environment) => {
+      platform.install(environment);
+      if (bootstrapAllowedActions !== undefined) {
+        assert.deepEqual(bootstrapAllowedActions, { 'library.loops.create': true });
+        environment.c.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ = Object.freeze({ ...bootstrapAllowedActions });
+      }
+    },
+  });
+  platform.installAudio();
+  runtimeContext = h.c;
+  const lexicalState = h.owner('state');
+  actualStop = runtimeContext.stopStreamingPlayback;
+  actualRelease = runtimeContext.releasePlaybackOwnership;
+  actualDispose = runtimeContext.disposePlaybackOwnershipCoordinator;
+  runtimeFixtureOwners.set(runtimeContext, {
+    loaded: new Set(h.loaded), loadUtilityLoops: runtimeContext.loadUtilityLoops,
+    canStartPlaybackInThisTab: runtimeContext.canStartPlaybackInThisTab,
+    startStreamingTrack: runtimeContext.startStreamingTrack,
+    resumeStreamingPlayback: runtimeContext.resumeStreamingPlayback,
+    pauseStreamingPlayback: runtimeContext.pauseStreamingPlayback,
+    getPlayerPlaybackSnapshot: runtimeContext.getPlayerPlaybackSnapshot,
+    scheduleStreamingContinuity: runtimeContext.scheduleStreamingContinuity,
+    addObserverCleanup(cleanup) { observerCleanups.push(cleanup); },
+  });
+  // Share supplied nested records, never detach assertions from lexical state.
+  // The immutable runtime root itself remains the actual bootstrap owner.
+  for (const [key, value] of Object.entries(context.state)) {
+    if ((key === 'player' || key === 'utility') && value && typeof value === 'object') {
+      const defaults = lexicalState[key];
+      for (const [field, defaultValue] of Object.entries(defaults || {})) {
+        if (!Object.hasOwn(value, field)) value[field] = defaultValue;
+      }
+    }
+    lexicalState[key] = value;
+  }
+  runtimeContext.state = lexicalState;
+  assert.strictEqual(runtimeContext.state, h.owner('state'));
+  for (const key of ['player', 'utility']) {
+    if (Object.hasOwn(context.state, key)) assert.strictEqual(runtimeContext.state[key], context.state[key]);
+  }
+  const NativeHTMLElement = runtimeContext.HTMLElement;
+  runtimeContext.HTMLElement = class extends NativeHTMLElement {
+    static [Symbol.hasInstance](element) {
+      return element instanceof FakeElement || element instanceof NativeHTMLElement;
+    }
+  };
+  // Keep real shell/scope lookups while retaining explicitly supplied unit DOM
+  // query observers. Event observers are forwarded without discarding owners.
+  if (Object.hasOwn(overrides, 'document')) {
+    const nativeDocument = runtimeContext.document;
+    const suppliedDocument = overrides.document;
+    assert.ok(suppliedDocument && typeof suppliedDocument === 'object', 'explicit document must be a supported object');
+    for (const name of ['getElementById', 'querySelector']) {
+      if (name in suppliedDocument) assert.equal(typeof suppliedDocument[name], 'function',
+        `explicit document ${name} cannot be silently replaced`);
+    }
+    runtimeContext.document = new Proxy(nativeDocument, {
+      get(target, key) {
+        if (key === 'getElementById' || key === 'querySelector') {
+          return (selector, ...args) => {
+            const shellLookup = key === 'getElementById'
+              ? selector === 'app-shell' : selector === '#app-shell';
+            if (shellLookup) return target[key](selector, ...args);
+            const supplied = Reflect.get(suppliedDocument, key, suppliedDocument);
+            return typeof supplied === 'function'
+              ? supplied.call(suppliedDocument, selector, ...args)
+              : target[key](selector, ...args);
+          };
+        }
+        // Native-harness documents inherit queries/events from Element.prototype.
+        // Those are intentional original surfaces, not missing overrides.
+        if (!(key in suppliedDocument)) {
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        const value = Reflect.get(suppliedDocument, key, suppliedDocument);
+        if (key === 'addEventListener' && typeof value === 'function') {
+          return (...args) => { value.apply(suppliedDocument, args); target.addEventListener(...args); };
+        }
+        return typeof value === 'function' ? value.bind(suppliedDocument) : value;
+      },
+      set(target, key, value) {
+        if (key in suppliedDocument) return Reflect.set(suppliedDocument, key, value, suppliedDocument);
+        return Reflect.set(target, key, value, target);
+      },
+    });
+    assert.strictEqual(runtimeContext.document.getElementById('app-shell'), h.shell);
+  }
+  // Old defaults/overrides preceded subject evaluation. Do not reverse that
+  // precedence by copying placeholders over genuine subject declarations.
+  for (const [name, value] of Object.entries(context)) {
+    if (['state', 'window', 'document', 'HTMLElement'].includes(name)
+      || subjectDeclarations.has(name)) continue;
+    runtimeContext[name] = value;
+  }
+  runtimeContext.window.ButtonComponent = context.window.ButtonComponent;
+  for (const name of ['updatePlayerUi', 'updateLoopInputsFromState',
+    'getPlayerDuration', 'getTimelineSecondsFromClientX']) {
+    assert.equal(subjectDeclarations.has(name), true);
+    assert.notStrictEqual(runtimeContext[name], context[name]);
+  }
+  if (observeLoopExpiry) {
+    assert.equal(Object.hasOwn(overrides, 'loopEditSessionExpiryController'), true);
+    const observers = overrides.loopEditSessionExpiryController;
+    const owner = h.owner('loopEditSessionExpiryController');
+    const descriptors = Object.getOwnPropertyDescriptors(owner);
+    const propertyDescriptor = Object.getOwnPropertyDescriptor(runtimeContext, 'loopEditSessionExpiryController');
+    const stopOwnedSession = owner.stop;
+    observerCleanups.push(() => {
+      const failures = [];
+      try { stopOwnedSession('global-player'); } catch (error) { failures.push(error); }
+      for (const [name, descriptor] of Object.entries(descriptors)) {
+        try { Object.defineProperty(owner, name, descriptor); } catch (error) { failures.push(error); }
+      }
+      try {
+        if (propertyDescriptor) Object.defineProperty(runtimeContext, 'loopEditSessionExpiryController', propertyDescriptor);
+        else delete runtimeContext.loopEditSessionExpiryController;
+      } catch (error) { failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, 'Expiry observer cleanup failed');
+    });
+    for (const [name, observer] of Object.entries(observers)) {
+      const actual = descriptors[name]?.value;
+      assert.equal(typeof observer, 'function');
+      assert.equal(typeof actual, 'function');
+      owner[name] = (...args) => {
+        observer.apply(observers, args);
+        return actual.apply(owner, args);
+      };
+    }
+    runtimeContext.loopEditSessionExpiryController = owner;
+    assert.strictEqual(owner, h.owner('loopEditSessionExpiryController'));
+    assert.strictEqual(runtimeContext.loopEditSessionExpiryController, owner);
+  }
+  return { context: runtimeContext, audio, timeline, playButton };
 }
 
 test('never-played player hides its timestamp until a track is available', () => {
@@ -351,6 +697,24 @@ test('visible play control and global Space dispatch pause and resume through th
     });
     return { ...loaded, player: loaded.context.player };
   })();
+  const prepared = await prepareLocalPlayingControl(context);
+  const work = [];
+  prepared.owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(work);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Control dispatch work failed');
+  });
+  for (const name of ['pauseStreamingPlayback', 'resumeStreamingPlayback']) {
+    const observer = context[name];
+    context[name] = (...args) => {
+      observer(...args);
+      const actualWork = prepared.owners[name](...args);
+      work.push(actualWork);
+      void Promise.resolve(actualWork).catch(() => {});
+      return actualWork;
+    };
+  }
+  context.canStartPlaybackInThisTab = (...args) => prepared.owners.canStartPlaybackInThisTab(...args);
   context.attachPlayerEvents();
 
   playButton.dispatch('click');
@@ -364,6 +728,14 @@ test('visible play control and global Space dispatch pause and resume through th
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), ['pause', 'resume']);
   assert.equal(audio.playCalls, 0);
+  assert.equal(work.length, 2);
+  assert.strictEqual(prepared.engine.roles.current, prepared.role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(prepared.attempt), true);
+  const handle = context.getActivePlaybackOwnershipHandle();
+  assert.ok(handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(prepared.role.firstFrameNotified, true);
 });
 
 test('streaming position updates the facade at the bounded callback cadence', async () => {
@@ -415,7 +787,7 @@ test('streaming position updates the facade at the bounded callback cadence', as
   assert.equal(uiUpdates, 1);
 });
 
-test('streaming pause and resume drive listen, now-playing, ownership, and UI effects', async () => {
+test('isolated streaming pause and resume preserve listen, ownership requests, and UI effects', async () => {
   const track = {
     src: '/track?path=song.flac',
     path: 'C:/Music/song.flac',
@@ -455,11 +827,65 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
       },
     },
     getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
-    pauseStreamingPlayback: async () => { snapshot.paused = true; },
-    resumeStreamingPlayback: async () => { snapshot.paused = false; snapshot.ended = false; return true; },
-    canStartPlaybackInThisTab: (activeTrack) => { ownershipClaims.push(activeTrack); return true; },
-    releasePlaybackOwnership: (status, activeTrack) => ownershipReleases.push({ status, track: activeTrack }),
   });
+  const owners = runtimeFixtureOwners.get(context);
+  const work = [];
+  const retain = pending => {
+    work.push(pending);
+    void Promise.resolve(pending).catch(() => {});
+    return pending;
+  };
+  owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(work);
+    const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Pause/resume owner work failed');
+  });
+  const scope = context.capturePlaybackOwnershipScope();
+  let attempt;
+  context.resumeStreamingPlayback = owners.resumeStreamingPlayback;
+  const role = await retain(owners.startStreamingTrack(track, {
+    autoplay: true, startSeconds: 12, onStartAttempt(value) { attempt = value; },
+  }));
+  const engine = context.streamingEngineState();
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.snapshot.currentTime, 12);
+  assert.equal(engine.snapshot.paused, false);
+  const handle = owners.canStartPlaybackInThisTab(track, {
+    isCurrent: () => context.isPlaybackOwnershipScopeCurrent(scope)
+      && context.state.player.current === track && engine.roles.current === role
+      && context.isStreamingPlaybackAttemptCurrent(attempt),
+  });
+  assert.ok(handle);
+  assert.equal(context.bindPlaybackOwnershipAttempt(handle, attempt), true);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(role.firstFrameNotified, true);
+  context.pauseStreamingPlayback = (...args) => retain(Promise.resolve(owners.pauseStreamingPlayback(...args)).then(result => {
+    snapshot.paused = true;
+    assert.equal(engine.snapshot.paused, true);
+    return result;
+  }));
+  context.resumeStreamingPlayback = (...args) => retain(Promise.resolve(owners.resumeStreamingPlayback(...args)).then(result => {
+    snapshot.paused = false;
+    snapshot.ended = false;
+    assert.equal(engine.snapshot.paused, false);
+    return result;
+  }));
+  // Explicit action-effect isolation: record requested release without retiring
+  // the real preissued handle. Full release/reclaim is tested separately below.
+  context.releasePlaybackOwnership = (status, releasedHandle) => {
+    ownershipReleases.push({ status, handle: releasedHandle });
+    return true;
+  };
+  context.canStartPlaybackInThisTab = (activeTrack, options) => {
+    ownershipClaims.push(activeTrack);
+    assert.strictEqual(activeTrack, track);
+    assert.equal(options.isCurrent(), true);
+    assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+    return handle;
+  };
   context.closeListenSegment = () => closedSegments.push('closed');
   context.markListenSessionPaused = (offset) => pausedOffsets.push(offset);
   context.maybeScrobbleListenSession = async (session) => scrobbles.push(session);
@@ -476,8 +902,10 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(closedSegments, ['closed']);
   assert.deepEqual(pausedOffsets, [12]);
   assert.deepEqual(scrobbles, [pausedSession]);
-  assert.deepEqual(ownershipReleases, [{ status: 'paused', track }]);
+  assert.deepEqual(ownershipReleases, [{ status: 'paused', handle }]);
   assert.equal(uiUpdates, 1);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(engine.context.state, 'suspended');
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -486,6 +914,170 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(listenResumes, [{ track, startSeconds: 12 }]);
   assert.deepEqual(nowPlaying, [{ track, session: resumedSession }]);
   assert.equal(uiUpdates, 2);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.strictEqual(engine.roles.current, role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(role.firstFrameNotified, true);
+});
+
+test('streaming pause and resume release and reclaim real ownership with every repaint', async () => {
+  const track = {
+    src: '/track?path=song.flac',
+    path: 'C:/Music/song.flac',
+    title: 'Song',
+  };
+  const pausedSession = { id: 'paused-session' };
+  const resumedSession = { id: 'resumed-session' };
+  const snapshot = {
+    currentTime: 12,
+    duration: 60,
+    paused: false,
+    ended: false,
+    src: track.src,
+  };
+  const closedSegments = [];
+  const pausedOffsets = [];
+  const scrobbles = [];
+  const ownershipClaims = [];
+  const ownershipReleases = [];
+  const listenResumes = [];
+  const nowPlaying = [];
+  let uiUpdates = 0;
+  const events = [];
+  let resumedHandle;
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current: track,
+        listenSession: pausedSession,
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        saveBusy: false,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+  });
+  const owners = runtimeFixtureOwners.get(context);
+  const actualRelease = context.releasePlaybackOwnership;
+  const work = [];
+  const retain = pending => {
+    work.push(pending);
+    void Promise.resolve(pending).catch(() => {});
+    return pending;
+  };
+  owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(work);
+    const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Pause/resume owner work failed');
+  });
+  const scope = context.capturePlaybackOwnershipScope();
+  let attempt;
+  context.resumeStreamingPlayback = owners.resumeStreamingPlayback;
+  const role = await retain(owners.startStreamingTrack(track, {
+    autoplay: true, startSeconds: 12, onStartAttempt(value) { attempt = value; },
+  }));
+  const engine = context.streamingEngineState();
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.snapshot.currentTime, 12);
+  assert.equal(engine.snapshot.paused, false);
+  const handle = owners.canStartPlaybackInThisTab(track, {
+    isCurrent: () => context.isPlaybackOwnershipScopeCurrent(scope)
+      && context.state.player.current === track && engine.roles.current === role
+      && context.isStreamingPlaybackAttemptCurrent(attempt),
+  });
+  assert.ok(handle);
+  assert.equal(context.bindPlaybackOwnershipAttempt(handle, attempt), true);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(role.firstFrameNotified, true);
+  context.pauseStreamingPlayback = (...args) => retain(Promise.resolve(owners.pauseStreamingPlayback(...args)).then(result => {
+    snapshot.paused = true;
+    assert.equal(engine.snapshot.paused, true);
+    return result;
+  }));
+  context.resumeStreamingPlayback = (...args) => retain(Promise.resolve(owners.resumeStreamingPlayback(...args)).then(result => {
+    snapshot.paused = false;
+    snapshot.ended = false;
+    assert.equal(engine.snapshot.paused, false);
+    return result;
+  }));
+  context.releasePlaybackOwnership = (status, releasedHandle) => {
+    events.push({ type: 'release', status, handle: releasedHandle });
+    ownershipReleases.push({ status, handle: releasedHandle });
+    return actualRelease(status, releasedHandle);
+  };
+  context.canStartPlaybackInThisTab = (activeTrack, options) => {
+    ownershipClaims.push(activeTrack);
+    events.push({ type: 'claim', track: activeTrack });
+    resumedHandle = owners.canStartPlaybackInThisTab(activeTrack, options);
+    return resumedHandle;
+  };
+  context.closeListenSegment = () => closedSegments.push('closed');
+  context.markListenSessionPaused = (offset) => pausedOffsets.push(offset);
+  context.maybeScrobbleListenSession = async (session) => scrobbles.push(session);
+  context.resumeListenSessionPlayback = async (activeTrack, startSeconds) => {
+    listenResumes.push({ track: activeTrack, startSeconds });
+    return resumedSession;
+  };
+  context.maybeSendNowPlaying = async (activeTrack, session) => nowPlaying.push({ track: activeTrack, session });
+  context.updatePlayerUi = () => {
+    uiUpdates += 1;
+    events.push({ type: 'ui', track: context.state.player.current,
+      handle: context.getActivePlaybackOwnershipHandle() });
+  };
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(closedSegments, ['closed']);
+  assert.deepEqual(pausedOffsets, [12]);
+  assert.deepEqual(scrobbles, [pausedSession]);
+  assert.deepEqual(ownershipReleases, [{ status: 'paused', handle }]);
+  assert.equal(uiUpdates, 2);
+  assert.deepEqual(events, [
+    { type: 'release', status: 'paused', handle },
+    { type: 'ui', track, handle: null },
+    { type: 'ui', track, handle: null },
+  ]);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), false);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  assert.equal(context.readPlaybackOwnershipRecord(), null);
+  assert.equal(engine.context.state, 'suspended');
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(ownershipClaims, [track]);
+  assert.deepEqual(listenResumes, [{ track, startSeconds: 12 }]);
+  assert.deepEqual(nowPlaying, [{ track, session: resumedSession }]);
+  assert.equal(uiUpdates, 4);
+  assert.ok(resumedHandle);
+  assert.notStrictEqual(resumedHandle, handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(resumedHandle), true);
+  assert.deepEqual(events, [
+    { type: 'release', status: 'paused', handle },
+    { type: 'ui', track, handle: null },
+    { type: 'ui', track, handle: null },
+    { type: 'claim', track },
+    { type: 'ui', track, handle: resumedHandle },
+    { type: 'ui', track, handle: resumedHandle },
+  ]);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), resumedHandle);
+  assert.strictEqual(engine.roles.current, role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.successfulPlaybackClaim(resumedHandle), false);
+  assert.notEqual(role.firstFrameNotified, true);
 });
 
 test('global-player handoff shares its pending pause until streaming ownership is released', async () => {
@@ -510,6 +1102,37 @@ test('global-player handoff shares its pending pause until streaming ownership i
     },
   });
 
+  const ownedWork = [];
+  const owners = runtimeFixtureOwners.get(context);
+  // Existing fixture cleanup retires selection/claim and stops the engine
+  // before observer cleanup. Release this gate ONLY there if action aborts.
+  owners.addObserverCleanup(async () => {
+    resolvePause();
+    const settled = await Promise.allSettled(ownedWork);
+    const errors = [...new Set(settled.filter(row => row.status === 'rejected').map(row => row.reason))];
+    if (errors.length) throw new AggregateError(errors, 'Owned handoff work failed');
+  });
+  const prepared = await prepareLocalPlayingControl(context);
+  const handle = owners.canStartPlaybackInThisTab(prepared.track, {
+    isCurrent: () => context.isPlaybackOwnershipScopeCurrent(prepared.scope)
+      && context.state.player.current === prepared.track
+      && prepared.engine.roles.current === prepared.role
+      && context.isStreamingPlaybackAttemptCurrent(prepared.attempt),
+  });
+  assert.ok(handle);
+  assert.equal(context.bindPlaybackOwnershipAttempt(handle, prepared.attempt), true);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  const pauseObserver = context.pauseStreamingPlayback;
+  context.pauseStreamingPlayback = (...args) => {
+    const gate = pauseObserver(...args);
+    const actualPause = owners.pauseStreamingPlayback(...args);
+    const combined = Promise.all([gate, actualPause]).then(() => undefined);
+    ownedWork.push(gate, actualPause, combined);
+    for (const work of [gate, actualPause, combined]) void Promise.resolve(work).catch(() => {});
+    return combined;
+  };
+
   const firstHandoff = context.pausePlayerPlaybackForHandoff({ ...snapshot, paused: false });
   const secondHandoff = context.pausePlayerPlaybackForHandoff({ ...snapshot, paused: true });
 
@@ -519,109 +1142,157 @@ test('global-player handoff shares its pending pause until streaming ownership i
   assert.equal(await firstHandoff, true);
   assert.equal(await secondHandoff, true);
   assert.equal(await context.pausePlayerPlaybackForHandoff({ ...snapshot, paused: true }), false);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), false);
+  assert.notStrictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  const lease = context.readPlaybackOwnershipRecord();
+  assert.equal(Boolean(lease && lease.tab_id === handle.tab_id && lease.claim_revision === handle.claim_revision), false);
+  assert.strictEqual(prepared.engine.roles.current, prepared.role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(prepared.attempt), true);
+  assert.equal(prepared.engine.context.state, 'suspended');
+  assert.equal(prepared.engine.snapshot.paused, true);
+  assert.notEqual(prepared.role.firstFrameNotified, true);
 });
 
-test('streaming terminal ended finalizes and releases ownership exactly once', async () => {
-  const track = {
-    src: '/track?path=song.flac',
-    path: 'C:/Music/song.flac',
-    title: 'Song',
-  };
-  const session = { id: 'terminal-session' };
-  const finalizations = [];
-  const releases = [];
-  let uiUpdates = 0;
-  const { context } = loadHelper({
-    state: {
-      player: {
-        current: track,
-        listenSession: session,
-        loopActive: false,
-        loopStart: 0,
-        loopEnd: 30,
-        saveBusy: false,
-        waveform: { renderToken: 0 },
-      },
-      utility: {
-        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
-        selectedLoopDetailMode: '', activeTab: '',
-      },
-    },
-    getPlayerPlaybackSnapshot: () => ({
-      currentTime: 42,
-      duration: 42,
-      paused: true,
-      ended: true,
-      src: track.src,
-    }),
-    releasePlaybackOwnership: (status, activeTrack) => releases.push({ status, track: activeTrack }),
+// These two terminal cases share the reviewed finite actual-owner fixture, not
+// loadHelper's legacy snapshot/control spies. No application owner is replaced.
+async function actualTerminalSong(t, run) {
+  const {scenario} = require('./completed-context-fixtures.cjs');
+  return scenario(t, async h => {
+    const track = {src: '/track?path=song.flac', path: 'C:/Music/song.flac', title: 'Song', durationSeconds: 42};
+    await h.complete(h.select(track));
+    const engine = h.engine(), role = engine.roles.current, node = engine.node;
+    const session = h.state.player.listenSession, handle = h.c.getActivePlaybackOwnershipHandle();
+    assert.ok(session && handle);
+    assert.equal(h.c.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.equal(h.c.currentPlayerSelection(h.owner('playerSelectionOwnership')), true);
+    engine.socket.emit({type: 'metadata', generation: role.generation, streamId: role.streamId,
+      role: 'current', sampleRate: 48000, channels: 2, provisionalTotalFrames: 2016000,
+      requestedStartFrame: role.startFrame, timelineStartFrame: role.startFrame});
+    await h.flush();
+    assert.equal(h.c.getPlayerPlaybackSnapshot().duration, 42);
+    const configure = node.sent.filter(message => message.type === 'configure' && message.generation === role.generation).at(-1);
+    const play = node.sent.filter(message => message.type === 'play' && message.generation === role.generation).at(-1);
+    assert.ok(configure && play && node.sent.indexOf(configure) < node.sent.indexOf(play));
+    assert.ok(Number.isSafeInteger(play.playbackIntentId) && play.playbackIntentId > 0);
+    const ended = h.c.handleStreamingPlaybackEnded, callbacks = [];
+    h.c.handleStreamingPlaybackEnded = function (...args) {
+      const pending = ended.apply(this, args);
+      callbacks.push({event: args[0], work: h.own(pending)});
+      return pending;
+    };
+    async function finish() {
+      node.emit({type: 'ended', generation: role.generation, streamId: role.streamId,
+        timelineFrame: 2016000, playbackIntentId: play.playbackIntentId});
+      await h.flush();
+      assert.equal(callbacks.length, 1, 'genuine processor EOF reaches the actual terminal facade');
+      // Finite real persistence seam replies; neither finalization nor its result
+      // is stubbed. Title-only fixture does not issue a now-playing request.
+      for (const path of ['/playback/session/scrobble', '/playback/session/complete']) {
+        const requests = h.requests.filter(request => !request.settled
+          && new URL(request.url, h.location).pathname === path);
+        assert.equal(requests.length, 1, `actual terminal session reaches ${path}`);
+        requests[0].resolve({ok: true}); await h.flush();
+      }
+      const result = await callbacks[0].work;
+      assert.equal(result.error, undefined, result.error?.stack);
+      assert.equal(h.c.getPlayerPlaybackSnapshot().currentTime, 42);
+      assert.equal(h.c.getPlayerPlaybackSnapshot().ended, true);
+      assert.equal(h.c.getActivePlaybackOwnershipHandle(), null);
+      return callbacks[0].event;
+    }
+    await run(h, {track, session, handle, role, node, finish});
   });
-  context.finalizeListenSession = async (reason, payload) => finalizations.push({ reason, payload });
-  context.updatePlayerUi = () => { uiUpdates += 1; };
-  const event = {
-    generation: 3,
-    streamId: 9,
-    trackPath: track.path,
-    timelineFrame: 2_016_000,
-    currentTime: 42,
+}
+
+test('streaming terminal ended finalizes and releases ownership exactly once', async t => actualTerminalSong(t, async (h, song) => {
+  const {track, session, handle, node, finish} = song;
+  const finalizations = [], releases = [], uiUpdates = [];
+  let releaseDepth = 0, ownershipPaintDepth = 0;
+  const finalize = h.c.finalizeListenSession, release = h.c.releasePlaybackOwnership, update = h.c.updatePlayerUi;
+  const repaintOwnership = h.c.repaintPlaybackOwnership;
+  h.c.finalizeListenSession = function (reason, payload) {
+    finalizations.push({reason, payload}); return finalize.call(this, reason, payload);
   };
-
-  await context.handleStreamingPlaybackEnded(event);
-  await context.handleStreamingPlaybackEnded(event);
-
-  assert.deepEqual(JSON.parse(JSON.stringify(finalizations)), [{
-    reason: 'ended',
-    payload: {
-      session,
-      currentTime: 42,
-      duration: 42,
-      finishedFully: true,
-    },
-  }]);
-  assert.deepEqual(releases, [{ status: 'stopped', track }]);
-  assert.equal(uiUpdates, 1);
-});
-
-test('play command after terminal EOS opens a fresh generation at frame zero before requesting resume', async () => {
-  const track = {
-    src: '/track?path=song.flac',
-    path: 'C:/Music/song.flac',
-    title: 'Song',
+  h.c.releasePlaybackOwnership = function (status, releasedHandle) {
+    releases.push({status, handle: releasedHandle}); releaseDepth += 1;
+    try {return release.call(this, status, releasedHandle);} finally {releaseDepth -= 1;}
   };
-  const calls = [];
-  const { context } = loadHelper({
-    state: {
-      player: {
-        current: track,
-        listenSession: null,
-        loopActive: false,
-        loopStart: 0,
-        loopEnd: 30,
-        saveBusy: false,
-        waveform: { renderToken: 0 },
-      },
-      utility: {
-        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
-        selectedLoopDetailMode: '', activeTab: '',
-      },
-    },
-    getPlayerPlaybackSnapshot: () => ({
-      currentTime: 42,
-      duration: 42,
-      paused: true,
-      ended: true,
-      src: track.src,
-    }),
-    canStartPlaybackInThisTab: () => true,
-    seekStreamingPlayback: async (seconds) => { calls.push(['seek', seconds]); },
-    resumeStreamingPlayback: async () => { calls.push(['resume']); return true; },
-  });
+  h.c.repaintPlaybackOwnership = function (...args) {
+    ownershipPaintDepth += 1;
+    try {return repaintOwnership.apply(this, args);} finally {ownershipPaintDepth -= 1;}
+  };
+  h.c.updatePlayerUi = function (...args) {
+    uiUpdates.push({releaseDepth, ownershipPaintDepth, finalizations: finalizations.length,
+      completionState: session.completionState});
+    return update.apply(this, args);
+  };
+  const event = await finish();
+  const expectedUpdates = [
+    {releaseDepth: 1, ownershipPaintDepth: 1, finalizations: 0, completionState: ''},
+    {releaseDepth: 0, ownershipPaintDepth: 0, finalizations: 1, completionState: 'done'},
+  ];
+  assert.deepEqual(uiUpdates, expectedUpdates,
+    'one ownership-release repaint precedes finalization; one direct terminal repaint follows completion');
+  // Duplicate processor delivery and duplicate facade delivery are both inert.
+  const play = node.sent.filter(message => message.type === 'play').at(-1);
+  node.emit({type: 'ended', generation: event.generation, streamId: event.streamId,
+    timelineFrame: 2016000, playbackIntentId: play.playbackIntentId});
+  await h.c.handleStreamingPlaybackEnded(event); await h.flush();
+  assert.equal(finalizations.length, 1);
+  assert.equal(finalizations[0].reason, 'ended');
+  assert.strictEqual(finalizations[0].payload.session, session);
+  assert.deepEqual(Object.keys(finalizations[0].payload).sort(), ['currentTime', 'duration', 'finishedFully', 'session']);
+  assert.equal(finalizations[0].payload.currentTime, 42);
+  assert.equal(finalizations[0].payload.duration, 42);
+  assert.equal(finalizations[0].payload.finishedFully, true);
+  assert.equal(session.completionState, 'done');
+  assert.equal(session.measurement.total, 0, 'terminal state does not fabricate rendered PCM credit');
+  assert.deepEqual(releases, [{status: 'paused', handle}]);
+  assert.equal(h.c.isPlaybackOwnershipHandleCurrent(handle), false);
+  assert.equal(h.c.getActivePlaybackOwnershipHandle(), null);
+  assert.strictEqual(h.state.player.current, track);
+  assert.deepEqual(uiUpdates, expectedUpdates, 'duplicate processor and facade EOF add no repaint');
+}));
 
-  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.deepEqual(calls, [['seek', 0], ['resume']]);
-});
+test('play command after terminal EOS opens a fresh generation at frame zero before requesting resume', async t => actualTerminalSong(t, async (h, song) => {
+  await song.finish();
+  const oldAttempt = h.engine().playbackAttempt, commands = [], seeks = [];
+  const priorPort = h.platform.onPortPost, priorSocket = h.platform.onSocketSend;
+  h.platform.onPortPost = (node, data) => {commands.push({channel: 'processor', ...data}); priorPort?.(node, data);};
+  h.platform.onSocketSend = (socket, data) => {commands.push({channel: 'socket', ...data}); priorSocket?.(socket, data);};
+  h.disposals.push(() => {h.platform.onPortPost = priorPort; h.platform.onSocketSend = priorSocket;});
+  const seek = h.c.seekStreamingPlayback;
+  h.c.seekStreamingPlayback = function (...args) {seeks.push(args); return seek.apply(this, args);};
+  const before = h.starts.length;
+  assert.equal(h.c.togglePlayerPlayback({focusTimelineOnResume: false}), true);
+  await h.open();
+  assert.equal(h.starts.length, before + 1, 'one actual same-song fresh start');
+  await h.complete(h.starts[before].work);
+  const engine = h.engine(), role = engine.roles.current;
+  assert.ok(role.generation > song.role.generation, 'terminal processor state is replaced by a fresh generation');
+  assert.notStrictEqual(role, song.role);
+  assert.notStrictEqual(engine.playbackAttempt, oldAttempt);
+  assert.equal(role.track.path, song.track.path);
+  assert.equal(role.startFrame, 0);
+  const opens = commands.filter(message => message.channel === 'socket' && message.type === 'open' && message.generation === role.generation);
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0].startFrame, 0);
+  assert.equal(opens[0].path, song.track.path);
+  const configure = commands.filter(message => message.channel === 'processor' && message.type === 'configure' && message.generation === role.generation);
+  const plays = commands.filter(message => message.channel === 'processor' && message.type === 'play' && message.generation === role.generation);
+  assert.equal(configure.length, 1); assert.equal(plays.length, 1);
+  assert.ok(commands.indexOf(configure[0]) < commands.indexOf(plays[0]), 'actual configure precedes actual PLAY');
+  assert.ok(Number.isSafeInteger(plays[0].playbackIntentId) && plays[0].playbackIntentId > 0);
+  assert.deepEqual(seeks, [], 'terminal restart is not a seek on the ended generation');
+  assert.equal(h.c.getPlayerPlaybackSnapshot().currentTime, 0);
+  assert.equal(h.c.getPlayerPlaybackSnapshot().paused, false);
+  assert.equal(h.c.getPlayerPlaybackSnapshot().ended, false);
+  assert.equal(h.c.currentPlayerSelection(h.owner('playerSelectionOwnership')), true);
+  const handle = h.c.getActivePlaybackOwnershipHandle();
+  assert.ok(handle); assert.notStrictEqual(handle, song.handle);
+  assert.equal(h.c.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.strictEqual(engine.roles.current.track, h.state.player.current);
+}));
 
 test('timeline input, keyboard seek, and drag release each issue one streaming seek', () => {
   const seeks = [];
@@ -704,11 +1375,14 @@ test('pause and seek rejections are observed by the streaming diagnostics bounda
     pauseStreamingPlayback: () => Promise.reject(rejection),
     resumeStreamingPlayback: () => Promise.resolve(true),
     seekStreamingPlayback: () => Promise.reject(rejection),
-    observeStreamingFacadeCallback: (result, source) => {
+    observeStreamingFacadeCallback: (...args) => {
+      assert.equal(args.length, 2);
+      const [result, source] = args;
       observed.push({ result, source });
       void result.catch(() => {});
     },
   });
+  await prepareLocalPlayingControl(context);
   context.attachPlayerEvents();
 
   playButton.dispatch('click');
@@ -723,6 +1397,256 @@ test('pause and seek rejections are observed by the streaming diagnostics bounda
   assert.ok(observed.every(({ result }) => result && typeof result.then === 'function'));
 });
 
+// Reporting-only control diagnostics. Operation promises below are intentional
+// dependency inputs; all role/scope/attempt/claim authority stays with real owners.
+function diagnosticsControlSource(name) {
+  const start = helperSource.indexOf(`function ${name}(`);
+  assert.ok(start >= 0);
+  const end = helperSource.indexOf('\nfunction ', start + 1);
+  assert.ok(end > start);
+  return helperSource.slice(start, end);
+}
+
+async function loadControlDiagnosticsFixture(t, { loop = false, absentObserver = false } = {}) {
+  const reports = [], warnings = [], observations = [], work = [], accepted = new Set(), gates = [];
+  const consoleObserver = { ...console,
+    error(...args) { reports.push(args); }, warn(...args) { warnings.push(args); },
+  };
+  const { context } = loadHelper({ console: consoleObserver });
+  const prepared = await prepareLocalPlayingControl(context);
+  const owners = prepared.owners;
+  context.getPlayerPlaybackSnapshot = owners.getPlayerPlaybackSnapshot;
+  // Loop bounds are explicit input to the clamped-seek unit branch, not a grant.
+  context.state.player.loopActive = loop;
+  context.state.player.loopStart = 10;
+  context.state.player.loopEnd = 30;
+  const actualObserver = context.observeStreamingFacadeCallback;
+  assert.equal(typeof actualObserver, 'function');
+  let subject = context;
+  if (absentObserver) {
+    // Narrow optional-dependency composition: do not delete an initialized owner.
+    assert.equal(vm.runInContext('playerSelectionOwnership', context), null);
+    assert.equal(context.captureStreamingRetiredOutgoingAttempt(), null);
+    const dependencies = {
+      state: context.state, console: consoleObserver,
+      isPlaybackLockedByAnotherTab: context.isPlaybackLockedByAnotherTab,
+      isNativePlayerSourceCurrent: context.isNativePlayerSourceCurrent,
+      getPlayerPlaybackSnapshot: context.getPlayerPlaybackSnapshot,
+      getActivePlaybackOwnershipHandle: context.getActivePlaybackOwnershipHandle,
+      captureStreamingRetiredOutgoingAttempt: context.captureStreamingRetiredOutgoingAttempt,
+      captureStreamingPlaybackAttempt: context.captureStreamingPlaybackAttempt,
+      isStreamingPlaybackAttemptCurrent: context.isStreamingPlaybackAttemptCurrent,
+      currentPlayerSelection: context.currentPlayerSelection,
+      releasePausedPlayerSelection: context.releasePausedPlayerSelection,
+      releasePlaybackOwnership: context.releasePlaybackOwnership,
+      closeListenSegment: context.closeListenSegment,
+      markListenSessionPaused: context.markListenSessionPaused,
+      maybeScrobbleListenSession: context.maybeScrobbleListenSession,
+      resumeListenSessionPlayback: context.resumeListenSessionPlayback,
+      updatePlayerUi: context.updatePlayerUi,
+    };
+    subject = vm.createContext(dependencies);
+    vm.runInContext('let pendingPlayerPlaybackHandoff = null; let playerSelectionOwnership = null;\n'
+      + ['setLoopPlaybackHead', 'setPlayerPlaybackHead', 'pausePlayerPlaybackForHandoff']
+        .map(diagnosticsControlSource).join('\n'), subject);
+    assert.strictEqual(subject.state, context.state);
+    assert.equal(vm.runInContext('typeof observeStreamingFacadeCallback', subject), 'undefined');
+    assert.strictEqual(context.observeStreamingFacadeCallback, actualObserver);
+  } else {
+    subject.observeStreamingFacadeCallback = (...args) => {
+      observations.push(args);
+      return actualObserver(...args);
+    };
+  }
+  const unhandled = [];
+  const onUnhandled = error => unhandled.push(error);
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.removeListener('unhandledRejection', onUnhandled));
+  owners.addObserverCleanup(async () => {
+    // Runtime cleanup retires actual ownership/engine first. Release only our
+    // dependency gates so failed assertions cannot strand the finite teardown.
+    gates.forEach(gate => gate.resolve());
+    const results = await Promise.allSettled(work);
+    const failures = results.flatMap((row, index) => row.status === 'rejected' && !accepted.has(work[index]) ? [row.reason] : []);
+    if (failures.length) throw new AggregateError(failures, 'Unasserted diagnostics test rejection');
+  });
+  const defer = () => {
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const gate = { promise, resolve, reject }; gates.push(gate); work.push(promise); return gate;
+  };
+  const own = promise => { work.push(promise); return promise; };
+  const assertRejected = async (promise, error) => {
+    await assert.rejects(promise, received => received === error);
+    accepted.add(promise);
+  };
+  const assertUnchangedEngine = (role = prepared.role, attempt = prepared.attempt) => {
+    assert.strictEqual(prepared.engine.roles.current, role);
+    assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+    assert.notEqual(prepared.engine.mode, 'error');
+    assert.equal(prepared.engine.context.state, 'running');
+    assert.equal(prepared.engine.context.closeCount, 0);
+    assert.equal(prepared.engine.node.disconnectCount, 0);
+  };
+  return { context, subject, prepared, owners, reports, warnings, observations,
+    unhandled, defer, own, assertRejected, assertUnchangedEngine };
+}
+
+function invokeDiagnosticControl(f, route, result) {
+  const calls = [];
+  if (route === 'pause') {
+    f.subject.pauseStreamingPlayback = () => { calls.push([]); return result; };
+    return { calls, returned: f.own(f.subject.pausePlayerPlaybackForHandoff()) };
+  }
+  f.subject.seekStreamingPlayback = (...args) => { calls.push(args); return result; };
+  return { calls, returned: f.subject.setPlayerPlaybackHead(50) };
+}
+
+for (const route of ['pause', 'normal seek', 'clamped seek']) {
+  test(`control diagnostics reports ${route} rejection once with the exact two-argument observer route`, async t => {
+    const f = await loadControlDiagnosticsFixture(t, { loop: route === 'clamped seek' });
+    const gate = f.defer(), error = new Error(`${route} rejection identity`);
+    const { calls, returned } = invokeDiagnosticControl(f, route, gate.promise);
+    const expected = route === 'pause' ? returned : gate.promise;
+    assert.equal(f.observations.length, 1);
+    assert.equal(f.observations[0].length, 2);
+    assert.strictEqual(f.observations[0][0], expected);
+    assert.equal(f.observations[0][1], route === 'pause' ? 'pause-control-error' : 'seek-control-error');
+    assert.deepEqual(calls, route === 'pause' ? [[]] : [[route === 'clamped seek' ? 30 : 50]]);
+    if (route !== 'pause') assert.equal(returned, undefined);
+    gate.reject(error);
+    await f.assertRejected(gate.promise, error);
+    if (route === 'pause') await f.assertRejected(returned, error);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.reports, [['Streaming facade callback failed', error]]);
+    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.unhandled, []);
+    f.assertUnchangedEngine();
+  });
+}
+
+test('pause diagnostics preserves pending promise sharing, exact rejection and finally latch cleanup', async t => {
+  const f = await loadControlDiagnosticsFixture(t);
+  const gate = f.defer(), error = new Error('pending pause identity');
+  const { returned: first } = invokeDiagnosticControl(f, 'pause', gate.promise);
+  const second = f.subject.pausePlayerPlaybackForHandoff();
+  assert.strictEqual(first, second);
+  assert.strictEqual(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), first);
+  assert.equal(f.observations.length, 1);
+  assert.strictEqual(f.observations[0][0], first);
+  gate.reject(error);
+  await f.assertRejected(gate.promise, error);
+  await f.assertRejected(first, error);
+  assert.equal(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), null);
+  const next = f.defer();
+  const { returned: third } = invokeDiagnosticControl(f, 'pause', next.promise);
+  assert.notStrictEqual(third, first);
+  assert.equal(f.observations.length, 2);
+  next.resolve();
+  assert.equal(await third, true);
+  assert.equal(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.reports, [['Streaming facade callback failed', error]]);
+  assert.deepEqual(f.unhandled, []);
+});
+
+for (const route of ['pause', 'normal seek', 'clamped seek']) {
+  test(`optional diagnostics absence preserves ${route} rejection fallback without removing a real owner`, async t => {
+    const f = await loadControlDiagnosticsFixture(t, { loop: route === 'clamped seek', absentObserver: true });
+    const gate = f.defer(), error = new Error(`${route} optional observer absence`);
+    const { returned } = invokeDiagnosticControl(f, route, gate.promise);
+    gate.reject(error);
+    // Let the product fallback alone observe rejection before assertion ownership.
+    await new Promise(resolve => setImmediate(resolve));
+    await f.assertRejected(gate.promise, error);
+    if (route === 'pause') {
+      await f.assertRejected(returned, error);
+      assert.equal(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), null);
+    } else assert.equal(returned, undefined);
+    assert.deepEqual(f.observations, []);
+    assert.deepEqual(f.reports, []);
+    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.unhandled, []);
+    f.assertUnchangedEngine();
+  });
+}
+
+for (const route of ['pause', 'normal seek', 'clamped seek']) {
+  test(`control diagnostics does not swallow a synchronous ${route} dependency throw`, async t => {
+    const f = await loadControlDiagnosticsFixture(t, { loop: route === 'clamped seek' });
+    const error = new Error(`${route} synchronous identity`);
+    let calls = 0;
+    const throwExact = () => { calls += 1; throw error; };
+    if (route === 'pause') f.subject.pauseStreamingPlayback = throwExact;
+    else f.subject.seekStreamingPlayback = throwExact;
+    assert.throws(() => route === 'pause'
+      ? f.subject.pausePlayerPlaybackForHandoff() : f.subject.setPlayerPlaybackHead(50), received => received === error);
+    assert.equal(calls, 1);
+    assert.deepEqual(f.observations, []);
+    assert.deepEqual(f.reports, []);
+    assert.equal(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), null);
+    f.assertUnchangedEngine();
+  });
+}
+
+for (const route of ['pause', 'normal seek', 'clamped seek']) {
+  test(`control diagnostics leaves successful ${route} return and reporting semantics unchanged`, async t => {
+    const f = await loadControlDiagnosticsFixture(t, { loop: route === 'clamped seek' });
+    const gate = f.defer();
+    const { returned } = invokeDiagnosticControl(f, route, gate.promise);
+    if (route === 'pause') assert.strictEqual(f.subject.pausePlayerPlaybackForHandoff(), returned);
+    else assert.equal(returned, undefined);
+    assert.equal(f.observations.length, 1);
+    assert.equal(f.observations[0].length, 2);
+    assert.strictEqual(f.observations[0][0], route === 'pause' ? returned : gate.promise);
+    gate.resolve(true);
+    if (route === 'pause') {
+      assert.equal(await returned, true);
+      assert.equal(vm.runInContext('pendingPlayerPlaybackHandoff', f.subject), null);
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.reports, []);
+    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.unhandled, []);
+  });
+}
+
+for (const route of ['pause', 'normal seek', 'clamped seek']) {
+  test(`late ${route} rejection is reporting-only and cannot fail a genuine successor`, async t => {
+    const f = await loadControlDiagnosticsFixture(t, { loop: route === 'clamped seek' });
+    const gate = f.defer(), error = new Error(`${route} retired dependency`);
+    const { returned } = invokeDiagnosticControl(f, route, gate.promise);
+    const successor = { path: 'C:/Music/successor.flac', src: '/track?path=successor.flac', title: 'Successor' };
+    for (const name of ['startStreamingTrack', 'resumeStreamingPlayback', 'canStartPlaybackInThisTab']) {
+      f.context[name] = f.owners[name];
+    }
+    assert.equal(await f.own(f.context.playTrackFromPayload(successor)), true);
+    const engine = f.context.streamingEngineState(), role = engine.roles.current;
+    const attempt = f.context.captureStreamingPlaybackAttempt(), handle = f.context.getActivePlaybackOwnershipHandle();
+    assert.strictEqual(role.track, successor);
+    assert.equal(f.context.isPlaybackOwnershipHandleCurrent(handle), true);
+    const closes = engine.context.closeCount, disconnects = engine.node.disconnectCount;
+    gate.reject(error);
+    await f.assertRejected(gate.promise, error);
+    if (route === 'pause') await f.assertRejected(returned, error);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.observations.length, 1);
+    assert.equal(f.observations[0].length, 2);
+    assert.deepEqual(f.reports, [['Streaming facade callback failed', error]]);
+    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.unhandled, []);
+    assert.strictEqual(engine.roles.current, role);
+    assert.strictEqual(f.context.state.player.current, successor);
+    assert.equal(f.context.isStreamingPlaybackAttemptCurrent(attempt), true);
+    assert.strictEqual(f.context.getActivePlaybackOwnershipHandle(), handle);
+    assert.equal(f.context.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.notEqual(engine.mode, 'error');
+    assert.equal(engine.context.state, 'running');
+    assert.equal(engine.context.closeCount, closes);
+    assert.equal(engine.node.disconnectCount, disconnects);
+  });
+}
+
 test('playTrackFromPayload claims ownership and dispatches streaming start without assigning native src', async () => {
   const nativeSrcAssignments = [];
   const audio = new FakeAudioElement({ src: '' });
@@ -732,15 +1656,18 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
     originalSetAttribute(name, value);
   };
   const ownershipClaims = [];
+  let issuedHandle;
   const streamingStarts = [];
   const { context } = loadHelper({
     audio,
-    canStartPlaybackInThisTab(track) {
+    canStartPlaybackInThisTab(track, options) {
       ownershipClaims.push(track);
-      return true;
+      issuedHandle = runtimeFixtureOwners.get(context).canStartPlaybackInThisTab(track, options);
+      return issuedHandle;
     },
     async startStreamingTrack(track, options) {
       streamingStarts.push({ track, options });
+      return runtimeFixtureOwners.get(context).startStreamingTrack(track, options);
     },
   });
   const track = {
@@ -756,6 +1683,21 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.equal(streamingStarts.length, 1);
   assert.strictEqual(streamingStarts[0].track, track);
   assert.deepEqual(nativeSrcAssignments, []);
+  const engine = context.streamingEngineState();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  const selection = vm.runInContext('playerSelectionOwnership', context);
+  assert.ok(issuedHandle);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), issuedHandle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(issuedHandle), true);
+  assert.ok(attempt);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.strictEqual(selection.handle, issuedHandle);
+  assert.strictEqual(selection.attempt, attempt);
+  assert.strictEqual(engine.roles.current.track, track);
+  assert.strictEqual(context.state.player.current, track);
+  assert.notEqual(engine.roles.current.firstFrameNotified, true);
+  assert.equal(engine.diagnostics.firstFrameAtMs, 0);
+  assert.equal(context.successfulPlaybackClaim(issuedHandle), false);
 });
 
 test('ownership denial leaves streaming, current track, and native src untouched', async () => {
@@ -798,9 +1740,13 @@ test('streaming start rejection stays inspectable and never falls back to native
     originalSetAttribute(name, value);
   };
   const failure = new Error('streaming transport rejected');
+  let issuedHandle;
   const { context } = loadHelper({
     audio,
-    canStartPlaybackInThisTab: () => true,
+    canStartPlaybackInThisTab(track, options) {
+      issuedHandle = runtimeFixtureOwners.get(context).canStartPlaybackInThisTab(track, options);
+      return issuedHandle;
+    },
     startStreamingTrack: async () => { throw failure; },
   });
 
@@ -811,6 +1757,14 @@ test('streaming start rejection stays inspectable and never falls back to native
     (error) => error === failure,
   );
   assert.deepEqual(nativeSrcAssignments, []);
+  assert.ok(issuedHandle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(issuedHandle), false);
+  assert.notStrictEqual(context.getActivePlaybackOwnershipHandle(), issuedHandle);
+  const lease = context.readPlaybackOwnershipRecord();
+  assert.equal(Boolean(lease && lease.tab_id === issuedHandle.tab_id
+    && lease.claim_revision === issuedHandle.claim_revision), false);
+  assert.equal(context.streamingEngineState().roles.current, null);
+  assert.equal(context.captureStreamingPlaybackAttempt(), null);
 });
 
 test('a stale rapid-selection start completion cannot replace the newer streaming track', async () => {
@@ -832,11 +1786,13 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
   const listenTracks = [];
   const nowPlayingTracks = [];
   const uiCurrentPaths = [];
+  const uiEvents = [];
+  const publications = [];
+  const handles = [];
+  const work = [];
   let startIndex = 0;
   const { context } = loadHelper({
     audio,
-    canStartPlaybackInThisTab: () => true,
-    startStreamingTrack: () => starts[startIndex++].promise,
     resumeListenSessionPlayback: async (track) => {
       listenTracks.push(track);
       return { track };
@@ -845,8 +1801,43 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
       nowPlayingTracks.push(track);
     },
   });
+  const owners = runtimeFixtureOwners.get(context);
+  const retain = pending => {
+    work.push(pending);
+    void Promise.resolve(pending).catch(() => {});
+    return pending;
+  };
+  owners.addObserverCleanup(async () => {
+    // Fixture teardown retires selection/claim and stops the engine BEFORE
+    // releasing these completion gates; stale publication cannot be revived.
+    firstStart.resolve();
+    secondStart.resolve();
+    const settled = await Promise.allSettled(work);
+    const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Rapid-selection owner work failed');
+  });
+  context.getPlayerPlaybackSnapshot = owners.getPlayerPlaybackSnapshot;
+  context.resumeStreamingPlayback = (...args) => retain(owners.resumeStreamingPlayback(...args));
+  context.canStartPlaybackInThisTab = (...args) => {
+    const handle = owners.canStartPlaybackInThisTab(...args);
+    handles.push(handle);
+    return handle;
+  };
+  context.startStreamingTrack = (...args) => {
+    const gate = starts[startIndex++];
+    // Invoke genuine admission NOW. Only its returned completion is delayed.
+    const actual = retain(owners.startStreamingTrack(...args));
+    return retain(Promise.all([actual, gate.promise]).then(([role]) => role));
+  };
+  const actualPublish = context.setCurrentPlayerTrack;
+  context.setCurrentPlayerTrack = (...args) => {
+    const published = actualPublish(...args);
+    if (published) publications.push(published);
+    return published;
+  };
   context.updatePlayerUi = () => {
     uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    uiEvents.push({ track: context.state.player.current, handle: context.getActivePlaybackOwnershipHandle() });
   };
   const olderTrack = {
     path: 'C:\\Music\\Older.flac', src: '/track?path=Older.flac', title: 'Older',
@@ -855,19 +1846,42 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
     path: 'C:\\Music\\Newer.flac', src: '/track?path=Newer.flac', title: 'Newer',
   };
 
-  const olderResult = context.playTrackFromPayload(olderTrack);
-  const newerResult = context.playTrackFromPayload(newerTrack);
+  const initialTrack = context.state.player.current;
+  const olderResult = retain(context.playTrackFromPayload(olderTrack));
+  const newerResult = retain(context.playTrackFromPayload(newerTrack));
+  assert.equal(startIndex, 2);
+  assert.equal(handles.length, 2);
+  assert.ok(handles[0]);
+  assert.ok(handles[1]);
+  assert.notStrictEqual(handles[0], handles[1]);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handles[0]), false);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handles[1]), true);
   secondStart.resolve({ role: 'current', streamId: 2, generation: 2 });
-  await newerResult;
+  assert.equal(await newerResult, true);
   firstStart.resolve({ role: 'current', streamId: 1, generation: 1 });
-  await olderResult;
+  assert.equal(await olderResult, false);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.strictEqual(context.state.player.current, newerTrack);
   assert.deepEqual(listenTracks, [newerTrack]);
   assert.deepEqual(nowPlayingTracks, [newerTrack]);
-  assert.equal(uiCurrentPaths.length, 2);
-  assert.equal(uiCurrentPaths.every((path) => path === newerTrack.path), true);
+  // Approved observation split: exactly one successful publication, plus ALL
+  // ownership and facade repaints (including the pre-publication old display).
+  assert.deepEqual(publications, [newerTrack]);
+  assert.deepEqual(uiEvents, [
+    { track: initialTrack, handle: handles[0] },
+    { track: initialTrack, handle: null },
+    { track: initialTrack, handle: handles[1] },
+    { track: newerTrack, handle: handles[1] },
+    { track: newerTrack, handle: handles[1] },
+  ]);
+  assert.deepEqual(uiCurrentPaths, ['', '', '', newerTrack.path, newerTrack.path]);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handles[1]);
+  const engine = context.streamingEngineState();
+  assert.strictEqual(engine.roles.current.track, newerTrack);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(context.captureStreamingPlaybackAttempt()), true);
+  assert.equal(context.successfulPlaybackClaim(handles[1]), false);
+  assert.notEqual(engine.roles.current.firstFrameNotified, true);
   assert.deepEqual(nativeSrcAssignments, []);
   assert.equal(audio.playCalls, 0);
 });
@@ -888,18 +1902,122 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
   const listenTracks = [];
   const nowPlayingTracks = [];
   const uiCurrentPaths = [];
-  const promotedCurrent = {
-    role: 'current', generation: 4, streamId: 12, track: replacement, firstFrameNotified: true,
-  };
+  let promotedCurrent, repeatedFirstFrame;
   const { context } = loadHelper({
     audio,
     state: {
       player: { current: outgoing, loopActive: false, loopStart: 0, loopEnd: 30, waveform: { renderToken: 0 } },
       utility: { loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '', selectedLoopDetailMode: '', activeTab: '' },
     },
-    canStartPlaybackInThisTab: () => true,
+  });
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [], thrown = [];
+  owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(retained);
+    const errors = [...thrown, ...settled.filter(row => row.status === 'rejected').map(row => row.reason)];
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Owned promoted replacement failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  const forward = callback => (...args) => {
+    try { return retain(callback(...args)); }
+    catch (error) { thrown.push(error); throw error; }
+  };
+  context.getPlayerPlaybackSnapshot = owners.getPlayerPlaybackSnapshot;
+  context.resumeStreamingPlayback = forward(owners.resumeStreamingPlayback);
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = forward(firstFrame);
+  // Genuine outgoing setup precedes installation of ALL original action observers.
+  const outgoingRole = await retain(owners.startStreamingTrack(outgoing, { autoplay: true }));
+  const engine = context.streamingEngineState();
+  assert.strictEqual(engine.roles.current, outgoingRole);
+  assert.strictEqual(outgoingRole.track, outgoing);
+  assert.equal(engine.context.state, 'running');
+  engine.socket.open();
+  const metadata = (role, total) => ({ type: 'metadata', generation: role.generation,
+    streamId: role.streamId, role: role.role, sampleRate: 48000, channels: 2,
+    provisionalTotalFrames: total, requestedStartFrame: role.startFrame, timelineStartFrame: role.startFrame });
+  engine.socket.emit(metadata(outgoingRole, 96000));
+  // Declared finite processor/server reports, not decoded or physically rendered PCM.
+  engine.node.emit({ type: 'consumed', generation: outgoingRole.generation,
+    streamId: outgoingRole.streamId, role: 'current', frames: 0, bufferedFrames: 48000 });
+  engine.node.emit({ type: 'first-frame', generation: outgoingRole.generation,
+    streamId: outgoingRole.streamId, renderedFrame: 1, contextTime: 0 });
+  assert.equal(outgoingRole.firstFrameNotified, true);
+  assert.ok(engine.diagnostics.firstFrameAtMs > 0);
+  assert.equal(engine.diagnostics.bufferedFrames.current, 48000);
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+  assert.equal(vm.runInContext('playerSelectionOwnership', context), null);
+  const scope = context.capturePlaybackOwnershipScope();
+  const handle = owners.canStartPlaybackInThisTab(replacement, {
+    isCurrent: () => context.isPlaybackOwnershipScopeCurrent(scope)
+      && context.isNativePlayerSourceCurrent(replacement),
+  });
+  assert.ok(handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.strictEqual(context.state.player.current, outgoing);
+  assert.deepEqual(starts, []);
+  assert.deepEqual(scheduled, []);
+  assert.deepEqual(listenTracks, []);
+  assert.deepEqual(nowPlayingTracks, []);
+  assert.deepEqual(uiCurrentPaths, []);
+  // Original isolated provider boundary: one genuinely issued exact-track grant.
+  // No in-action owner repaint is filtered; this is not full claim integration.
+  Object.assign(context, {
+    canStartPlaybackInThisTab(track, options) {
+      assert.strictEqual(track, replacement);
+      if (!context.isPlaybackOwnershipScopeCurrent(scope)
+        || !context.isPlaybackOwnershipHandleCurrent(handle)
+        || options?.isCurrent?.() !== true) return false;
+      return handle;
+    },
     async startStreamingTrack(track, options) {
       starts.push({ track, options });
+      const completion = retain(owners.startStreamingTrack(track, options));
+      const pending = engine.pendingSeek;
+      assert.ok(pending);
+      assert.equal(pending.kind, 'replacement');
+      assert.equal(pending.currentStreamId, outgoingRole.streamId);
+      const incoming = engine.roles.continuity;
+      assert.ok(incoming);
+      assert.strictEqual(incoming.track, replacement);
+      assert.equal(pending.streamId, incoming.streamId);
+      assert.ok(engine.node.sent.some(message => message.type === 'reserve-seek'
+        && message.generation === pending.generation && message.streamId === incoming.streamId));
+      const total = incoming.targetBufferFrames;
+      assert.ok(Number.isInteger(total) && total > 0);
+      engine.socket.emit(metadata(incoming, total));
+      engine.node.emit({ type: 'consumed', generation: incoming.generation,
+        streamId: incoming.streamId, role: 'continuity', frames: 0, bufferedFrames: total });
+      engine.socket.emit({ type: 'eos', generation: incoming.generation, streamId: incoming.streamId,
+        role: 'continuity', emittedFrames: total, authoritativeTotalFrames: total });
+      assert.equal(pending.prepareSent, true);
+      assert.ok(engine.node.sent.some(message => message.type === 'prepare-seek'
+        && message.generation === pending.generation && message.streamId === incoming.streamId));
+      engine.node.emit({ type: 'seek-boundary', generation: pending.generation,
+        outgoingStreamId: outgoingRole.streamId, incomingStreamId: incoming.streamId,
+        timelineFrame: 0, renderedFrame: 0 });
+      assert.strictEqual(engine.roles.current, incoming);
+      assert.equal(engine.roles.continuity, null);
+      assert.equal(engine.pendingSeek, null);
+      assert.ok(engine.pendingPromotion);
+      engine.socket.emit({ type: 'promoted', generation: incoming.generation,
+        streamId: incoming.streamId, role: 'current' });
+      assert.equal(engine.pendingPromotion, null);
+      assert.strictEqual(context.state.player.current, outgoing);
+      engine.node.emit({ type: 'first-frame', generation: incoming.generation,
+        streamId: incoming.streamId, renderedFrame: 1, contextTime: 0 });
+      assert.equal(incoming.firstFrameNotified, true);
+      assert.deepEqual(scheduled, []);
+      assert.deepEqual(listenTracks, []);
+      promotedCurrent = await completion;
+      assert.strictEqual(promotedCurrent, incoming);
+      assert.equal(context.isStreamingPlaybackAttemptCurrent(context.captureStreamingPlaybackAttempt()), true);
+      repeatedFirstFrame = { generation: promotedCurrent.generation,
+        streamId: promotedCurrent.streamId, trackPath: replacement.path };
       return promotedCurrent;
     },
     peekNextQueuedTrack: () => adjacent,
@@ -914,13 +2032,10 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
       nowPlayingTracks.push(track);
     },
   });
+  context.startStreamingTrack = forward(context.startStreamingTrack);
+  context.playTrackFromPayload = forward(context.playTrackFromPayload);
   context.updatePlayerUi = () => {
     uiCurrentPaths.push(String(context.state.player.current?.path || ''));
-  };
-  const repeatedFirstFrame = {
-    generation: promotedCurrent.generation,
-    streamId: promotedCurrent.streamId,
-    trackPath: replacement.path,
   };
 
   await context.playTrackFromPayload(replacement, { autoplay: true });
@@ -940,6 +2055,13 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
   assert.deepEqual(nowPlayingTracks, [replacement]);
   assert.deepEqual(uiCurrentPaths, [replacement.path, replacement.path]);
   assert.equal(audio.playCalls, 0, 'reconciliation never returns to native audio playback');
+  assert.strictEqual(engine.roles.current, promotedCurrent);
+  assert.strictEqual(promotedCurrent.track, replacement);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  const selection = vm.runInContext('playerSelectionOwnership', context);
+  assert.strictEqual(selection.handle, handle);
+  assert.strictEqual(selection.attempt, context.captureStreamingPlaybackAttempt());
 });
 
 test('streaming first-frame scheduling peeks exactly one queued track', async () => {
@@ -956,10 +2078,61 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
     },
   });
 
-  await context.handleStreamingPlaybackFirstFrame({ generation: 1, streamId: 7 });
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Simulated processor callback work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  const current = context.state.player.current;
+  assert.equal(current.src, '/track?path=song.flac');
+  assert.equal(Object.hasOwn(current, 'path'), false);
+  current.path = 'C:/Music/song.flac';
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  assert.equal(await retain(context.playTrackFromPayload(current, { autoplay: true })), true);
+  const engine = context.streamingEngineState();
+  const role = engine.roles.current;
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  assert.strictEqual(role.track, current);
+  assert.ok(handle);
+  assert.ok(attempt);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+  let firstFrameWork;
+  let firstFrameEvent;
+  let firstFrameCalls = 0;
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameCalls += 1;
+    firstFrameEvent = event;
+    firstFrameWork = retain(firstFrame(event));
+    return firstFrameWork;
+  };
+  assert.equal(peekCalls, 0);
+  assert.deepEqual(scheduled, []);
+  // Simulated processor delivery tests facade dispatch, not rendered PCM or LS-09 evidence.
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+  assert.equal(firstFrameCalls, 1);
+  assert.equal(firstFrameEvent.trackPath, current.path);
+  assert.equal(firstFrameEvent.generation, role.generation);
+  assert.equal(firstFrameEvent.streamId, role.streamId);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
 });
 
 test('changing tracks clears an outgoing timeline drag preview', () => {
@@ -975,19 +2148,99 @@ test('streaming boundary consumes the queued track exactly once', async () => {
   const nextTrack = { path: 'C:\\Music\\Next.flac', durationSeconds: 30 };
   let consumeCalls = 0;
   const { context } = loadHelper({
+    peekNextQueuedTrack: () => nextTrack,
     getNextQueuedTrack() {
       consumeCalls += 1;
       return nextTrack;
     },
   });
 
-  await context.handleStreamingPlaybackBoundary({
-    generation: 1,
-    outgoingStreamId: 7,
-    incomingStreamId: 8,
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Simulated processor callback work failed');
   });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  const current = context.state.player.current;
+  assert.equal(current.src, '/track?path=song.flac');
+  assert.equal(Object.hasOwn(current, 'path'), false);
+  current.path = 'C:/Music/song.flac';
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  assert.equal(await retain(context.playTrackFromPayload(current, { autoplay: true })), true);
+  const engine = context.streamingEngineState();
+  const role = engine.roles.current;
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  assert.strictEqual(role.track, current);
+  assert.ok(handle);
+  assert.ok(attempt);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+  let firstFrameWork;
+  let firstFrameEvent;
+  let firstFrameCalls = 0;
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameCalls += 1;
+    firstFrameEvent = event;
+    firstFrameWork = retain(firstFrame(event));
+    return firstFrameWork;
+  };
+  assert.equal(consumeCalls, 0);
+  // Simulated readiness and boundary reports are unit inputs, not rendering evidence.
+  engine.node.emit({ type: 'consumed', generation: role.generation, streamId: role.streamId,
+    role: 'current', frames: 0, bufferedFrames: 48000 });
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
+  assert.equal(firstFrameCalls, 1);
+  assert.equal(firstFrameEvent.trackPath, current.path);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  const continuity = engine.roles.continuity;
+  assert.ok(continuity);
+  assert.strictEqual(continuity.track, nextTrack);
+  assert.equal(continuity.continuityOptions.kind, 'queued-next');
+  assert.equal(consumeCalls, 0);
+  const renderedFrame = context.getPlayerPlaybackSnapshot().renderedFrame;
+  assert.equal(renderedFrame, 1);
+  let boundaryWork;
+  let boundaryEvent;
+  let boundaryCalls = 0;
+  const boundary = context.handleStreamingPlaybackBoundary;
+  context.handleStreamingPlaybackBoundary = event => {
+    boundaryCalls += 1;
+    boundaryEvent = event;
+    boundaryWork = retain(boundary(event));
+    return boundaryWork;
+  };
+
+  engine.node.emit({ type: 'boundary', generation: role.generation,
+    outgoingStreamId: role.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame, timelineFrame: 0 });
+  assert.ok(boundaryWork);
+  await boundaryWork;
 
   assert.equal(consumeCalls, 1);
+  assert.equal(boundaryCalls, 1);
+  assert.equal(boundaryEvent.outgoingTrackPath, current.path);
+  assert.equal(boundaryEvent.incomingTrackPath, nextTrack.path);
+  assert.equal(boundaryEvent.generation, role.generation);
+  assert.equal(boundaryEvent.outgoingStreamId, role.streamId);
+  assert.equal(boundaryEvent.incomingStreamId, continuity.streamId);
+  assert.strictEqual(context.state.player.current, nextTrack);
+  assert.strictEqual(engine.roles.current, continuity);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
 });
 
 test('duplicate streaming boundary notification is an idempotent queue no-op', async () => {
@@ -1002,16 +2255,82 @@ test('duplicate streaming boundary notification is an idempotent queue no-op', a
     peekNextQueuedTrack: () => incoming,
     getNextQueuedTrack() { consumeCalls += 1; return incoming; },
   });
-  const boundary = {
-    generation: 7, outgoingStreamId: 41, incomingStreamId: 42,
-    outgoingTrackPath: outgoing.path, incomingTrackPath: incoming.path, renderedFrame: 1440000,
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Simulated boundary callback work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  assert.equal(await retain(context.playTrackFromPayload(outgoing, { autoplay: true })), true);
+  const engine = context.streamingEngineState();
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  const role = engine.roles.current;
+  assert.ok(handle);
+  assert.ok(attempt);
+  assert.strictEqual(role.track, outgoing);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+  assert.equal(consumeCalls, 0);
+  let firstFrameWork;
+  let firstFrameCalls = 0;
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = (...args) => {
+    firstFrameCalls += 1;
+    firstFrameWork = retain(firstFrame(...args));
+    return firstFrameWork;
+  };
+  // Simulated processor reports exercise owner guards, not PCM rendering or LS-09 evidence.
+  engine.node.emit({ type: 'consumed', generation: role.generation, streamId: role.streamId,
+    role: 'current', frames: 0, bufferedFrames: 48000 });
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
+  assert.equal(firstFrameCalls, 1);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  const continuity = engine.roles.continuity;
+  assert.ok(continuity);
+  assert.strictEqual(continuity.track, incoming);
+  assert.equal(continuity.continuityOptions.kind, 'queued-next');
+  assert.equal(consumeCalls, 0);
+  let boundary;
+  let boundaryWork;
+  let boundaryCalls = 0;
+  const originalBoundary = context.handleStreamingPlaybackBoundary;
+  context.handleStreamingPlaybackBoundary = (event) => {
+    boundaryCalls += 1;
+    boundary = event;
+    boundaryWork = retain(originalBoundary(event));
+    return boundaryWork;
   };
 
-  await context.handleStreamingPlaybackBoundary(boundary);
-  await context.handleStreamingPlaybackBoundary(boundary);
+  engine.node.emit({ type: 'boundary', generation: role.generation,
+    outgoingStreamId: role.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame: 1440000, timelineFrame: 0 });
+  assert.ok(boundaryWork);
+  await boundaryWork;
+  assert.equal(boundaryCalls, 1);
+  assert.equal(boundary.renderedFrame, 1440000);
+  assert.equal(boundary.outgoingTrackPath, outgoing.path);
+  assert.equal(boundary.incomingTrackPath, incoming.path);
+  await retain(originalBoundary(boundary));
 
   assert.equal(consumeCalls, 1);
   assert.strictEqual(context.state.player.current, incoming);
+  assert.strictEqual(engine.roles.current, continuity);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
 });
 
 test('queued boundary hands off listen side effects exactly once at the processor offset', async () => {
@@ -1075,18 +2394,117 @@ test('queued boundary hands off listen side effects exactly once at the processo
       nowPlaying.push({ track, session });
     },
   });
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Session boundary callback work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  const controlledSnapshot = context.getPlayerPlaybackSnapshot;
+  context.getPlayerPlaybackSnapshot = owners.getPlayerPlaybackSnapshot;
+  context.resumeStreamingPlayback = owners.resumeStreamingPlayback;
+  const scope = context.capturePlaybackOwnershipScope();
+  const handle = owners.canStartPlaybackInThisTab(outgoing, {
+    isCurrent: () => context.isPlaybackOwnershipScopeCurrent(scope),
+  });
+  assert.ok(handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  let attempt;
+  const role = await retain(owners.startStreamingTrack(outgoing, {
+    startSeconds: 0, autoplay: true,
+    onStartAttempt(value) {
+      attempt = value;
+      assert.equal(context.bindPlaybackOwnershipAttempt(handle, value), true);
+    },
+  }));
+  const engine = context.streamingEngineState();
+  assert.ok(role);
+  assert.ok(attempt);
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, outgoing);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(owners.getPlayerPlaybackSnapshot().paused, false);
+  let firstFrameWork;
+  let firstFrameCalls = 0;
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameCalls += 1;
+    firstFrameWork = retain(firstFrame(event));
+    return firstFrameWork;
+  };
+  // Simulated processor coordinates exercise session handoff, not rendered PCM or LS-09 evidence.
+  engine.node.emit({ type: 'consumed', generation: role.generation, streamId: role.streamId,
+    role: 'current', frames: 0, bufferedFrames: 48000 });
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
+  assert.equal(firstFrameCalls, 1);
+  assert.equal(context.commitPlaybackOwnership(handle, role, outgoing), true);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  const continuity = engine.roles.continuity;
+  assert.ok(continuity);
+  assert.strictEqual(continuity.track, incoming);
+  assert.equal(continuity.continuityOptions.kind, 'queued-next');
+  assert.strictEqual(context.state.player.current, outgoing);
+  assert.strictEqual(context.state.player.listenSession, outgoingSession);
+  assert.equal(consumeCalls, 0);
+  assert.deepEqual(finalizations, []);
+  assert.deepEqual(listenStarts, []);
+  assert.deepEqual(nowPlaying, []);
+  assert.equal(role.startFrame, 0);
+  assert.equal(role.renderedFrameBase, 0);
+  assert.equal(vm.runInContext('STREAMING_SAMPLE_RATE', context), 48000);
+  assert.equal(1470000 / 48000, exactOutgoingSnapshot.currentTime);
+  assert.equal(6000 / 48000, controlledSnapshot().currentTime);
+  context.getPlayerPlaybackSnapshot = controlledSnapshot;
   context.attachPlayerEvents();
-  const boundary = {
-    generation: 7,
-    outgoingStreamId: 41,
-    incomingStreamId: 42,
-    outgoingTrackPath: outgoing.path,
-    incomingTrackPath: incoming.path,
-    outgoingPlaybackSnapshot: exactOutgoingSnapshot,
+  assert.strictEqual(context.state.player.listenSession, outgoingSession);
+  assert.equal(consumeCalls, 0);
+  assert.deepEqual(finalizations, []);
+  assert.deepEqual(listenStarts, []);
+  assert.deepEqual(nowPlaying, []);
+  let boundary;
+  let boundaryWork;
+  let boundaryCalls = 0;
+  const originalBoundary = context.handleStreamingPlaybackBoundary;
+  context.handleStreamingPlaybackBoundary = event => {
+    boundaryCalls += 1;
+    boundary = event;
+    const actual = owners.getPlayerPlaybackSnapshot();
+    const controlled = controlledSnapshot();
+    assert.equal(controlled.mode, 'streaming');
+    assert.deepEqual({ currentTime: actual.currentTime, duration: actual.duration,
+      paused: actual.paused, ended: actual.ended, src: actual.src },
+    { currentTime: controlled.currentTime, duration: controlled.duration,
+      paused: controlled.paused, ended: controlled.ended, src: controlled.src });
+    assert.equal(actual.generation, role.generation);
+    assert.strictEqual(engine.roles.current, continuity);
+    assert.equal(engine.context.state, 'running');
+    assert.equal(event.outgoingPlaybackSnapshot.currentTime, exactOutgoingSnapshot.currentTime);
+    assert.equal(event.outgoingPlaybackSnapshot.duration, exactOutgoingSnapshot.duration);
+    assert.equal(event.outgoingTrackPath, outgoing.path);
+    assert.equal(event.incomingTrackPath, incoming.path);
+    assert.strictEqual(context.state.player.listenSession, outgoingSession);
+    boundaryWork = retain(originalBoundary(event));
+    return boundaryWork;
   };
 
-  await context.handleStreamingPlaybackBoundary(boundary);
-  await context.handleStreamingPlaybackBoundary(boundary);
+  engine.node.emit({ type: 'boundary', generation: role.generation,
+    outgoingStreamId: role.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame: 1470000, timelineFrame: 6000 });
+  assert.ok(boundaryWork);
+  assert.equal(boundaryCalls, 1);
+  await boundaryWork;
+  await retain(originalBoundary(boundary));
+
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(consumeCalls, 1);
@@ -1115,13 +2533,78 @@ test('queue mutation invalidates the prepared incoming identity before boundary 
     peekNextQueuedTrack: () => next,
     getNextQueuedTrack() { consumeCalls += 1; return next; },
   });
-  await context.handleStreamingPlaybackFirstFrame({ generation: 9, streamId: 51 });
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Queue-mutation callback work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  assert.equal(await retain(context.playTrackFromPayload(outgoing, { autoplay: true })), true);
+  const engine = context.streamingEngineState();
+  const role = engine.roles.current;
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  assert.strictEqual(role.track, outgoing);
+  assert.ok(handle);
+  assert.ok(attempt);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+  let firstFrameWork;
+  let firstFrameCalls = 0;
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameCalls += 1;
+    firstFrameWork = retain(firstFrame(event));
+    return firstFrameWork;
+  };
+  // Simulated processor reports test queue guards, not actual rendering or LS-09 evidence.
+  engine.node.emit({ type: 'consumed', generation: role.generation, streamId: role.streamId,
+    role: 'current', frames: 0, bufferedFrames: 48000 });
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
+  assert.equal(firstFrameCalls, 1);
+  const continuity = engine.roles.continuity;
+  assert.ok(continuity);
+  assert.strictEqual(continuity.track, prepared);
+  assert.equal(continuity.continuityOptions.kind, 'queued-next');
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(consumeCalls, 0);
   next = reordered;
 
-  await assert.rejects(context.handleStreamingPlaybackBoundary({
-    generation: 9, outgoingStreamId: 51, incomingStreamId: 52,
-    outgoingTrackPath: outgoing.path, incomingTrackPath: prepared.path,
-  }), /identity|mismatch/i);
+  const renderedFrame = context.getPlayerPlaybackSnapshot().renderedFrame;
+  assert.equal(renderedFrame, 1);
+  let boundaryWork;
+  let boundaryEvent;
+  let boundaryCalls = 0;
+  const boundary = context.handleStreamingPlaybackBoundary;
+  context.handleStreamingPlaybackBoundary = event => {
+    boundaryCalls += 1;
+    boundaryEvent = event;
+    boundaryWork = boundary(event);
+    retain(assert.rejects(boundaryWork, /identity|mismatch/i));
+    return boundaryWork;
+  };
+  engine.node.emit({ type: 'boundary', generation: role.generation,
+    outgoingStreamId: role.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame, timelineFrame: 0 });
+  assert.ok(boundaryWork);
+  assert.equal(boundaryCalls, 1);
+  assert.equal(boundaryEvent.outgoingTrackPath, outgoing.path);
+  assert.equal(boundaryEvent.incomingTrackPath, prepared.path);
+  await assert.rejects(boundaryWork, /identity|mismatch/i);
   assert.equal(consumeCalls, 0);
   assert.strictEqual(context.state.player.current, outgoing);
 });
@@ -1141,7 +2624,9 @@ test('enabling and disabling an A/B loop swaps one continuity role then restores
     peekNextQueuedTrack: () => queued,
     scheduleStreamingContinuity: async (track, options) => { scheduled.push({ track, options }); },
     setStreamingLoop: (...args) => { loopMessages.push(args); },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
   context.state.player.loopStart = 10;
   context.state.player.loopEnd = 14;
 
@@ -1175,7 +2660,9 @@ test('enabling the untouched full-track range prepares whole-track repeat from f
     },
     getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 30, paused: false, ended: false, src: current.path }),
     scheduleStreamingContinuity: async (track, options) => { scheduled.push({ track, options }); },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
 
   context.setLoopActive(true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -1201,7 +2688,7 @@ test('streaming boundary schedules the third track while optional waveform promo
   const promotion = new Promise((resolve, reject) => {
     rejectPromotion = reject;
   });
-  void promotion.then(
+  const promotionObservation = promotion.then(
     () => { promotionSettled = true; },
     () => { promotionSettled = true; },
   );
@@ -1224,9 +2711,6 @@ test('streaming boundary schedules the third track while optional waveform promo
       consumeCalls += 1;
       return queue.shift() || null;
     },
-    getPlayerPlaybackSnapshot: () => ({
-      generation: 7, currentTime: 0, duration: 30, paused: false, ended: false, src: incoming.src || '',
-    }),
     promoteWaveformPeaks: (...args) => {
       promotionCalls.push(args);
       return promotion;
@@ -1238,16 +2722,95 @@ test('streaming boundary schedules the third track while optional waveform promo
     },
   });
 
-  const boundary = {
-    generation: 7,
-    outgoingStreamId: 41,
-    incomingStreamId: 42,
-    outgoingTrackPath: outgoing.path,
-    incomingTrackPath: incoming.path,
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  owners.addObserverCleanup(async () => {
+    if (!promotionSettled) rejectPromotion(new Error('Optional waveform fixture teardown'));
+    await promotionObservation;
+    const results = await Promise.allSettled(retained);
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Optional waveform callback work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
   };
-  const firstBoundary = context.handleStreamingPlaybackBoundary(boundary);
-  void firstBoundary.then(() => { boundarySettled = true; });
-  await context.handleStreamingPlaybackBoundary(boundary);
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  const scheduleObserver = context.scheduleStreamingContinuity;
+  context.scheduleStreamingContinuity = owners.scheduleStreamingContinuity;
+  let role, handle, engine, generation, continuity;
+  try {
+    assert.equal(await retain(context.playTrackFromPayload(outgoing, { autoplay: true })), true);
+    engine = context.streamingEngineState();
+    role = engine.roles.current;
+    handle = context.getActivePlaybackOwnershipHandle();
+    const attempt = context.captureStreamingPlaybackAttempt();
+    assert.strictEqual(role.track, outgoing);
+    assert.ok(handle);
+    assert.ok(attempt);
+    assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+    assert.equal(engine.context.state, 'running');
+    assert.equal(context.getPlayerPlaybackSnapshot().paused, false);
+    let firstFrameWork;
+    let firstFrameCalls = 0;
+    const firstFrame = context.handleStreamingPlaybackFirstFrame;
+    context.handleStreamingPlaybackFirstFrame = event => {
+      firstFrameCalls += 1;
+      firstFrameWork = retain(firstFrame(event));
+      return firstFrameWork;
+    };
+    // Simulated processor reports test facade ordering, not rendered PCM or LS-09 evidence.
+    engine.node.emit({ type: 'consumed', generation: role.generation, streamId: role.streamId,
+      role: 'current', frames: 0, bufferedFrames: 48000 });
+    engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+      renderedFrame: 1, contextTime: 0 });
+    assert.ok(firstFrameWork);
+    await firstFrameWork;
+    assert.equal(firstFrameCalls, 1);
+    assert.equal(context.successfulPlaybackClaim(handle), true);
+    continuity = engine.roles.continuity;
+    assert.ok(continuity);
+    assert.strictEqual(continuity.track, incoming);
+    assert.equal(continuity.continuityOptions.kind, 'queued-next');
+    generation = role.generation;
+    assert.equal(engine.generation, generation);
+    assert.equal(continuity.generation, generation);
+    assert.equal(context.getPlayerPlaybackSnapshot().generation, generation);
+    assert.deepEqual(queue, [incoming, third]);
+    assert.equal(consumeCalls, 0);
+    assert.deepEqual(scheduled, []);
+    assert.deepEqual(promotionCalls, []);
+  } finally {
+    context.scheduleStreamingContinuity = scheduleObserver;
+  }
+  let boundary;
+  let firstBoundary;
+  let boundaryCalls = 0;
+  const originalBoundary = context.handleStreamingPlaybackBoundary;
+  context.handleStreamingPlaybackBoundary = event => {
+    boundaryCalls += 1;
+    boundary = event;
+    const snapshot = context.getPlayerPlaybackSnapshot();
+    assert.deepEqual({ generation: snapshot.generation, currentTime: snapshot.currentTime,
+      duration: snapshot.duration, paused: snapshot.paused, ended: snapshot.ended, src: snapshot.src },
+    { generation, currentTime: 0, duration: 30, paused: false, ended: false, src: incoming.src || '' });
+    firstBoundary = retain(originalBoundary(event));
+    return firstBoundary;
+  };
+  const renderedFrame = context.getPlayerPlaybackSnapshot().renderedFrame;
+  assert.equal(renderedFrame, 1);
+  engine.node.emit({ type: 'boundary', generation,
+    outgoingStreamId: role.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame, timelineFrame: 0 });
+  assert.ok(firstBoundary);
+  assert.equal(boundaryCalls, 1);
+  assert.equal(boundary.generation, generation);
+  retain(firstBoundary.then(() => { boundarySettled = true; }));
+  await retain(originalBoundary(boundary));
+
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(promotionSettled, false, 'optional peak promotion remains unresolved');
@@ -1255,26 +2818,30 @@ test('streaming boundary schedules the third track while optional waveform promo
   assert.equal(consumeCalls, 1, 'duplicate boundary notification consumes the incoming track once');
   assert.strictEqual(context.state.player.current, incoming);
   assert.deepEqual(scheduled, [third], 'the newly adjacent third track is prepared immediately');
-  assert.deepEqual(promotionCalls, [[outgoing.path, incoming.path, 7]]);
+  assert.deepEqual(promotionCalls, [[outgoing.path, incoming.path, generation]]);
 
   const rejection = new Error('optional compact peaks failed');
   rejectPromotion(rejection);
   await firstBoundary;
   await new Promise((resolve) => setImmediate(resolve));
-  await context.handleStreamingPlaybackBoundary(boundary);
+  await retain(originalBoundary(boundary));
 
   assert.equal(warnings.length, 1, 'optional peak rejection is observed once as a warning');
   assert.match(String(warnings[0][0]), /optional peak promotion failed/i);
   assert.strictEqual(warnings[0][1], rejection);
   assert.equal(consumeCalls, 1, 'settled duplicate boundary remains an exact no-op');
   assert.deepEqual(scheduled, [third], 'settled duplicate boundary does not prepare continuity twice');
-  assert.deepEqual(promotionCalls, [[outgoing.path, incoming.path, 7]]);
+  assert.deepEqual(promotionCalls, [[outgoing.path, incoming.path, generation]]);
+  assert.equal(engine.generation, generation);
+  assert.strictEqual(engine.roles.current, continuity);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
 });
 
-test('streaming boundary identity mismatch fails without consuming or changing current track', async () => {
+test('unowned streaming boundary with wrong identity is ignored without effects', async () => {
   const current = { path: 'C:\\Music\\Current.flac', title: 'Current' };
   let consumeCalls = 0;
-  const { context } = loadHelper({
+  const { context, audio } = loadHelper({
     state: {
       player: { current, loopActive: false, loopStart: 0, loopEnd: 30, waveform: { renderToken: 0 } },
       utility: { loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '', selectedLoopDetailMode: '', activeTab: '' },
@@ -1285,21 +2852,48 @@ test('streaming boundary identity mismatch fails without consuming or changing c
     },
   });
 
-  await assert.rejects(
-    context.handleStreamingPlaybackBoundary({
+  const engine = context.streamingEngineState();
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  assert.equal(handle, null);
+  assert.equal(attempt, null);
+  assert.equal(engine.roles.current, null);
+  assert.equal(engine.roles.continuity, null);
+  const queue = context.state.player.playbackQueue;
+  const boundaryIdentity = context.state.player.lastStreamingBoundaryIdentity;
+  const effects = [];
+  for (const name of ['setCurrentPlayerTrack', 'updatePlayerUi', 'persistPlayerState',
+    'finalizeListenSession', 'resumeListenSessionPlayback', 'maybeSendNowPlaying',
+    'scheduleStreamingContinuity', 'startStreamingTrack', 'showToast']) {
+    const actual = context[name];
+    assert.equal(typeof actual, 'function');
+    context[name] = (...args) => { effects.push(name); return actual(...args); };
+  }
+
+  assert.equal(await context.handleStreamingPlaybackBoundary({
       generation: 1,
       outgoingStreamId: 7,
       incomingStreamId: 8,
       outgoingTrackPath: 'C:\\Music\\Wrong.flac',
       incomingTrackPath: 'C:\\Music\\Unexpected.flac',
-    }),
-    /identity|mismatch/i,
-  );
+    }), undefined);
   assert.equal(consumeCalls, 0);
   assert.strictEqual(context.state.player.current, current);
+  assert.strictEqual(context.state.player.playbackQueue, queue);
+  assert.equal(context.state.player.lastStreamingBoundaryIdentity, boundaryIdentity);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.strictEqual(context.captureStreamingPlaybackAttempt(), attempt);
+  assert.equal(engine.roles.current, null);
+  assert.equal(engine.roles.continuity, null);
+  assert.equal(engine.context, null);
+  assert.equal(engine.node, null);
+  assert.equal(engine.socket, null);
+  assert.deepEqual(effects, []);
+  assert.equal(audio.playCalls, 0);
+  assert.equal(audio.pauseCalls, 0);
 });
 
-{
+test('focused loop boundary input preserves editing text and commits change', () => {
   const loopStartInput = new FakeElement({
     tagName: 'INPUT',
     type: 'text',
@@ -1356,9 +2950,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
 
   assert.equal(context.state.player.loopStart, 12.5);
   assert.equal(context.state.player.loopEnd, 20);
-}
+});
 
-{
+test('left-arrow seeks within active loop and consumes event', () => {
   const { context, audio } = loadHelper({
     state: {
       player: {
@@ -1403,9 +2997,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(prevented, true);
   assert.equal(stopped, true);
   assert.equal(audio.currentTime, 19);
-}
+});
 
-{
+test('shift-right-arrow advances playback head five seconds', () => {
   const { context, audio } = loadHelper({
     audio: {
       currentTime: 12,
@@ -1425,9 +3019,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   });
 
   assert.equal(audio.currentTime, 17);
-}
+});
 
-{
+test('alt-arrow leaves playback head and event untouched', () => {
   const { context, audio } = loadHelper({
     audio: {
       currentTime: 12,
@@ -1451,9 +3045,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
 
   assert.equal(prevented, false);
   assert.equal(audio.currentTime, 12);
-}
+});
 
-{
+test('a prepared paused control preserves the isolated ownership-denial response', async () => {
   const calls = {
     showToast: [],
     updatePlayerUi: 0,
@@ -1481,15 +3075,54 @@ test('streaming boundary identity mismatch fails without consuming or changing c
     },
   });
 
+  // This case originally isolated the refusal provider. Prepare its missing
+  // local paused control through real owners; a src-only role does not prove
+  // server/media admission, first-frame readiness or audible playback.
+  const track = context.state.player.current;
+  assert.deepEqual(JSON.parse(JSON.stringify(track)), { src: '/track?path=song.flac' });
+  const scope = context.capturePlaybackOwnershipScope();
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  if (context.window.AlbumHavenCapabilities) {
+    assert.equal(context.window.AlbumHavenCapabilities.allows('library.media.read'), true);
+  }
+  let preparedAttempt;
+  const preparedRole = await context.startStreamingTrack(track, {
+    autoplay: false,
+    onStartAttempt(attempt) { preparedAttempt = attempt; },
+  });
+  const engine = context.streamingEngineState();
+  assert.ok(preparedRole);
+  assert.ok(preparedAttempt);
+  assert.strictEqual(engine.roles.current, preparedRole);
+  assert.strictEqual(preparedRole.track, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(preparedAttempt), true);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(engine.context.state, 'suspended');
+  assert.equal(engine.snapshot.paused, true);
+  assert.equal(engine.snapshot.src, track.src);
+  assert.equal(engine.diagnostics.firstFrameAtMs, 0);
+  assert.notEqual(preparedRole.firstFrameNotified, true);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  const resumeCount = engine.context.resumeCount;
+
   context.attachPlayerEvents();
   playButton.dispatch('click');
 
   assert.equal(audio.playCalls, 0);
   assert.deepEqual(calls.showToast, [['Playback is active in another tab.', 'error', 2800]]);
   assert.equal(calls.updatePlayerUi, 0);
-}
+  // The pre-load UI counter is shadowed by the subject declaration; zero here
+  // preserves its original assertion, not a claim that actual UI never ran.
+  assert.strictEqual(engine.roles.current, preparedRole);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(preparedAttempt), true);
+  assert.equal(engine.context.state, 'suspended');
+  assert.equal(engine.context.resumeCount, resumeCount);
+  assert.equal(engine.snapshot.paused, true);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+});
 
-{
+test('player-surface arrow seek focuses timeline', () => {
   const target = new FakeElement({
     tagName: 'BUTTON',
     closestSelector: '.global-player',
@@ -1519,9 +3152,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(prevented, true);
   assert.equal(audio.currentTime, 19);
   assert.deepEqual(JSON.parse(JSON.stringify(timeline.focusCalls)), [{ preventScroll: true }]);
-}
+});
 
-{
+test('text-entry arrow leaves playback and timeline focus unchanged', () => {
   const target = new FakeElement({
     tagName: 'INPUT',
     type: 'text',
@@ -1548,9 +3181,9 @@ test('streaming boundary identity mismatch fails without consuming or changing c
 
   assert.equal(audio.currentTime, 20);
   assert.equal(timeline.focusCalls.length, 0);
-}
+});
 
-{
+test('paused loop activation uses full duration without seeking legacy audio', () => {
   const audio = new FakeAudioElement({
     currentTime: 57,
     duration: 60,
@@ -1579,14 +3212,16 @@ test('streaming boundary identity mismatch fails without consuming or changing c
         activeTab: '',
       },
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
 
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
   context.setLoopActive(true);
 
   assert.equal(context.state.player.loopActive, true);
   assert.equal(audio.currentTime, 57, 'streaming loop setup does not seek the legacy audio element');
   assert.equal(context.state.player.loopEnd, 60);
-}
+});
 
 test('shared player click awaits accepted streaming-start command before current-track and now-playing effects', async () => {
   const rawTitle = 'Track Two (feat. Guest Singer)';
@@ -1641,9 +3276,9 @@ test('shared player click awaits accepted streaming-start command before current
     maybeSendNowPlaying: async (track) => {
       nowPlayingTracks.push(track);
     },
-    async startStreamingTrack(track) {
+    startStreamingTrack(track, options) {
       streamingStarts.push(track);
-      return { role: 'current', streamId: 7, generation: 1 };
+      return runtimeFixtureOwners.get(context).startStreamingTrack(track, options);
     },
     resumeListenSessionPlayback: () => ({
       then(callback) {
@@ -1653,6 +3288,7 @@ test('shared player click awaits accepted streaming-start command before current
     }),
   });
 
+  const assertAdmission = ownActualClickAdmission(context);
   context.attachPlayerEvents();
   context.attachSharedPlayer();
   playTrackButton.dispatch('click');
@@ -1665,9 +3301,10 @@ test('shared player click awaits accepted streaming-start command before current
   assert.equal(context.state.player.current.albumArtist, 'Various Artists');
   assert.equal(nowPlayingTracks.length, 1);
   assert.equal(nowPlayingTracks[0].title, rawTitle);
+  assertAdmission(streamingStarts[0]);
 });
 
-{
+test('playing loop setup leaves legacy audio time unchanged', () => {
   const audio = new FakeAudioElement({
     currentTime: 20,
     duration: 60,
@@ -1696,14 +3333,17 @@ test('shared player click awaits accepted streaming-start command before current
         activeTab: '',
       },
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
 
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
   context.setLoopActive(true);
 
   assert.equal(audio.currentTime, 20);
-}
+  assert.equal(context.state.player.loopActive, true);
+});
 
-{
+test('player pause does not consume queue or finalize stale native end', () => {
   const currentTrack = {
     src: '/track?path=song1.flac',
     path: 'C:/Music/song1.flac',
@@ -1811,7 +3451,7 @@ test('shared player click awaits accepted streaming-start command before current
   assert.equal(audio.getAttribute('src'), currentTrack.src);
   assert.equal(audio.playCalls, 0);
   assert.deepEqual(resumeCalls, []);
-}
+});
 
 test('queued album track click dispatches streaming start without touching native audio', async () => {
   const trackPath = 'C:/Music/Artist/Album/01 Long Song.mp3';
@@ -1835,7 +3475,7 @@ test('queued album track click dispatches streaming start without touching nativ
     album: 'Album',
     coverPath: '',
   };
-  const playTrackButton = new FakeElement({
+  let playTrackButton = new FakeElement({
     tagName: 'BUTTON',
     attributes: {
       'data-src': selectedTrack.src,
@@ -1857,12 +3497,13 @@ test('queued album track click dispatches streaming start without touching nativ
   };
   const streamingStarts = [];
   const album = { title: 'Album' };
+  let trackModal;
   const document = {
     querySelectorAll(selector) {
       return selector === '.play-track-button' ? [playTrackButton] : [];
     },
     getElementById(id) {
-      return id === 'track-modal' ? { hidden: false } : null;
+      return id === 'track-modal' ? trackModal : null;
     },
     addEventListener() {},
   };
@@ -1897,12 +3538,15 @@ test('queued album track click dispatches streaming start without touching nativ
         currentIndex: 0,
       };
     },
-    async startStreamingTrack(track) {
+    startStreamingTrack(track, options) {
       streamingStarts.push(track);
-      return { role: 'current', streamId: 11, generation: 2 };
+      return runtimeFixtureOwners.get(context).startStreamingTrack(track, options);
     },
   }));
 
+  ({ button: playTrackButton, modal: trackModal } = mountOriginalTrackModal(context, playTrackButton));
+  assert.equal(trackModal.contains(playTrackButton), true);
+  const assertAdmission = ownActualClickAdmission(context);
   context.attachSharedPlayer();
   playTrackButton.dispatch('click');
   await new Promise((resolve) => setImmediate(resolve));
@@ -1919,6 +3563,7 @@ test('queued album track click dispatches streaming start without touching nativ
     tracks: [selectedTrack, queuedTrack],
     currentIndex: 0,
   });
+  assertAdmission(streamingStarts[0]);
 });
 
 test('album-row click awaits prepared-start acceptance before installing one first-frame continuity queue', async () => {
@@ -1947,7 +3592,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
     tracks: [selectedTrack, queuedTrack],
     currentIndex: 0,
   };
-  const playTrackButton = new FakeElement({
+  let playTrackButton = new FakeElement({
     tagName: 'BUTTON',
     attributes: {
       'data-src': selectedTrack.src,
@@ -1960,12 +3605,13 @@ test('album-row click awaits prepared-start acceptance before installing one fir
       'data-track-duration-seconds': String(selectedTrack.durationSeconds),
     },
   });
+  let trackModal;
   const document = {
     querySelectorAll(selector) {
       return selector === '.play-track-button' ? [playTrackButton] : [];
     },
     getElementById(id) {
-      return id === 'track-modal' ? { hidden: false } : null;
+      return id === 'track-modal' ? trackModal : null;
     },
     addEventListener() {},
   };
@@ -2017,17 +3663,36 @@ test('album-row click awaits prepared-start acceptance before installing one fir
       assert.equal(startingTrackPath, selectedTrack.path);
       context.state.player.playbackQueue = exactQueue;
     },
-    async startStreamingTrack(track) {
+    async startStreamingTrack(track, options) {
       callOrder.push('streaming-start');
       playbackStartCalls += 1;
+      const selection = vm.runInContext('playerSelectionOwnership', context);
+      const handle = selection.handle;
       await preparedStart;
-      return {
-        role: 'continuity',
-        generation: 3,
-        streamId: 21,
-        track,
-        firstFrameNotified: true,
-      };
+      if (!context.currentPlayerSelection(selection)
+        || context.getActivePlaybackOwnershipHandle() !== handle
+        || !context.isPlaybackOwnershipHandleCurrent(handle)
+        || !context.isPlaybackOwnershipScopeCurrent(selection.scope)) return null;
+      const role = await retain(owners.startStreamingTrack(track, options));
+      const engine = context.streamingEngineState();
+      assert.strictEqual(engine.roles.current, role);
+      assert.strictEqual(role.track, track);
+      assert.strictEqual(selection.attempt, context.captureStreamingPlaybackAttempt());
+      assert.equal(context.isStreamingPlaybackAttemptCurrent(selection.attempt), true);
+      assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+      assert.equal(engine.context.state, 'running');
+      assert.equal(context.state.player.current, null);
+      assert.notEqual(role.firstFrameNotified, true);
+      // Declared simulated processor delivery: not PCM rendering or LS-09 evidence.
+      engine.node.emit({ type: 'first-frame', generation: role.generation,
+        streamId: role.streamId, renderedFrame: 2400, contextTime: 0 });
+      assert.equal(role.firstFrameNotified, true);
+      assert.equal(firstFrameEvents.length, 1);
+      assert.equal(firstFrameEvents[0].current, null);
+      assert.equal(firstFrameEvents[0].event.trackPath, track.path);
+      assert.equal(callOrder.includes('first-frame-peek'), false);
+      assert.equal(lifecycleCalls, 0);
+      return role;
     },
     peekNextQueuedTrack() {
       callOrder.push('first-frame-peek');
@@ -2050,12 +3715,52 @@ test('album-row click awaits prepared-start acceptance before installing one fir
       pauseCalls += 1;
     },
   }));
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [], thrown = [], firstFrameEvents = [];
+  owners.addObserverCleanup(async () => {
+    // Fixture teardown has already retired selection/claim and stopped the engine.
+    // The real selection guard in the starter prevents late gate release restarting it.
+    resolvePreparedStart();
+    const settled = await Promise.allSettled(retained);
+    const errors = [...thrown, ...settled.filter(row => row.status === 'rejected').map(row => row.reason)];
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Owned accepted-click work failed');
+  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  const forward = callback => (...args) => {
+    try { return retain(callback(...args)); }
+    catch (error) { thrown.push(error); throw error; }
+  };
+  context.resumeStreamingPlayback = forward(owners.resumeStreamingPlayback);
+  const firstFrame = context.handleStreamingPlaybackFirstFrame;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameEvents.push({ event, current: context.state.player.current });
+    return forward(firstFrame)(event);
+  };
+  const pauseObserver = context.pauseStreamingPlayback;
+  context.pauseStreamingPlayback = forward((...args) => {
+    pauseObserver(...args);
+    return owners.pauseStreamingPlayback(...args);
+  });
+  const originalSnapshot = context.getPlayerPlaybackSnapshot;
+  const scope = context.capturePlaybackOwnershipScope();
+  const shell = context.document.getElementById('app-shell');
+  assert.ok(shell);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(context.state.player.current, null);
+  assert.equal(context.streamingEngineState().roles.current, null);
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
   const productionPlayTrackFromPayload = context.playTrackFromPayload;
   context.playTrackFromPayload = (...args) => {
     callOrder.push('play-track-from-payload');
-    return productionPlayTrackFromPayload(...args);
+    return forward(productionPlayTrackFromPayload)(...args);
   };
 
+  ({ button: playTrackButton, modal: trackModal } = mountOriginalTrackModal(context, playTrackButton));
+  assert.equal(trackModal.contains(playTrackButton), true);
   context.attachSharedPlayer();
   playTrackButton.dispatch('click');
 
@@ -2080,6 +3785,20 @@ test('album-row click awaits prepared-start acceptance before installing one fir
   assert.equal(lifecycleCalls, 1);
   assert.equal(continuityCalls, 1);
 
+  assert.strictEqual(context.getPlayerPlaybackSnapshot, originalSnapshot);
+  assert.strictEqual(context.document.getElementById('app-shell'), shell);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  const engine = context.streamingEngineState();
+  const role = engine.roles.current;
+  const attempt = context.captureStreamingPlaybackAttempt();
+  const handle = context.getActivePlaybackOwnershipHandle();
+  assert.strictEqual(role.track, context.state.player.current);
+  assert.equal(role.track.path, selectedTrack.path);
+  assert.equal(role.firstFrameNotified, true);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.ok(firstFrameEvents.some(row => row.current === role.track));
+
   playTrackButton.dispatch('click');
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -2089,6 +3808,10 @@ test('album-row click awaits prepared-start acceptance before installing one fir
   assert.equal(lifecycleCalls, 1);
   assert.equal(continuityCalls, 1);
   assert.equal(callOrder.at(-1), 'current-track-toggle');
+  assert.strictEqual(context.getPlayerPlaybackSnapshot, originalSnapshot);
+  assert.equal(engine.snapshot.paused, true);
+  assert.equal(engine.context.state, 'suspended');
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), false);
 });
 
 test('plain Space intercepts only when foreground playback handles it', async () => {
@@ -2099,6 +3822,43 @@ test('plain Space intercepts only when foreground playback handles it', async ()
     src: '/track?path=song.flac',
   });
   const { context } = loadHelper({ audio });
+  const prepared = await prepareLocalPlayingControl(context);
+  const work = [], thrown = [];
+  prepared.owners.addObserverCleanup(async () => {
+    const settled = await Promise.allSettled(work);
+    const errors = [...thrown, ...settled.filter(row => row.status === 'rejected').map(row => row.reason)];
+    if (errors.length) throw new AggregateError([...new Set(errors)], 'Owned Space control work failed');
+  });
+  for (const name of ['pauseStreamingPlayback', 'resumeStreamingPlayback']) {
+    const observer = context[name];
+    context[name] = (...args) => {
+      let actualWork;
+      try {
+        observer(...args);
+        actualWork = prepared.owners[name](...args);
+      } catch (error) { thrown.push(error); throw error; }
+      work.push(actualWork);
+      void Promise.resolve(actualWork).catch(() => {});
+      return actualWork;
+    };
+  }
+  context.canStartPlaybackInThisTab = (...args) => prepared.owners.canStartPlaybackInThisTab(...args);
+  const assertPendingResume = () => {
+    const handle = context.getActivePlaybackOwnershipHandle();
+    const selection = vm.runInContext('playerSelectionOwnership', context);
+    assert.ok(handle);
+    assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.strictEqual(selection.handle, handle);
+    assert.strictEqual(selection.attempt, prepared.attempt);
+    assert.strictEqual(context.state.player.current, prepared.track);
+    assert.strictEqual(prepared.engine.roles.current, prepared.role);
+    assert.equal(context.isStreamingPlaybackAttemptCurrent(prepared.attempt), true);
+    assert.equal(prepared.engine.context.state, 'running');
+    assert.equal(prepared.engine.snapshot.paused, false);
+    assert.equal(context.successfulPlaybackClaim(handle), false);
+    assert.notEqual(prepared.role.firstFrameNotified, true);
+    assert.equal(prepared.engine.diagnostics.firstFrameAtMs, 0);
+  };
   const outsidePlayer = new FakeElement({ tagName: 'DIV' });
   const createSpaceEvent = (target, overrides = {}) => {
     const observed = { prevented: 0, stopped: 0 };
@@ -2144,6 +3904,7 @@ test('plain Space intercepts only when foreground playback handles it', async ()
   assert.equal(audio.playCalls, 1);
   assert.equal(audio.paused, false);
   assert.deepEqual(resumeShortcut.observed, { prevented: 1, stopped: 1 });
+  assertPendingResume();
 
   const legacySpacebarShortcut = createSpaceEvent(outsidePlayer, { key: 'Spacebar', code: '' });
   assert.equal(context.handlePlayerKeyboardPlayback(legacySpacebarShortcut.event), true);
@@ -2157,6 +3918,7 @@ test('plain Space intercepts only when foreground playback handles it', async ()
   assert.equal(audio.playCalls, 2);
   assert.equal(audio.paused, false);
   assert.deepEqual(codeOnlySpaceShortcut.observed, { prevented: 1, stopped: 1 });
+  assertPendingResume();
 
   const playerTimelineShortcut = createSpaceEvent(new FakeElement({
     tagName: 'INPUT',
@@ -2173,6 +3935,7 @@ test('plain Space intercepts only when foreground playback handles it', async ()
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(audio.playCalls, 3);
   assert.equal(audio.paused, false);
+  assertPendingResume();
 
   const blockedAudio = new FakeAudioElement({
     currentTime: 12,
@@ -2284,6 +4047,7 @@ test('plain Space intercepts only when foreground playback handles it', async ()
       playbackDelta: [2, 7].includes(index) ? 1 : 0,
     })),
   });
+  assertPendingResume();
 });
 
 test('keyboard Space preserves the focused control after the resume request resolves', async () => {
@@ -2296,6 +4060,7 @@ test('keyboard Space preserves the focused control after the resume request reso
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
   const focusedRange = new FakeElement({ tagName: 'INPUT', type: 'range' });
   const { context } = loadHelper({ audio, timeline });
+  const prepared = await preparePositiveFocusControl(context);
 
   assert.equal(context.handlePlayerKeyboardPlayback({
     key: ' ',
@@ -2314,6 +4079,18 @@ test('keyboard Space preserves the focused control after the resume request reso
 
   assert.equal(audio.playCalls, 1);
   assert.equal(timeline.focusCalls.length, 0);
+  assert.equal(prepared.observed.work.length, 1);
+  assert.strictEqual(context.state.player.current, prepared.track);
+  assert.strictEqual(prepared.engine.roles.current, prepared.role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(prepared.attempt), true);
+  const handle = context.getActivePlaybackOwnershipHandle();
+  assert.ok(handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  const selection = vm.runInContext('playerSelectionOwnership', context);
+  assert.strictEqual(selection.handle, handle);
+  assert.strictEqual(selection.attempt, prepared.attempt);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(prepared.role.firstFrameNotified, true);
 });
 
 test('global Space delegates to an owned Utility loop before toggling player audio', () => {
@@ -2364,6 +4141,7 @@ test('visible player play-control focuses the timeline after the resume request 
   });
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
   const { context, playButton } = loadHelper({ audio, timeline });
+  const prepared = await preparePositiveFocusControl(context);
 
   context.attachPlayerEvents();
   playButton.dispatch('click', {
@@ -2374,6 +4152,18 @@ test('visible player play-control focuses the timeline after the resume request 
 
   assert.equal(audio.playCalls, 1);
   assert.equal(timeline.focusCalls.length, 1);
+  assert.equal(prepared.observed.work.length, 1);
+  assert.strictEqual(context.state.player.current, prepared.track);
+  assert.strictEqual(prepared.engine.roles.current, prepared.role);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(prepared.attempt), true);
+  const handle = context.getActivePlaybackOwnershipHandle();
+  assert.ok(handle);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  const selection = vm.runInContext('playerSelectionOwnership', context);
+  assert.strictEqual(selection.handle, handle);
+  assert.strictEqual(selection.attempt, prepared.attempt);
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  assert.notEqual(prepared.role.firstFrameNotified, true);
 });
 
 test('global-player pointerdown clears saved-loop Space ownership', () => {
@@ -2497,7 +4287,9 @@ async function verifySaveCurrentLoopUsesAppDialog() {
           activeTab: '',
         },
       },
-    });
+    }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+    assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+    assert.equal(context.state.loopCreateAllowed, true);
 
     const firstSave = context.saveCurrentLoop();
     const secondSave = context.saveCurrentLoop();
@@ -2549,7 +4341,9 @@ async function verifySaveCurrentLoopUsesAppDialog() {
           activeTab: '',
         },
       },
-    });
+    }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+    assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+    assert.equal(context.state.loopCreateAllowed, true);
 
     const cancelledSave = context.saveCurrentLoop();
     assert.equal(context.state.player.saveBusy, true);
@@ -2624,7 +4418,9 @@ async function verifySaveCurrentLoopUsesAppDialog() {
           activeTab: 'loops',
         },
       },
-    });
+    }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+    assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+    assert.equal(context.state.loopCreateAllowed, true);
 
     await context.saveCurrentLoop();
 
@@ -2675,7 +4471,9 @@ async function verifySaveCurrentLoopUsesAppDialog() {
           activeTab: '',
         },
       },
-    });
+    }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+    assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+    assert.equal(context.state.loopCreateAllowed, true);
 
     await context.saveCurrentLoop();
 
@@ -2684,14 +4482,12 @@ async function verifySaveCurrentLoopUsesAppDialog() {
   }
 }
 
-verifySaveCurrentLoopUsesAppDialog().catch((error) => {
-  process.nextTick(() => {
-    throw error;
-  });
-});
+test('app-owned save-loop dialog verifier retains its complete original sequence', verifySaveCurrentLoopUsesAppDialog);
 
 test('successful loop save refreshes scissors after clearing the busy state', async () => {
   const uiStates = [];
+  const dialogCalls = [];
+  const fetchCalls = [];
   const loopActions = {
     _loopActionController: {
       update(nextState) {
@@ -2700,11 +4496,17 @@ test('successful loop save refreshes scissors after clearing the busy state', as
     },
   };
   const { context } = loadHelper({
-    showLoopNameDialog: async () => 'Saved Loop',
-    fetch: async () => ({
-      ok: true,
-      json: async () => ({ ok: true, loop: { id: 'loop-1', name: 'Saved Loop' } }),
-    }),
+    showLoopNameDialog: async () => {
+      dialogCalls.push('open');
+      return 'Saved Loop';
+    },
+    fetch: async (...args) => {
+      fetchCalls.push(args);
+      return {
+        ok: true,
+        json: async () => ({ ok: true, loop: { id: 'loop-1', name: 'Saved Loop' } }),
+      };
+    },
     getPlayerElements: () => ({ loopActions }),
     state: {
       player: {
@@ -2724,12 +4526,76 @@ test('successful loop save refreshes scissors after clearing the busy state', as
         activeTab: '',
       },
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
+  const current = context.state.player.current;
 
   await context.saveCurrentLoop();
 
-  assert.deepEqual(uiStates.at(-1), { enabled: true, canCreate: false, contextKey: 'C:/Music/song.flac', active: false, busy: false });
+  assert.deepEqual(dialogCalls, ['open']);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0][0], '/loops/create');
+  assert.equal(fetchCalls[0][1].method, 'POST');
+  assert.deepEqual(JSON.parse(fetchCalls[0][1].body), {
+    name: 'Saved Loop', source_path: current.path, start_seconds: 10, end_seconds: 20,
+    artist: '', title: '', album: '', cover_path: '',
+  });
+  assert.equal(context.state.utility.selectedLoopId, 'loop-1');
+  assert.equal(context.state.loopCreateAllowed, true);
+  assert.equal(context.state.player.saveBusy, false);
+  assert.equal(context.state.player.loopActive, false);
+  assert.strictEqual(context.state.player.current, current);
+
+  assert.deepEqual(uiStates.at(-1), { enabled: true, canCreate: true, contextKey: 'C:/Music/song.flac', active: false, busy: false });
   assert.ok(context.state.player.current, 'the loaded track remains available for another loop');
+});
+
+test('loop save without create permission opens no dialog and sends no request', async () => {
+  const dialogCalls = [];
+  const fetchCalls = [];
+  const { context } = loadHelper({
+    showLoopNameDialog: async () => {
+      dialogCalls.push('open');
+      return 'Not Allowed';
+    },
+    fetch: async (...args) => {
+      fetchCalls.push(args);
+      return { ok: true, json: async () => ({ ok: true, loop: { id: 'unexpected' } }) };
+    },
+    state: {
+      player: {
+        current: { src: '/track?path=song.flac', path: 'C:/Music/song.flac' },
+        loopActive: true,
+        loopStart: 10,
+        loopEnd: 20,
+        saveBusy: false,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [],
+        loopsLoaded: false,
+        selectedLoopId: '',
+        selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '',
+        activeTab: '',
+      },
+    },
+  });
+  assert.equal(context.state.loopCreateAllowed, false);
+  assert.equal(context.isPlaybackLockedByAnotherTab(), false);
+  const current = context.state.player.current;
+
+  await context.saveCurrentLoop();
+
+  assert.deepEqual(dialogCalls, []);
+  assert.deepEqual(fetchCalls, []);
+  assert.equal(context.state.loopCreateAllowed, false);
+  assert.equal(context.state.player.saveBusy, false);
+  assert.equal(context.state.player.loopActive, true);
+  assert.strictEqual(context.state.player.current, current);
+  assert.equal(context.state.utility.loops.length, 0);
+  assert.equal(context.state.utility.selectedLoopId, '');
 });
 
 test('Enter opens loop naming from active edit mode without creating the loop', async () => {
@@ -2762,7 +4628,9 @@ test('Enter opens loop naming from active edit mode without creating the loop', 
         activeTab: '',
       },
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
   let prevented = 0;
   let stopped = 0;
 
@@ -2857,7 +4725,9 @@ test('bottom-player loop editor uses the shared expiry session and only automati
       rangeOptions = options;
       return {};
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true }, observeLoopExpiry: true });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
 
   context.setLoopActive(true);
   context.getGlobalPlayerLoopControlOptions().mountRange(new FakeElement());
@@ -2915,26 +4785,129 @@ test('bottom-player reports only whole-track repeat boundaries to the shared exp
       start: () => {}, renewAfterBoundaryEdit: () => false, stop: () => false, has: () => true,
       noteUntouchedWholeRangeWrap(ownerId) { wraps.push(ownerId); return true; },
     },
-  });
+  }, { observeLoopExpiry: true, bootstrapAllowedActions: { 'library.loops.create': true } });
 
-  await context.handleStreamingPlaybackBoundary({
-    generation: 2,
-    outgoingStreamId: 10,
-    incomingStreamId: 11,
-    outgoingTrackPath: track.path,
-    incomingTrackPath: track.path,
-    continuityKind: 'whole-track-repeat',
+  const owners = runtimeFixtureOwners.get(context);
+  const retained = [];
+  const originalFirstFrame = context.handleStreamingPlaybackFirstFrame;
+  const originalBoundary = context.handleStreamingPlaybackBoundary;
+  const originalSchedule = context.scheduleStreamingContinuity;
+  owners.addObserverCleanup(async () => {
+    try {
+      const results = await Promise.allSettled(retained);
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Loop wrap callback work failed');
+    } finally {
+      context.handleStreamingPlaybackFirstFrame = originalFirstFrame;
+      context.handleStreamingPlaybackBoundary = originalBoundary;
+      context.scheduleStreamingContinuity = originalSchedule;
+    }
   });
-  await context.handleStreamingPlaybackBoundary({
-    generation: 2,
-    outgoingStreamId: 11,
-    incomingStreamId: 12,
-    outgoingTrackPath: track.path,
-    incomingTrackPath: track.path,
-    continuityKind: 'short-loop',
-  });
+  const retain = work => {
+    retained.push(work);
+    void Promise.resolve(work).catch(() => {});
+    return work;
+  };
+  for (const name of ['canStartPlaybackInThisTab', 'startStreamingTrack',
+    'resumeStreamingPlayback', 'getPlayerPlaybackSnapshot']) context[name] = owners[name];
+  assert.equal(await retain(context.playTrackFromPayload(track, { autoplay: true })), true);
+  const engine = context.streamingEngineState();
+  const role = engine.roles.current;
+  const handle = context.getActivePlaybackOwnershipHandle();
+  const attempt = context.captureStreamingPlaybackAttempt();
+  assert.strictEqual(role.track, track);
+  assert.ok(handle);
+  assert.ok(attempt);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+  assert.equal(engine.context.state, 'running');
+  assert.equal(context.successfulPlaybackClaim(handle), false);
+  engine.socket.open();
+  let firstFrameWork;
+  let firstFrameCalls = 0;
+  context.handleStreamingPlaybackFirstFrame = event => {
+    firstFrameCalls += 1;
+    firstFrameWork = retain(originalFirstFrame(event));
+    return firstFrameWork;
+  };
+  // Finite processor reports exercise wrap notifications, not rendering or elapsed-cycle evidence.
+  engine.node.emit({ type: 'first-frame', generation: role.generation, streamId: role.streamId,
+    renderedFrame: 1, contextTime: 0 });
+  assert.ok(firstFrameWork);
+  await firstFrameWork;
+  assert.equal(firstFrameCalls, 1);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  let deferredShortWork = null;
+  let deferredShortCalls = 0;
+  context.scheduleStreamingContinuity = (value, options) => {
+    const deferredShort = options?.kind === 'short-loop' && !engine.pendingPromotion;
+    const work = retain(owners.scheduleStreamingContinuity(value, options));
+    if (deferredShort) { deferredShortCalls += 1; deferredShortWork = work; }
+    return work;
+  };
+  assert.equal(context.state.loopCreateAllowed, true);
+  context.setLoopActive(true);
+  const whole = await retain(context.dispatchActiveStreamingLoop());
+  assert.ok(whole);
+  assert.strictEqual(engine.roles.continuity, whole);
+  assert.strictEqual(whole.track, track);
+  assert.equal(whole.continuityOptions.kind, 'whole-track-repeat');
+  assert.equal(whole.continuityOptions.startSeconds, 0);
+  assert.equal(whole.continuityOptions.endSeconds, 60);
+  assert.equal(context.state.player.loopActive, true);
+  assert.equal(context.state.player.loopStart, 0);
+  assert.equal(context.state.player.loopEnd, 60);
+  assert.equal(context.loopEditSessionExpiryController.has('global-player'), true);
+  let boundaryWork;
+  let boundaryCalls = 0;
+  context.handleStreamingPlaybackBoundary = event => {
+    boundaryCalls += 1;
+    assert.equal(event.continuityKind, 'whole-track-repeat');
+    boundaryWork = retain(originalBoundary(event));
+    return boundaryWork;
+  };
+  engine.node.emit({ type: 'boundary', generation: role.generation,
+    outgoingStreamId: role.streamId, incomingStreamId: whole.streamId,
+    renderedFrame: 60 * 48000, timelineFrame: 0 });
+  assert.ok(boundaryWork);
+  await boundaryWork;
+  assert.equal(boundaryCalls, 1);
+  assert.strictEqual(engine.roles.current, whole);
+  assert.strictEqual(context.getActivePlaybackOwnershipHandle(), handle);
+  assert.equal(context.successfulPlaybackClaim(handle), true);
+  assert.deepEqual(wraps, ['global-player']);
+  assert.ok(engine.pendingPromotion);
+  assert.equal(await retain(context.scheduleStreamingContinuity(track,
+    { kind: 'short-loop', startSeconds: 0, endSeconds: 5 })), null);
+  assert.equal(deferredShortCalls, 0);
+  engine.socket.emit({ type: 'promoted', generation: whole.generation,
+    streamId: whole.streamId, role: 'current' });
+  // The acknowledgement queues exactly one deferStreamingContinuity microtask.
+  await Promise.resolve();
+  assert.ok(deferredShortWork, 'promotion acknowledgement must dispatch deferred short-loop work');
+  const short = await deferredShortWork;
+  assert.equal(deferredShortCalls, 1);
+  assert.ok(short);
+  assert.strictEqual(engine.roles.continuity, short);
+  assert.strictEqual(short.track, track);
+  assert.equal(short.continuityOptions.kind, 'short-loop');
+  assert.equal(engine.pendingPromotion, null);
+  assert.ok(engine.node.sent.some(message => message.type === 'set-loop'
+    && message.kind === 'short-loop' && message.retainedStreamId === short.streamId));
+  const previousRenderedFrame = engine.snapshot.renderedFrame;
+  const shortRenderedFrame = 65 * 48000;
+  assert.notEqual(previousRenderedFrame, shortRenderedFrame);
+  engine.node.emit({ type: 'boundary', generation: whole.generation,
+    outgoingStreamId: whole.streamId, incomingStreamId: short.streamId,
+    renderedFrame: shortRenderedFrame, timelineFrame: 0 });
+  assert.equal(engine.snapshot.renderedFrame, shortRenderedFrame);
+  assert.equal(engine.snapshot.currentTime, 0);
+  assert.strictEqual(engine.roles.current, whole);
+  assert.strictEqual(engine.roles.continuity, short);
+  assert.equal(boundaryCalls, 1);
 
   assert.deepEqual(wraps, ['global-player']);
+
 });
 
 test('bottom-player integration leaves selection geometry exclusively to the shared range controller', () => {
@@ -2986,7 +4959,9 @@ test('bottom-player loop range freezes the current-role playback duration for on
       rangeOptions = options;
       return {};
     },
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
 
   context.setLoopActive(true);
   context.getGlobalPlayerLoopControlOptions().mountRange(new FakeElement());
@@ -3036,7 +5011,9 @@ test('bottom-player loop activation waits for the real full-track duration inste
       return {};
     },
     showToast: (...args) => toasts.push(args),
-  });
+  }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+  assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+  assert.equal(context.state.loopCreateAllowed, true);
 
   context.setLoopActive(true);
   assert.equal(context.state.player.loopActive, false);
@@ -3164,11 +5141,15 @@ for (const deleteAllowed of [true, false]) {
           ? { ok: true, loop: saved, loops: [saved] }
           : { ok: true, loops: [older, saved], allowed_actions: { 'library.loops.read': true, 'library.loops.create': true, 'library.loops.delete': deleteAllowed } } };
       },
-    });
+    }, { bootstrapAllowedActions: { 'library.loops.create': true } });
+    assert.deepEqual(context.window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__, { 'library.loops.create': true });
+    assert.equal(context.state.loopCreateAllowed, true);
     context.state.player.loopActive = true;
     context.state.utility.loopsLoaded = false;
     context.state.utility.allowedActions = {};
-    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+    const owners = runtimeFixtureOwners.get(context);
+    assert.equal(owners.loaded.has('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), true);
+    assert.strictEqual(context.loadUtilityLoops, owners.loadUtilityLoops);
     context.buildUtilityLoopGroupKey = loop => loop.id === 'created' ? 'saved-song' : 'other-song';
     context.groupUtilityLoops = loops => loops.map(loop => ({ key: context.buildUtilityLoopGroupKey(loop), loops: [loop] }));
     context.collapseAllUtilityLoopGroups = () => {};
@@ -3183,6 +5164,160 @@ for (const deleteAllowed of [true, false]) {
     await context.loadUtilityLoops();
     assert.deepEqual(requests, ['/loops/create', '/utilities/loops'], 'an established grant or denial projection may reuse the cache');
   });
+}
+
+async function loadPreparedCapabilityTrackRow(actions) {
+  const {bindPlaytableSelection} = await import('../../../music_app/static/js/playtables/selection.mjs');
+  const effects = [];
+  const { context, audio, timeline } = loadHelper();
+  const owners = runtimeFixtureOwners.get(context), document = context.document;
+  document.readyState = 'loading';
+  const shell = document.getElementById('app-shell');
+  const scope = context.capturePlaybackOwnershipScope();
+  const work = [], thrown = [], nodes = [];
+  let selection;
+  owners.addObserverCleanup(async () => {
+    const failures = [...thrown];
+    try {
+      const settled = await Promise.allSettled(work);
+      failures.push(...settled.filter(row => row.status === 'rejected').map(row => row.reason));
+    } finally {
+      try { selection?.dispose(); } catch (error) { failures.push(error); }
+      for (const node of nodes.reverse()) {
+        try { node.remove(); } catch (error) { failures.push(error); }
+      }
+    }
+    if (failures.length) throw new AggregateError([...new Set(failures)], 'Owned mobile playback failed');
+  });
+  const retain = callback => (...args) => {
+    let result;
+    try { result = callback(...args); }
+    catch (error) { thrown.push(error); throw error; }
+    work.push(result);
+    void Promise.resolve(result).catch(() => {});
+    return result;
+  };
+  assert.ok(shell);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  assert.equal(document.getElementById('track-modal'), null);
+  assert.equal(document.getElementById('capability-bootstrap'), null);
+  const host = document.createElement('section');
+  host.innerHTML = '<div class="album-track-table__row" data-cdt-row-key="song-occurrence" tabindex="0">Song'
+    + '<button type="button" class="play-track-button album-track-table__play" data-src="/track?path=song.flac" data-track-path="song.flac" data-track-title="Song">Play</button></div>';
+  const row = host.firstElementChild, button = row.querySelector('button');
+  const album = { name: 'Album' };
+  const modal = document.createElement('div'); modal.id = 'track-modal'; nodes.push(modal);
+  // Positive album-row fixture: keep the same controls inside their album modal.
+  // Detached-button contracts elsewhere remain unchanged.
+  modal.appendChild(host); document.body.appendChild(modal);
+  const bootstrap = document.createElement('script'); bootstrap.id = 'capability-bootstrap'; nodes.push(bootstrap);
+  bootstrap.textContent = JSON.stringify({allowed_actions: actions,
+    denied_selectors: actions?.['library.media.read'] === true ? [] : ['.play-track-button', '.global-player']});
+  document.body.appendChild(bootstrap);
+  assert.equal(document.querySelectorAll('#track-modal').length, 1);
+  assert.equal(document.querySelectorAll('#capability-bootstrap').length, 1);
+  assert.strictEqual(document.getElementById('app-shell'), shell);
+  assert.strictEqual(host.firstElementChild, row);
+  assert.strictEqual(row.querySelector('button'), button);
+  assert.equal(modal.contains(button), true);
+  context.state.player.current = { path: 'song.flac', src: '/track?path=song.flac' };
+  context.state.player.playbackQueue = { tracks: ['retained.flac'] };
+  context.state.modalReleases = [album];
+  context.state.modalReleaseIndex = 0;
+  if (actions !== undefined) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname,
+      '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
+    assert.equal(context.window.AlbumHavenCapabilities.allows('library.media.read'), true);
+  } else assert.equal(context.window.AlbumHavenCapabilities, undefined);
+  const albumTableOwner = 'music_app/static/js/runtime/album-track-table.js';
+  assert.equal(owners.loaded.has(albumTableOwner), true, 'reuse the already evaluated album-table owner');
+  assert.equal(context.canPlayTrackModalSelection(button), true);
+  assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+  const track = context.state.player.current;
+  let attempt;
+  const role = await owners.startStreamingTrack(track, {
+    autoplay: false, startSeconds: Number(audio.currentTime) || 0,
+    onStartAttempt(value) { attempt = value; },
+  });
+  const engine = context.streamingEngineState();
+  assert.strictEqual(engine.roles.current, role);
+  assert.strictEqual(role.track, track);
+  assert.strictEqual(context.state.player.current, track);
+  assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(engine.snapshot.paused, true);
+  assert.equal(engine.context.state, 'suspended');
+  assert.equal(context.getActivePlaybackOwnershipHandle(), null);
+  assert.notEqual(role.firstFrameNotified, true);
+  // Install original action observers once; no setup effects are reset/filtered.
+  context.canStartPlaybackInThisTab = (...args) => {
+    effects.push('ownership'); return owners.canStartPlaybackInThisTab(...args);
+  };
+  context.startStreamingTrack = retain((...args) => {
+    effects.push('stream'); return owners.startStreamingTrack(...args);
+  });
+  const resumeObserver = context.resumeStreamingPlayback;
+  context.resumeStreamingPlayback = retain((...args) => {
+    resumeObserver(...args); return owners.resumeStreamingPlayback(...args);
+  });
+  const playTrack = context.playTrackFromPayload;
+  context.playTrackFromPayload = retain((...args) => playTrack(...args));
+  context.setAlbumPlaybackQueue = () => {
+    effects.push('queue'); context.state.player.playbackQueue = { tracks: ['song.flac'] };
+  };
+  context.usesMobilePageLayout = () => true;
+  const readPlayback = context.getPlayerPlaybackSnapshot;
+  context.getPlayerPlaybackSnapshot = () => { effects.push('snapshot'); return readPlayback(); };
+  const animate = context.triggerAlbumTrackPlayActivation;
+  context.triggerAlbumTrackPlayActivation = target => { effects.push('animation'); animate(target); };
+  context.updatePlayerUi = () => effects.push('render');
+  context.attachSharedPlayer();
+  const instance = {};
+  selection = bindPlaytableSelection(host, {
+    sourceAdapter: {snapshot: () => ({scopeKey: 'media-capability-fixture', instance,
+      rows: [{rowKey: 'song-occurrence', readable: true, selectable: true}]})},
+    onPlay: (_rowKey, event, options) => context.activateSharedTrackButton(button,
+      {restart: options?.restart === true, focusTimeline: event.isTrusted !== false}),
+  });
+  const emit = (target, type, properties = {}) => {
+    const event = new context.Event(type);
+    Object.assign(event, {detail: 1, isTrusted: false}, properties); target.dispatchEvent(event); return event;
+  };
+  const tap = timeStamp => {
+    const pointer = {pointerType: 'touch', pointerId: 1, isPrimary: true, clientX: 20, clientY: 20};
+    emit(row, 'pointerdown', {...pointer, timeStamp});
+    emit(row, 'pointerup', {...pointer, timeStamp: timeStamp + 10});
+    emit(row, 'click', {timeStamp: timeStamp + 11});
+  };
+  let resumedHandle;
+  const assertPending = restarted => {
+    assert.strictEqual(document.getElementById('app-shell'), shell);
+    assert.equal(context.isPlaybackOwnershipScopeCurrent(scope), true);
+    const currentRole = engine.roles.current;
+    const currentAttempt = context.captureStreamingPlaybackAttempt();
+    const handle = context.getActivePlaybackOwnershipHandle();
+    const selected = vm.runInContext('playerSelectionOwnership', context);
+    assert.ok(handle);
+    assert.equal(context.isPlaybackOwnershipHandleCurrent(handle), true);
+    assert.strictEqual(selected.handle, handle);
+    assert.strictEqual(selected.attempt, currentAttempt);
+    assert.equal(context.isStreamingPlaybackAttemptCurrent(currentAttempt), true);
+    assert.strictEqual(currentRole.track, context.state.player.current);
+    assert.equal(engine.context.state, 'running');
+    assert.equal(context.successfulPlaybackClaim(handle), false);
+    assert.notEqual(currentRole.firstFrameNotified, true);
+    assert.equal(engine.diagnostics.firstFrameAtMs, 0);
+    if (!restarted) {
+      assert.strictEqual(currentRole, role); assert.strictEqual(currentAttempt, attempt);
+      resumedHandle = handle;
+    } else {
+      assert.notStrictEqual(currentRole, role); assert.notStrictEqual(currentAttempt, attempt);
+      assert.notStrictEqual(handle, resumedHandle);
+      assert.equal(context.isPlaybackOwnershipHandleCurrent(resumedHandle), false);
+      assert.equal(context.isStreamingPlaybackAttemptCurrent(attempt), false);
+    }
+  };
+  return { context, effects, audio, timeline, tap, button, row, assertPending,
+    play: () => emit(button, 'click'), doubleClick: timeStamp => emit(row, 'dblclick', {detail: 2, timeStamp}) };
 }
 
 async function loadCapabilityTrackRow(actions, t) {
@@ -3262,7 +5397,7 @@ for (const actions of [{ 'library.media.read': false }, {}]) {
 
 for (const actions of [{ 'library.media.read': true }, undefined]) {
   test(`mobile row selection, explicit resume and deliberate double-tap use shared playback (${actions ? 'allowed' : 'legacy'})`, async t => {
-    const f = await loadCapabilityTrackRow(actions, t);
+    const f = await loadPreparedCapabilityTrackRow(actions);
     const queue = f.context.state.player.playbackQueue;
     f.tap(100);
     assert.equal(f.row.getAttribute('aria-selected'), 'true'); assert.deepEqual(f.effects, []);
@@ -3272,6 +5407,7 @@ for (const actions of [{ 'library.media.read': true }, undefined]) {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.audio.playCalls, 1, 'explicit Play resumes the loaded current track');
     assert.equal(f.effects.includes('stream'), false);
+    f.assertPending(false);
     f.tap(1000); f.tap(1130); f.doubleClick(1145);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.effects.filter(effect => effect === 'stream').length, 1);
@@ -3280,6 +5416,7 @@ for (const actions of [{ 'library.media.read': true }, undefined]) {
     assert.equal(f.context.state.player.current.path, 'song.flac');
     assert.deepEqual(f.context.state.player.playbackQueue, { tracks: ['song.flac'] });
     assert.deepEqual(f.timeline.focusCalls, [], 'row activation must not steal timeline focus');
+    f.assertPending(true);
   });
 }
 

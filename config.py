@@ -222,6 +222,13 @@ class Config:
         os.environ.get("ALBUM_HAVEN_POSITION_CAPTURE_ENABLED", "")
         .strip().lower() in {"1", "true", "yes"}
     )
+    # Native evidence follows the existing capture opt-in unless explicitly
+    # overridden. Readiness and current user/library authority still gate it.
+    ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED = (
+        os.environ.get("ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED",
+                       "true" if ALBUM_HAVEN_POSITION_CAPTURE_ENABLED else "")
+        .strip().lower() in {"1", "true", "yes"}
+    )
     ALBUM_HAVEN_WAV_ABSOLUTE_CAPTURE_ENABLED = (
         os.environ.get("ALBUM_HAVEN_WAV_ABSOLUTE_CAPTURE_ENABLED", "")
         .strip().lower() in {"1", "true", "yes"}
@@ -273,8 +280,6 @@ class Config:
         'ALBUM_HAVEN_FOOBAR_IMPORT_INTAKE_BYTES')
     ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES = os.environ.get(
         'ALBUM_HAVEN_FOOBAR_IMPORT_TOTAL_LOGICAL_BYTES')
-    ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED = os.environ.get(
-        'ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED', '').strip().casefold() == 'true'
     ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED = os.environ.get(
         'ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED', '').strip().casefold() == 'true'
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"}

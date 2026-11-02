@@ -19,7 +19,18 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
   assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
   assert.match(adminNavigation, /<form[^>]*method="post"[^>]*action="\/logout">[\s\S]*name="csrf_token"[\s\S]*navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)[\s\S]*<\/form>/);
-  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
+  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section not in \('account', 'foobar', 'foobar-history'\),/);
+  assert.match(adminNavigation, /if navigation_actions\.allows\('account\.self\.foobar\.read'\) %}{{ navigation_tree_item\('Foobar history', '\/account\/foobar-history', 'foobar-history', settings_section == 'foobar-history',/);
+  assert.match(adminNavigation, /if \(account_foobar_allowed \| default\(false\)\) or navigation_actions\.allows\('account\.self\.foobar\.write'\) %}{{ navigation_tree_item\('Integrations · Foobar2000', '\/account\/integrations\/foobar', 'foobar', settings_section == 'foobar',/);
+  // Count actual macro call sites as well as their labels: a duplicate or an
+  // unrecognised extra item must not hide behind one matching expected entry.
+  const itemCalls = adminNavigation.match(/\bnavigation_tree_item\s*\(/g) || [];
+  const itemLabels = [...adminNavigation.matchAll(/\bnavigation_tree_item\s*\(\s*'([^']+)'\s*,/g)]
+    .map((match) => match[1]);
+  assert.equal(itemCalls.length, 5);
+  assert.deepEqual(itemLabels.sort(), [
+    'Foobar history', 'Integrations · Foobar2000', 'My account', 'Sign Out', 'Users',
+  ].sort());
   assert.match(navigationMacro, /set tag = 'button' if action else 'a'/);
   assert.match(navigationMacro, /if action %}type="submit"/);
   assert.match(navigationMacro, /if selected %} aria-current="{{ 'page' if settings else 'true' }}"/);
@@ -33,7 +44,7 @@ test('Admin navigation offers My account instead of unavailable placeholders', (
 
 test('Account navigation identifies the current user settings as My account', () => {
   assert.match(accountTemplate, /set settings_section = 'account'/);
-  assert.match(adminNavigation, /navigation_tree_item\('My account', '\/account', 'account', settings_section == 'account'/);
+  assert.match(adminNavigation, /navigation_tree_item\('My account', '\/account', 'account', settings_section == 'account',/);
 });
 
 test('Account navigation omits the unavailable Profile placeholder', () => {

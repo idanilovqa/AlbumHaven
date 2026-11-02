@@ -19,9 +19,20 @@ function fixture() {
   return { ...sandbox.api, engine, events, parent, bridge, context, node };
 }
 function role(kind = null, path = '/fixture.flac') {
-  return { generation: 7, streamId: 41, track: { path }, continuityOptions: kind ? { kind } : null };
+  return { generation: 7, streamId: kind ? 42 : 41, role: kind ? 'continuity' : 'current',
+    startFrame: 0, nextSequence: 0, metadataAccepted: false,
+    track: { path }, continuityOptions: kind ? { kind } : null };
 }
 const metadata = { sampleRate: 48000, timelineStartFrame: 123456 };
+
+// A synthetic server observation for a decoder opened at source zero.
+function sourceZeroMetadata(role) {
+  return { sampleRate: 48000, generation: role.generation, streamId: role.streamId,
+    requestedStartFrame: role.startFrame, timelineStartFrame: role.startFrame,
+    captureSource: { version: 'decoded-pcm-observation-v1',
+      observationId: '22222222-2222-4222-8222-222222222222',
+      coordinateBasis: 'decoded-output-zero', sourceBase48: 0, extentFrames48: null } };
+}
 
 test('metadata bind uses its validated absolute source base and actual context rate', () => {
   const f = fixture(), current = role(); f.engine.roles.current = current;
@@ -37,7 +48,8 @@ for (const kind of ['seek', 'short-loop', 'long-loop', 'whole-track-repeat']) {
   test(`${kind} stream shares the existing track occurrence parent`, () => {
     const f = fixture(), current = role(), next = role(kind);
     current.captureParent = f.parent; f.engine.roles.current = current;
-    f.bindStreamingCapture(next, metadata);
+    f.engine.roles.continuity = next;
+    f.bindStreamingCapture(next, sourceZeroMetadata(next));
     assert.equal(next.captureParent, f.parent);
     assert.equal(f.events.filter(event => event[0] === 'parent').length, 0);
   });
@@ -47,7 +59,8 @@ for (const kind of ['queued-next', 'replacement']) {
     const f = fixture(), current = role(), next = role(kind === 'replacement' ? 'seek' : kind);
     if (kind === 'replacement') f.engine.pendingSeek = { kind: 'replacement', streamId: next.streamId };
     current.captureParent = {}; f.engine.roles.current = current;
-    f.bindStreamingCapture(next, metadata);
+    f.engine.roles.continuity = next;
+    f.bindStreamingCapture(next, sourceZeroMetadata(next));
     assert.equal(f.events.filter(event => event[0] === 'parent').length, 1);
     assert.notEqual(next.captureParent, current.captureParent);
   });
@@ -79,11 +92,11 @@ test('temporary staged gate cannot create requests, timers or ports', () => {
 test('context-not-ready metadata is explicitly skipped and never retroactively bound after PCM', () => {
   const f = fixture(), current = role(); f.engine.roles.current = current;
   f.bridge.owner.bindTrack = () => null;
-  f.bindStreamingCapture(current, metadata);
+  f.bindStreamingCapture(current, sourceZeroMetadata(current));
   assert.equal(current.captureSkipped, true);
   assert.equal(f.bridge.diagnostic, 'capture_binding_unavailable_before_pcm');
   f.bridge.owner.bindTrack = () => f.parent;
-  f.bindStreamingCapture(current, metadata);
+  f.bindStreamingCapture(current, sourceZeroMetadata(current));
   assert.equal(f.events.length, 0);
   assert.equal(current.captureBinding, undefined);
 });
@@ -119,7 +132,7 @@ test('early-click/restore preparation reuses one nonblocking context request and
   const node = { port: { postMessage() {} } }, context = {
     sampleRate: 48000, state: 'running', addEventListener() {}, removeEventListener() {},
   };
-  const engine = { generation: 7, context, node };
+  const engine = { generation: 7, context, node, roles: { current: null, continuity: null } };
   const sandbox = vm.createContext({
     AbortController, PLAYBACK_CAPTURE_ENABLED: true,
     PlaybackCaptureTelemetry: { createOwner(options) {

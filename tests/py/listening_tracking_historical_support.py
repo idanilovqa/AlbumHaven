@@ -20,21 +20,27 @@ def historical_capture_db():
     # role names, server identity and passfile metadata through the unchanged
     # shared admission contract. The process environment is never repointed.
     env = dict(os.environ)
-    for destination, suffix in (
-        ('ALBUM_HAVEN_OWNED_POSTGRES_MANIFEST', 'OWNERSHIP_MANIFEST'),
-        ('DATABASE_MIGRATOR_URL', 'SETUP_URL'),
-        ('DATABASE_APP_URL', 'APP_URL'),
-        ('ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL', 'APP_URL'),
-        ('PGPASSFILE', 'PGPASSFILE'),
-    ):
-        value = os.environ.get(prefix + suffix)
-        assert value, 'Explicit historical owned fixture binding required: ' + suffix
-        env[destination] = value
-    assert env['DATABASE_MIGRATOR_URL'] != os.environ.get('DATABASE_MIGRATOR_URL'), 'Historical DB must be separate from the current target'
+    ci = env.get('ALBUM_HAVEN_TRACKING_MIGRATION_ADMISSION') == 'windows-ci'
+    if ci:
+        # Keep all four explicit target bindings available to CI admission.
+        # In particular the ordinary passfile must not become the cohort file.
+        env['ALBUM_HAVEN_TRACKING_MIGRATION_COHORT'] = 'historical-0153'
+    else:
+        for destination, suffix in (
+            ('ALBUM_HAVEN_OWNED_POSTGRES_MANIFEST', 'OWNERSHIP_MANIFEST'),
+            ('DATABASE_MIGRATOR_URL', 'SETUP_URL'),
+            ('DATABASE_APP_URL', 'APP_URL'),
+            ('ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL', 'APP_URL'),
+            ('PGPASSFILE', 'PGPASSFILE'),
+        ):
+            value = os.environ.get(prefix + suffix)
+            assert value, 'Explicit historical owned fixture binding required: ' + suffix
+            env[destination] = value
+        assert env['DATABASE_MIGRATOR_URL'] != os.environ.get('DATABASE_MIGRATOR_URL'), 'Historical DB must be separate from the current target'
     env.update(ALBUM_HAVEN_TRACKING_MIGRATION_TEST='exclusive-isolated-rollback',
                ALBUM_HAVEN_TRACKING_MIGRATION_BASELINE='aad200d9',
                ALBUM_HAVEN_TRACKING_MIGRATION_TOPOLOGY='separate-owner',
-               ALBUM_HAVEN_TRACKING_MIGRATION_RUNNER='isolated')
+               ALBUM_HAVEN_TRACKING_MIGRATION_RUNNER='operational-function' if ci else 'isolated')
     with pre0169_connection(env) as (connection, ownership):
         # The historical ledger is exactly the independent 147-file 0153
         # inventory. Reject private column-only upgrades as well as new tables.

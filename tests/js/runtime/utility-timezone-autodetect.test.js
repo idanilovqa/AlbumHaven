@@ -78,7 +78,20 @@ function createContext({ getIntegrations, saveTimezone, draftTimezone = '' }) {
       warn() {},
     },
   };
+  const document = {
+    readyState: 'loading',
+    addEventListener() {},
+    getElementById(id) {
+      return id === 'capability-bootstrap' ? {
+        textContent: JSON.stringify({ allowed_actions: { 'integration.settings.read': true } }),
+      } : null;
+    },
+  };
+  context.document = document;
+  context.window = { document };
   vm.createContext(context);
+  const capabilityPath = path.resolve(__dirname, '../../../music_app/static/js/capability-ui.js');
+  vm.runInContext(fs.readFileSync(capabilityPath, 'utf8'), context, { filename: capabilityPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls, toasts };
 }

@@ -4,12 +4,18 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_PYTEST_CASES = 3037;
 const MINIMUM_PYTEST_MODULES = 147;
-const EXPECTED_COMPONENT_CASES = 194;
+const EXPECTED_COMPONENT_CASES = 406;
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);
-  const end = workflow.indexOf(`\n  ${nextJobName}:`, start);
-  if (start === -1 || end === -1) return '';
+  if (start === -1) return '';
+  const expectedEnd = workflow.indexOf(`\n  ${nextJobName}:`, start);
+  if (expectedEnd === -1) return '';
+  const remainder = workflow.slice(start + 1);
+  // Any non-comment peer-level content ends this job; unfamiliar key/value
+  // syntax must not let another job donate its prerequisite checks.
+  const nextJob = remainder.match(/\n {2}(?=[^\s#])[^\r\n]*(?:\r?\n|$)/);
+  const end = nextJob ? start + 1 + nextJob.index : expectedEnd;
   return workflow.slice(start, end);
 }
 

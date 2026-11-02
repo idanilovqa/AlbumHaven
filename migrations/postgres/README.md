@@ -249,6 +249,27 @@ which the old unique index cannot represent. Rollback requires stopping writers,
 inspecting those rows and an explicit data-preserving recovery plan. Never restore
 the old index or edit historical ledger rows merely to make older code start.
 
+## Canonical migration bytes
+
+Migration checksums identify raw file bytes, including line endings. The
+`migrations/postgres/*.sql text eol=lf` and
+`migrations/postgres/legacy/*.sql text eol=lf` attributes keep active and archived
+SQL at LF in fresh Git checkouts on every platform. Historical migration blobs
+remain unchanged, and archived SQL stays outside active migration discovery.
+The checkout policy does not rewrite files already present in a workspace or
+repair a database ledger created from different bytes.
+
+If an existing ledger records CRLF-derived checksums or any other mismatch, stop
+and preserve the ledger and application data for a separately reviewed recovery
+plan. Do not normalize historical SQL, rewrite recorded checksums, or add
+permissive checksum aliases to make an upgrade pass. Migration `0169` continues
+to require one of its exact canonical predecessor inventories.
+
+The Windows bootstrap reports raw predecessor hashes, line-ending counts and
+allowlisted ledger checksums immediately before `0169`. These read-only
+observations help distinguish checkout-byte differences from other mismatches;
+a ledger-validation failure alone does not establish a line-ending cause.
+
 ## Listening tracking storage
 
 `0169_install_listening_tracking_storage.sql` installs the listening-position,

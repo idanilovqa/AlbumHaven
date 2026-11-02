@@ -32,6 +32,21 @@ INPUT_HASHES = {
     'absolute-coordinates': 'f9d91fa276494da4eabc1ad7b1a34220c5f4648236577fc5ced63762581db164',
     'converted-coordinates': 'f84072f7b3b32970ac850a3cd7398d625666c842a726da73cc6a2760e303c1f4',
 }
+PUBLIC_DESCRIPTION = 'Independent historical DDL oracle; outer documentary comments removed without changing executable SQL or quoted bodies.'
+# Reviewed comment-only transformation of the independent original inputs above.
+PUBLIC_HASHES = dict(zip(INPUT_HASHES, (
+    '2a923bdc5f39ada667181df658c0264cd05a7bfc8952dea51634db6bd41ab577',
+    'f9f98ac70675bfaaef2f53020be34e7df294afd26593afd7a9f8ac152dadcea0',
+    '3a7972f9ac2a4b824184f380ccc4e8917aa0b343a990c02b8ba8f168342e0b3a',
+    '66339ed670501bab2d0ab556f1fe6762aa174ab0d565bafdfca259cc82f796cf',
+    '5b54ed25b6281722818cacd9d087d19d3b7eef400f6579044e09c05b1a152126',
+    '031c7ccf00a252b37342112928660133d307edf14bc1aa1c6a7a6ed1d497bca5',
+    '8b95dfe9d5d67f84d5c7f2e4fb1cb61613a42e743dd18ef1fc97c8f1a8120b98',
+    '1abea6aa8f020da5e84d6552854bbba5a78588116fb1369eef297c5d990079f1',
+    'bcb1ddb871ae22c3b7a936ed0ddff7b503e946127cdb24eda76b333060765234',
+    '6b6371659ff04a164412f0be18dc44f2200a0889680717b71207cab49e897c45',
+    '978d752586002f6acfecf449d1ca6725de2f82efcb4966b14c61794a03ccadef',
+)))
 COHORTS = {'nine-spec': 9, 'absolute': 10, 'converted': 11}
 NEW_TABLES = (
     'integration.playback_capture_owner', 'integration.playback_capture_loss',
@@ -45,26 +60,47 @@ TABLES = NEW_TABLES + tuple('integration.playback_capture_' + n for n in (
     'app.album_ratings', 'app.album_list_items', 'app.album_list_item_progress')
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result, 'Duplicate fixture JSON key'
+        result[key] = value
+    return result
+
+
 def decode_inputs(raw):
-    payload = json.loads(raw)
-    assert type(payload) is dict and set(payload) == {'schemaVersion', 'inputs'}
-    assert type(payload['schemaVersion']) is int and payload['schemaVersion'] == 1
+    payload = json.loads(raw, object_pairs_hook=_unique_object)
+    assert type(payload) is dict
+    version = payload.get('schemaVersion')
+    assert type(version) is int and version in (1, 2)
+    assert set(payload) == ({'schemaVersion', 'inputs'} if version == 1 else
+                            {'schemaVersion', 'description', 'inputs'})
+    if version == 2:
+        assert payload['description'] == PUBLIC_DESCRIPTION
     assert type(payload['inputs']) is list and len(payload['inputs']) == len(INPUT_HASHES)
     result = {}
-    for item in payload['inputs']:
-        assert type(item) is dict and set(item) == {'id', 'sql'}
+    for index, item in enumerate(payload['inputs']):
+        assert type(item) is dict and set(item) == ({'id', 'sql'} if version == 1 else
+            {'id', 'sql', 'originalSha256', 'sanitizedSha256'})
         key, sql = item['id'], item['sql']
-        assert key in INPUT_HASHES and key not in result
+        assert type(key) is str and key in INPUT_HASHES and key not in result
         assert type(sql) is str
-        assert hashlib.sha256(sql.encode('utf-8')).hexdigest() == INPUT_HASHES[key], key
+        expected = INPUT_HASHES[key]
+        if version == 2:
+            assert key == tuple(INPUT_HASHES)[index]
+            assert item['originalSha256'] == expected
+            expected = PUBLIC_HASHES[key]
+            assert item['sanitizedSha256'] == expected
+        assert hashlib.sha256(sql.encode('utf-8')).hexdigest() == expected, key
         result[key] = sql
     assert set(result) == set(INPUT_HASHES)
     return result
 
 
 def proposal_inputs(environ):
-    value = environ.get('ALBUM_HAVEN_TRACKING_MIGRATION_INPUTS', '')
-    assert value, 'Supply independently sealed eleven-input tracking fixture JSON'
+    value = environ.get('ALBUM_HAVEN_TRACKING_MIGRATION_INPUTS',
+                        str(ROOT / 'tests/fixtures/listening-tracking/historical-inputs-v2.json'))
+    assert value, 'Explicit tracking fixture path must not be empty'
     path = Path(value)
     assert path.is_absolute() and path == path.resolve(strict=True)
     info = path.lstat()
@@ -101,7 +137,13 @@ def pre0169_connection(environ):
     assert topology in ('separate-owner', 'direct-migrator')
     runner = environ.get('ALBUM_HAVEN_TRACKING_MIGRATION_RUNNER', 'isolated')
     assert runner in ('isolated', 'operational-function')
-    if topology == 'direct-migrator':
+    admission = environ.get('ALBUM_HAVEN_TRACKING_MIGRATION_ADMISSION', 'local')
+    assert admission in ('local', 'windows-ci')
+    if admission == 'windows-ci':
+        assert topology == 'separate-owner' and runner == 'operational-function'
+        from tests.py.listening_tracking_ci_admission import ci_context, validate_ci_connection
+        ownership = ci_context(environ, environ.get('ALBUM_HAVEN_TRACKING_MIGRATION_COHORT', 'tracking-rollback'))
+    elif topology == 'direct-migrator':
         assert runner == 'operational-function', 'Direct qualification requires the operational function'
         from tests.py.listening_tracking_direct_admission import direct_context, validate_direct_connection
         ownership = direct_context(environ)
@@ -115,10 +157,13 @@ def pre0169_connection(environ):
         row_factory=dict_row, connect_timeout=5,
         options='-c statement_timeout=10000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=20000')
     try:
-        assert_owned_local_server(connection, ownership)
-        if topology == 'direct-migrator':
+        if admission == 'windows-ci':
+            validate_ci_connection(connection, ownership)
+        elif topology == 'direct-migrator':
+            assert_owned_local_server(connection, ownership)
             validate_direct_connection(connection, ownership)
         else:
+            assert_owned_local_server(connection, ownership)
             isolated._assert_connected_role(connection, isolated.SETUP_ROLE)
             flags = connection.execute('''select rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
                 from pg_roles where rolname=current_user''').fetchone()

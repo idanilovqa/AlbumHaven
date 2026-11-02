@@ -67,6 +67,7 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   if (!peaks || playerWaveformForegroundSuspensionDepth > 0
       || Number(state.player?.streaming?.generation) !== generation
       || String(state.player?.current?.path || '') !== path) return null;
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return peaks;
   state.player.waveform.compactPeaks = { path, generation, data: peaks };
   try {
     await updateWaveformAppearance();
@@ -268,6 +269,7 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
   }
   if (!peaks || state.player.streaming.generation !== generation
       || String(state.player.current?.path || '') !== rawPath) return null;
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return peaks;
   playerWaveformPeakCurrentIdentity = identity;
   trimWaveformPeakCache();
   state.player.waveform.compactPeaks = { path: rawPath, generation, data: peaks };

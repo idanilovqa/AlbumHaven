@@ -118,7 +118,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 194);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 406);
 
   assert.deepEqual(
     validator.validatePytestCollection(
@@ -312,4 +312,67 @@ test('foundation validator rejects every test family losing its review-success d
       replaceInJob(workflow, job, /!cancelled\(\)/, 'always()'),
       /cancellable job condition/);
   }
+});
+
+const supplementalJobBody = [
+  '    needs:',
+  '      - review_prerequisites',
+  "    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' }}",
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - run: echo "boundary probe"',
+].join('\n');
+
+const supplementalJobs = [
+  ['hyphenated key', `  supplemental-probe:\n${supplementalJobBody}`],
+  ['trailing whitespace', `  supplemental_probe:   \n${supplementalJobBody}`],
+  ['trailing comment', `  supplemental_probe: # separate job\n${supplementalJobBody}`],
+  ['single-quoted key', `  'supplemental_probe':\n${supplementalJobBody}`],
+  ['double-quoted key', `  "supplemental_probe":\n${supplementalJobBody}`],
+  ['anchored job', `  supplemental_probe: &boundary_probe\n${supplementalJobBody}`],
+  ['inline job mapping', `  supplemental_probe: ${JSON.stringify({
+    needs: ['review_prerequisites'],
+    if: "${{ !cancelled() && needs.review_prerequisites.result == 'success' }}",
+    'runs-on': 'ubuntu-latest',
+    steps: [{ run: 'echo "boundary probe"' }],
+  })}`],
+];
+
+for (const [headerKind, supplementalJob] of supplementalJobs) {
+  for (const missing of [
+    {
+      name: 'dependency',
+      pattern: /      - review_prerequisites\r?\n/,
+      error: /python job[^\n]*review_prerequisites dependency/,
+    },
+    {
+      name: 'condition',
+      pattern: /needs\.review_prerequisites\.result == 'success' && /,
+      error: /python job[^\n]*successful review prerequisite/,
+    },
+  ]) test(`foundation job boundary blocks Python ${missing.name} borrowing past ${headerKind}`, () => {
+    const validator = require(validatorPath);
+    const workflow = fs.readFileSync(workflowPath, 'utf8');
+    const peer = '\n  test_tops_linux:';
+    assert.ok(workflow.indexOf(peer) > workflow.indexOf('\n  test_python:'));
+    const insertPeer = text => text.replace(peer, `\n${supplementalJob}\n${peer}`);
+    const compliant = insertPeer(workflow);
+    assert.notEqual(compliant, workflow);
+    assert.deepEqual(validator.validateWorkflowContract(compliant), [], 'the compliant control must remain valid');
+    // Mutate the original Python block before inserting a nonstandard peer header.
+    const missingPythonGuard = replaceInJob(workflow, 'test_python', missing.pattern, '');
+    const changed = insertPeer(missingPythonGuard);
+    assertWorkflowDrift(validator, compliant, changed, missing.error);
+  });
+}
+
+for (const [name, separator] of [
+  ['blank lines', '\n  \n\n'],
+  ['comment lines', '\n  # supplemental_probe: not a job\n    # still inside Python\n'],
+]) test(`foundation job boundary preserves Python guards after ${name}`, () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const changed = replaceInJob(workflow, 'test_python', /^    needs:/m, `${separator}    needs:`);
+  assert.notEqual(changed, workflow);
+  assert.deepEqual(validator.validateWorkflowContract(changed), []);
 });

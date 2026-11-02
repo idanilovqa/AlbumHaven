@@ -50,7 +50,7 @@ function receivePcmAndAssertEnqueue(harness, messageOptions = {}, expectations =
   const samples = messageOptions.samples || [0.25, -0.5, 0.75, -1];
   const before = harness.portMessages('enqueue').length;
   const wirePcm = createPcmMessage({ ...messageOptions, samples });
-  harness.sockets[0].receive(wirePcm);
+  harness.sockets[expectations.socketIndex ?? 0].receive(wirePcm);
   const enqueues = harness.portMessages('enqueue');
   const expectedEnqueue = expectations.expectedEnqueue !== false;
   assert.equal(
@@ -423,6 +423,7 @@ test('facade receives bounded position updates and one active terminal ended eve
   });
   const track = makeTrack();
   await harness.api.start(track);
+  const causalPlay = structuredClone(harness.portMessages('play').at(-1));
   const current = harness.sent('open')[0];
   acceptMetadata(harness, current);
 
@@ -460,6 +461,7 @@ test('facade receives bounded position updates and one active terminal ended eve
 
   const terminal = {
     type: 'ended',
+    playbackIntentId: causalPlay.playbackIntentId,
     generation: current.generation,
     streamId: current.streamId,
     timelineFrame: 72_000,
@@ -491,6 +493,7 @@ test('non-zero initial starts keep zero-relative worklet messages on the absolut
   const startSeconds = 3.11;
   const startFrame = Math.round(startSeconds * 48_000);
   await harness.api.start(makeTrack(), { startSeconds });
+  const causalPlay = structuredClone(harness.portMessages('play').at(-1));
   const current = harness.sent('open')[0];
   acceptMetadata(harness, current);
 
@@ -541,6 +544,7 @@ test('non-zero initial starts keep zero-relative worklet messages on the absolut
 
   harness.nodes[0].port.dispatch({
     type: 'ended',
+    playbackIntentId: causalPlay.playbackIntentId,
     generation: current.generation,
     streamId: current.streamId,
     timelineFrame: 48_000,
@@ -658,28 +662,28 @@ test('waveform readiness survives playback refill dips and fires once per track 
   assert.equal(ready.length, 2, 'a generation change does not reuse old readiness identities');
 
   const nextCurrent = harness.sent('open')[2];
-  acceptMetadata(harness, nextCurrent);
+  acceptMetadata(harness, nextCurrent, {}, 1);
   receivePcmAndAssertEnqueue(harness, {
     generation: nextCurrent.generation,
     streamId: nextCurrent.streamId,
     sequence: 0,
     samples: new Array(48_000 * 2).fill(0.25),
-  });
+  }, { socketIndex: 1 });
   assert.equal(ready.length, 3);
-  harness.nodes[0].port.dispatch({
+  harness.nodes[1].port.dispatch({
     type: 'first-frame', generation: nextCurrent.generation, streamId: nextCurrent.streamId,
     renderedFrame: 0, contextTime: 12.5,
   });
   await harness.api.continuity(nextContinuityTrack);
   const nextContinuity = harness.sent('open')[3];
-  acceptMetadata(harness, nextContinuity);
+  acceptMetadata(harness, nextContinuity, {}, 1);
   receivePcmAndAssertEnqueue(harness, {
     role: 1,
     generation: nextContinuity.generation,
     streamId: nextContinuity.streamId,
     sequence: 0,
     samples: new Array(48_000 * 2).fill(-0.25),
-  });
+  }, { socketIndex: 1 });
 
   assert.equal(ready.length, 4, 'a new current-plus-successor identity gets one readiness callback');
   assert.equal(ready[3].generation, nextCurrent.generation);
@@ -847,8 +851,8 @@ test('an older start blocked on cleanup cannot replace a newer completed start',
   assert.equal(harness.engine.generation, opens[0].generation);
 });
 
-function acceptMetadata(harness, open, changes = {}) {
-  harness.sockets[0].receive({
+function acceptMetadata(harness, open, changes = {}, socketIndex = 0) {
+  harness.sockets[socketIndex].receive({
     type: 'metadata',
     generation: open.generation,
     streamId: open.streamId,
@@ -3024,6 +3028,7 @@ test('replacement remains live when outgoing ended races worklet seek reservatio
     handleStreamingPlaybackEnded: (event) => ended.push(structuredClone(event)),
   });
   await harness.api.start(makeTrack('outgoing.flac'));
+  const causalPlay = structuredClone(harness.portMessages('play').at(-1));
   const outgoing = harness.sent('open')[0];
   acceptMetadata(harness, outgoing);
   receivePcmAndAssertEnqueue(harness, {
@@ -3046,6 +3051,7 @@ test('replacement remains live when outgoing ended races worklet seek reservatio
 
   harness.nodes[0].port.dispatch({
     type: 'ended',
+    playbackIntentId: causalPlay.playbackIntentId,
     generation: outgoing.generation,
     streamId: outgoing.streamId,
     timelineFrame: 48_000,
@@ -3083,6 +3089,7 @@ test('paused replacement suppresses raced outgoing ended without restarting the 
     handleStreamingPlaybackEnded: (event) => ended.push(structuredClone(event)),
   });
   await harness.api.start(makeTrack('outgoing.flac'));
+  const causalPlay = structuredClone(harness.portMessages('play').at(-1));
   const outgoing = harness.sent('open')[0];
   acceptMetadata(harness, outgoing);
   receivePcmAndAssertEnqueue(harness, {
@@ -3103,6 +3110,7 @@ test('paused replacement suppresses raced outgoing ended without restarting the 
   const playCount = harness.portMessages('play').length;
   harness.nodes[0].port.dispatch({
     type: 'ended',
+    playbackIntentId: causalPlay.playbackIntentId,
     generation: outgoing.generation,
     streamId: outgoing.streamId,
     timelineFrame: 48_000,
@@ -3795,6 +3803,62 @@ test('manual resume wins before the original restore resume succeeds without a d
   assert.equal(autoplayStartedCalls, 0);
 });
 
+test('obsolete restore resume rejection cannot destroy a manually resumed then paused role', async () => {
+  let rejectRestoreResume;
+  let resumeCall = 0;
+  const restoreResumeGate = new Promise((resolve, reject) => {
+    rejectRestoreResume = reject;
+  });
+  const harness = createEngineHarness({
+    resumeContext: () => {
+      resumeCall += 1;
+      return resumeCall === 1 ? restoreResumeGate : undefined;
+    },
+    clearTimeout: () => {},
+    setTimeout: (callback) => {
+      queueMicrotask(callback);
+      return 1;
+    },
+  });
+  let autoplayStartedCalls = 0;
+  const restored = await harness.api.start(makeTrack('03.flac'), {
+    autoplay: true,
+    allowSuspendedAutoplayFallback: true,
+    onAutoplayStarted: () => { autoplayStartedCalls += 1; },
+  });
+  const context = harness.engine.context;
+  const node = harness.engine.node;
+  const socket = harness.engine.socket;
+  const attempt = harness.context.captureStreamingPlaybackAttempt();
+  assert.ok(attempt);
+  assert.equal(harness.context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(resumeCall, 2);
+  await harness.api.pause();
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(context.state, 'suspended');
+
+  rejectRestoreResume(new Error('obsolete original resume rejection after explicit pause'));
+  await harness.settle();
+  await harness.settle();
+
+  assert.equal(harness.engine.roles.current, restored);
+  assert.equal(harness.engine.context, context);
+  assert.equal(harness.engine.node, node);
+  assert.equal(harness.engine.socket, socket);
+  assert.equal(harness.context.isStreamingPlaybackAttemptCurrent(attempt), true);
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.api.snapshot().mode, 'paused');
+  assert.equal(harness.api.snapshot().diagnostics.lastError, undefined);
+  assert.equal(context.state, 'suspended');
+  assert.equal(context.closeCalls, 0);
+  assert.equal(node.disconnectCalls, 0);
+  assert.equal(socket.closeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 1);
+  assert.equal(autoplayStartedCalls, 0);
+});
+
 test('concurrent restore and manual resume post play exactly once', async () => {
   let resolveResume;
   const resumeGate = new Promise((resolve) => {
@@ -4138,6 +4202,75 @@ test('stop racing deferred preparation waits for and exactly cleans the complete
   assert.equal(harness.engine.node, null);
   assert.equal(harness.engine.socket, null);
   assert.equal(harness.api.snapshot().mode, 'stopped');
+});
+
+for (const failureCase of [
+  { name: 'stop post throws', hook: 'stopPostMessage', failure: new Error('staged stop post failed') },
+  { name: 'node disconnect throws', hook: 'disconnectNode', failure: new Error('staged disconnect failed') },
+  { name: 'context close rejects Error', hook: 'closeContext', failure: new Error('staged context close failed') },
+  ...[null, undefined, false, 0, ''].map(failure => ({
+    name: `context close rejects ${String(failure) || 'empty string'}`,
+    hook: 'closeContext',
+    failure,
+  })),
+]) test(`retired deferred preparation rejects unsafe cleanup when ${failureCase.name}`, async () => {
+  let releaseModule;
+  const moduleGate = new Promise(resolve => { releaseModule = resolve; });
+  const harness = createEngineHarness({
+    addModule: () => moduleGate,
+    [failureCase.hook]: () => { throw failureCase.failure; },
+  });
+  const preparation = harness.api.prepare();
+  await harness.settle();
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.nodes.length, 0);
+  const stopping = harness.api.stop('retire-staged-preparation');
+  const waitingSuccessor = harness.api.start(makeTrack('waiting-unsafe-successor.flac'));
+  const results = Promise.allSettled([preparation, stopping, waitingSuccessor]);
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.nodes.length, 0);
+  releaseModule();
+  const [prepared, stopped, waiting] = await results;
+
+  assert.equal(prepared.status, 'rejected');
+  assert.match(prepared.reason.message, /Preparation retired/);
+  assert.equal(stopped.status, 'rejected');
+  assert.equal(waiting.status, 'rejected', 'a successor waiting on unsafe cleanup must reject');
+  assert.ok(Array.isArray(prepared.reason.cleanupErrors));
+  assert.ok(prepared.reason.cleanupErrors.some(error => Object.is(error, failureCase.failure)));
+  assert.ok(stopped.reason.errors.some(error => Object.is(error, failureCase.failure)));
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.nodes.length, 1);
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.portMessages('configure').length, 0, 'staged worklet never received an active generation');
+  assert.equal(harness.nodes[0].disconnectCalls, 1);
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.contexts[0].state, failureCase.hook === 'closeContext' ? 'suspended' : 'closed');
+  assert.equal(harness.engine.context, null);
+  assert.equal(harness.engine.node, null);
+  assert.equal(harness.engine.socket, null);
+  assert.equal(harness.engine.roles.current, null);
+
+  const retainedFailure = error => {
+    const pending = [error];
+    const visited = new Set();
+    for (let index = 0; index < pending.length && index < 32; index += 1) {
+      const failure = pending[index];
+      if (Object.is(failure, failureCase.failure)) return true;
+      if (!failure || visited.has(failure) || !Array.isArray(failure.errors)) continue;
+      visited.add(failure);
+      pending.push(...failure.errors);
+    }
+    return false;
+  };
+  assert.equal(retainedFailure(waiting.reason), true);
+  await assert.rejects(harness.api.prepare(), retainedFailure);
+  await assert.rejects(harness.api.start(makeTrack('unsafe-successor.flac')), retainedFailure);
+  assert.equal(harness.contexts.length, 1, 'unsafe preparation cannot allocate a successor context');
+  assert.equal(harness.nodes.length, 1, 'unsafe preparation cannot allocate a successor node');
+  assert.equal(harness.sockets.length, 1, 'unsafe preparation cannot allocate a successor socket');
+  assert.deepEqual([...harness.api.snapshot().diagnostics.activeRoles], []);
 });
 
 test('start waits for blocked stop cleanup and uses one fresh resource set', async () => {
@@ -4812,7 +4945,7 @@ test('authoritative current EOS corrects duration and permanently closes its cre
   assert.ok(harness.api.snapshot().diagnostics.bufferedFrames.current <= 12 * 48_000);
 });
 
-test('restart waits through failed stop cleanup and then starts on one fresh resource set', async () => {
+test('restart rejects failed physical stop cleanup without allocating a second resource set', async () => {
   const cleanupFailure = new Error('old context close failed');
   const harness = createEngineHarness({
     closeContext: async (context) => {
@@ -4825,32 +4958,41 @@ test('restart waits through failed stop cleanup and then starts on one fresh res
 
   const stopping = harness.api.stop('replacement');
   const restarting = harness.api.start(newTrack);
-  let stopRejection;
-  try {
-    await stopping;
-  } catch (error) {
-    stopRejection = error;
-  }
-  await restarting;
+  const [stopped, restarted] = await Promise.allSettled([stopping, restarting]);
   await harness.settle();
 
+  assert.equal(stopped.status, 'rejected', 'failed teardown must remain reported to the stop caller');
+  assert.equal(restarted.status, 'rejected', 'unsafe physical cleanup must reject the waiting successor');
+  const stopRejection = stopped.reason;
   assert.ok(stopRejection, 'failed teardown must remain reported to the stop caller');
+  assert.strictEqual(restarted.reason, stopRejection, 'both callers retain the same cleanup failure');
   assert.deepEqual(
     [...(stopRejection.errors || [])].map((error) => error.message),
     [cleanupFailure.message],
   );
-  assert.equal(harness.contexts.length, 2);
-  assert.equal(harness.nodes.length, 2);
-  assert.equal(harness.sockets.length, 2);
+  assert.strictEqual(stopRejection.errors[0], cleanupFailure);
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.nodes.length, 1);
+  assert.equal(harness.sockets.length, 1);
   assert.deepEqual(
-    harness.sockets[1].sent.filter(({ type }) => type === 'open').map(({ path }) => path),
-    [newTrack.path],
+    harness.sockets[0].sent.filter(({ type }) => type === 'open').map(({ path }) => path),
+    [oldTrack.path],
+    'the rejected successor sends no decoder-open command',
   );
-  assert.equal(harness.contexts[1].state, 'running');
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.nodes[0].disconnectCalls, 1);
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.portMessages('stop').length, 1);
+  assert.equal(harness.engine.context, null);
+  assert.equal(harness.engine.node, null);
+  assert.equal(harness.engine.socket, null);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.engine.roles.continuity, null);
   const snapshot = harness.api.snapshot();
-  assert.equal(snapshot.mode, 'starting');
-  assert.equal(snapshot.src, newTrack.src);
-  assert.deepEqual([...snapshot.diagnostics.activeRoles], ['current']);
+  assert.equal(snapshot.mode, 'stopped');
+  assert.equal(snapshot.src, '');
+  assert.equal(snapshot.paused, true);
+  assert.deepEqual([...snapshot.diagnostics.activeRoles], []);
 });
 
 test('failed credit send is fatal without reserving frames and preserves its diagnostic through cleanup', async () => {
@@ -5011,4 +5153,910 @@ test('unknown active-stream control type is a fatal socket protocol error', asyn
   assert.equal(settled.mode, 'error');
   assert.equal(settled.diagnostics.lastError.source, 'socket');
   assert.match(settled.diagnostics.lastError.message, /unknown|protocol|control/i);
+});
+
+// Finite-platform command/state regressions, not real-browser or speaker proof.
+function emptyWarmupLogicalSnapshot(harness) {
+  const snapshot = structuredClone(harness.api.snapshot());
+  // Native context settlement is observable but not cancellable by pause/retirement.
+  delete snapshot.diagnostics.contextState;
+  return snapshot;
+}
+test('empty warmup resumes synchronously without acquiring playback authority', async (t) => {
+  const harness = createEngineHarness({ measuredListening: true });
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.prepare();
+  await harness.settle();
+  const before = emptyWarmupLogicalSnapshot(harness);
+  const attempt = harness.engine.playbackAttempt;
+  let listeningCalls = 0;
+  harness.context.beginOrdinaryAlbumListening = () => { listeningCalls += 1; };
+  // CONNECTING is a platform condition, not permission to open a role.
+  harness.sockets[0].readyState = 0;
+  const warming = harness.api.resume();
+  assert.equal(harness.contexts[0].resumeCalls, 1, 'native resume must begin inside the gesture call');
+  assert.equal(await warming, true);
+  assert.equal(harness.contexts[0].state, 'running');
+  assert.deepEqual(structuredClone(harness.portMessages('play')), [{ type: 'play', generation: harness.engine.generation }]);
+  assert.equal(harness.portMessages('configure').length, 0);
+  assert.deepEqual(emptyWarmupLogicalSnapshot(harness), before);
+  assert.equal(harness.engine.playbackAttempt, attempt);
+  assert.equal(harness.context.captureStreamingPlaybackAttempt(), null);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.engine.roles.continuity, null);
+  assert.equal(listeningCalls, 0);
+  assert.equal(harness.sockets[0].sent.length, 0, 'no opens, credits, or controls');
+  assert.deepEqual([...harness.engine.pendingControls], []);
+});
+
+test('empty warmup can repeat and prepare fresh resources after a safe stop', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.prepare();
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(await harness.api.resume(), true);
+  await harness.api.pause();
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.portMessages('play').length, 3);
+  await harness.api.start(makeTrack('before-fresh-warmup.flac'), { autoplay: false });
+  assert.ok(harness.engine.generation > 0);
+  await harness.api.stop('new-empty-preparation');
+  await harness.api.prepare();
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.contexts.length, 2);
+  assert.equal(harness.nodes[1].port.messages.at(-1).message.type, 'play');
+  assert.equal(harness.nodes[1].port.messages.filter(({ message }) => message.type === 'configure').length, 0);
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.sockets[1].sent.length, 0);
+});
+
+test('empty warmup preserves capture preparation without creating playback or listening claims', async (t) => {
+  const harness = createEngineHarness();
+  const captureCommands = [];
+  let listeningCalls = 0;
+  // A finite telemetry/platform adapter: production prepareStreamingCapture runs.
+  Object.assign(harness.context, {
+    PLAYBACK_CAPTURE_ENABLED: true,
+    AbortController,
+    capturePlaybackOwnershipScope: () => ({ owner: 'warmup-unit-scope' }),
+    isPlaybackOwnershipScopeCurrent: () => true,
+    fetch: async () => ({ ok: true, json: async () => ({ supported_protocols: [] }) }),
+    beginOrdinaryAlbumListening: () => { listeningCalls += 1; },
+    PlaybackCaptureTelemetry: { createOwner({ sendCommand }) {
+      return {
+        async enable() { captureCommands.push('enable'); sendCommand({ type: 'capture-enable' }); return true; },
+        onContextState() {}, onScopeLost() {}, pagehide() {},
+        close() {},
+      };
+    } },
+  });
+  harness.context.window.addEventListener = () => {};
+  harness.context.window.removeEventListener = () => {};
+  harness.context.window.AudioContext.prototype.addEventListener = () => {};
+  harness.context.window.AudioContext.prototype.removeEventListener = () => {};
+  t.after(() => harness.api.stop('warmup-capture-cleanup'));
+  await harness.api.prepare();
+  await harness.settle();
+  assert.deepEqual(captureCommands, ['enable']);
+  assert.equal(harness.portMessages('capture-enable').length, 1);
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.nodes[0].port.messages.at(-1).message.type, 'play');
+  assert.equal(harness.portMessages('configure').length, 0);
+  assert.equal(harness.sockets[0].sent.length, 0);
+  assert.equal(listeningCalls, 0);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+test('empty warmup rejects playback callbacks and expected owners without invoking them', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.prepare();
+  let started = 0;
+  for (const args of [[null, () => { started += 1; }], [1], [null, null, {}], [null, null, null, {}], [null, null, null, null, () => false]]) {
+    assert.equal(await harness.api.resume(...args), false);
+  }
+  assert.equal(started, 0);
+  assert.equal(harness.contexts[0].resumeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 0);
+  assert.equal(await harness.api.resume(), true, 'rejected internal calls must not consume fresh provenance');
+});
+
+for (const field of ['pendingControls', 'pendingSeek', 'pendingPromotion', 'pendingContinuityTrack', 'pendingContinuityOptions', 'replacementCushionWaiter']) {
+  test(`empty warmup rejects unit-injected ${field} without flushing or clearing it`, async (t) => {
+    const harness = createEngineHarness();
+    t.after(() => harness.api.stop('warmup-test-cleanup'));
+    await harness.api.prepare();
+    await harness.settle();
+    // Negative unit fault input only; no authority or safety flags are granted.
+    const pending = field === 'pendingControls' ? [{ type: 'credit', frames: 123 }]
+      : field === 'replacementCushionWaiter' ? { resolve() {} } : {};
+    harness.engine[field] = pending;
+    assert.equal(await harness.api.resume(), false);
+    assert.equal(harness.engine[field], pending);
+    assert.equal(harness.contexts[0].resumeCalls, 0);
+    assert.equal(harness.portMessages('play').length, 0);
+    assert.equal(harness.sockets[0].sent.length, 0);
+  });
+}
+
+test('empty warmup returns false when native resume fulfills still suspended', async (t) => {
+  const harness = createEngineHarness({ resumeLeavesSuspended: true });
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.prepare();
+  assert.equal(await harness.api.resume(), false);
+  assert.equal(harness.contexts[0].resumeCalls, 1);
+  assert.equal(harness.portMessages('play').length, 0);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+for (const synchronous of [true, false]) {
+  test(`empty warmup propagates current ${synchronous ? 'synchronous throw' : 'asynchronous rejection'}`, async (t) => {
+    const failure = new Error('warmup-native-resume-denied');
+    const harness = createEngineHarness({ resumeContext: () => Promise.reject(failure) });
+    t.after(() => harness.api.stop('warmup-test-cleanup'));
+    await harness.api.prepare();
+    if (synchronous) harness.contexts[0].resume = () => { throw failure; };
+    await assert.rejects(harness.api.resume(), error => error === failure);
+    assert.equal(harness.portMessages('play').length, 0);
+    assert.equal(harness.api.snapshot().paused, true);
+    assert.equal(harness.engine.roles.current, null);
+  });
+}
+
+for (const transition of ['pause', 'start', 'stop', 'replacement']) {
+  test(`empty warmup settlement cannot cross ${transition}`, async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const harness = createEngineHarness({ resumeContext: () => gate });
+    await harness.api.prepare();
+    const oldNode = harness.nodes[0];
+    const warming = harness.api.resume();
+    try {
+      assert.equal(harness.contexts[0].resumeCalls, 1);
+      if (transition === 'pause') await harness.api.pause();
+      if (transition === 'start') await harness.api.start(makeTrack('warmup-selection.flac'), { autoplay: false });
+      if (transition === 'stop' || transition === 'replacement') await harness.api.stop('warmup-retired');
+      if (transition === 'replacement') await harness.api.prepare();
+      const before = emptyWarmupLogicalSnapshot(harness);
+      release();
+      assert.equal(await warming, false);
+      assert.equal(oldNode.port.messages.filter(({ message }) => message.type === 'play').length, 0);
+      assert.deepEqual(emptyWarmupLogicalSnapshot(harness), before);
+      if (transition === 'start') assert.equal(harness.portMessages('configure').length, 1);
+    } finally {
+      const stopping = harness.api.stop('warmup-race-cleanup');
+      release();
+      await Promise.all([warming, stopping]);
+    }
+  });
+}
+
+test('empty warmup is invalidated before pending selection callbacks can resume', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.prepare();
+  let nestedResume;
+  await harness.api.start(makeTrack('warmup-pending-selection.flac'), {
+    autoplay: false,
+    onStartAttempt() { nestedResume = harness.api.resume(); },
+  });
+  assert.equal(await nestedResume, false);
+  assert.equal(harness.contexts[0].resumeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 0);
+  assert.equal(harness.portMessages('configure').length, 1);
+});
+
+test('empty warmup late rejection cannot poison a safely prepared successor', async () => {
+  let rejectOld, releaseOld;
+  const gate = new Promise((resolve, reject) => { rejectOld = reject; releaseOld = resolve; });
+  const harness = createEngineHarness({ resumeContext: context => context === harness.contexts[0] ? gate : undefined });
+  await harness.api.prepare();
+  const warming = harness.api.resume();
+  const observed = warming.then(value => ({ value }), error => ({ error }));
+  try {
+    assert.equal(harness.contexts[0].resumeCalls, 1);
+    await harness.api.stop('replace-warmup');
+    await harness.api.prepare();
+    assert.equal(await harness.api.resume(), true);
+    const before = emptyWarmupLogicalSnapshot(harness);
+    rejectOld(new Error('obsolete-warmup-denied'));
+    assert.deepEqual(await observed, { value: false });
+    assert.deepEqual(emptyWarmupLogicalSnapshot(harness), before);
+    assert.equal(harness.nodes[0].port.messages.filter(({ message }) => message.type === 'play').length, 0);
+    assert.equal(harness.nodes[1].port.messages.filter(({ message }) => message.type === 'play').length, 1);
+  } finally {
+    const stopping = harness.api.stop('warmup-race-cleanup');
+    if (harness.contexts[0].resumeCalls) rejectOld(new Error('test-owned-gate-release'));
+    else releaseOld();
+    await observed;
+    await stopping;
+  }
+});
+
+test('empty warmup refuses genuinely configured resources made roleless by a unit fault', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-test-cleanup'));
+  await harness.api.start(makeTrack('configured-not-empty.flac'), { autoplay: false });
+  assert.equal(harness.portMessages('configure').length, 1);
+  // Negative corruption input: removing public roles cannot grant provenance.
+  harness.engine.roles.current = null;
+  harness.engine.playbackAttempt = null;
+  harness.engine.mode = 'prepared';
+  await harness.api.prepare(); // Existing-resource early return must not certify it.
+  assert.equal(await harness.api.resume(), false);
+  assert.equal(harness.contexts[0].resumeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 0);
+});
+
+for (const pending of [false, true]) {
+  test(`empty warmup cannot bypass unsafe physical cleanup ${pending ? 'during resume' : 'before resume'}`, async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const failure = new Error('warmup-context-close-failed');
+    const harness = createEngineHarness({
+      resumeContext: () => gate,
+      closeContext: () => { throw failure; },
+    });
+    await harness.api.prepare();
+    const warming = pending ? harness.api.resume() : Promise.resolve(false);
+    let stopAttempted = false;
+    try {
+      if (pending) assert.equal(harness.contexts[0].resumeCalls, 1);
+      stopAttempted = true;
+      await assert.rejects(harness.api.stop('unsafe-warmup-retirement'));
+      release();
+      assert.equal(await warming, false);
+      assert.equal(await harness.api.resume(), false);
+      await assert.rejects(harness.api.prepare());
+      await assert.rejects(harness.api.start(makeTrack('blocked-warmup-successor.flac')));
+      assert.equal(harness.contexts.length, 1);
+      assert.equal(harness.portMessages('play').length, 0);
+    } finally {
+      // Retire the owner before releasing the test gate, including on RED.
+      if (!stopAttempted) await assert.rejects(harness.api.stop('unsafe-warmup-cleanup'));
+      if (harness.engine.playbackAttempt) await harness.api.stop('retire-blocked-successor');
+      // The failed physical cleanup is intentionally retained; no fake safety reset.
+      release();
+      await warming;
+    }
+  });
+}
+
+test('empty warmup propagates a current play-port failure without claiming playback', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-port-cleanup'));
+  await harness.api.prepare();
+  const port = harness.nodes[0].port;
+  const post = port.postMessage.bind(port);
+  const failure = new Error('warmup-play-port-failed');
+  port.postMessage = (message, transfer) => {
+    if (message.type === 'play') throw failure;
+    return post(message, transfer);
+  };
+  await assert.rejects(harness.api.resume(), error => error === failure);
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.sent('open').length, 0);
+});
+
+test('empty warmup rechecks ownership after a play-port effect retires resources', async () => {
+  const harness = createEngineHarness();
+  await harness.api.prepare();
+  const port = harness.nodes[0].port;
+  const post = port.postMessage.bind(port);
+  let stopping;
+  port.postMessage = (message, transfer) => {
+    post(message, transfer);
+    if (message.type === 'play') stopping = harness.api.stop('warmup-port-retired');
+  };
+  try {
+    assert.equal(await harness.api.resume(), false);
+    assert.ok(stopping, 'the command must reach the finite port before its retirement callback');
+    await stopping;
+    assert.equal(harness.engine.context, null);
+    assert.equal(harness.api.snapshot().paused, true);
+    assert.equal(harness.engine.roles.current, null);
+  } finally {
+    await (stopping || harness.api.stop('warmup-port-cleanup'));
+  }
+});
+
+for (const phase of ['initial', 'settlement']) {
+  for (const action of ['pause', 'stop', 'selection']) {
+    test(`empty warmup revalidates ${phase} isCurrent callback reentry through ${action}`, async () => {
+      const harness = createEngineHarness();
+      await harness.api.prepare();
+      let checks = 0;
+      let transition;
+      const isCurrent = () => {
+        checks += 1;
+        if (!transition && (phase === 'initial' || harness.contexts[0].resumeCalls === 1)) {
+          transition = action === 'pause' ? harness.api.pause()
+            : action === 'stop' ? harness.api.stop('warmup-predicate-retirement')
+              : harness.api.start(makeTrack('warmup-predicate-selection.flac'), { autoplay: false });
+        }
+        return true; // Truthy callback cannot override a changed owner/pause intent.
+      };
+      try {
+        assert.equal(await harness.api.resume(null, null, null, null, isCurrent), false);
+        assert.ok(checks >= (phase === 'initial' ? 1 : 2));
+        assert.ok(transition, 'the existing predicate seam must actually reenter');
+        await transition;
+        assert.equal(harness.contexts[0].resumeCalls, phase === 'initial' ? 0 : 1);
+        assert.equal(harness.portMessages('play').length, 0);
+        assert.equal(harness.api.snapshot().paused, true);
+      } finally {
+        const stopping = harness.api.stop('warmup-predicate-cleanup');
+        await transition;
+        await stopping;
+      }
+    });
+  }
+}
+
+test('empty warmup provenance is retired by a direct role open even after normal role close', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-direct-role-cleanup'));
+  await harness.api.prepare();
+  await harness.settle();
+  const context = harness.engine.context;
+  const node = harness.engine.node;
+  const role = harness.context.openStreamingRole('continuity', makeTrack('warmup-direct-role.flac'), 0,
+    { kind: 'queued-next' });
+  assert.ok(role);
+  assert.equal(harness.sent('open').length, 1);
+  assert.equal(harness.context.closeStreamingContinuityRole('warmup-direct-close'), true);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.engine.roles.continuity, null);
+  assert.equal(harness.engine.playbackAttempt ?? null, null);
+  assert.equal(harness.engine.context, context);
+  assert.equal(harness.engine.node, node);
+  await harness.api.prepare(); // Existing resources must not regain fresh provenance.
+  assert.equal(await harness.api.resume(), false);
+  assert.equal(context.resumeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 0);
+});
+
+test('empty warmup rejects a start reentering preparation before successful publication', async () => {
+  let harness;
+  let selection;
+  let nestedWarmup;
+  const track = makeTrack('warmup-preparation-reentry.flac');
+  harness = createEngineHarness({
+    addModule() {
+      selection = harness.api.start(track, {
+        autoplay: false,
+        onStartAttempt() { nestedWarmup = harness.api.resume(); },
+      });
+    },
+  });
+  const preparation = harness.api.prepare();
+  try {
+    await preparation;
+    assert.ok(selection, 'real worklet-module preparation must invoke the platform callback');
+    assert.equal(await nestedWarmup, false);
+    await selection;
+    assert.equal(harness.portMessages('configure').length, 1);
+    assert.equal(harness.portMessages('play').length, 0);
+    assert.equal(harness.contexts[0].resumeCalls, 0);
+    assert.equal(harness.api.snapshot().paused, true);
+    // Negative unit corruption after genuine start/configure: public emptiness is
+    // insufficient even when prepare began as an empty call before reentry.
+    harness.engine.roles.current = null;
+    harness.engine.playbackAttempt = null;
+    harness.engine.mode = 'prepared';
+    await harness.api.prepare();
+    assert.equal(await harness.api.resume(), false);
+    assert.equal(harness.contexts[0].resumeCalls, 0);
+  } finally {
+    const stopping = harness.api.stop('warmup-preparation-reentry-cleanup');
+    await Promise.all([preparation, selection, nestedWarmup, stopping]);
+  }
+});
+
+for (const action of ['current', 'pause', 'stop', 'successor']) {
+  test(`empty warmup play-port throw preserves ${action} ownership semantics`, async () => {
+    const harness = createEngineHarness();
+    await harness.api.prepare();
+    const port = harness.nodes[0].port;
+    const post = port.postMessage.bind(port);
+    const failure = new Error(`warmup-port-${action}-failure`);
+    let playCalls = 0;
+    let transition;
+    port.postMessage = (message, transfer) => {
+      post(message, transfer);
+      if (message.type !== 'play') return;
+      playCalls += 1;
+      if (action === 'pause') transition = harness.api.pause();
+      if (action === 'stop') transition = harness.api.stop('warmup-port-throw-retirement');
+      if (action === 'successor') transition = harness.api.start(makeTrack('warmup-port-throw-successor.flac'), { autoplay: false });
+      throw failure;
+    };
+    const warming = harness.api.resume().then(value => ({ value }), error => ({ error }));
+    try {
+      const outcome = await warming;
+      assert.equal(playCalls, 1, 'the real warmup must reach the throwing finite-platform port seam');
+      if (action === 'current') assert.equal(outcome.error, failure, 'current failure identity is preserved');
+      else {
+        assert.ok(transition, 'the port effect must invoke a real owner transition');
+        assert.deepEqual(outcome, { value: false }, 'stale port rejection cannot poison the changed owner');
+        await transition;
+      }
+      assert.equal(harness.api.snapshot().paused, true);
+      if (action === 'successor') {
+        assert.equal(harness.engine.roles.current.track.path, makeTrack('warmup-port-throw-successor.flac').path);
+        assert.equal(harness.portMessages('configure').length, 1);
+        assert.equal(harness.api.snapshot().mode, 'paused');
+        assert.equal(harness.api.snapshot().diagnostics.lastError, undefined);
+      }
+      if (action === 'stop') assert.equal(harness.engine.context, null);
+    } finally {
+      const stopping = harness.api.stop('warmup-port-throw-cleanup');
+      await Promise.all([warming, transition, stopping]);
+    }
+  });
+}
+
+test('empty warmup cannot remint freshness after staged capture attachment opens and closes a role', async (t) => {
+  const harness = createEngineHarness();
+  t.after(() => harness.api.stop('warmup-staged-attachment-cleanup'));
+  await harness.api.start(makeTrack('before-staged-capture-warmup.flac'), { autoplay: false });
+  await harness.api.stop('prepare-fresh-staged-capture');
+  const priorOpenCount = harness.sent('open').length;
+  const priorCloseCount = harness.sent('close').length;
+  const priorNodeCount = harness.nodes.length;
+  const expectedStreamId = harness.engine.nextStreamId;
+  const expectedGeneration = harness.engine.generation;
+  assert.ok(Number.isInteger(expectedStreamId) && expectedStreamId > 0);
+  assert.ok(Number.isInteger(expectedGeneration) && expectedGeneration > 0);
+  let attachments = 0;
+  let attachedContext;
+  let openedRole;
+  let closedRole;
+  Object.assign(harness.context, {
+    PLAYBACK_CAPTURE_ENABLED: true,
+    AbortController,
+    capturePlaybackOwnershipScope: () => ({ owner: 'warmup-staged-attachment-unit-scope' }),
+    isPlaybackOwnershipScopeCurrent: () => true,
+    fetch: async () => ({ ok: true, json: async () => ({ supported_protocols: [] }) }),
+    PlaybackCaptureTelemetry: { createOwner() {
+      return {
+        async enable() { return true; },
+        onContextState() {}, onScopeLost() {}, pagehide() {}, close() {},
+      };
+    } },
+  });
+  harness.context.window.addEventListener = () => {};
+  harness.context.window.removeEventListener = () => {};
+  harness.context.window.AudioContext.prototype.removeEventListener = () => {};
+  // Finite platform reentry at the real capture-attachment seam, before prepare
+  // publishes success. No marker, authority, generation or safety flag is set.
+  harness.context.window.AudioContext.prototype.addEventListener = function (type) {
+    if (type !== 'statechange') return;
+    attachments += 1;
+    attachedContext = this;
+    openedRole = harness.context.openStreamingRole('continuity', makeTrack('staged-capture-role.flac'), 0,
+      { kind: 'queued-next' });
+    closedRole = harness.context.closeStreamingContinuityRole('staged-capture-role-closed');
+  };
+
+  await harness.api.prepare();
+  await harness.settle();
+  assert.equal(attachments, 1, 'capture preparation must actually invoke the attachment callback');
+  assert.ok(openedRole, 'the callback must genuinely open a streaming role');
+  assert.equal(closedRole, true);
+  assert.equal(openedRole.streamId, expectedStreamId);
+  assert.equal(openedRole.generation, expectedGeneration);
+  assert.ok(Number.isInteger(openedRole.streamId) && openedRole.streamId > 0);
+  assert.ok(Number.isInteger(openedRole.generation) && openedRole.generation > 0);
+  const newOpens = harness.sent('open').slice(priorOpenCount);
+  const newCloses = harness.sent('close').slice(priorCloseCount);
+  assert.equal(newOpens.length, 1);
+  assert.equal(newCloses.length, 1);
+  assert.equal(newOpens[0].streamId, openedRole.streamId);
+  assert.equal(newCloses[0].streamId, openedRole.streamId);
+  assert.equal(newOpens[0].generation, openedRole.generation);
+  assert.equal(newCloses[0].generation, openedRole.generation);
+  assert.equal(harness.engine.context, attachedContext);
+  assert.equal(harness.nodes.length, priorNodeCount + 1);
+  assert.equal(harness.engine.node, harness.nodes[priorNodeCount]);
+  assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.engine.roles.continuity, null);
+  assert.equal(harness.engine.playbackAttempt ?? null, null);
+  assert.equal(harness.nodes[priorNodeCount].port.messages.filter(({ message }) => message.type === 'configure').length, 0);
+  assert.equal(harness.api.snapshot().mode, 'prepared');
+  assert.deepEqual([...harness.engine.pendingControls], []);
+  assert.equal(await harness.api.resume(), false);
+  assert.equal(attachedContext.resumeCalls, 0);
+  assert.equal(harness.portMessages('play').length, 0);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+// E2a finite-platform control correlation; neither facade replay nor audible proof.
+function e2aObservers(harness) {
+  const retires = [], failures = [];
+  const retire = harness.context.retireStreamingCapture, fail = harness.context.failStreamingEngine;
+  harness.context.retireStreamingCapture = (...args) => {retires.push(args); return retire(...args);};
+  harness.context.failStreamingEngine = (...args) => {failures.push(args); return fail(...args);};
+  return {retires, failures};
+}
+async function e2aRetireOwnedStart(harness, reason, starting, actionError) {
+  const errors = actionError ? [actionError] : [];
+  const cutover = harness.engine.pendingSeek;
+  const expectedCancellation = Boolean(starting && cutover?.kind === 'replacement' && typeof cutover.reject === 'function');
+  try {await harness.api.stop(reason);} catch (error) {errors.push(error);}
+  if (starting) {
+    try {await starting;} catch (error) {
+      // Only our observed live replacement's exact intentional retirement is expected.
+      // Unexpected child/cleanup failures remain visible alongside the primary assertion.
+      if (!(expectedCancellation && error?.name === 'Error'
+          && error.message === `Prepared track replacement stopped: ${reason}`)) errors.push(error);
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'E2a action and owned cleanup failures');
+}
+function e2aCausalPlay(harness) {
+  const command = structuredClone(harness.portMessages('play').at(-1));
+  assert.ok(command, 'Real configured play must have been sent');
+  return command;
+}
+function e2aTerminal(open, causal, overrides = {}) {
+  return {type: 'ended', generation: open.generation, streamId: open.streamId,
+    timelineFrame: 4, playbackIntentId: causal.playbackIntentId, ...overrides};
+}
+function e2aLogicalState(harness) {
+  const snapshot = harness.api.snapshot(), role = harness.engine.roles.current;
+  return {currentTime: snapshot.currentTime, renderedFrame: snapshot.renderedFrame,
+    paused: snapshot.paused, ended: snapshot.ended, role, endedNotified: role?.endedNotified,
+    captureSource: role?.captureSource, captureBinding: role?.captureBinding,
+    generation: harness.engine.generation, attempt: harness.engine.playbackAttempt};
+}
+function e2aAttachRealProcessor(harness) {
+  const node = harness.nodes.at(-1), events = [];
+  let Processor;
+  const context = {sampleRate: 48000, currentTime: 0, currentFrame: 0,
+    Float32Array, Float64Array, ArrayBuffer, Math, Number, Object,
+    AudioWorkletProcessor: class {constructor() {this.port = {onmessage: null, postMessage(message) {
+      const event = structuredClone(message); events.push(event);
+      if (event.type !== 'ended') node.port.dispatch(event); // Hold only actual produced EOS.
+    }};}}, registerProcessor(_name, constructor) {Processor = constructor;}};
+  vm.createContext(context);
+  const file = path.join(repoRoot, 'music_app/static/js/audio-worklets/gapless-playback-processor.js');
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context, {filename: file});
+  const processor = new Processor(), original = node.port.postMessage.bind(node.port);
+  node.port.postMessage = (message, transfer) => {original(message, transfer); processor.port.onmessage({data: message});};
+  return {processor, events, render() {
+    const left = new Float32Array(128), right = new Float32Array(128);
+    assert.equal(processor.process([], [[left, right]]), true);
+    context.currentFrame += 128; context.currentTime = context.currentFrame / 48000;
+    return {left: [...left], right: [...right]};
+  }};
+}
+
+test('E2a configured controls allocate positive causal IDs without changing nonterminal role or position', async (t) => {
+  const harness = createEngineHarness(); t.after(() => harness.api.stop('e2a-cleanup'));
+  const track = makeTrack(); await harness.api.start(track);
+  const open = harness.sent('open')[0], role = harness.engine.roles.current, first = e2aCausalPlay(harness);
+  assert.ok(Number.isSafeInteger(first.playbackIntentId) && first.playbackIntentId > 0);
+  acceptMetadata(harness, open);
+  harness.nodes[0].port.dispatch({type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96000});
+  const before = e2aLogicalState(harness), opens = harness.sent('open').length, configs = harness.portMessages('configure').length;
+  await harness.api.pause(); const pause = structuredClone(harness.portMessages('pause').at(-1));
+  assert.ok(pause.playbackIntentId > first.playbackIntentId);
+  assert.equal(await harness.api.resume(), true); const play = e2aCausalPlay(harness);
+  assert.ok(play.playbackIntentId > pause.playbackIntentId);
+  assert.equal(harness.engine.roles.current, role); assert.equal(harness.engine.generation, open.generation);
+  assert.equal(harness.engine.roles.current.streamId, open.streamId); assert.equal(harness.api.snapshot().currentTime, 2);
+  assert.equal(harness.engine.playbackAttempt, before.attempt);
+  assert.equal(harness.sent('open').length, opens); assert.equal(harness.portMessages('configure').length, configs);
+  assert.equal(harness.nodes.length, 1); assert.equal(harness.contexts.length, 1); assert.equal(harness.sockets.length, 1);
+});
+
+for (const resumeBeforeOld of [false, true]) test('E2a actual processor held EOS stays stale after pause, then fresh resumed EOS completes: ' + resumeBeforeOld, async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-bridge-cleanup'));
+  await harness.api.prepare(); const bridge = e2aAttachRealProcessor(harness), observed = e2aObservers(harness);
+  await harness.api.start(makeTrack()); const open = harness.sent('open')[0], play1 = e2aCausalPlay(harness);
+  acceptMetadata(harness, open);
+  receivePcmAndAssertEnqueue(harness, {generation: open.generation, streamId: open.streamId,
+    samples: [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1, -1]});
+  harness.sockets[0].receive({type: 'eos', generation: open.generation, streamId: open.streamId,
+    role: 'current', emittedFrames: 4, authoritativeTotalFrames: 4});
+  const output = bridge.render(); assert.deepEqual(output.left.slice(0, 4), [0.25, 0.5, 0.75, 1]);
+  const oldEOS = bridge.events.find(event => event.type === 'ended'); assert.ok(oldEOS, 'Real processor produced held EOF');
+  assert.equal(oldEOS.playbackIntentId, play1.playbackIntentId);
+  const identity = harness.engine.roles.current, captureSource = identity.captureSource;
+  await harness.api.pause(); const pause2 = structuredClone(harness.portMessages('pause').at(-1));
+  if (resumeBeforeOld) assert.equal(await harness.api.resume(), true);
+  const before = e2aLogicalState(harness), retired = observed.retires.length;
+  harness.nodes[0].port.dispatch(oldEOS);
+  assert.deepEqual(e2aLogicalState(harness), before, 'Held old causal EOF must have no terminal mutation');
+  assert.equal(observed.retires.length, retired); assert.equal(observed.failures.length, 0); assert.equal(ended.length, 0);
+  if (!resumeBeforeOld) assert.equal(await harness.api.resume(), true);
+  const play3 = e2aCausalPlay(harness);
+  assert.ok(Number.isSafeInteger(play1.playbackIntentId) && play1.playbackIntentId > 0);
+  assert.ok(pause2.playbackIntentId > play1.playbackIntentId && play3.playbackIntentId > pause2.playbackIntentId);
+  assert.equal(harness.engine.roles.current, identity); assert.equal(identity.captureSource, captureSource);
+  const consumed = bridge.events.filter(event => event.type === 'consumed').reduce((sum, event) => sum + event.frames, 0);
+  const nextOutput = bridge.render(); assert.ok(nextOutput.left.every(value => value === 0));
+  const freshEOS = bridge.events.filter(event => event.type === 'ended').at(-1);
+  assert.notEqual(freshEOS, oldEOS); assert.equal(freshEOS.playbackIntentId, play3.playbackIntentId);
+  assert.equal(oldEOS.playbackIntentId, play1.playbackIntentId);
+  assert.equal(freshEOS.generation, oldEOS.generation); assert.equal(freshEOS.streamId, oldEOS.streamId);
+  assert.equal(freshEOS.timelineFrame, oldEOS.timelineFrame);
+  assert.equal(bridge.events.filter(event => event.type === 'consumed').reduce((sum, event) => sum + event.frames, 0), consumed);
+  harness.nodes[0].port.dispatch(freshEOS); harness.nodes[0].port.dispatch(freshEOS);
+  assert.equal(ended.length, 1); assert.equal(harness.api.snapshot().ended, true);
+  assert.equal(observed.retires.length, retired + 1); assert.equal(observed.failures.length, 0);
+});
+
+for (const malformed of ['missing', 'null', 'zero', 'fraction', 'unsafe', 'string']) test('E2a current playing malformed EOF fails closed without natural completion: ' + malformed, async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-malformed-cleanup'));
+  await harness.api.start(makeTrack()); const open = harness.sent('open')[0], play = e2aCausalPlay(harness), observed = e2aObservers(harness);
+  const event = e2aTerminal(open, play);
+  if (malformed === 'missing') delete event.playbackIntentId;
+  else event.playbackIntentId = {null: null, zero: 0, fraction: 1.5, unsafe: Number.MAX_SAFE_INTEGER + 1, string: '1'}[malformed];
+  harness.nodes[0].port.dispatch(event);
+  assert.equal(ended.length, 0); assert.equal(observed.failures.length, 1);
+  assert.equal(harness.engine.mode, 'error'); assert.equal(harness.engine.diagnostics.lastError.source, 'processor');
+  assert.equal(harness.api.snapshot().ended, false);
+});
+
+for (const lineage of ['generation', 'stream', 'timeline']) test('E2a old or malformed lineage stays stale before malformed token classification: ' + lineage, async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-lineage-cleanup'));
+  await harness.api.start(makeTrack()); const open = harness.sent('open')[0], play = e2aCausalPlay(harness), observed = e2aObservers(harness);
+  const before = e2aLogicalState(harness), event = e2aTerminal(open, play, {playbackIntentId: null});
+  if (lineage === 'generation') event.generation--;
+  else if (lineage === 'stream') event.streamId += 99;
+  else event.timelineFrame = -1;
+  harness.nodes[0].port.dispatch(event);
+  assert.deepEqual(e2aLogicalState(harness), before); assert.equal(observed.failures.length, 0);
+  assert.equal(observed.retires.length, 0); assert.equal(ended.length, 0);
+});
+
+for (const token of [undefined, null, 1]) test('E2a configured never-played EOF stays stale without positive play authority: ' + String(token), async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-never-played-cleanup'));
+  await harness.api.start(makeTrack(), {autoplay: false}); const open = harness.sent('open')[0], observed = e2aObservers(harness);
+  assert.equal(harness.portMessages('play').length, 0);
+  const before = e2aLogicalState(harness);
+  harness.nodes[0].port.dispatch({type: 'ended', generation: open.generation, streamId: open.streamId,
+    timelineFrame: 4, ...(token === undefined ? {} : {playbackIntentId: token})});
+  assert.deepEqual(e2aLogicalState(harness), before); assert.equal(observed.failures.length, 0);
+  assert.equal(observed.retires.length, 0); assert.equal(ended.length, 0);
+});
+
+test('E2a fresh roleless pause and warmup play remain byte-identical and unconfigured', async (t) => {
+  const harness = createEngineHarness(); t.after(() => harness.api.stop('e2a-warmup-cleanup'));
+  await harness.api.prepare(); await harness.api.pause(); assert.equal(await harness.api.resume(), true);
+  assert.deepEqual(structuredClone(harness.portMessages('pause')), [{type: 'pause', generation: harness.engine.generation}]);
+  assert.deepEqual(structuredClone(harness.portMessages('play')), [{type: 'play', generation: harness.engine.generation}]);
+  assert.equal(harness.portMessages('configure').length, 0); assert.equal(harness.engine.roles.current, null);
+  assert.equal(harness.engine.playbackAttempt ?? null, null); assert.equal(harness.sent('open').length, 0);
+});
+
+test('E2a role allocated before configure does not mint configured control provenance', async (t) => {
+  const harness = createEngineHarness(); t.after(() => harness.api.stop('e2a-preconfigure-cleanup'));
+  await harness.api.prepare(); const node = harness.nodes[0], original = node.port.postMessage.bind(node.port);
+  let pause, roleAtCallback, checked = false;
+  node.port.postMessage = (message, transfer) => {
+    if (message.type === 'configure' && !checked) {
+      checked = true; roleAtCallback = harness.engine.roles.current;
+      pause = harness.api.pause(); pause.catch(() => {});
+    }
+    return original(message, transfer);
+  };
+  try {
+    await harness.api.start(makeTrack(), {autoplay: false}); await pause;
+    assert.ok(checked && roleAtCallback, 'Actual allocated-role configure callback must be reached');
+    assert.equal(Object.hasOwn(harness.portMessages('pause').at(-1), 'playbackIntentId'), false);
+  } finally {if (pause) await pause;}
+});
+
+test('E2a stop and fresh node invalidate old EOS without resetting monotonic control IDs', async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-replacement-node-cleanup'));
+  await harness.api.start(makeTrack()); const oldNode = harness.nodes[0], oldOpen = harness.sent('open')[0], oldPlay = e2aCausalPlay(harness);
+  const oldEvent = e2aTerminal(oldOpen, oldPlay);
+  await harness.api.stop('replace'); await harness.api.start(makeTrack('new.flac'));
+  const current = harness.sent('open').at(-1), newPlay = e2aCausalPlay(harness), before = e2aLogicalState(harness);
+  oldNode.port.dispatch(oldEvent); harness.nodes.at(-1).port.dispatch(oldEvent);
+  assert.deepEqual(e2aLogicalState(harness), before); assert.equal(ended.length, 0);
+  assert.ok(newPlay.playbackIntentId > oldPlay.playbackIntentId);
+  harness.nodes.at(-1).port.dispatch(e2aTerminal(current, newPlay));
+  assert.equal(ended.length, 1);
+});
+
+for (const type of ['pause', 'play']) for (const throws of [false, true]) test('E2a configured port reentry preserves successor correlation and existing throw identity: ' + type + '/' + throws, async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-port-reentry-cleanup'));
+  await harness.api.start(makeTrack('old.flac'), {autoplay: type === 'pause'});
+  const node = harness.nodes[0], original = node.port.postMessage.bind(node.port), failure = new Error('e2a exact port failure');
+  let successor, reached = 0, oldControl, actionError;
+  node.port.postMessage = (message, transfer) => {
+    original(message, transfer);
+    if (message.type === type && reached === 0) {
+      reached++; oldControl = structuredClone(message);
+      successor = harness.api.start(makeTrack('successor.flac')); successor.catch(() => {});
+      if (throws) throw failure;
+    }
+  };
+  try {
+    const operation = type === 'pause' ? harness.api.pause() : harness.api.resume();
+    if (throws) await assert.rejects(operation, error => error === failure);
+    else if (type === 'play') assert.equal(await operation, false);
+    else await operation;
+    assert.equal(reached, 1, 'The real configured control port seam was exercised');
+    const current = await successor; assert.ok(current);
+    assert.equal(current.track.path, makeTrack('successor.flac').path);
+    const play = e2aCausalPlay(harness);
+    assert.ok(play.playbackIntentId > oldControl.playbackIntentId);
+    const open = harness.sent('open').at(-1);
+    harness.nodes.at(-1).port.dispatch(e2aTerminal(open, play));
+    assert.equal(ended.length, 1); assert.equal(ended[0].trackPath, makeTrack('successor.flac').path);
+  } catch (error) {actionError = error;} finally {
+    await e2aRetireOwnedStart(harness, 'e2a-port-reentry-retire', successor, actionError);
+  }
+});
+
+for (const type of ['pause', 'play']) test('E2a current configured port error retains exact failure identity: ' + type, async (t) => {
+  const harness = createEngineHarness(); t.after(() => harness.api.stop('e2a-current-port-error-cleanup'));
+  await harness.api.start(makeTrack(), {autoplay: type === 'pause'});
+  const node = harness.nodes[0], original = node.port.postMessage.bind(node.port), failure = new Error('current owned port failure');
+  let reached = 0;
+  node.port.postMessage = (message, transfer) => {
+    original(message, transfer);
+    if (message.type === type) {reached++; throw failure;}
+  };
+  await assert.rejects(type === 'pause' ? harness.api.pause() : harness.api.resume(), error => error === failure);
+  assert.equal(reached, 1);
+});
+
+test('E2a replacement EOS recovery sends fresh causal play and old token cannot recover twice', async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-recovery-cleanup'));
+  let starting, actionError;
+  try {
+    await harness.api.start(makeTrack('outgoing.flac')); const outgoing = harness.sent('open')[0], causal = e2aCausalPlay(harness);
+    acceptMetadata(harness, outgoing);
+    receivePcmAndAssertEnqueue(harness, {generation: outgoing.generation, streamId: outgoing.streamId,
+      samples: new Array(48000*2).fill(0.25)});
+    harness.nodes[0].port.dispatch({type: 'first-frame', generation: outgoing.generation, streamId: outgoing.streamId, renderedFrame: 0, contextTime: 1});
+    starting = harness.api.start(makeTrack('replacement.flac')); starting.catch(() => {});
+    const replacement = harness.sent('open').at(-1), count = harness.portMessages('play').length;
+    assert.equal(harness.engine.pendingSeek.kind, 'replacement');
+    harness.nodes[0].port.dispatch(e2aTerminal(outgoing, causal, {timelineFrame: 48000, playbackIntentId: 999999}));
+    assert.equal(harness.portMessages('play').length, count, 'Unequal well-formed token must not trigger recovery');
+    const terminal = e2aTerminal(outgoing, causal, {timelineFrame: 48000});
+    harness.nodes[0].port.dispatch(terminal);
+    assert.equal(harness.portMessages('play').length, count + 1);
+    const recovery = e2aCausalPlay(harness); assert.ok(recovery.playbackIntentId > causal.playbackIntentId);
+    harness.nodes[0].port.dispatch(terminal);
+    assert.equal(harness.portMessages('play').length, count + 1); assert.equal(ended.length, 0);
+    acceptMetadata(harness, replacement);
+    receivePcmAndAssertEnqueue(harness, {role: 1, generation: replacement.generation, streamId: replacement.streamId,
+      samples: new Array(48000*2).fill(0.5)});
+    harness.nodes[0].port.dispatch({type: 'seek-boundary', generation: replacement.generation,
+      outgoingStreamId: outgoing.streamId, incomingStreamId: replacement.streamId,
+      renderedFrame: 48000, timelineFrame: 0, silentFrames: 0,
+      capture: {outgoing: {frames: 64}, incoming: {frames: 1}}});
+    assert.equal((await starting).streamId, replacement.streamId);
+    const promoted = e2aLogicalState(harness);
+    harness.nodes[0].port.dispatch({...terminal, playbackIntentId: null});
+    assert.deepEqual(e2aLogicalState(harness), promoted, 'Retired same-generation stream stays stale before malformed-token classification');
+    assert.equal(ended.length, 0);
+  } catch (error) {actionError = error;} finally {
+    await e2aRetireOwnedStart(harness, 'e2a-recovery-retire', starting, actionError);
+  }
+});
+
+
+test('E2a actual incoming start retirement sends a fresh correlated outgoing pause', async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-retired-outgoing-cleanup'));
+  let starting, actionError;
+  try {
+    await harness.api.start(makeTrack('retiring.flac'));
+    const role = harness.engine.roles.current, open = harness.sent('open')[0], play = e2aCausalPlay(harness);
+    let reached = 0, retired, admitted;
+    starting = harness.api.start(makeTrack('incoming.flac'), {onStartAttempt(attempt) {
+      reached++; admitted = attempt;
+      retired = harness.context.retireStreamingOutgoingRole(role, attempt);
+    }});
+    starting.catch(() => {});
+    assert.equal(reached, 1); assert.ok(admitted); assert.equal(retired, true);
+    const pause = harness.portMessages('pause').at(-1);
+    assert.equal(pause.generation, open.generation);
+    assert.ok(Number.isSafeInteger(pause.playbackIntentId) && pause.playbackIntentId > play.playbackIntentId);
+    const before = e2aLogicalState(harness), observed = e2aObservers(harness);
+    harness.nodes[0].port.dispatch(e2aTerminal(open, play));
+    assert.deepEqual(e2aLogicalState(harness), before);
+    assert.equal(ended.length, 0); assert.equal(observed.failures.length, 0); assert.equal(observed.retires.length, 0);
+  } catch (error) {actionError = error;} finally {
+    await e2aRetireOwnedStart(harness, 'e2a-retired-outgoing-retire', starting, actionError);
+  }
+});
+
+// Product-boundary negative fault injection only: never mint configured/play authority.
+test('E2a exhausted real allocator fails owned playback without wrapping or emitting a command', async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-exhaustion-cleanup'));
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0], causal = e2aCausalPlay(harness), observed = e2aObservers(harness);
+  assert.equal(vm.runInContext('typeof streamingPlaybackIntents', harness.context), 'object',
+    'Explicit product-boundary representation prerequisite, not baseline behavioral proof');
+  const record = vm.runInContext('streamingPlaybackIntents.get(state.player.streaming)', harness.context);
+  assert.ok(record); assert.equal(record.counter, causal.playbackIntentId);
+  assert.ok(Number.isSafeInteger(record.counter) && record.counter > 0);
+  // Sole private write: move an already genuinely allocated counter to its negative boundary.
+  record.counter = Number.MAX_SAFE_INTEGER - 1;
+  await harness.api.pause();
+  assert.equal(harness.portMessages('pause').at(-1).playbackIntentId, Number.MAX_SAFE_INTEGER);
+  const plays = harness.portMessages('play').length, node = harness.nodes[0];
+  assert.equal(await harness.api.resume(), false);
+  assert.equal(harness.portMessages('play').length, plays);
+  assert.equal(record.counter, Number.MAX_SAFE_INTEGER);
+  assert.equal(observed.failures.length, 1); assert.equal(observed.failures[0][0], 'processor');
+  assert.equal(harness.engine.mode, 'error'); assert.equal(ended.length, 0);
+  assert.equal(harness.engine.roles.current, null); assert.equal(harness.engine.playbackAttempt, null);
+  assert.equal(harness.api.snapshot().paused, true); assert.equal(harness.api.snapshot().ended, false);
+  node.port.dispatch(e2aTerminal(open, causal));
+  assert.equal(ended.length, 0, 'Exhaustion cannot reauthorize the old genuine PLAY receipt');
+});
+
+for (const configureMode of ['throw', 'reenter-return', 'reenter-throw']) test('E2a failed or stale configure cannot publish successor intent provenance: ' + configureMode, async (t) => {
+  const ended = [], harness = createEngineHarness({handleStreamingPlaybackEnded: event => ended.push(event)});
+  t.after(() => harness.api.stop('e2a-configure-provenance-cleanup'));
+  await harness.api.prepare();
+  const node = harness.nodes[0], original = node.port.postMessage.bind(node.port);
+  const oldFailure = new Error('exact old configure failure'), successorFailure = new Error('exact successor configure failure');
+  let configurations = 0, successor, actionError;
+  node.port.postMessage = (message, transfer) => {
+    original(message, transfer);
+    if (message.type !== 'configure') return;
+    configurations++;
+    if (configurations === 1) {
+      if (configureMode === 'throw') throw oldFailure;
+      successor = harness.api.start(makeTrack('failed-successor.flac'), {autoplay: false});
+      successor.catch(() => {});
+      if (configureMode === 'reenter-throw') throw oldFailure;
+    } else if (configurations === 2 && configureMode !== 'throw') throw successorFailure;
+  };
+  try {
+    const oldStart = harness.api.start(makeTrack('failed-old.flac'), {autoplay: false});
+    if (configureMode === 'reenter-return') assert.equal(await oldStart, null);
+    else await assert.rejects(oldStart, error => error === oldFailure);
+    if (successor) await assert.rejects(successor, error => error === successorFailure);
+    assert.equal(configurations, configureMode === 'throw' ? 1 : 2, 'All intended real configure callbacks were reached');
+    assert.ok(harness.engine.roles.current, 'The negative has a genuinely allocated role, not fabricated owner state');
+    await harness.api.pause();
+    assert.equal(Object.hasOwn(harness.portMessages('pause').at(-1), 'playbackIntentId'), false);
+    assert.equal(await harness.api.resume(), true);
+    const unconfiguredPlay = e2aCausalPlay(harness);
+    assert.equal(Object.hasOwn(unconfiguredPlay, 'playbackIntentId'), false);
+    const observed = e2aObservers(harness), before = e2aLogicalState(harness);
+    node.port.dispatch(e2aTerminal(harness.sent('open').at(-1), unconfiguredPlay));
+    assert.deepEqual(e2aLogicalState(harness), before, 'An unsuccessfully configured role has no positive EOF authority');
+    assert.equal(ended.length, 0); assert.equal(observed.failures.length, 0); assert.equal(observed.retires.length, 0);
+    node.port.postMessage = original;
+    await harness.api.start(makeTrack('configured-recovery.flac'));
+    const genuine = e2aCausalPlay(harness);
+    assert.ok(Number.isSafeInteger(genuine.playbackIntentId) && genuine.playbackIntentId > 0);
+    node.port.dispatch(e2aTerminal(harness.sent('open').at(-1), genuine));
+    assert.equal(ended.length, 1);
+  } catch (error) {actionError = error;} finally {
+    // Only the exact error thrown by our owned successor configure seam is expected.
+    // Preserve any earlier action failure and all independent cleanup failures.
+    const errors = actionError ? [actionError] : [];
+    try {await harness.api.stop('e2a-configure-provenance-retire');} catch (error) {errors.push(error);}
+    if (successor) {
+      try {await successor;} catch (error) {if (error !== successorFailure) errors.push(error);}
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'E2a configure action and cleanup failures');
+  }
 });

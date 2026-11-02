@@ -8451,7 +8451,8 @@
       "durable-private-capture"
     ],
     "mutationOwnership": {
-      "databaseIdentity": "case:playback-capture-short"
+      "databaseIdentity": "case:playback-capture-short",
+      "scope": "database-only"
     },
     "ownerApproval": "approved"
   },
@@ -8473,8 +8474,3189 @@
       "repeated-source-positions"
     ],
     "mutationOwnership": {
-      "databaseIdentity": "case:playback-capture-seek"
+      "databaseIdentity": "case:playback-capture-seek",
+      "scope": "database-only"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "same-URL busy refusal in real fetchAndRender creates no false Top failure banner",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-URL busy refusal in real fetchAndRender creates no false Top failure banner"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "real noninterruptible queue refusal is quiet and its still-current later dispatch opens the exact Top once",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real noninterruptible queue refusal is quiet and its still-current later dispatch opens the exact Top once"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "queued destination retired by Change actor scope cannot fetch after the real blocker finishes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "queued destination retired by Change actor scope cannot fetch after the real blocker finishes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "queued destination retired by Change private context cannot fetch after the real blocker finishes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "queued destination retired by Change private context cannot fetch after the real blocker finishes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "queued destination retired by Server revision change cannot fetch after the real blocker finishes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "queued destination retired by Server revision change cannot fetch after the real blocker finishes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "actual http response remains actionable and Retry repeats exactly the failed destination",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual http response remains actionable and Retry repeats exactly the failed destination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "actual network response remains actionable and Retry repeats exactly the failed destination",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual network response remains actionable and Retry repeats exactly the failed destination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "actual wrong-resource response remains actionable and Retry repeats exactly the failed destination",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual wrong-resource response remains actionable and Retry repeats exactly the failed destination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopActualRequestStart.spec.js",
+    "case": "native discard decline remains before the genuine request owner with no failure banner or fetch",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native discard decline remains before the genuine request owner with no failure banner or fetch"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopSnapshotNotification.spec.js",
+    "case": "real queued Top departure retired by Change actor scope keeps replacement Session current without render-phase subscription updates",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real queued Top departure retired by Change actor scope keeps replacement Session current without render-phase subscription updates"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopSnapshotNotification.spec.js",
+    "case": "real queued Top departure retired by Change private context keeps replacement Session current without render-phase subscription updates",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real queued Top departure retired by Change private context keeps replacement Session current without render-phase subscription updates"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/actual-request/albumTopSnapshotNotification.spec.js",
+    "case": "real queued Top departure retired by Server revision change keeps replacement Session current without render-phase subscription updates",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real queued Top departure retired by Server revision change keeps replacement Session current without render-phase subscription updates"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/capacity/albumPickerCapacity.spec.js",
+    "case": "actual All picker bounds DOM while real5000-item draft explains capacity, disables Select only and recovers after removal",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual All picker bounds DOM while real5000-item draft explains capacity, disables Select only and recovers after removal"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "mounted create is query-first and submits selected canonical identity exactly once",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mounted create is query-first and submits selected canonical identity exactly once"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "mounted edit removes and keyboard-reorders retained identities in one changed Save",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mounted edit removes and keyboard-reorders retained identities in one changed Save"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "dirty Cancel requests confirmation and leaves persisted membership untouched",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty Cancel requests confirmation and leaves persisted membership untouched"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "search clearing, failures and Selected tabs preserve the membership draft",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "search clearing, failures and Selected tabs preserve the membership draft"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "a filtered empty page offers continuation to authorized album metadata",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a filtered empty page offers continuation to authorized album metadata"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "unmount during search cannot repaint a disposed builder or admit albums",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unmount during search cannot repaint a disposed builder or admit albums"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "compact native cards and builder controls fit 390px without document overflow",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "compact native cards and builder controls fit 390px without document overflow"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/create/albumTopMembershipBuilder.spec.js",
+    "case": "compact native cards and builder controls fit 1100px without document overflow",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "compact native cards and builder controls fit 1100px without document overflow"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "same-ID local claim before direct abort termination does not manufacture a stale Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-ID local claim before direct abort termination does not manufacture a stale Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "same-ID local claim before direct wrong-resource termination does not manufacture a stale Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-ID local claim before direct wrong-resource termination does not manufacture a stale Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "same-ID local claim before direct http termination does not manufacture a stale Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-ID local claim before direct http termination does not manufacture a stale Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "same-ID local claim before direct network termination does not manufacture a stale Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-ID local claim before direct network termination does not manufacture a stale Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "current direct wrong-resource remains actionable and Retry opens the original target",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "current direct wrong-resource remains actionable and Retry opens the original target"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "current direct http remains actionable and Retry opens the original target",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "current direct http remains actionable and Retry opens the original target"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "current direct network remains actionable and Retry opens the original target",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "current direct network remains actionable and Retry opens the original target"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/direct-retirement/albumTopDirectRetirement.spec.js",
+    "case": "local claim of an unstarted native queue stays quiet and never dispatches the obsolete destination",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "local claim of an unstarted native queue stays quiet and never dispatches the obsolete destination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/full5000/albumPickerNativePreservation.spec.js",
+    "case": "actual React Selected query edit does not regenerate unchanged native cards or row Buttons",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React Selected query edit does not regenerate unchanged native cards or row Buttons"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/full5000/albumPickerNativePreservation.spec.js",
+    "case": "actual React Selected removal retains surviving row nodes and does not regenerate their native markup",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React Selected removal retains surviving row nodes and does not regenerate their native markup"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/full5000/albumPickerNativePreservation.spec.js",
+    "case": "actual React shared End/Home reorder moves keyed rows while retaining the same physical handle and focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React shared End/Home reorder moves keyed rows while retaining the same physical handle and focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/full5000/albumPickerNativePreservation.spec.js",
+    "case": "actual React busy transition disables retained controls and restores the same native owners",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React busy transition disables retained controls and restores the same native owners"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/full5000/albumPickerNativePreservation.spec.js",
+    "case": "actual React metadata authority transition disables retained controls and restores the same native owners",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React metadata authority transition disables retained controls and restores the same native owners"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty sidebar departure declines through the real shared owner without losing the inline draft",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty sidebar departure declines through the real shared owner without losing the inline draft"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty other-top departure declines through the real shared owner without losing the inline draft",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty other-top departure declines through the real shared owner without losing the inline draft"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty settings departure declines through the real shared owner without losing the inline draft",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty settings departure declines through the real shared owner without losing the inline draft"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty history departure declines through the real shared owner without losing the inline draft",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty history departure declines through the real shared owner without losing the inline draft"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty sidebar acceptance commits one intended departure and never restores the abandoned editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty sidebar acceptance commits one intended departure and never restores the abandoned editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty settings acceptance commits one intended departure and never restores the abandoned editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty settings acceptance commits one intended departure and never restores the abandoned editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "dirty history acceptance commits one intended departure and never restores the abandoned editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dirty history acceptance commits one intended departure and never restores the abandoned editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "clean inline sidebar departure needs no discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "clean inline sidebar departure needs no discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "clean inline settings departure needs no discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "clean inline settings departure needs no discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "clean inline history departure needs no discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "clean inline history departure needs no discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "sidebar, inline Cancel and header Back re-entry share one pending native confirmation and one destination",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar, inline Cancel and header Back re-entry share one pending native confirmation and one destination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "busy Save blocks sidebar and Settings without replacement navigation or a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "busy Save blocks sidebar and Settings without replacement navigation or a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "uncertain Save blocks sidebar and Settings without replacement navigation or a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "uncertain Save blocks sidebar and Settings without replacement navigation or a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after changeScope cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after changeScope cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after changeGeneration cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after changeGeneration cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after revise cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after revise cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after revoke cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after revoke cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after newerHistory cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after newerHistory cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "late native confirmation after dispose cannot navigate or revive obsolete draft authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late native confirmation after dispose cannot navigate or revive obsolete draft authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "external changeScope without a user departure retires unsafe actions without a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "external changeScope without a user departure retires unsafe actions without a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "external changeGeneration without a user departure retires unsafe actions without a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "external changeGeneration without a user departure retires unsafe actions without a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "external revise without a user departure retires unsafe actions without a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "external revise without a user departure retires unsafe actions without a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "external revoke without a user departure retires unsafe actions without a discard prompt",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "external revoke without a user departure retires unsafe actions without a discard prompt"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "declining navigation then Save keeps exact reordered original item/source bindings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "declining navigation then Save keeps exact reordered original item/source bindings"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "missingRegistration cannot enable a modern inline editor without a departure owner",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "missingRegistration cannot enable a modern inline editor without a departure owner"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigation.spec.js",
+    "case": "rejectedRegistration cannot enable a modern inline editor without a departure owner",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rejectedRegistration cannot enable a modern inline editor without a departure owner"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "held Save and held authoritative refresh retire the inline owner after commit without a render-phase update warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "held Save and held authoritative refresh retire the inline owner after commit without a render-phase update warning"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "a sidebar attempt blocked by busy Save leaves no false navigation error after successful saved-detail refresh",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a sidebar attempt blocked by busy Save leaves no false navigation error after successful saved-detail refresh"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "decline is an intentional no-navigation result, not a destination load failure",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "decline is an intentional no-navigation result, not a destination load failure"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "cancel-editor is an intentional no-navigation result, not a destination load failure",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "cancel-editor is an intentional no-navigation result, not a destination load failure"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "busy is an intentional no-navigation result, not a destination load failure",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "busy is an intentional no-navigation result, not a destination load failure"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "uncertain is an intentional no-navigation result, not a destination load failure",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "uncertain is an intentional no-navigation result, not a destination load failure"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "a genuinely started reject destination failure still offers a working exact-target retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a genuinely started reject destination failure still offers a working exact-target retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "a genuinely started false destination failure still offers a working exact-target retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a genuinely started false destination failure still offers a working exact-target retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "a genuinely started wrong-resource destination failure still offers a working exact-target retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a genuinely started wrong-resource destination failure still offers a working exact-target retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "changeScope retirement has no render warning and no queued old close can erase a replacement editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "changeScope retirement has no render warning and no queued old close can erase a replacement editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "changeGeneration retirement has no render warning and no queued old close can erase a replacement editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "changeGeneration retirement has no render warning and no queued old close can erase a replacement editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "newerHistory retirement has no render warning and no queued old close can erase a replacement editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "newerHistory retirement has no render warning and no queued old close can erase a replacement editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationLifecycle.spec.js",
+    "case": "revise retirement has no render warning and no queued old close can erase a replacement editor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "revise retirement has no render warning and no queued old close can erase a replacement editor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/navigation/albumTopNavigationRepaint.spec.js",
+    "case": "a real pending search completion cannot hide or discard the source while Back-to-Settings confirmation is open",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a real pending search completion cannot hide or discard the source while Back-to-Settings confirmation is open"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "later queued http completion reaches the Top error owner and one exact-target Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "later queued http completion reaches the Top error owner and one exact-target Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "later queued network completion reaches the Top error owner and one exact-target Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "later queued network completion reaches the Top error owner and one exact-target Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "later queued wrong-resource completion reaches the Top error owner and one exact-target Retry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "later queued wrong-resource completion reaches the Top error owner and one exact-target Retry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "a held queued failure retired by Change actor scope cannot notify or revive the old Session",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a held queued failure retired by Change actor scope cannot notify or revive the old Session"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "a held queued failure retired by Change private context cannot notify or revive the old Session",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a held queued failure retired by Change private context cannot notify or revive the old Session"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "a held queued failure retired by Server revision change cannot notify or revive the old Session",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a held queued failure retired by Server revision change cannot notify or revive the old Session"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/queued-completion/albumTopQueuedCompletion.spec.js",
+    "case": "a newer real directory request supersedes a held queued error without stale Retry or unhandled rejection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a newer real directory request supersedes a held queued error without stale Retry or unhandled rejection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopInlineCompactHeader.spec.js",
+    "case": "inline gallery header has only two compact editable identity rows at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline gallery header has only two compact editable identity rows at 320px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopInlineCompactHeader.spec.js",
+    "case": "inline gallery header has only two compact editable identity rows at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline gallery header has only two compact editable identity rows at 390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopInlineCompactHeader.spec.js",
+    "case": "inline gallery header has only two compact editable identity rows at 480px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline gallery header has only two compact editable identity rows at 480px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopInlineCompactHeader.spec.js",
+    "case": "inline gallery header has only two compact editable identity rows at 1100px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline gallery header has only two compact editable identity rows at 1100px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopInlineCompactHeader.spec.js",
+    "case": "inline gallery header has only two compact editable identity rows at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline gallery header has only two compact editable identity rows at 1440px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopRequestLimit.spec.js",
+    "case": "preview command_too_large gives actionable selection-limit guidance and Cancel preserves the saved Top",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "preview command_too_large gives actionable selection-limit guidance and Cancel preserves the saved Top"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopRequestLimit.spec.js",
+    "case": "command command_too_large gives actionable selection-limit guidance and Cancel preserves the saved Top",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "command command_too_large gives actionable selection-limit guidance and Cancel preserves the saved Top"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "preview evidence_unavailable is actionable and retains inline draft and saved source bindings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "preview evidence_unavailable is actionable and retains inline draft and saved source bindings"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "preview evidence_stale is actionable and retains inline draft and saved source bindings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "preview evidence_stale is actionable and retains inline draft and saved source bindings"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "command evidence_unavailable is actionable and retains inline draft and saved source bindings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "command evidence_unavailable is actionable and retains inline draft and saved source bindings"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "command evidence_stale is actionable and retains inline draft and saved source bindings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "command evidence_stale is actionable and retains inline draft and saved source bindings"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "private metadata-only omission preserves existing bindings without invoking evidence_unavailable membership revalidation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "private metadata-only omission preserves existing bindings without invoking evidence_unavailable membership revalidation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/albumTopSourceErrors.spec.js",
+    "case": "private metadata-only omission preserves existing bindings without invoking evidence_stale membership revalidation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "private metadata-only omission preserves existing bindings without invoking evidence_stale membership revalidation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/galleryCardDisabledSelect.spec.js",
+    "case": "shared GalleryCard Select is visibly inactive for native-disabled without a Top wrapper",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared GalleryCard Select is visibly inactive for native-disabled without a Top wrapper"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/galleryCardDisabledSelect.spec.js",
+    "case": "shared GalleryCard Select is visibly inactive for aria-disabled without a Top wrapper",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared GalleryCard Select is visibly inactive for aria-disabled without a Top wrapper"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/galleryCardDisabledSelect.spec.js",
+    "case": "held album admission accepted dims stable Select controls and blocks repeat activation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "held album admission accepted dims stable Select controls and blocks repeat activation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/galleryCardDisabledSelect.spec.js",
+    "case": "held album admission rejected dims stable Select controls and blocks repeat activation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "held album admission rejected dims stable Select controls and blocks repeat activation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/real-owner-ui/galleryCardDisabledSelect.spec.js",
+    "case": "held Save dims existing search cards and a definitive rejection restores the same controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "held Save dims existing search cards and a definitive rejection restores the same controls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "shared-search preserves the actual input, incremental query, focus and caret through asynchronous resource repaint",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-search preserves the actual input, incremental query, focus and caret through asynchronous resource repaint"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "playlist-create preserves the actual input, incremental query, focus and caret through asynchronous resource repaint",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "playlist-create preserves the actual input, incremental query, focus and caret through asynchronous resource repaint"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "top-create preserves the actual input, incremental query, focus and caret through asynchronous resource repaint",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "top-create preserves the actual input, incremental query, focus and caret through asynchronous resource repaint"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "failed replacement query removes obsolete clickable cards and its old continuation from the mounted Top",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "failed replacement query removes obsolete clickable cards and its old continuation from the mounted Top"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "selecting and removing focused album cards moves focus to a surviving action or current tab",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selecting and removing focused album cards moves focus to a surviving action or current tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "pending selection failure retains intentional focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending selection failure retains intentional focus ownership"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/album-tops-membership/shared-search/sharedCreationSearchLifetime.spec.js",
+    "case": "pending selection focus-moved retains intentional focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending selection focus-moved retains intentional focus ownership"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumColumnResizeDelivery.spec.js",
+    "case": "optional File path toggles across responsive discs settle without ResizeObserver errors",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "optional File path toggles across responsive discs settle without ResizeObserver errors"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumMountedPreferences.spec.js",
+    "case": "real MountedPreferences click writes once, disables pending Love and isolates row gestures",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real MountedPreferences click writes once, disables pending Love and isolates row gestures"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumMountedPreferences.spec.js",
+    "case": "double-click detail never submits a second Love write or invokes row playback",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "double-click detail never submits a second Love write or invokes row playback"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumMountedPreferences.spec.js",
+    "case": "source replacement aborts pending Love and ignores stale resolve",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source replacement aborts pending Love and ignores stale resolve"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumMountedPreferences.spec.js",
+    "case": "source replacement aborts pending Love and ignores stale reject",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source replacement aborts pending Love and ignores stale reject"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumMountedPreferences.spec.js",
+    "case": "unmount aborts an in-flight Love and stale completion cannot recreate its controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unmount aborts an in-flight Love and stale completion cannot recreate its controls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveDiscGeometry.spec.js",
+    "case": "responsive Album disc decoration preserves aligned client grids at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "responsive Album disc decoration preserves aligned client grids at 320px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveDiscGeometry.spec.js",
+    "case": "responsive Album disc decoration preserves aligned client grids at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "responsive Album disc decoration preserves aligned client grids at 390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveDiscGeometry.spec.js",
+    "case": "responsive Album disc decoration preserves aligned client grids at 480px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "responsive Album disc decoration preserves aligned client grids at 480px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveDiscGeometry.spec.js",
+    "case": "responsive Album disc decoration preserves aligned client grids at 1100px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "responsive Album disc decoration preserves aligned client grids at 1100px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native multi-disc Album shares aligned measured grids at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native multi-disc Album shares aligned measured grids at 320px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native multi-disc Album shares aligned measured grids at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native multi-disc Album shares aligned measured grids at 390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native multi-disc Album shares aligned measured grids at 480px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native multi-disc Album shares aligned measured grids at 480px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native multi-disc Album shares aligned measured grids at 1100px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native multi-disc Album shares aligned measured grids at 1100px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "Album toolbar controls every disc, offers only extras and keeps explicit overflow table-local",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album toolbar controls every disc, offers only extras and keeps explicit overflow table-local"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "same resource refresh preserves choice, replaces native rows and retires old menu callbacks",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same resource refresh preserves choice, replaces native rows and retires old menu callbacks"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header opens shared columns menu with Alt+ArrowDown",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header opens shared columns menu with Alt+ArrowDown"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header opens shared columns menu with Shift+F10",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header opens shared columns menu with Shift+F10"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header opens shared columns menu with ContextMenu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header opens shared columns menu with ContextMenu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "revoked or disposed Album cannot apply a pending columns action",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "revoked or disposed Album cannot apply a pending columns action"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "ordinary Album unknown Love never invents an Off heart or a taste mutation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "ordinary Album unknown Love never invents an Off heart or a taste mutation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header long-press uses the shared menu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header long-press uses the shared menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header long-press cancels on source",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header long-press cancels on source"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header long-press cancels on rehost",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header long-press cancels on rehost"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveMount.spec.js",
+    "case": "native Album header long-press cancels on dispose",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Album header long-press cancels on dispose"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveReview.spec.js",
+    "case": "a native button-only runtime leaves column action disabled without crashing selection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a native button-only runtime leaves column action disabled without crashing selection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumResponsiveReview.spec.js",
+    "case": "native playback text growth remeasures Length on every disc without a viewport resize",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native playback text growth remeasures Length on every disc without a viewport resize"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "ArtistRow retains focused native row through unrelated, selected and label refreshes with latest callback",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "ArtistRow retains focused native row through unrelated, selected and label refreshes with latest callback"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "ArtistRow readability revocation changes the same native node and suppresses its old action",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "ArtistRow readability revocation changes the same native node and suppresses its old action"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "PersonNavigation preserves focus and current selected markup across no-op and label refreshes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PersonNavigation preserves focus and current selected markup across no-op and label refreshes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "PersonNavigation onSelect parent render preserves its native node and completes deferred activation once",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PersonNavigation onSelect parent render preserves its native node and completes deferred activation once"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "PersonNavigation revoke during onSelect suppresses deferred activation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PersonNavigation revoke during onSelect suppresses deferred activation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "PersonNavigation hide during onSelect suppresses deferred activation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PersonNavigation hide during onSelect suppresses deferred activation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "PersonNavigation unmount during onSelect suppresses deferred activation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PersonNavigation unmount during onSelect suppresses deferred activation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeNativeRowIdentity.spec.js",
+    "case": "newer same-row activation cancels the first pending frame sequence and uses latest parent callback",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "newer same-row activation cancels the first pending frame sequence and uses latest parent callback"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "Tools toggles through native Enter activation and reuses original actions",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Tools toggles through native Enter activation and reuses original actions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "Tools toggles through native Space activation and reuses original actions",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Tools toggles through native Space activation and reuses original actions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "child native choice owns first Escape; second closes Tools and restores its trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "child native choice owns first Escape; second closes Tools and restores its trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "selecting a native child option keeps Tools available and updates current count",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selecting a native child option keeps Tools available and updates current count"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "outside pointer closes Tools without taking focus from the clicked control",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "outside pointer closes Tools without taking focus from the clicked control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "refresh retains native action identity and applies latest callback and disabled authority",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "refresh retains native action identity and applies latest callback and disabled authority"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "real measured resize fits one action row without cloning or leaving an orphan choice",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real measured resize fits one action row without cloning or leaving an orphan choice"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "unmount retires child menu and document-level dismissal ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unmount retires child menu and document-level dismissal ownership"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "caller tail keeps Collapse rightmost across inline and compact layouts",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "caller tail keeps Collapse rightmost across inline and compact layouts"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "caller tail keeps More actions rightmost across inline and compact layouts",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "caller tail keeps More actions rightmost across inline and compact layouts"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "caller tail keeps Close rightmost across inline and compact layouts",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "caller tail keeps Close rightmost across inline and compact layouts"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "opening Tools with Enter makes its native actions reachable by forward Tab",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "opening Tools with Enter makes its native actions reachable by forward Tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "opening Tools with Space makes its native actions reachable by forward Tab",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "opening Tools with Space makes its native actions reachable by forward Tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "compact-to-inline measurement returns Tools focus to a connected visible native action",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "compact-to-inline measurement returns Tools focus to a connected visible native action"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "lower short-viewport capsule stays reachable",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "lower short-viewport capsule stays reachable"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "lower short-viewport capsule stays reachable above the global player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "lower short-viewport capsule stays reachable above the global player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "inline focused native Period menu retires into visible Tools when measurement becomes compact",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "inline focused native Period menu retires into visible Tools when measurement becomes compact"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "retiring an unfocused native Period menu on compact transition does not steal outside focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "retiring an unfocused native Period menu on compact transition does not steal outside focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "Period selection preserves mounted Tools and Period nodes, disclosure state, focus and current callbacks",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Period selection preserves mounted Tools and Period nodes, disclosure state, focus and current callbacks"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "repeated unrelated parent refresh preserves expanded native markup and focused control identity",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "repeated unrelated parent refresh preserves expanded native markup and focused control identity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "Tabs and ViewControl keep their mounted native owners through unrelated React19 parent renders",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Tabs and ViewControl keep their mounted native owners through unrelated React19 parent renders"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/homeSharedHeader.spec.js",
+    "case": "compact capsule respects the 8px left gutter with a real document scrollbar",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "compact capsule respects the 8px left gutter with a real document scrollbar"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "actual Loose sections share aligned native React presentation at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual Loose sections share aligned native React presentation at 320px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "actual Loose sections share aligned native React presentation at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual Loose sections share aligned native React presentation at 390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "actual Loose sections share aligned native React presentation at 480px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual Loose sections share aligned native React presentation at 480px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "actual Loose sections share aligned native React presentation at 1100px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual Loose sections share aligned native React presentation at 1100px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose columns offer only existing extras, retain section actions and confine explicit path overflow locally",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose columns offer only existing extras, retain section actions and confine explicit path overflow locally"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "same Loose resource refresh keeps explicit choices and retires pre-refresh menu callbacks",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same Loose resource refresh keeps explicit choices and retires pre-refresh menu callbacks"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose source replacement restores default choices and retires old menu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose source replacement restores default choices and retires old menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose scope replacement restores default choices and retires old menu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose scope replacement restores default choices and retires old menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose close replacement restores default choices and retires old menu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose close replacement restores default choices and retires old menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "actual Loose header uses the shared keyboard and long-press column owner",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual Loose header uses the shared keyboard and long-press column owner"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose source replacement cancels a pending header long-press",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose source replacement cancels a pending header long-press"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsiveMount.spec.js",
+    "case": "Loose without shared Choice dependency has a visibly disabled column action",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Loose without shared Choice dependency has a visibly disabled column action"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsivePlaybackGrowth.spec.js",
+    "case": "canonical Loose wrappers keep short required columns in view at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "canonical Loose wrappers keep short required columns in view at 320px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsivePlaybackGrowth.spec.js",
+    "case": "canonical Loose wrappers keep short required columns in view at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "canonical Loose wrappers keep short required columns in view at 390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsivePlaybackGrowth.spec.js",
+    "case": "canonical Loose wrappers keep short required columns in view at 480px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "canonical Loose wrappers keep short required columns in view at 480px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseResponsivePlaybackGrowth.spec.js",
+    "case": "live Loose duration growth remeasures all sections and confines unavoidable overflow to the compact tables",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "live Loose duration growth remeasures all sections and confines unavoidable overflow to the compact tables"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "actual native table uses one aligned grid and explicit Rating below480 stays table-local",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual native table uses one aligned grid and explicit Rating below480 stays table-local"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "header keyboard equivalent Alt+ArrowDown",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "header keyboard equivalent Alt+ArrowDown"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "header keyboard equivalent Shift+F10",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "header keyboard equivalent Shift+F10"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "header keyboard equivalent ContextMenu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "header keyboard equivalent ContextMenu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on movement",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on movement"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on scroll",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on scroll"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on multitouch",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on multitouch"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on resize",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on resize"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on source",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on source"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on rehost",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on rehost"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "pending header longpress cancels on dispose",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pending header longpress cancels on dispose"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "consumed longpress suppresses only its trailing pointer click; keyboard and next ordinary sort survive",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "consumed longpress suppresses only its trailing pointer click; keyboard and next ordinary sort survive"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "real React playlist owns native columns toolbar, resource-local choices, facts and missing playback",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real React playlist owns native columns toolbar, resource-local choices, facts and missing playback"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumns.spec.js",
+    "case": "real React recent owns native columns toolbar, resource-local choices, facts and missing playback",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real React recent owns native columns toolbar, resource-local choices, facts and missing playback"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "consumed longpress remains consumed through a hold beyond the old one-second expiry",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "consumed longpress remains consumed through a hold beyond the old one-second expiry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "abandoned released sequence expires separately and cannot consume a later click",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "abandoned released sequence expires separately and cannot consume a later click"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "pointercancel retires the consumed sequence immediately",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pointercancel retires the consumed sequence immediately"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "native Choice Escape restores a non-sortable header opening to its focusable content label: contextmenu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Choice Escape restores a non-sortable header opening to its focusable content label: contextmenu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "native Choice Escape restores a non-sortable header opening to its focusable content label: longpress",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Choice Escape restores a non-sortable header opening to its focusable content label: longpress"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "native column menu anchors to intrinsic label width and disposal restores bare text without touching native sort",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native column menu anchors to intrinsic label width and disposal restores bare text without touching native sort"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "header keyboard opening uses real visible content label rather than whole-header menu anchor",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "header keyboard opening uses real visible content label rather than whole-header menu anchor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileTrackColumnsCorrections.spec.js",
+    "case": "actual React Playlist long title shrinks inside artwork identity and receives native ellipsis",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "actual React Playlist long title shrinks inside artwork identity and receives native ellipsis"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue 320px defaults keep title, Love and unknown Length without fabricated columns",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue 320px defaults keep title, Love and unknown Length without fabricated columns"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue 390px defaults keep title, Love and unknown Length without fabricated columns",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue 390px defaults keep title, Love and unknown Length without fabricated columns"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue shares duplicate Love pending identity, completes full cycle and keeps unrelated same-title tracks distinct",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue shares duplicate Love pending identity, completes full cycle and keeps unrelated same-title tracks distinct"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue pending Love restores focus after acknowledgement and a fresh public snapshot repaint",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue pending Love restores focus after acknowledgement and a fresh public snapshot repaint"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue Love completion does not steal focus moved to another control",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue Love completion does not steal focus moved to another control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue revoke retires pending Love and ignores late rejection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue revoke retires pending Love and ignores late rejection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue source retires pending Love and ignores late rejection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue source retires pending Love and ignores late rejection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue scope retires pending Love and ignores late rejection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue scope retires pending Love and ignores late rejection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue unmount retires pending Love and ignores late rejection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue unmount retires pending Love and ignores late rejection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue mobile columns chooser is the shared owner, retains choices through metadata repaint and retires old menu",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue mobile columns chooser is the shared owner, retains choices through metadata repaint and retires old menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/queueTrackMetadata.spec.js",
+    "case": "Queue header keeps existing clear ownership and occurrence exclusion",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Queue header keeps existing clear ownership and occurrence exclusion"
+    ],
     "ownerApproval": "approved"
   }
 ]

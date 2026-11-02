@@ -18,12 +18,14 @@ const graphs = {
     "music_app/static/js/home-friends/friends-directory.mjs",
     "music_app/static/js/home-friends/model.mjs",
     "music_app/static/js/home-friends/native-controls.mjs",
+    "music_app/static/js/home-friends/recent-scrobble-delivery.mjs",
     "music_app/static/js/home-friends/resource-target.mjs"
   ],
   "homeSharedHeaderEntry.mjs": [
     "music_app/static/js/home-friends/header-layout.mjs",
     "music_app/static/js/home-friends/model.mjs",
     "music_app/static/js/home-friends/native-controls.mjs",
+    "music_app/static/js/home-friends/recent-scrobble-delivery.mjs",
     "music_app/static/js/home-friends/period.mjs",
     "music_app/static/js/home-friends/profile.mjs",
     "music_app/static/js/home-friends/resource-target.mjs",

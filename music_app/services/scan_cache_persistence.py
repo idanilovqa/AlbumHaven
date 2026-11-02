@@ -2484,6 +2484,21 @@ def _structural_destination_album_projection(
     if changed_field_names == frozenset({"artist"}):
         for entry in projection_entries.values():
             entry["artist"] = entry.get("album_artist") or entry.get("artist")
+    elif changed_field_names in (frozenset({"album"}), frozenset({"year"})):
+        track_artists = {
+            _key(entry.get("artist")): str(entry.get("artist") or "").strip()
+            for entry in projection_entries.values()
+        }
+        if (
+            len(track_artists) == 1
+            and not set(track_artists) & {"", "unknown artist"}
+            and all(_is_various_artist(entry.get("album_artist")) for entry in projection_entries.values())
+        ):
+            # Project the selected subset's owner without changing persisted credits.
+            owner = next(iter(track_artists.values()))
+            if not _is_various_artist(owner) and len(track_artist_credit_members(owner, owner)) == 1:
+                for entry in projection_entries.values():
+                    entry["album_artist"] = owner
     destination_albums = build_albums(
         projection_entries,
         (

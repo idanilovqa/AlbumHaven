@@ -41,6 +41,7 @@ export class CoverLookup extends BasePage {
     this.inactiveLocalCoverCards = this.modalBody
       .locator('[data-select-local-cover]:not([data-cover-lookup-local-active])');
     this.remoteCoverCards = this.modalBody.locator('[data-select-remote-cover]');
+    this.suggestedCoverCards = this.modalBody.locator('.is-suggested');
     this.firstRemoteCoverCard = this.remoteCoverCards.first();
     this.savedRemoteCoverCards = this.modalBody.locator('[data-cover-lookup-saved-remote]');
     this.savedRemoteCoverCard = this.savedRemoteCoverCards.first();

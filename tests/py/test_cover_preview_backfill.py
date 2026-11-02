@@ -4,6 +4,8 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
+
 
 class _Cursor:
     def __init__(self, rows):
@@ -226,23 +228,25 @@ def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
     assert "metadata ->> 'cover_revision'" in connection.executed[0]
 
 
-def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path):
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_backfill_honors_storage_policy_without_revision(tmp_path, mode):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
 
     source = tmp_path / "Artist" / "Album" / "cover.jpg"
     data_dir = tmp_path / "app-data"
     connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
     generated = []
 
-    class AlbumFolderStoragePolicy:
-        def write_cache_root(self, source_path):
-            return Path(source_path).parent / ".album-haven"
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
 
     worker = CoverPreviewBackfill(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
             "DATA_DIR": str(data_dir),
-            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
         },
         connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
         generate=lambda source_path, **kwargs: generated.append(
@@ -252,7 +256,58 @@ def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path)
     )
 
     assert worker.run_once() == 1
-    assert generated == [(source, data_dir / "display-cover-cache")]
+    assert generated == [(source, policy.write_cache_root(source))]
+
+
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_repeated_unrevisioned_backfill_records_only_policy_destination(tmp_path, mode):
+    from PIL import Image
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.covers import resolve_cover_display_variant
+    from music_app.services.generated_preview_storage import (
+        preview_storage_policy_from_mapping, record_generated_preview,
+    )
+
+    source = tmp_path / "album" / "cover.jpg"
+    source.parent.mkdir()
+    Image.new("RGB", (600, 600), "red").save(source)
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    recorded = []
+
+    class Inventory:
+        def record_inventory(self, **row):
+            recorded.append(row)
+
+    inventory = Inventory()
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "DATA_DIR": str(tmp_path / "app-data"),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": lambda source, preview: record_generated_preview(
+                inventory, source, preview,
+            ),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=resolve_cover_display_variant,
+        throttle_seconds=0,
+    )
+
+    for _ in range(3):
+        assert worker.run_once() == 1
+    assert len(recorded) == 3
+    assert len({row["current_path"] for row in recorded}) == 1
+    for row in recorded:
+        relocation_target = (
+            tmp_path / "ssd" / row["managed_relative_path"]
+            if mode == "custom" else Path(row["album_preview_path"])
+        )
+        assert Path(row["current_path"]) == relocation_target
+        assert relocation_target.is_file()
+    assert not (tmp_path / "app-data" / "display-cover-cache").exists()
 
 
 def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):

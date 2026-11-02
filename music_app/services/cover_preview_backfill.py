@@ -120,11 +120,7 @@ class CoverPreviewBackfill:
                 cache_root=display_cover_variant_cache_root(
                     source_path,
                     data_dir=self._data_dir,
-                    storage_policy=(
-                        self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
-                        if cover_revision or not self._data_dir
-                        else None
-                    ),
+                    storage_policy=self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY"),
                 ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",

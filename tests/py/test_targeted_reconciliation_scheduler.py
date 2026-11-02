@@ -19,6 +19,36 @@ def _request(root_id: str, *paths: str) -> TargetedReconciliationRequest:
         paths=frozenset(Path(path) for path in paths),
     )
 
+
+def test_explicit_catch_up_retains_health_until_successful_recovery():
+    started = Event()
+    release = Event()
+    cleared = []
+
+    def catch_up(root_ids):
+        assert root_ids == frozenset({"arrivals"})
+        started.set()
+        assert release.wait(2)
+        raise OSError("root still unavailable")
+
+    scheduler = TargetedReconciliationScheduler(
+        reconcile=lambda _request: None,
+        catch_up=catch_up,
+        record_problem=lambda _problem: None,
+        clear_recovered=cleared.append,
+    )
+    try:
+        assert scheduler.request_catch_up(frozenset({"arrivals"}))
+        assert started.wait(2)
+        assert cleared == []
+        release.set()
+        assert scheduler.wait_for_idle(timeout=2)
+        assert cleared == []
+    finally:
+        release.set()
+        scheduler.shutdown(wait=True, timeout=2)
+    assert not scheduler.request_catch_up(frozenset({"arrivals"}))
+
 def test_burst_beyond_legacy_256_job_limit_is_admitted_without_losing_paths():
     started = Event()
     release = Event()

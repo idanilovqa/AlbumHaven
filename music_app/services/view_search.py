@@ -415,7 +415,10 @@ def search_word_matches(query_word: str, candidate_word: str) -> bool:
         return False
     if query_text == candidate_text:
         return True
-    if len(query_text) >= 3 and (query_text in candidate_text or candidate_text in query_text):
+    if len(query_text) >= 3 and (
+        query_text in candidate_text
+        or (len(candidate_text) >= 3 and candidate_text in query_text)
+    ):
         return True
     if query_text[0] != candidate_text[0] and min(len(query_text), len(candidate_text)) >= 4:
         return False

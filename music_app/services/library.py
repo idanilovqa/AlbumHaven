@@ -359,6 +359,17 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
     ]
+    if explicit_various and persisted_compilation_state is not True and len(distinct_track_artists) == 2 and all(
+        not _is_various_artist(artist) and artist.casefold() != "unknown artist"
+        for artist in distinct_track_artists
+    ):
+        return compilation_state(True), _format_shared_album_artist(distinct_track_artists), distinct_track_artists
+    if len(distinct_track_artists) >= 2 and any(
+        str(entry.get("album_type") or "").strip().casefold() == "split"
+        for entry in entries
+    ):
+        members = matched_album_artist_members if len(matched_album_artist_members) >= 2 else distinct_track_artists
+        return compilation_state(True), _format_shared_album_artist(members), members
     primary_artist = main_disc_album_artist or next(
         (value for value in album_artist_values if value.strip()),
         "",

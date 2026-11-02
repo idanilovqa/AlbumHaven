@@ -53,6 +53,7 @@ from music_app.services.listen_through import (
 from music_app.services.library_roots import (
     build_root_provenance_payload,
     configured_library_root_paths_snapshot,
+    library_category_slug,
     summarize_root_provenance_payloads,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
@@ -5252,6 +5253,14 @@ def _missing_album_projection_payloads(
             row.get("file_scan_cache_stale") is True for row in album_rows
         ):
             continue
+        # Transitional arrivals disappear after deletion; permanent sources
+        # retain their missing-album warning until the owner confirms removal.
+        album_rows = [
+            row for row in album_rows
+            if library_category_slug(row.get("file_library_root_category")) != "new_arrivals"
+        ]
+        if not album_rows:
+            continue
         first = album_rows[0]
         metadata = _problematic_album_metadata_from_row(first)
         artists = metadata.get("artists")
@@ -7195,11 +7204,7 @@ def _queue_display_cover_variants_for_groups(
                     cache_root=display_cover_variant_cache_root(
                         source_path,
                         data_dir=config.get("DATA_DIR"),
-                        storage_policy=(
-                            config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
-                            if cover_revision
-                            else None
-                        ),
+                        storage_policy=config.get("_GENERATED_PREVIEW_STORAGE_POLICY"),
                     ),
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
                     **revision_options,
@@ -7931,16 +7936,23 @@ def _root_album_browse_album_payloads(
 
 
 def _album_artist_relationship(rows: Iterable[object]) -> str:
+    from music_app.services.selected_artist_membership import album_artist_relationship
+
+    payloads = [_row_mapping(row) for row in rows]
     kinds = {
-        str(_row_mapping(row).get("featured_kind") or "").strip().casefold()
-        for row in rows
+        str(payload.get("featured_kind") or "").strip().casefold()
+        for payload in payloads
     }
-    return (
-        "featured"
-        if "owner" not in kinds
-        and kinds & {"featured_member", "featured_track_artist"}
-        else "owned"
-    )
+    if "owner" in kinds or not kinds & {"featured_member", "featured_track_artist"}:
+        return "owned"
+    for payload in payloads:
+        album_artist = _row_json_mapping(payload.get("album_metadata")).get("album_artist")
+        if album_artist and album_artist_relationship(
+            SimpleNamespace(album_artist=album_artist),
+            str(payload.get("artist_name") or ""), {},
+        ) == "owned":
+            return "owned"
+    return "featured"
 
 
 def _copy_album_for_artist_occurrence(
@@ -8851,12 +8863,12 @@ from library.local_artists
         )
         order by
           regexp_replace(
-            lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+            translate(lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)), U&'\\2018\\2019', U&'\\0027\\0027'),
             '^[[:punct:][:space:]]+',
             ''
           ),
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name),
-          regexp_replace(lower(library.local_artists.name), '^[[:punct:][:space:]]+', ''),
+          regexp_replace(translate(lower(library.local_artists.name), U&'\\2018\\2019', U&'\\0027\\0027'), '^[[:punct:][:space:]]+', ''),
           library.local_artists.name
         limit {normalized_candidate_limit};
     """
@@ -8990,13 +9002,13 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             dense_rank() over (
               order by
                 regexp_replace(
-                  lower(canonical_artist_sort_values.canonical_sort_name),
+                  translate(lower(canonical_artist_sort_values.canonical_sort_name), U&'\\2018\\2019', U&'\\0027\\0027'),
                   '^[[:punct:][:space:]]+',
                   ''
                 ),
                 canonical_artist_sort_values.canonical_sort_name,
                 regexp_replace(
-                  lower(canonical_artist_sort_values.canonical_artist_name),
+                  translate(lower(canonical_artist_sort_values.canonical_artist_name), U&'\\2018\\2019', U&'\\0027\\0027'),
                   '^[[:punct:][:space:]]+',
                   ''
                 ),

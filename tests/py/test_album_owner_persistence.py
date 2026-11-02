@@ -526,8 +526,8 @@ def test_various_artists_owner_does_not_create_composite_display_artist(
         (row["artist_key"], row["featured_kind"])
         for row in featured_rows
     } == {
-        ("jordsjø", "featured_member"),
-        ("breidablik", "featured_member"),
+        ("jordsjø", "owner"),
+        ("breidablik", "owner"),
         ("jordsjø", "featured_track_artist"),
         ("breidablik", "featured_track_artist"),
     }
@@ -553,7 +553,7 @@ def test_targeted_various_artists_release_keeps_two_constituent_display_credit(
     assert {
         row["artist_key"]
         for row in featured_rows
-        if row["featured_kind"] == "featured_member"
+        if row["featured_kind"] == "owner"
     } == {"jordsjø", "breidablik"}
     assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
     assert {row["artist_key"] for row in artist_rows} == {"jordsjø", "breidablik"}
@@ -631,8 +631,8 @@ def test_structured_shared_release_does_not_persist_composite_owner(monkeypatch)
         (row["artist_key"], row["featured_kind"])
         for row in featured_rows
     } == {
-        ("jordsjø", "featured_member"),
-        ("breidablik", "featured_member"),
+        ("jordsjø", "owner"),
+        ("breidablik", "owner"),
         ("jordsjø", "featured_track_artist"),
         ("breidablik", "featured_track_artist"),
     }

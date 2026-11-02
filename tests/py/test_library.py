@@ -375,7 +375,7 @@ def test_build_albums_from_file_cache_preserves_persisted_non_compilation_family
     assert inferred_relation_views["folder_related"] == {}
 
 
-def test_build_albums_from_file_cache_preserves_explicit_various_artists_owner():
+def test_build_albums_from_file_cache_infers_split_from_two_track_artists():
     album_name = "Watcher Joint Credit Release"
     member_artists = ("Jordsjø", "Breidablik")
     file_cache = {
@@ -394,8 +394,27 @@ def test_build_albums_from_file_cache_preserves_explicit_various_artists_owner()
 
     assert len(albums) == 1
     assert albums[0].is_compilation is True
-    assert albums[0].album_artist == "Various Artists"
-    assert albums[0].artists == []
+    assert albums[0].album_artist == "Jordsjø / Breidablik"
+    assert albums[0].artists == list(member_artists)
+
+
+@pytest.mark.parametrize("album_artist", ["Various Artists", "First Artist / Absent Artist"])
+def test_explicit_split_keeps_both_main_artists_with_unequal_track_counts(album_artist):
+    file_cache = {
+        f"track-{index}": {
+            **_entry(
+                path=f"C:/Music/Split/{index:02}.mp3", title=f"Track {index}",
+                artist=artist, album_artist=album_artist, album="Explicit Split",
+                track_number=index,
+            ),
+            "album_type": "Split",
+        }
+        for index, artist in enumerate(["First Artist"] * 5 + ["Second Artist"], 1)
+    }
+    album = build_albums_from_file_cache(file_cache)[0]
+    assert album.artists == ["First Artist", "Second Artist"]
+    assert album.album_artist == "First Artist / Second Artist"
+    assert [track.artist for track in album.tracks] == ["First Artist"] * 5 + ["Second Artist"]
 
 
 def test_build_albums_from_file_cache_deduplicates_repeated_composite_album_artist_names():

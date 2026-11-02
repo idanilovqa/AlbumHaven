@@ -303,6 +303,7 @@ def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(
 @pytest.mark.parametrize("owned_directory_name", [
     "watcher-reconciliation", "gallery-native-response-overlap",
     "watcher-grouped-feature-credit", "generated-preview-storage",
+    "watcher-artist-collation-curly",
 ])
 def test_watcher_cleanup_accepts_exact_response_overlap_owner_before_database_access(monkeypatch, tmp_path, owned_directory_name):
     from tests.e2e.support import watcherFixture

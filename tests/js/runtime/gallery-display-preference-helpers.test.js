@@ -430,3 +430,14 @@ for (const scoped of [
     assert.deepEqual(Array.from(context.buildDisplayGroups(groups), item => item.artist), ['Alice & Bob']);
   });
 }
+
+require('node:test')('selected slash-composite keeps its existing raw-credit grouping preference', () => {
+  const { context } = loadHelper();
+  context.state.view.selected_artist = 'Alice / Bob';
+  const groups = context.buildDisplayGroups([{ artist: 'Alice / Bob', albums: [
+    { key: 'joint', album_artist: 'Alice / Bob' },
+    { key: 'alternate', album_artist: 'Alice & Bob' },
+    { key: 'solo', album_artist: 'Alice' },
+  ] }]);
+  assert.deepEqual(Array.from(groups, group => group.artist), ['Alice / Bob', 'Alice', 'Alice & Bob']);
+});

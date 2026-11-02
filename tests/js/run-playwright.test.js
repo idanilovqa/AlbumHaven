@@ -3854,6 +3854,18 @@ test('managed watcher cleanup derives its only path from runner media ownership'
       '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
       path.join(ownedRoot, 'media', 'cases', 'watcher-grouped-feature-credit'),
     ]);
+    calls.length = 0;
+    await _private.cleanupManagedWatcherFixture(environment, {
+      ownedDirectoryName: 'watcher-artist-collation-curly',
+      runCommandFn(command, args, options) {
+        calls.push({ command, args, options });
+        return { status: 0, signal: null };
+      },
+    });
+    assert.deepEqual(calls[0].args, [
+      '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
+      path.join(ownedRoot, 'media', 'cases', 'watcher-artist-collation-curly'),
+    ]);
     await assert.rejects(
       _private.cleanupManagedWatcherFixture(environment, { ownedDirectoryName: 'not-runner-owned' }),
       /owned directory/i,

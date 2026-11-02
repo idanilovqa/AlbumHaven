@@ -42,6 +42,53 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+require('node:test')('manual controls reset native and accessible disabled state after extraction', () => {
+  class Button {
+    constructor() { this.disabled = true; this.attributes = { 'aria-disabled': 'true' }; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class TextArea { constructor() { this.disabled = false; } }
+  const input = new TextArea();
+  const extract = new Button();
+  const findBetter = new Button();
+  const save = new Button();
+  const context = loadHelper({
+    HTMLButtonElement: Button,
+    HTMLTextAreaElement: TextArea,
+    document: {
+      getElementById: (id) => ({
+        'cover-lookup-pasted-urls': input,
+        'cover-lookup-find-better-button': findBetter,
+        'cover-lookup-save-remote-button': save,
+      }[id] || null),
+      querySelector: () => extract,
+    },
+  });
+  context.state.coverLookup.modal.manualUrlText = 'https://images.example/cover.jpg';
+  for (const busy of [false, true, false]) {
+    context.state.coverLookup.modal.manualBusy = busy;
+    context.syncCoverLookupManualControlsUi();
+    assert.equal(input.disabled, busy);
+    for (const button of [extract, findBetter]) {
+      assert.equal(button.disabled, busy);
+      assert.equal(button.attributes['aria-disabled'], String(busy));
+    }
+  }
+  context.state.coverLookup.modal.manualUrlText = '';
+  context.syncCoverLookupManualControlsUi();
+  assert.equal(extract.disabled, true);
+  assert.equal(extract.attributes['aria-disabled'], 'true');
+  assert.equal(findBetter.disabled, false);
+  assert.equal(findBetter.attributes['aria-disabled'], 'false');
+  context.state.coverLookup.modal.pendingPastedImageId = 'pasted-cover';
+  for (const saving of [false, true, false]) {
+    context.state.coverLookup.modal.saving = saving;
+    context.syncCoverLookupSaveButton();
+    assert.equal(save.disabled, saving);
+    assert.equal(save.attributes['aria-disabled'], String(saving));
+  }
+});
+
 require('node:test')('Cover Lookup subtitle makes only the album name interactive', () => {
   const context = loadHelper({ escapeHtml: value => String(value || '') });
   const markup = context.buildCoverLookupAlbumSubtitleHtml({
@@ -192,6 +239,78 @@ require('node:test')('only the active automatic suggestion receives suggested st
     url: 'https://images.example/suggested.jpg',
   }, 'remote');
   assert.doesNotMatch(manuallySelected, /is-suggested/);
+});
+
+require('node:test')('Neural Code keeps its automatic local cover selected while marking the remote suggestion', () => {
+  const { context } = createDrawerHarness();
+  context.buildCoverUrl = (path) => `/cover?path=${encodeURIComponent(path)}`;
+  const local = { path: 'C:/Fixture/Neural Code/cover.jpg', is_active: true };
+  const remote = { id: 'neural-discogs', source: 'discogs', art_kind: 'cover', url: 'https://images.example/neural.jpg' };
+  const task = { id: 'neural-task', status: 'completed', notification_action_taken: false };
+  context.state.coverLookup.tasks = [task];
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: task.id,
+    album: { key: 'neural-code::neural-code', name: 'Neural Code', cover_path: local.path, cover_selection_origin: 'automatic' },
+    localCovers: [local], activeLocalSelectionPath: local.path,
+    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '',
+  });
+  const source = { generation: 'neural-search', status: 'completed', revision: 1, bestCandidateId: remote.id, candidates: [remote] };
+
+  context.applyCoverLookupCandidateSource(source);
+
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, remote.id);
+  const suggested = context.buildCoverLookupCard(remote, 'remote');
+  assert.match(suggested, /\bis-suggested\b/);
+  assert.doesNotMatch(suggested, /\bis-active\b/);
+  assert.match(context.buildCoverLookupCard(local, 'local'), /\bis-active\b/);
+  assert.equal(task.notification_action_taken, false);
+
+  const classes = new Set();
+  const remoteCard = {
+    getAttribute: () => remote.id,
+    querySelector: () => null,
+    classList: { toggle: (name, enabled) => enabled ? classes.add(name) : classes.delete(name) },
+  };
+  const modalElement = {
+    hidden: false,
+    querySelectorAll: (selector) => selector === '[data-select-remote-cover]' ? [remoteCard] : [],
+  };
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = (id) => id === 'cover-lookup-modal' ? modalElement : getElementById(id);
+  context.syncCoverLookupSelectionUi();
+  assert.equal(classes.has('is-suggested'), true);
+  assert.equal(classes.has('is-active'), false);
+
+  context.state.coverLookup.modal.pendingPastedImageId = 'pending-image';
+  context.syncCoverLookupSelectionUi();
+  assert.equal(classes.has('is-suggested'), false);
+  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
+  context.state.coverLookup.modal.pendingPastedImageId = '';
+  task.notification_action_taken = true;
+  context.applyCoverLookupCandidateSource(source);
+
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
+  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
+  context.syncCoverLookupSelectionUi();
+  assert.equal(classes.has('is-suggested'), false);
+});
+
+require('node:test')('a user-owned local cover suppresses remote suggestion before the current search is actioned', () => {
+  const { context } = createDrawerHarness();
+  Object.assign(context.state.coverLookup.modal, {
+    album: { cover_selection_origin: 'user' },
+    localCovers: [{ path: 'C:/Fixture/user-cover.jpg', is_active: true }],
+    selectedRemoteId: '',
+  });
+  context.applyCoverLookupCandidateSource({
+    generation: 'later-search', status: 'completed', bestCandidateId: 'remote',
+    candidates: [{ id: 'remote', url: 'https://images.example/remote.jpg' }],
+  });
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 });
 
 require('node:test')('completed lookup counts every selectable artwork candidate', () => {
@@ -2516,6 +2635,7 @@ require('node:test')('active-only polling preserves full task fields omitted by 
 
 require('node:test')('repeated explicit manual lookup reuses its terminal task without collapsing provider refresh generations', async () => {
   class TestButton {
+    setAttribute(name, value) { this[name] = String(value); }
     constructor() {
       this.hidden = false;
       this.disabled = false;
@@ -2579,6 +2699,7 @@ require('node:test')('repeated explicit manual lookup reuses its terminal task w
 
 require('node:test')('repeated explicit manual lookup finds the matching terminal album task after another album opens', async () => {
   class TestButton {
+    setAttribute(name, value) { this[name] = String(value); }
     constructor() {
       this.hidden = false;
       this.disabled = false;
@@ -3026,7 +3147,7 @@ require('node:test')('approaching drawer end serializes the next page request', 
 });
 
 require('node:test')('closing cover lookup releases hidden candidate images and polling state', () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: false };
   const modalBody = { innerHTML: '<img src="https://images.example/large-cover.jpg">' };
   const drawerBody = { scrollTop: 0 };
@@ -3764,6 +3885,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
 ;(async () => {
   class TestButton {
+    setAttribute(name, value) { this[name] = String(value); }
     constructor() {
       this.hidden = false;
       this.disabled = false;
@@ -6407,7 +6529,7 @@ require('node:test')('failed single notification clear performs a full rollback 
 });
 
 require('node:test')('initial cover gallery load finishes before task polling starts', async () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
   const saveButton = new TestButton();
   const order = [];
@@ -6447,7 +6569,7 @@ require('node:test')('initial cover gallery load finishes before task polling st
 });
 
 require('node:test')('reopening Cover Lookup renders its cached gallery before refreshing', async () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
   const saveButton = new TestButton();
   const album = { tracks: [{ path: 'N:/Music/Dissection/01.flac' }] };
@@ -6479,7 +6601,7 @@ require('node:test')('reopening Cover Lookup renders its cached gallery before r
 });
 
 require('node:test')('reopening Cover Lookup from a compact notification reuses the cached gallery', async () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
   const fullAlbum = {
     key: 'mastodon::crack the skye',
@@ -7478,7 +7600,7 @@ require('node:test')('failed gallery loading shows an error instead of a false e
 });
 
 require('node:test')('opening from Album Details immediately uses its saved candidate snapshot', async () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
   const context = loadHelper({
     HTMLButtonElement: TestButton,
@@ -7515,7 +7637,7 @@ require('node:test')('remote-only progress preserves local cards and the complet
 });
 
 require('node:test')('reopening a cached empty gallery waits for fresh inventory before declaring empty', async () => {
-  class TestButton {}
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
   const context = loadHelper({
     HTMLButtonElement: TestButton,

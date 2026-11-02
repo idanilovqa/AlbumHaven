@@ -4428,7 +4428,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 ).fetchone()["QUERY PLAN"]
                 evidence = _phase6_plan_evidence(plan)
                 assert evidence["actual_rows"] == expected_rows
-                assert evidence["execution_ms"] < execution_ceiling_ms
+                assert evidence["execution_ms"] < execution_ceiling_ms, (surface, evidence)
                 assert evidence["external_sorts"] == 0
                 plan_evidence[surface] = evidence
 

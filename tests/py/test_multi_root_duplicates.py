@@ -196,6 +196,61 @@ def test_separate_tagged_releases_in_sibling_disc_folders_are_not_mixed_metadata
     assert rejected_local_album_paths(entries) == {}
 
 
+@pytest.mark.parametrize("copy_title,expected_sources", [("Track 1", 3), ("Extra", 2)])
+def test_separated_year_projection_includes_only_overlapping_track_sources(copy_title, expected_sources):
+    from music_app.services.library_browse_postgres import (
+        _duplicate_sources_from_rows, _duplicate_sources_for_projected_album,
+    )
+
+    rows = [
+        {
+            "album_key": key, "file_private_path": str(track.path),
+            "file_entry": asdict(track), "duration_seconds": track.duration_seconds,
+        }
+        for key, track in [
+            ("main", _track("main/original", edition="main")),
+            ("main", _track("main/copy-a", title=copy_title, year=2002)),
+            ("main", _track("main/copy-b", title=copy_title, year=2002)),
+            ("reissue", _track("arrivals/reissue", year=2002, edition="reissue")),
+        ]
+    ]
+    result = _duplicate_sources_from_rows(rows)["main"]
+    sources = _duplicate_sources_for_projected_album(
+        {"key": "main::year::2002", "_persisted_album_key": "main", "year": 2002}, result,
+    )
+    assert len(sources) == expected_sources
+    assert all(track["year"] == 2002 for source in sources for track in source["tracks"])
+
+
+@pytest.mark.parametrize("copy_title", ["Track 1", "Extra"])
+def test_catalogue_year_projection_links_matching_track_copies_symmetrically(copy_title):
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    copy = _track("arrivals/reissue-2001", title=copy_title)
+    tracks = [
+        ("main", _track("main/original", edition="main")),
+        ("deluxe", _track("hoard/deluxe", edition="deluxe")),
+        ("deluxe", _track("hoard/deluxe", 2, edition="deluxe")),
+        ("reissue", _track("arrivals/reissue", year=2002, edition="reissue")),
+        ("reissue", copy),
+    ]
+    results = _duplicate_sources_from_rows([
+        {
+            "album_key": key, "file_private_path": str(track.path),
+            "file_entry": asdict(track), "duration_seconds": track.duration_seconds,
+        }
+        for key, track in tracks
+    ])
+    for key in ("main", "reissue"):
+        found = {
+            track["path"] for source in results[key]["duplicate_sources"] for track in source["tracks"]
+        }
+        if copy_title == "Track 1":
+            assert {str(track.path) for _, track in tracks if track.year == 2001} <= found
+        else:
+            assert str(copy.path) not in found
+
+
 def test_multidisc_folders_remain_one_source_when_compared_with_flat_copy():
     entries = [
         {**asdict(_track("main/release/CD1", 1)), "library_root_id": 1},

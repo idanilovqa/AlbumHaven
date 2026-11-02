@@ -660,7 +660,8 @@ def create_asgi_app():
 
         def persist_library_watch_health(event) -> None:
             try:
-                runtime.library_watch_health_service.record_event(event)
+                if runtime.library_watch_health_service.record_event(event):
+                    targeted_executor.request_catch_up(frozenset({event.root_id}))
             except Exception:
                 runtime.logger.exception(
                     "Unable to persist library watcher health event."
@@ -781,6 +782,17 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        try:
+            configured_root_ids = {
+                str(root.get("id") or "") for root in get_library_roots(runtime.config)
+            }
+            targeted_executor.request_catch_up(frozenset(
+                problem.root_id
+                for problem in runtime.library_watch_health_service.load_problems()
+                if problem.root_id in configured_root_ids
+            ))
+        except Exception:
+            runtime.logger.exception("Unable to schedule persisted library watcher recovery.")
         try:
             yield
         finally:

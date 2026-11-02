@@ -96,6 +96,23 @@ class TargetedReconciliationScheduler:
             self._dispatch_request(dispatch)
         return True
 
+    def request_catch_up(self, root_ids: frozenset[str]) -> bool:
+        """Admit already-recorded watcher failures to the serial recovery lane."""
+        roots = {str(root_id).strip() for root_id in root_ids if str(root_id).strip()}
+        dispatch = False
+        with self._lock:
+            if self._stopped or not roots:
+                return False
+            self._failed_catch_up_roots.difference_update(roots)
+            self._catch_up_roots.update(roots)
+            if not self._active:
+                self._active = True
+                self._idle.clear()
+                dispatch = True
+        if dispatch:
+            self._advance()
+        return True
+
     def wait_for_idle(self, *, timeout: float | None = None) -> bool:
         return self._idle.wait(timeout)
 

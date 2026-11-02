@@ -396,10 +396,12 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
-def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
+@pytest.mark.parametrize("apostrophe", ["'", "\u2019", "\u2018"])
+def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting(apostrophe):
     from music_app.services import library_browse_postgres as browse
 
-    names = ["IZZ", "'Til Tuesday", "I'm with Her", "!Air"]
+    apostrophe_artist = f"I{apostrophe}m with Her"
+    names = ["IZZ", "'Til Tuesday", apostrophe_artist, "!Air"]
     rows = [
         _browse_album_row(
             artist=artist,
@@ -409,7 +411,7 @@ def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
         )
         for index, artist in enumerate(names, start=1)
     ]
-    expected = ["!Air", "I'm with Her", "IZZ", "'Til Tuesday"]
+    expected = ["!Air", apostrophe_artist, "IZZ", "'Til Tuesday"]
 
     groups = browse._root_album_browse_artist_groups(rows)
     search_names = ["'Bravo", "Alpha"]
@@ -432,6 +434,7 @@ def test_root_startup_sql_ignores_leading_punctuation_before_artist_limits():
         normalized = " ".join(sql.casefold().split())
         assert "regexp_replace(" in normalized
         assert "'^[[:punct:][:space:]]+'" in normalized
+        assert normalized.count("u&'\\2018\\2019', u&'\\0027\\0027'") == 2
 
 
 @pytest.mark.parametrize("guest_name", ["Guest", "Guest Alias"])
@@ -569,7 +572,7 @@ def test_postgres_split_release_suppresses_composite_owner_artist_group():
     groups = browse._root_album_browse_artist_groups(rows)
 
     assert [group["artist"] for group in groups] == ["Aarni", "Persistence In Mourning"]
-    assert all(group["albums"][0]["artist_relationship"] == "featured" for group in groups)
+    assert all(group["albums"][0]["artist_relationship"] == "owned" for group in groups)
     assert all(
         group["albums"][0]["album_artist"] == "Aarni / Persistence In Mourning"
         for group in groups
@@ -652,6 +655,45 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     assert browse._selected_artist_album_payloads(
         [featured, owner], "Solo One"
     )[0]["artist_relationship"] == "owned"
+
+
+@pytest.mark.parametrize("preview", [False, True])
+@pytest.mark.parametrize("guest_owner", ["Various Artists", "Other Composer / Guest Composer"])
+def test_spirit_explicit_joint_owner_is_not_featured_and_distinct_score_remains(preview, guest_owner):
+    from music_app.services import library_browse_postgres as browse
+
+    joint = _browse_album_row(
+        artist="Hans Zimmer", album_id=556,
+        album_key="bryan adams / hans zimmer::spirit: stallion of the cimarron",
+        title="Spirit: Stallion Of The Cimarron",
+    )
+    joint["album_metadata"] = {
+        "album_artist": "Bryan Adams / Hans Zimmer",
+        "artists": ["Bryan Adams", "Hans Zimmer"],
+    }
+    joint["featured_kind"] = "featured_member"
+    joint_track = dict(joint, featured_kind="featured_track_artist")
+    score = _browse_album_row(
+        artist="Hans Zimmer", album_id=1544,
+        album_key="hans zimmer::spirit: stallion of the cimarron",
+        title="Spirit: Stallion Of The Cimarron",
+    )
+    score["featured_kind"] = "owner"
+    guest = _browse_album_row(
+        artist="Hans Zimmer", album_id=4673,
+        album_key="various artists::rain man", title="Rain Man",
+    )
+    guest["album_metadata"] = {"album_artist": guest_owner}
+    guest["featured_kind"] = "featured_member"
+    build = browse._root_album_browse_album_payloads if preview else browse._selected_artist_album_payloads
+
+    albums = build([joint, joint_track, score, guest], "Hans Zimmer")
+
+    assert {album["key"]: album["artist_relationship"] for album in albums} == {
+        joint["album_key"]: "owned", score["album_key"]: "owned",
+        guest["album_key"]: "featured",
+    }
+    assert next(album for album in albums if album["key"] == joint["album_key"])["album_artist"] == "Bryan Adams / Hans Zimmer"
 
 
 def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
@@ -10878,6 +10920,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
             "year": "1999",
             "release_date": None,
             "edition": None,
+            "is_split_album": False,
             "root_provenance": {},
             "library_root_id": 7,
             "library_root_category": "library",
@@ -11028,6 +11071,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             "album_ref": "exception-artist-exception-album",
             "_persisted_album_key": "exception-artist-exception-album",
             "name": "Exception Album",
+            "is_split_album": False,
             "album_artist": "Exception Artist",
             "artists": ["Exception Artist"],
             "cover_path": "covers/exception.jpg",
@@ -16997,6 +17041,41 @@ def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=
     return row
 
 
+@pytest.mark.parametrize(
+    ("categories", "visible", "expected"),
+    [
+        (["new_arrivals"], [], False),
+        (["main_library"], [], True),
+        (["hoard"], [], True),
+        ([None], [], True),
+        (["new_arrivals", "hoard"], ["new_arrivals"], False),
+        (["new_arrivals", "hoard"], ["hoard"], True),
+        (["new_arrivals", "hoard"], [], True),
+    ],
+)
+def test_missing_album_retention_requires_permanent_source(categories, visible, expected):
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [
+        _missing_browse_row(album_id=2, title="Deleted", category=category)
+        for category in categories
+    ]
+    result = library_browse._missing_album_projection_payloads(
+        rows, view_state={"visible_library_categories": visible},
+    )
+    assert bool(result) is expected
+
+
+def test_deleted_arrivals_do_not_make_surviving_hoard_album_missing():
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [
+        _missing_browse_row(album_id=2, title="Kept", category="new_arrivals"),
+        _missing_browse_row(album_id=2, title="Kept", category="hoard", stale=False),
+    ]
+    assert library_browse._missing_album_projection_payloads(rows) == []
+
+
 @pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
 def test_exact_artist_search_sidebar_includes_only_artist_name_matches(
     monkeypatch, missing_album_browse_repository, outside_match,
@@ -17079,9 +17158,11 @@ def test_selected_artist_missing_albums_respect_category_with_active_albums(
 
     albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
     expected_missing = next(row["album_key"] for row in missing if row["file_library_root_category"] == category)
-    assert {album["key"] for album in albums} == {"active", expected_missing}
-    assert payload["album_count"] == 2
-    assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
+    expected = {"active"} if category == "new_arrivals" else {"active", expected_missing}
+    assert {album["key"] for album in albums} == expected
+    assert payload["album_count"] == len(expected)
+    if category != "new_arrivals":
+        assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
 
 
 @pytest.mark.parametrize(
@@ -17908,8 +17989,10 @@ def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
     ]
 
 
-def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypatch):
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_postgres_cover_variant_queue_honors_storage_policy_without_revision(monkeypatch, tmp_path, mode):
     from music_app.services import covers as covers_module
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
     from music_app.services.library_browse_postgres import (
         _queue_display_cover_variants_for_groups,
     )
@@ -17923,14 +18006,14 @@ def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypa
         ),
     )
 
-    class AlbumFolderStoragePolicy:
-        def write_cache_root(self, source_path):
-            return Path(source_path).parent / ".album-haven"
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
 
     _queue_display_cover_variants_for_groups(
         {
             "DATA_DIR": r"C:\AlbumHavenData",
-            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
         },
         [{"albums": [{"cover_path": r"N:\Music\Artist\Album\Art\Front.jpg"}]}],
         limit=1,
@@ -17939,7 +18022,7 @@ def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypa
     assert queued == [
         (
             r"N:\Music\Artist\Album\Art\Front.jpg",
-            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            str(policy.write_cache_root(Path(r"N:\Music\Artist\Album\Art\Front.jpg"))),
             None,
         )
     ]

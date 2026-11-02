@@ -17612,8 +17612,12 @@ async function fetchAndRender(url, push = true, options = {}) {
         !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
+    // A library view without its tree stays behind this revision until a full refresh adds it.
+    const rootViewLacksArtistTree = String(url).includes('omit_sidebar=1')
+      && !/[?&](?:artist|q)=/.test(String(url));
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
-      && appliedInventoryMutationRevision >= 0) {
+      && appliedInventoryMutationRevision >= 0
+      && !rootViewLacksArtistTree) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(
         state.status?.inventory_mutation_revision,

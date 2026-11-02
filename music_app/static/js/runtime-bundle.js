@@ -24062,11 +24062,6 @@ function renderUtilityAndroid() {
   const rows = [{ key: 'updates', label: 'App & updates' }];
   if (info?.sandbox) rows.push({ key: 'sandbox', label: 'Sandbox server' });
   els.count.textContent = String(rows.length);
-  if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = '';
-  }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
     els.problemFilterButton.hidden = true;

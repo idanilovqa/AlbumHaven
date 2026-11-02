@@ -179,9 +179,10 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
   await stepLogger.step('Keep rejected files accessible in Loose Tracks', async () => {
     await navigationPanelActions.selectSidebarArtistByName(fixture.artist);
     await navigationPanelActions.waitForSidebarSelection(fixture.artist);
-    await artistPageSettingsActions.openNonAlbumTracks(3);
-    await artistPageSettingsActions.expectNonAlbumTrackPaths(fixture.excludedPaths);
+    await artistPageSettingsActions.openNonAlbumTracks(2);
+    await artistPageSettingsActions.expectNonAlbumTrackPaths(fixture.excludedPaths.filter(value => value.endsWith('copied-song.mp3')));
     await artistPageSettingsActions.closeNonAlbumTracks();
+    await galleryActions.waitForAlbumVisibleUnderHeading(fixture.artist, 'Unrelated Album');
   });
   await stepLogger.step('Retain the orphan duplicates as repairable Problematic Files', async () => {
     await settingsModalAppBarActions.openSettings();

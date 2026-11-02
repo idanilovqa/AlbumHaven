@@ -2047,6 +2047,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     });
     expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
     expect(saved.payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await expect(coverLookupActions.coverLookup.taskCardById(generationATaskId)).toHaveCount(1);

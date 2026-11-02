@@ -2065,6 +2065,8 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
   });
 
   await stepLogger.step('Release B afterward and prove its terminal publication cannot replace persisted A', async () => {
+    await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET);
+    await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     await coverLookupActions.releaseLaterProviderFixture();

@@ -564,7 +564,12 @@ export class CoverLookupActions {
       && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'
     ), { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
+    const mobileCoverLookup = await this.coverLookup.mobilePage.isVisible()
+      || await this.coverLookup.mobileSheet.isVisible();
     await this.coverLookup.saveRemoteButton.click();
+    if (mobileCoverLookup) {
+      await expect(this.coverLookup.modal).toBeHidden();
+    }
     const response = await responsePromise;
     const payload = await response.json();
     if (!response.ok() || payload?.ok !== true) {
@@ -1572,7 +1577,12 @@ export class CoverLookupActions {
     await this.coverLookup.localCoverActionWithin(candidateCard).click();
     await expect(candidateCard).toHaveClass(/\bis-active\b/, { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
+    const mobileCoverLookup = await this.coverLookup.mobilePage.isVisible()
+      || await this.coverLookup.mobileSheet.isVisible();
     await this.coverLookup.saveRemoteButton.click();
+    if (mobileCoverLookup) {
+      await expect(this.coverLookup.modal).toBeHidden();
+    }
     let immediateCoverState = null;
     if (stableCoverLocator) {
       // parity-check: allow-read-only-measurement-evaluate -- immediate cover readiness telemetry only

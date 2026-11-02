@@ -1277,11 +1277,14 @@ def _ordered_album_duplicate_track_groups(
     if len(ordered_groups) <= 1:
         return []
     identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
-    counts = Counter(identities)
     qualifying_indexes = {
         index
         for index, identity in enumerate(identities)
-        if identity is not None and counts[identity] > 1
+        if identity is not None and any(
+            other_index != index and identity == other_identity
+            and _duplicate_track_groups_overlap(ordered_groups[index][1], ordered_groups[other_index][1])
+            for other_index, other_identity in enumerate(identities)
+        )
     }
     for index, (_, tracks) in enumerate(ordered_groups):
         if index in qualifying_indexes:
@@ -1355,6 +1358,14 @@ def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | Non
             return None
         identities.add(identity)
     return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _duplicate_track_groups_overlap(left: list[Track], right: list[Track]) -> bool:
+    titles = {
+        title for track in left
+        if (title := _normalized_duplicate_card_text(track.title)) and title != "unknown track"
+    }
+    return any(_normalized_duplicate_card_text(track.title) in titles for track in right)
 
 
 def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
@@ -1647,12 +1658,17 @@ def _link_duplicate_album_sources(
             identities.setdefault(identity, []).append((folder_paths[folder], tracks))
     duplicate_groups_by_identity = {
         identity: sorted(
-            groups,
+            [group for index, group in enumerate(groups) if any(
+                other_index != index and _duplicate_track_groups_overlap(group[1], other[1])
+                for other_index, other in enumerate(groups)
+            )],
             key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
         )
         for identity, groups in identities.items()
         if len(groups) > 1
     }
+    duplicate_groups_by_identity = {identity: groups for identity, groups in duplicate_groups_by_identity.items() if len(groups) > 1}
+    duplicate_folders = {os.path.normcase(folder) for groups in duplicate_groups_by_identity.values() for folder, _ in groups}
     sources_by_identity: dict[tuple[str, str, int], list[dict[str, object]]] = {}
 
     def materialize_identity_sources(identity: tuple[str, str, int]) -> list[dict[str, object]]:
@@ -1684,12 +1700,12 @@ def _link_duplicate_album_sources(
 
     contexts: list[dict[str, object]] = []
     for album, folder_keys in zip(albums, album_folder_keys):
-        own_identities = {folder_identities[key] for key in folder_keys}
+        own_identities = {folder_identities[key] for key in folder_keys if key in duplicate_folders}
         duplicate_identities = tuple(sorted(own_identities.intersection(duplicate_groups_by_identity)))
         source_track_groups = [
             tracks
             for identity in duplicate_identities
-            for _, tracks in identities[identity]
+            for _, tracks in duplicate_groups_by_identity[identity]
         ]
         linked_tracks: list[Track] = []
         if duplicate_identities:

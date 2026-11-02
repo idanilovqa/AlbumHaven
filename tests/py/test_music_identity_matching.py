@@ -5,6 +5,14 @@ import pytest
 from music_app.services import music_identity_matching as identity
 
 
+def test_infinity_symbol_and_word_match_without_dropping_title_meaning():
+    symbolic = identity.normalize_search_text("F♯ A♯ ∞")
+    spelled_out = identity.normalize_search_text("F♯ A♯ infinity")
+    assert symbolic == spelled_out
+    assert symbolic != identity.normalize_search_text("F♯ A♯")
+    assert symbolic != identity.normalize_search_text("F♯ A♯ II")
+
+
 @pytest.mark.parametrize(
     ("target_artist", "candidate_artist"),
     [

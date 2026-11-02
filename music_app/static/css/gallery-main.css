@@ -369,3 +369,9 @@
 @media (prefers-reduced-motion: reduce) {
   .album-card .gallery-source-action, .album-card .gallery-source-action span { transition: none; }
 }
+[data-open-non-album-tracks][data-search-match="true"] { position: relative; }
+[data-open-non-album-tracks][data-search-match="true"]::after {
+  content: ""; position: absolute; top: 3px; right: 3px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--blue, #4da3ff);
+  pointer-events: none;
+}

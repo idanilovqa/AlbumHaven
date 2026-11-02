@@ -11,6 +11,7 @@ export class CoverLookup extends BasePage {
     this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
+    this.albumDetailsLink = this.modalSubtitle.locator("[data-open-cover-lookup-album-details]");
     this.modalStatus = page.locator(this.modalStatusSelector);
     this.modalStatusTitle = this.modalStatus.locator('.on-page-alert__title');
     this.modalStatusMessage = this.modalStatus.locator('.on-page-alert__message');

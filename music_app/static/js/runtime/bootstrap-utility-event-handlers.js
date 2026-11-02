@@ -159,8 +159,6 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -181,8 +179,6 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;

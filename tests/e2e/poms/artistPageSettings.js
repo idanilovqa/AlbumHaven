@@ -90,6 +90,11 @@ export class ArtistPageSettings extends BasePage {
     ), { timeout: options.timeout || 10000 });
   }
 
+  async readLibraryWideSearchIndicatorWidth() {
+    // parity-check: allow-read-only-measurement-evaluate measures the visible search-match dot.
+    return this.libraryWideNonAlbumTracksButton.evaluate(node => getComputedStyle(node, '::after').width);
+  }
+
   nonAlbumTrackRowByTitle(trackTitle) {
     return this.nonAlbumTrackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({

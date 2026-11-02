@@ -130,9 +130,15 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
 
   await stepLogger.step('Hide manual composition on mobile, then extract on desktop without losing the staged choice', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(lookup.manualUrlInput).toBeHidden();
-    await expect(lookup.manualExtractButton).toBeHidden();
-    await expect(lookup.manualDropZone).toBeHidden();
+    await expect(lookup.manualUrlInput).toBeVisible();
+    await expect(lookup.manualExtractButton).toBeVisible();
+    await expect(lookup.manualDropZone).toBeVisible();
+    await coverLookupActions.pasteManualUrl(imageUrl);
+    await coverLookupActions.expectComposerFitsViewport();
+    const mobileExtracted = await coverLookupActions.extractComposerLinks();
+    expect(mobileExtracted.status).toBe(200);
+    expect(mobileExtracted.payload.ok).toBe(true);
+    await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
     await page.setViewportSize({ width: 1280, height: 844 });
     await expect(lookup.manualUrlInput).toBeVisible();
     await coverLookupActions.pasteManualUrl(imageUrl);
@@ -179,6 +185,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
   const expectedCover = findFixtureCoverBySubtitle(Object.values(MANUAL_PROVIDER_COVER).join(' - '));
   expect(expectedCover).not.toBeNull();
+  let previousLocalCover = null;
   let savedCoverPath = '';
   let savedCoverRevision = '';
   let savedPreviewHash = '';
@@ -201,18 +208,25 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       USER_OWNED_IMPROVEMENT_TARGET.album,
       /^[1-9]\d* covers? found$/,
     );
-    await coverLookupActions.closeDrawer();
-    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
-      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await coverLookupActions.openTask(USER_OWNED_IMPROVEMENT_TARGET.album);
+    await coverLookupActions.waitForModalResultsReady();
+    await lookup.albumDetailsLink.click();
+    await expect(lookup.modal).toBeHidden();
+    await expect(lookup.drawer).toBeVisible();
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    previousLocalCover = (await coverLookupActions.readLocalCoverCandidates())
+      .find(candidate => candidate.isActive);
+    expect(previousLocalCover).toBeTruthy();
     await coverLookupActions.chooseComposerImages([pickerPath]);
     await expect(lookup.pendingAttachmentByName(pickerName)).toBeVisible();
     await lookup.manualExtractButton.click();
     const stagedCover = lookup.stagedCoverCardByName(pickerName);
     await expect(stagedCover).toBeVisible();
+    await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
     await coverLookupActions.selectOnlyCover(stagedCover);
+    await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
 
     const saveResponsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
@@ -232,7 +246,14 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
     await expect(lookup.modal).toBeHidden();
+    // The notification must update while Album Details remains open.
+    await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
+    await expect(lookup.drawer).toBeVisible();
+    await expect(lookup.taskCoverByTitle(USER_OWNED_IMPROVEMENT_TARGET.album))
+      .toHaveAttribute('src', new RegExp(savedCoverRevision));
+    await coverLookupActions.waitForTaskCoverDecoded(USER_OWNED_IMPROVEMENT_TARGET.album);
     await trackModalActions.close();
+    await coverLookupActions.closeDrawer();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(
@@ -312,6 +333,30 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     );
     expect(reloadedCardCover.sha256).toBe(savedPreviewHash);
   });
+  await stepLogger.step('Reopen, select the previous distinct image, and retain the replacement too', async () => {
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const candidates = await coverLookupActions.readLocalCoverCandidates();
+    const previous = candidates.find(candidate => candidate.image.sha256 === previousLocalCover.image.sha256);
+    expect(previous).toBeTruthy();
+    expect(previous.isActive).toBe(false);
+    await coverLookupActions.selectLocalCoverByNameAndSave(previous.name);
+    await expect(lookup.modal).toBeHidden();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const reopened = await coverLookupActions.readLocalCoverCandidates();
+    expect(reopened.find(candidate => candidate.isActive)?.image.sha256)
+      .toBe(previousLocalCover.image.sha256);
+    const replacement = reopened.find(candidate => candidate.image.sha256 === savedPreviewHash);
+    expect(replacement).toBeTruthy();
+    expect(replacement.isActive).toBe(false);
+    await coverLookupActions.selectLocalCoverByNameAndSave(replacement.name);
+    await expect(lookup.modal).toBeHidden();
+  });
+
 });
 
 test('FTC-COVERS-022 cover gallery loading starts before the task list responds', { tag: '@area:cover-providers' }, async ({
@@ -322,6 +367,7 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
   trackModalActions,
 }) => {
   let appleCandidate = null;
+  let knownCandidateIds = [];
 
   await stepLogger.step('Hold real candidate image bytes at the isolated provider', async () => {
     await coverLookupActions.holdCandidateImageFixture();
@@ -343,6 +389,9 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
       (candidate) => candidate.source === 'Apple Music',
     );
     expect(appleCandidate?.id).toBeTruthy();
+    knownCandidateIds = await coverLookupActions.readRemoteCandidateIds();
+    await expect(coverLookupActions.coverLookup.remoteCoverCards).toHaveCount(knownCandidateIds.length);
+    await expect(coverLookupActions.coverLookup.manualUrlInput).toBeVisible();
     await coverLookupActions.waitForCandidateImageFixtureBlocked();
   });
 
@@ -351,6 +400,10 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
     const requestOrder = await trackModalActions.openCoverLookupAndReadRequestOrder();
     expect(requestOrder).toContain('gallery-request');
     expect(requestOrder).toContain('tasks-response');
+    // Known choices must stay mounted even when the provider cannot deliver image bytes yet.
+    await expect(coverLookupActions.coverLookup.remoteCoverCards).toHaveCount(knownCandidateIds.length);
+    expect(await coverLookupActions.readRemoteCandidateIds()).toEqual(knownCandidateIds);
+    await expect(coverLookupActions.coverLookup.manualUrlInput).toBeVisible();
     await coverLookupActions.waitForModalResultsReady();
     const heldEvidence = await coverLookupActions.readProviderFixtureEvidence();
     expect(heldEvidence.candidate_image_released).toBe(false);
@@ -592,6 +645,14 @@ test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved w
     await coverLookupActions.waitForModalResultsReady();
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(NOTIFICATION_ACTIONED_TARGET.album);
     await coverLookupActions.coverLookup.waitForDrawerState(true);
+    const stagedImageName = 'album-haven-cloud-vinyl.png';
+    await coverLookupActions.chooseComposerImages([
+      path.resolve('music_app', 'static', 'images', stagedImageName),
+    ]);
+    await coverLookupActions.coverLookup.manualExtractButton.click();
+    await expect(coverLookupActions.coverLookup.stagedCoverCardByName(stagedImageName)).toBeVisible();
+    // Extracting stages a choice; only Save may mark the finished notification as actioned.
+    await expect(coverLookupActions.coverLookup.taskCardByTitle(actionedTaskTitle)).not.toContainText('Art chosen');
     await coverLookupActions.selectFirstRemoteCoverAndSave();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();

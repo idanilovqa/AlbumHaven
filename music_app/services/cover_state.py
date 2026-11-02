@@ -128,12 +128,9 @@ def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> lis
     pending_directories = [album_root]
     while pending_directories:
         directory = pending_directories.pop()
-        try:
-            entries = list(os.scandir(directory))
-        except OSError:
-            continue
-        for entry in entries:
-            try:
+        # An unreadable directory is unknown inventory, never an empty gallery.
+        with os.scandir(directory) as entries:
+            for entry in entries:
                 if entry.is_dir(follow_symlinks=False):
                     directory_path = Path(entry.path)
                     if not is_managed_preview_path(directory_path):
@@ -141,11 +138,9 @@ def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> lis
                     continue
                 if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
                     continue
-            except OSError:
-                continue
-            path = Path(entry.path)
-            if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
-                paths.append(path)
+                path = Path(entry.path)
+                if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
+                    paths.append(path)
     return paths
 
 
@@ -265,6 +260,7 @@ def serialize_cover_gallery_payload(
     is_squareish_cover,
     task_payload: dict[str, object] | None = None,
     candidate_snapshot: Mapping[str, object] | None = None,
+    include_local: bool = True,
 ) -> dict[str, object]:
     album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
@@ -272,6 +268,14 @@ def serialize_cover_gallery_payload(
         track_paths,
     )
     active_remote_cover = active_remote_cover_for_track_paths(file_cache, track_paths)
+    if not include_local:
+        return {
+            "ok": True,
+            "local_inventory_complete": False,
+            "remote_cover": active_remote_cover,
+            "task": task_payload or None,
+            "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
+        }
     local_candidates = iter_local_cover_candidates(
         album_root,
         image_extensions=image_extensions,
@@ -293,6 +297,7 @@ def serialize_cover_gallery_payload(
                 candidate["cover_revision"] = active_cover_revision
     return {
         "ok": True,
+        "local_inventory_complete": True,
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
         "selected_source_path": selected_source_path,

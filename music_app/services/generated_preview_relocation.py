@@ -11,6 +11,8 @@ import threading
 from typing import Mapping
 from uuid import uuid4
 
+from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
+
 
 class GeneratedPreviewRelocationWorker:
     def __init__(
@@ -177,6 +179,19 @@ class GeneratedPreviewRelocationWorker:
                                 "Generated preview source cleanup failed for %s.",
                                 source_to_delete,
                             )
+                    if result["status"] == "completed" and source_to_delete is not None:
+                        for parent in source_to_delete.parents:
+                            if parent.name == ".album-haven":
+                                try:
+                                    remove_empty_album_preview_directories(
+                                        parent, emptied_directory=source_to_delete.parent,
+                                    )
+                                except OSError as exc:
+                                    self._logger.warning(
+                                        "Generated preview moved, but empty directory cleanup failed: %s",
+                                        exc,
+                                    )
+                                break
                     self._repository.complete_item(operation_id=operation_id, **result)
                     if self._stop_requested.is_set():
                         return False

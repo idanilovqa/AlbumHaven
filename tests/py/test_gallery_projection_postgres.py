@@ -644,7 +644,8 @@ def test_full_scan_refresh_scheduled_only_after_successful_commit(monkeypatch, f
 
 @pytest.mark.parametrize("size", [8, 50])
 @pytest.mark.parametrize("missing", [False, True])
-def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, size, missing):
+@pytest.mark.parametrize("deleted_occurrence", [None, "stale", "current"])
+def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, size, missing, deleted_occurrence):
     from music_app.services import gallery_projection_postgres as projection
     from tests.py.test_library_browse_postgres import _browse_album_row, _EmptyAlbumRatingsService
     rows = [_browse_album_row(artist="Artist", album_id=i, album_key=f"album-{i}", title=f"Album {i}")
@@ -657,6 +658,8 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     else:
         for row in snapshot["ordered"]:
             row["album_key"] = f"legacy-{row['album_key']}"
+    if deleted_occurrence:
+        rows.clear()
     calls = []
     class Connection:
         def execute(self, sql, params=None):
@@ -681,8 +684,12 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     load_options = []
     def load_projection(connection, state, params, **kwargs):
         load_options.append(kwargs)
-        return browse._select_root_gallery_snapshot_page(snapshot, params)
+        page = browse._select_root_gallery_snapshot_page(snapshot, params)
+        page[3]["projection_stale"] = deleted_occurrence == "stale"
+        return page
     monkeypatch.setattr(projection, "load_gallery_projection_page", load_projection)
+    refresh = Mock()
+    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", refresh)
     def forbidden(*args, **kwargs):
         pytest.fail("ready page recomputed whole membership or alias readiness")
     monkeypatch.setattr(repository, "_load_relation_alias_maps", forbidden)
@@ -690,6 +697,8 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     missing_calls = []
     def load_missing(*, album_keys, connection):
         missing_calls.append(album_keys)
+        if deleted_occurrence:
+            return []
         return [{"key": key, "name": key, "album_artist": "Artist"} for key in album_keys]
     monkeypatch.setattr(repository, "_load_missing_album_rows", load_missing if missing else forbidden)
     if missing:
@@ -698,6 +707,17 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **kwargs:
                         {"ignored_version_keys": [], "manual_version_links": {}})
     monkeypatch.setattr(browse, "_queue_display_cover_variants_for_groups", lambda *args: None)
+    if deleted_occurrence:
+        expected_error = browse.GalleryProjectionPending if deleted_occurrence == "stale" else ValueError
+        expected_message = "Gallery is being prepared" if deleted_occurrence == "stale" else "restart required"
+        with pytest.raises(expected_error, match=expected_message):
+            repository.build_root_startup_preview_payload(
+                query_params={"gallery_page_size": str(size)},
+                library_state={"scan_in_progress": True},
+            )
+        assert refresh.call_count == (1 if deleted_occurrence == "stale" else 0)
+        assert calls[-2:] == [("rollback", None), ("close", None)]
+        return
     payload = repository.build_root_startup_preview_payload(
         query_params={"gallery_page_size": str(size)},
         library_state={"scan_in_progress": True},

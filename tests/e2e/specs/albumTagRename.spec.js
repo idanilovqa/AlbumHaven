@@ -192,6 +192,9 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
     await trackModalActions.closeIfOpen();
 
+    await staleMergeSession.trackModalActions.waitForTitle(
+      albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
+    );
     const mergedSummary = await staleMergeSession.trackModalActions.waitForInteractiveSummary();
     expect(mergedSummary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
     expect(mergedSummary.trackRows).toBe(1);

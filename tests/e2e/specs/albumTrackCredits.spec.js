@@ -116,6 +116,17 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
     expect(summary.title).toContain(`${ORDINARY_ALBUM_ARTIST} • ${ORDINARY_ALBUM}`);
     const credits = await trackModalActions.readTrackCredits(ORDINARY_TRACK_CREDITS.length);
     expect(credits).toEqual(ORDINARY_TRACK_CREDITS);
+    const semicolonCredit = await trackModalActions.readTrackCreditAt(3);
+    await expect(trackModalActions.trackModal.trackTitleAt(3)).toBeVisible();
+    await expect(trackModalActions.trackModal.secondaryArtistAt(3)).toBeVisible();
+    expect(semicolonCredit).toEqual({
+      title: 'Semicolon Feature Signal',
+      secondaryArtist: 'feat. Guest One, Guest Two',
+    });
+    expect(await trackModalActions.readTrackAt(3)).toMatchObject({
+      title: 'Semicolon Feature Signal',
+      artist: `${ORDINARY_ALBUM_ARTIST}; Guest One; Guest Two; Guest One`,
+    });
     await trackModalActions.close();
   });
 

@@ -1625,6 +1625,25 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
     }
     return incomingCandidates;
   }
+  const editedPaths = new Set(Object.keys(options.tagEdits || {}));
+  if (editedPaths.size && albumIsDemonstrablyFullyHydrated(originalAlbum)
+      && !originalAlbum.tag_editor_collection
+      && !incomingCandidates.some(candidate => albumsShareLogicalReleaseIdentity(candidate, originalAlbum))) {
+    const returnedPaths = new Set(incomingCandidates.flatMap(candidate => Array.from(getAlbumTrackPaths(candidate))));
+    const remainingTracks = originalAlbum.tracks.filter(track => (
+      !editedPaths.has(String(track.path || '')) && !returnedPaths.has(String(track.path || ''))
+    ));
+    if (remainingTracks.length) {
+      const remainingPaths = new Set(remainingTracks.map(track => String(track.path || '')));
+      const duration = remainingTracks.reduce((sum, track) => sum + (Number(track.duration_seconds) || 0), 0);
+      // Save responses contain edited destinations, not necessarily the untouched source.
+      incomingCandidates.push({ ...originalAlbum, tracks: remainingTracks,
+        track_paths: Array.from(remainingPaths), track_count_preview: remainingTracks.length,
+        total_duration_seconds: duration, total_duration_display: formatCanonicalAlbumDuration(duration),
+        ...(Array.isArray(originalAlbum.track_rows) ? { track_rows: originalAlbum.track_rows.filter(row => remainingPaths.has(String(row.path || row.track_ref || ''))) } : {}),
+      });
+    }
+  }
   const visibleAlbums = collectVisibleAlbumsUnique();
   const candidates = coalesceUniqueVisibleLogicalAlbumCandidates(
     incomingCandidates,

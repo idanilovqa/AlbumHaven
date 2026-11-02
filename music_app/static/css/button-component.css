@@ -28,7 +28,7 @@ transition: background 150ms ease, border-color 150ms ease, color 150ms ease, ou
 .ui-button[hidden] { display: none !important; }
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ui-button--medium { box-sizing: border-box; height: 34px; min-height: 34px; padding: 0 12px; }
-.ui-button--small { min-height: 26px; }
+.ui-button--small { box-sizing: border-box; height: 26px; min-height: 26px; padding: 0 8px; font-size: 0.75rem; }
 .ui-button--primary {
 border-color: var(--appearance-primary-button, var(--accent));
 background: var(--appearance-primary-button, var(--accent));
@@ -149,12 +149,14 @@ background: var(--appearance-item-action-pressed, var(--appearance-item-action-h
 outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close'],
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive) {
 border-color: transparent;
 background: transparent;
 box-shadow: none;
 }
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close']:hover:not(:disabled):not([aria-disabled='true']),
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
 border-color: transparent;
 background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) !important;

@@ -497,8 +497,7 @@ class PostgresLibraryBrowseRepository:
             for value in visible_artist_names
             if str(value or "").strip()
         ]
-        scoped_query = str(query or "").strip()
-        scope_inventory_query = bool(scoped_artist_names or scoped_query) and not include_library_wide
+        scope_inventory_query = bool(scoped_artist_names) and not include_library_wide
         cached = (
             self._get_cached_utility_projection(kind)
             if fingerprint and not scope_inventory_query
@@ -510,19 +509,9 @@ class PostgresLibraryBrowseRepository:
             generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
-            if scoped_artist_names:
-                options["artist_names"] = scoped_artist_names
-            if scoped_query:
-                from music_app.services.view_search import split_search_terms
-
-                options["query_terms"] = sorted(
-                    {
-                        word
-                        for term in split_search_terms(scoped_query)
-                        for word in term.split()
-                        if word
-                    }
-                )
+            options["artist_names"] = scoped_artist_names
+        # Exact SQL text filtering can discard fuzzy and canonical-alias matches.
+        # Keep bounded eligibility/artist reads; the Python matcher owns text search.
         rows = [] if reuse and not options["track_ids"] else self._inventory_repository.load_non_album_candidates(
             limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
         )
@@ -549,6 +538,7 @@ class PostgresLibraryBrowseRepository:
             ),
             alias_to_canonical=alias_to_canonical,
             canonical_to_aliases=canonical_to_aliases,
+            query=query,
         )
 
     def build_root_counts_payload(
@@ -947,6 +937,8 @@ class PostgresLibraryBrowseRepository:
                         or hydrated.get(occurrence["album_key"])
                     )
                     if album is None:
+                        if projection_stale:
+                            raise GalleryProjectionPending("Gallery is being prepared.")
                         raise ValueError("Gallery changed; restart required.")
                     album = _copy_album_for_artist_occurrence(album, occurrence)
                     group = groups.setdefault(occurrence["artist_id"], dict(artist=artist,
@@ -10764,9 +10756,6 @@ def _problematic_files_sql(
     duplicate_candidates: bool = False,
     duplicate_sources_only: bool = False,
 ) -> str:
-    physical_album_container = _physical_album_container_sql(
-        "library.local_track_files.private_path"
-    )
     spotify_quota_cte = "" if duplicate_sources_only else """
         spotify_quota_albums as materialized (
           select tasks.task_key
@@ -10842,7 +10831,6 @@ def _problematic_files_sql(
               '/[^/]*$', ''
             ) as physical_parent,
             regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
-            __PHYSICAL_ALBUM_CONTAINER__ as physical_album_container,
             library.local_track_files.track_id,
             coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
             case when library.local_tracks.track_number > 0
@@ -10908,7 +10896,7 @@ def _problematic_files_sql(
           join active_problem_rows source_files
             on source_files.library_id = exception_files.library_id
            and source_files.library_root_id = exception_files.library_root_id
-           and source_files.physical_album_container = exception_files.physical_album_container
+           and (__SOURCE_ALBUM_CONTAINER__) = (__EXCEPTION_ALBUM_CONTAINER__)
            and source_files.file_album = exception_files.file_album
            and source_files.file_album_artist = exception_files.file_album_artist
            and source_files.file_year is not distinct from exception_files.file_year
@@ -10921,13 +10909,15 @@ def _problematic_files_sql(
         ),
     """
     physical_file_ctes = (
-        local_album_membership_ctes_sql()
+        physical_scope_ctes
+        + local_album_membership_ctes_sql(scope_file_ids=not inventory_physical_context)
         + ","
-        + physical_scope_ctes
         + physical_file_ctes.replace(
             "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
         ).replace(
-            "__PHYSICAL_ALBUM_CONTAINER__", physical_album_container,
+            "__SOURCE_ALBUM_CONTAINER__", _physical_album_container_sql("source_files.private_path"),
+        ).replace(
+            "__EXCEPTION_ALBUM_CONTAINER__", _physical_album_container_sql("exception_files.private_path"),
         )
     )
     candidate_ctes = ""

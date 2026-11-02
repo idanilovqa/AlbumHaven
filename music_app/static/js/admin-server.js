@@ -1,4 +1,6 @@
 (() => {
+  const accountMenu = document.querySelector(".shell-app-bar [data-account-menu-component]");
+  if (accountMenu) attachAccountMenu(accountMenu);
   const ACTIVE_STATES = new Set(['queued', 'running', 'cancel_requested']);
 
   const configurationLocked = operationState => {

@@ -303,6 +303,8 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     sql, params = connection.calls[0]
     assert "update app.generated_preview_relocation_items" in sql
     assert "finished_at = now()" in sql
+    assert "set current_path = finished.target_path" in sql
+    assert "and %(status)s <> 'failed'" in sql
     assert params["status"] == status
 
 

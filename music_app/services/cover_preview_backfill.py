@@ -12,6 +12,7 @@ from music_app.services.covers import (
     resolve_cover_display_variant,
 )
 from music_app.services.postgres_connections import pooled_connection
+from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
 
 
 _DISPLAY_COVER_SIZE = 480
@@ -97,9 +98,19 @@ class CoverPreviewBackfill:
 
     def run_once(self) -> int:
         generated = 0
+        cleanup_attempted: set[Path] = set()
         for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
+            policy = self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
+            previous_root = source_path.parent / ".album-haven"
+            if (policy is not None and policy.write_cache_root(source_path) != previous_root
+                    and previous_root not in cleanup_attempted):
+                cleanup_attempted.add(previous_root)
+                try:
+                    remove_empty_album_preview_directories(previous_root)
+                except OSError:
+                    self._logger.warning("Unable to prune old preview directories in %s", previous_root, exc_info=True)
             generation_options = {}
             recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
             if recorder is not None:

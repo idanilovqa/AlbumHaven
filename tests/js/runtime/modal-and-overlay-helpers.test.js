@@ -364,6 +364,28 @@ test('deferred non-album hydration accepts an equivalent reordered category scop
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
+test('loose-track search indicator follows confirmed custom-collection results and query scope', async () => {
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.buildApiUrl = view => `/view-data?q=${encodeURIComponent(view.query || '')}`;
+  context.state.view = { query: 'Bright Eyes', non_album_tracks_deferred: true };
+  context.fetch = async () => ({ ok: true, json: async () => ({
+    non_album_tracks: [],
+    library_non_album_tracks: [{ title: 'At the Bottom of Everything', artist: 'Bright Eyes', exception_type: 'Custom Collection' }],
+  }) });
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), true);
+  context.state.view.query = 'Another artist';
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+  context.state.view.query = '';
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+});
+
 test('library-wide non-album tracks hydrate after artist hydration completes', async () => {
   const { context } = loadHelper();
   const requested = [];
@@ -788,7 +810,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     markup,
     /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
   assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
@@ -826,6 +848,25 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   }]);
   assert.match(missingMetadata, /class="album-track-table__title">Artist - Possible Song\.flac/);
   assert.doesNotMatch(missingMetadata, /Unknown track|Unknown Artist/);
+});
+
+test('Loose Tracks highlights current title and artist matches using the shared table style', () => {
+  const { context } = loadHelper();
+  const items = [
+    { path: 'a.mp3', title: 'Apply Rarity Here', artist: 'Fixture Artist' },
+    { path: 'b.mp3', title: 'Other Song', artist: 'Rarity Guest' },
+    { path: 'c.mp3', title: 'Unrelated Song', artist: 'Other Artist' },
+  ];
+  context.state.view.query = '  RARITY  ';
+  const rows = context.buildNonAlbumTrackRowsMarkup(items, 0);
+  assert.deepEqual(Array.from(rows, row => row.isSearchMatch), [true, true, false]);
+  const markup = context.buildNonAlbumTrackSectionsMarkup(items);
+  assert.equal((markup.match(/album-track-table__row--search-match/g) || []).length, 2);
+  assert.equal((markup.match(/data-track-search-match="true"/g) || []).length, 2);
+  context.state.view.query = 'unrelated';
+  assert.deepEqual(Array.from(context.buildNonAlbumTrackRowsMarkup(items, 0), row => row.isSearchMatch), [false, false, true]);
+  context.state.view.query = '';
+  assert.doesNotMatch(context.buildNonAlbumTrackSectionsMarkup(items), /album-track-table__row--search-match/);
 });
 
 function createAlbumCard(viewport, options = {}) {

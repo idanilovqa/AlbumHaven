@@ -1577,7 +1577,7 @@ def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matchin
     assert kind == "candidates"
     assert "artist_keys" not in params
     assert params["artist_names"] == ["Neal Morse", "Morse, Portnoy & George"]
-    assert params["query_terms"] == ["morse", "neal"]
+    assert "query_terms" not in params
     assert sql == "caller-owned snapshot"
     assert [entry["title"] for entry in entries] == ["Alias Path Rarity"]
 
@@ -11673,6 +11673,16 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "cross join lateral" not in detail_sql
 
 
+def test_problematic_detail_membership_read_is_bounded_to_selected_physical_files():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    for options in ({}, {"duplicate_candidates": True}, {"candidate_summary": True, "selected_album_ids": True}):
+        sql = " ".join(_problematic_files_sql(**options).split())
+        membership = sql.split("local_album_membership as materialized (", 1)[1].split("active_problem_rows as materialized", 1)[0]
+        assert "join physical_scope_file_ids on physical_scope_file_ids.id = files.id" in membership
+        assert sql.index("physical_scope_file_ids as materialized") < sql.index("local_album_membership as materialized")
+
+
 def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes_missing_numbers():
     from music_app.services.library_browse_postgres import _problematic_files_sql
 
@@ -12561,6 +12571,32 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.parametrize("query", ["Mornng", "Canonical Artist", "2001", "Non-album rarity"])
+@pytest.mark.parametrize("library_wide", [False, True])
+def test_non_album_search_preserves_fuzzy_alias_and_persisted_matches(monkeypatch, query, library_wide):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "non-album-fuzzy-contract"})
+    calls = []
+    row = {"private_path": "/owned/audio.flac", "library_root_category": "main_library",
+           "file_entry": {"artist": "Raw Artist", "album_artist": "Raw Artist", "album": "",
+                          "title": "Morning", "year": 2001, "exception_type": "non album rarity"}}
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates",
+                        lambda **kwargs: calls.append(kwargs) or [row])
+    entries = repository._load_non_album_entries(
+        view_state={}, alias_to_canonical={"Raw Artist": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Raw Artist"]},
+        visible_artist_names=["Raw Artist"], query=query, include_library_wide=library_wide,
+    )
+    if library_wide:
+        entries = entries[1]
+    assert [entry["path"] for entry in entries] == ["/owned/audio.flac"]
+    assert "query_terms" not in calls[0], "Exact SQL LIKE cannot prefilter fuzzy/alias matches"
+    assert calls[0]["limit"] == browse.MAX_NON_ALBUM_CANDIDATE_LIMIT
+    assert calls[0].get("artist_names") == (None if library_wide else ["Raw Artist"])
+
+
 def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_loaded(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12601,19 +12637,26 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
         query="Tender Buttons",
         connection=object(),
     )
+    repository._load_non_album_entries(
+        view_state={}, alias_to_canonical={}, canonical_to_aliases={},
+        visible_artist_names=["Bright Eyes"], query="Bright Eyes",
+        include_library_wide=True, connection=object(),
+    )
 
     assert calls == [
         {
             "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
             "connection": calls[0]["connection"],
             "artist_names": ["Radiohead", "Thom Yorke"],
-            "query_terms": ["a", "kid"],
         },
         {
             "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
             "connection": calls[1]["connection"],
             "artist_names": ["Broadcast"],
-            "query_terms": ["button", "tender"],
+        },
+        {
+            "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            "connection": calls[2]["connection"],
         },
     ]
     browse.invalidate_postgres_utility_projection_cache()

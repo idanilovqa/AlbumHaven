@@ -26,6 +26,10 @@ const helperPath = path.join(
   'tag-editor-and-optimistic-updates.js',
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
+  + '\n' + vm.runInNewContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'album-track-table.js'), 'utf8')
+      + '\nmatchesAlbumTrackSearch',
+  ).toString()
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 
 test('openTagEditor hydrates an album on mobile', () => {
@@ -1021,6 +1025,31 @@ test('Album Details separates exact main and bonus durations for mixed explicit 
       { isBonus: true, durationSeconds: 245 },
     ],
   );
+});
+
+test('Album Details highlights matching track credits without highlighting unrelated compilation tracks', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'the court' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  const tracks = [
+    { path: 'court.flac', title: 'Anastasius Epitaph', artist: 'The Court', track_number: 1 },
+    { path: 'other.flac', title: 'The Crossing', artist: 'Willowglass', track_number: 2 },
+    { path: 'title.flac', title: 'The Court of Dreams', artist: 'Another Artist', track_number: 3 },
+  ];
+  context.buildTrackListHtml(tracks, {
+    album_artist: 'Various Artists',
+    track_rows: tracks.map(track => ({ path: track.path, title: track.title, secondary_artist: track.artist })),
+  });
+  assert.deepEqual(Array.from(renderedConfig.groups.flatMap(group => group.tracks), track => track.isSearchMatch),
+    [true, false, true]);
 });
 
 test('Album Details passes main and bonus group semantics into AlbumTrackTable', () => {

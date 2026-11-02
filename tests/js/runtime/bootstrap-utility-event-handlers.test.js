@@ -452,6 +452,28 @@ test('switching Settings tabs paints selected navigation before loading panel co
   assert.deepEqual(events, ['select:rules', 'shell', 'load', 'render']);
 });
 
+test('switching from Rules clears its tree before Problematic Files data arrives', () => {
+  const list = { dataset: { utilityNavigationOwner: 'rules' }, innerHTML: 'Rules tree', scrollTop: 120 };
+  const detail = { innerHTML: 'Rule detail', classList: { remove() {} }, setAttribute() {} };
+  const count = { textContent: '7' };
+  const sidebarLabel = { textContent: 'Rules' };
+  const tab = { textContent: 'Problematic Files', getAttribute: () => 'problematic-files',
+    classList: { toggle() {} }, setAttribute() {} };
+  const context = vm.createContext({
+    state: { utility: { activeTab: 'problematic-files' } },
+    getUtilityModalElements: () => ({ list, detail, count, sidebarLabel, tabs: [tab] }),
+  });
+  vm.runInContext(utilityRenderersSource, context);
+  context.syncUtilityTabAlignment = () => {};
+  context.renderUtilityModalContent({ shellOnly: true });
+  assert.doesNotMatch(list.innerHTML, /Rules tree/);
+  assert.match(list.innerHTML, /Loading/);
+  assert.match(detail.innerHTML, /Loading/);
+  assert.equal(sidebarLabel.textContent, 'Problematic Files');
+  assert.equal(count.textContent, '');
+  assert.equal(list.scrollTop, 0);
+});
+
 test('Settings shell-only render stops before active panel rendering', () => {
   const shellReturn = utilityRenderersSource.indexOf('if (options.shellOnly === true) {');
   const problematicRender = utilityRenderersSource.indexOf('renderProblematicFiles(options);');
@@ -545,7 +567,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
-test('applying a problem filter waits for the complete Problematic Files snapshot', async () => {
+test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {
   let releaseComplete;
   const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
   const { context, calls } = createContext({
@@ -567,8 +589,8 @@ test('applying a problem filter waits for the complete Problematic Files snapsho
 
   const click = context.handleUtilityBootstrapClick(event);
   await Promise.resolve();
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
-  assert.equal(calls.renders, 0);
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
+  assert.equal(calls.renders, 1);
 
   context.state.utility.problematicFiles = [
     { key: 'canonical', problem_reasons: ['Poor art quality'] },

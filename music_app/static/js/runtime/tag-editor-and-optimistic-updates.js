@@ -1957,6 +1957,7 @@ function renderTrackModalRelease(album) {
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
       releaseType: album.release_type || 'ALBUM',
+      sourceMarkersHtml: coverSourceMarkersHtml,
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
@@ -1985,7 +1986,6 @@ function renderTrackModalRelease(album) {
       <div class="track-modal-cover-shell">
         ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
       </div>
-      ${coverSourceMarkersHtml}
     `;
   } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -2025,7 +2025,6 @@ function renderTrackModalRelease(album) {
       })}
       ${coverSourceBadge}
       </div>
-      ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
       ? els.cover.querySelector('.track-modal-cover-image-slot')
@@ -2090,7 +2089,6 @@ function renderTrackModalRelease(album) {
         overlayHtml: coverToolsHtml,
       })}
       </div>
-      ${coverSourceMarkersHtml}
     `;
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
@@ -2113,14 +2111,15 @@ function renderTrackModalRelease(album) {
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
         actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
-          label: `Folder ${index + 1}`,
-          variant: index === duplicateSourceIndex ? 'primary' : 'secondary',
+          label: String(index + 1),
+          ariaLabel: `Open folder ${index + 1}`,
+          variant: 'secondary', size: 'small', quiet: true,
+          className: 'track-modal-duplicate-folder',
           title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
           attributes: {
             'data-open-track-modal-duplicate-folder': '1',
             'data-album-key': resolvedAlbumKey,
             'data-duplicate-source-index': String(index),
-            'aria-pressed': String(index === duplicateSourceIndex),
           },
         })).join(''),
       });
@@ -2328,7 +2327,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+        isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
       };
     });
     return {

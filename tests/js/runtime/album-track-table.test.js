@@ -106,7 +106,7 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
   assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
-  assert.match(html, /class="album-track-table__secondary">Guest Artist<\/span>/);
+  assert.match(html, /class="album-track-table__secondary" title="Guest Artist"><span>Guest Artist<\/span>/);
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
   assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
   assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);

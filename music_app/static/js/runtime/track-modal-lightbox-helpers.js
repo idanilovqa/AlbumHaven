@@ -590,7 +590,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  renderTrackModalLoadingState(openAlbum);
+  // The rows stay until fresh details replace them, so an unrelated change shows nothing.
   let refreshedAlbum = null;
   let loadError = null;
   try {

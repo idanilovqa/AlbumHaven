@@ -934,7 +934,10 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     monkeypatch.setattr(
         library_roots,
         "get_library_roots",
-        lambda _config: ({"id": "main-root", "path": str(tmp_path)},),
+        lambda _config: (
+            {"id": "main-root", "path": str(tmp_path)},
+            {"id": "offline-root", "path": str(tmp_path / "disconnected")},
+        ),
     )
     monkeypatch.setattr(
         scan_cache_persistence,
@@ -1009,6 +1012,14 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
                 ("event", "main-root"), ("recover", "main-root"),
                 ("clear", frozenset({"main-root"})),
             ]
+            before_recovery = list(recovery_calls)
+            callbacks["emit_health_event"](LibraryEvent(
+                kind=LibraryEventKind.ROOT_UNAVAILABLE,
+                root_id="offline-root", path=tmp_path / "disconnected",
+            ))
+            assert recovery_calls == [*before_recovery, ("event", "offline-root")]
+            assert recorded[-1].root_id == "offline-root"
+            assert recorded[-1].code == "root_unavailable"
             with pytest.raises(OSError):
                 app.state.replace_library_watch_roots([{"id": "attach-failed", "path": "C:/Unattached"}])
             assert recorded[-1].root_id == "attach-failed"

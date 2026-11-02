@@ -17077,13 +17077,15 @@ def test_deleted_arrivals_do_not_make_surviving_hoard_album_missing():
 
 
 @pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
-def test_exact_artist_search_sidebar_includes_only_artist_name_matches(
+def test_exact_artist_search_sidebar_keeps_direct_artist_album_and_track_matches(
     monkeypatch, missing_album_browse_repository, outside_match,
 ):
     repository = missing_album_browse_repository
     active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
     matching = _missing_browse_row(album_id=2, title="Lost Album", category="main_library", artist="Other Artist")
     matching[{"album": "album_title", "track": "track_title", "artist": "artist_name"}[outside_match]] = "Broadcast Collaboration"
+    matching["search_album_title_match"] = outside_match == "album"
+    matching["search_matched_track_artist_ids"] = [matching["artist_id"]] if outside_match == "track" else []
     if outside_match == "artist":
         matching["artist_sort_name"] = "Broadcast Collaboration"
         matching["album_metadata"].update({
@@ -17112,11 +17114,70 @@ def test_exact_artist_search_sidebar_includes_only_artist_name_matches(
     })
     payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
 
-    expected = {"Broadcast", "Broadcast Collaboration"} if outside_match == "artist" else {"Broadcast"}
+    expected = {"Broadcast", "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"}
     assert {row["artist"] for row in payload["artists_sidebar"]} == expected
     assert payload["artist_count"] == len(expected)
-    assert payload["show_all_artists_sidebar_link"] is (outside_match == "artist")
+    assert payload["show_all_artists_sidebar_link"] is True
     assert payload["selected_artist"] == "Broadcast"
+
+
+@pytest.mark.parametrize("query, matched_ids, title_match, expected_extra", [
+    ("Ария", [2], False, True),
+    ("Ария", [], True, True),
+    ("Bella Ramsey", [1], False, False),
+])
+def test_exact_artist_search_keeps_own_matches_without_sibling_credit_leakage(
+    monkeypatch, missing_album_browse_repository, query, matched_ids, title_match, expected_extra,
+):
+    repository = missing_album_browse_repository
+    primary = _browse_album_row(artist=query, album_id=1, album_key="primary", title="Primary")
+    extra = _browse_album_row(artist="БИ-2", album_id=2, album_key="other", title="Аллилуйя")
+    extra.update(search_matched_track_artist_ids=matched_ids, search_album_title_match=title_match)
+    extra["album_featured_artists"] = [
+        {"artist_id": 2, "artist_name": "БИ-2", "featured_kind": "owner"},
+        {"artist_id": 3, "artist_name": "Unrelated Soundtrack Artist", "featured_kind": "featured_track_artist"},
+    ]
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: query)
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: _partitioned_search_rows([primary, extra], []))
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {query: query}, "canonical_to_aliases": {query: [query]}, "projection_stale_reason": "",
+    })
+    monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **kwargs: {
+        "selected_artist": query, "primary_artist_groups": [{"artist": query, "albums": [{"key": "primary"}]}],
+        "family_artist_groups": [{"artist": "Family Only", "albums": [{"key": "family"}]}], "search_context": {},
+    })
+    payload = repository.build_search_payload(query_params={"q": query})
+    assert {row["artist"] for row in payload["artists_sidebar"]} == {query, *(["БИ-2"] if expected_extra else [])}
+    assert payload["family_artist_groups"][0]["artist"] == "Family Only"
+
+
+def test_search_preview_carries_eligible_track_identity_for_sidebar_matching():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+    sql = _search_preview_sql()
+    assert "as search_matched_track_artist_ids" in sql
+    assert "as search_album_title_match" in sql
+    assert "eligible_album_tracks.track_id = matched_track_album_ids.track_id" in sql
+
+
+def test_selected_artist_loose_tracks_are_scoped_and_ready_in_initial_payload(
+    monkeypatch, missing_album_browse_repository,
+):
+    repository = missing_album_browse_repository
+    calls = []
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **kwargs: [])
+    monkeypatch.setattr(repository, "_load_selected_artist_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **kwargs: calls.append(kwargs) or [])
+    payload = repository.build_selected_artist_payload(
+        query_params={"artist": "Broadcast", "omit_sidebar": "1", "include_non_album": "1", "payload_tier": "gallery_summary"},
+        _relation_alias_maps={
+            "alias_to_canonical": {"Former Name": "Broadcast"},
+            "canonical_to_aliases": {"Broadcast": ["Former Name"]},
+        },
+    )
+    assert payload["non_album_tracks_deferred"] is False
+    assert len(calls) == 1
+    assert set(calls[0]["visible_artist_names"]) == {"Broadcast", "Former Name"}
+    assert calls[0]["include_library_wide"] is False
 
 
 def test_selected_artist_passes_expanded_owner_scope_to_missing_loader(

@@ -62,18 +62,20 @@ for (const width of [390, 960]) {
       window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
       window.ButtonComponent = { renderIconSvg: () => '' };
     });
-    for (const file of ['compact-data-table.js', 'album-track-table.js']) {
+    for (const file of ['compact-player-helpers.js', 'compact-data-table.js', 'album-track-table.js']) {
       await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
     }
     await page.evaluate(() => {
-      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ groups: [{ tracks: [
+      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ playingAnimation: false, groups: [{ tracks: [
         { title: 'Track with guests', secondaryArtist: 'Featured guest artist and orchestra with a very long complete credit '.repeat(5), duration: '3:42' },
         { title: 'Short credit', secondaryArtist: 'Guest', duration: '2:10' },
       ] }] });
     });
+    await page.evaluate(() => syncAlbumTrackCreditMotion(document.getElementById('table')));
     const rows = page.locator('.album-track-table__row');
     const before = await rows.first().boundingBox();
     const credit = page.locator('.album-track-table__secondary').first();
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
     await credit.locator('span').evaluate(node => {
       const animation = node.getAnimations()[0];
       animation.pause();
@@ -84,13 +86,21 @@ for (const width of [390, 960]) {
     expect(boxes.inner.right).toBeCloseTo(boxes.outer.right, 0);
     expect(await rows.first().boundingBox()).toEqual(before);
     const short = page.locator('.album-track-table__secondary').last();
-    await short.locator('span').evaluate(node => {
-      const animation = node.getAnimations()[0]; animation.pause(); animation.currentTime = 11000;
-    });
-    expect(await short.locator('span').evaluate(node => new DOMMatrix(getComputedStyle(node).transform).m41)).toBe(0);
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
+    expect(await short.locator('span').evaluate(node => node.getAnimations().length)).toBe(0);
+    await short.evaluate(node => { node.style.width = '10px'; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await short.evaluate(node => { node.style.width = ''; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
     await expect(credit).toHaveAttribute('title', /Featured guest artist/);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await page.evaluate(() => disposeAlbumTrackCreditMotion(document.getElementById('table')));
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.setViewportSize({ width: width + 20, height: 720 });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
   });
 }
 

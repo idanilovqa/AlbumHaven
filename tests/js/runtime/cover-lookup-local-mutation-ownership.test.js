@@ -46,12 +46,16 @@ const album = name => ({ name, cover_path: `/${name}/cover.jpg`, cover_revision:
   tracks: [{ path: `/${name}/track.mp3`, cover_path: `/${name}/cover.jpg` }] });
 
 function harness() {
-  class Button { disabled = false; hidden = false; textContent = ''; }
+  class Button {
+    disabled = false; hidden = false; textContent = ''; attributes = {};
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+  }
   const save = new Button(), remove = new Button();
   const overlay = { hidden: true, querySelectorAll: () => [remove] };
   const confirm = { hidden: true, style: {} };
   const requests = [], galleries = [], notifications = [], painted = new Map(), server = new Map();
   const context = vm.createContext({
+    ButtonComponent: require(path.join(runtime, '../button-component.js')),
     state: { coverRefreshTokens: {}, coverLookup: { modal: { pastedImages: [] }, tasks: [], optimisticAlbumCovers: {} } },
     window: {}, HTMLButtonElement: Button, URL, URLSearchParams, console: { log() {}, error() {}, warn() {} },
     deepCloneJson: clone, persistCoverLookupNotificationTasks() {},

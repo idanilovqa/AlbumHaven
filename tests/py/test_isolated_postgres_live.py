@@ -4427,6 +4427,18 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                     params,
                 ).fetchone()["QUERY PLAN"]
                 evidence = _phase6_plan_evidence(plan)
+                if (
+                    evidence["actual_rows"] != expected_rows
+                    or evidence["execution_ms"] >= execution_ceiling_ms
+                    or evidence["external_sorts"] != 0
+                ):
+                    print("PHASE6_FAILED_QUERY_PLAN=" + json.dumps({
+                        "surface": surface,
+                        "expected_rows": expected_rows,
+                        "execution_ceiling_ms": execution_ceiling_ms,
+                        "evidence": evidence,
+                        "plan": plan,
+                    }, sort_keys=True))
                 assert evidence["actual_rows"] == expected_rows
                 assert evidence["execution_ms"] < execution_ceiling_ms, (surface, evidence)
                 assert evidence["external_sorts"] == 0

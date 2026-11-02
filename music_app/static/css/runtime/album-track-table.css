@@ -132,13 +132,14 @@
 .album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
 .album-track-table__secondary { container-type: inline-size; overflow: hidden; }
-.album-track-table__secondary > span { display: block; width: max-content; animation: album-track-credit-pan 12s linear infinite alternate; }
+.album-track-table__secondary > span { display: block; width: max-content; }
+.album-track-table__secondary.is-credit-overflowing > span { animation: album-track-credit-pan 12s linear infinite alternate; }
 @keyframes album-track-credit-pan {
   0%, 15% { transform: translateX(0); }
   85%, 100% { transform: translateX(min(0px, calc(100cqw - 100%))); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .album-track-table__secondary > span { animation: none; }
+  .album-track-table__secondary.is-credit-overflowing > span { animation: none; }
 }
 .album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }

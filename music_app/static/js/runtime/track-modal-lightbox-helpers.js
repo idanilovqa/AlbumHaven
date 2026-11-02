@@ -28,6 +28,7 @@ function albumRequiresHydration(album) {
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
@@ -71,6 +72,7 @@ function renderTrackModalLoadingState(album) {
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (els.title) {
     els.title.textContent = '';
   }
@@ -473,6 +475,7 @@ function renderTrackModalIdentitySplitChoices(releases) {
   const choices = Array.isArray(releases) ? releases : [];
   if (choices.length < 2) return false;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   state.ui.trackModalIdentitySplitChoices = choices;
   els.subtitle.textContent = 'This album was split—choose the current release';
   els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
@@ -1009,6 +1012,7 @@ function closeImageLightbox() {
 function closeTrackModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
   const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();

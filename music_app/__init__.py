@@ -415,6 +415,7 @@ def create_asgi_app():
         TargetedLibraryReconciler,
     )
     from music_app.services.targeted_reconciliation_scheduler import (
+        LibraryRootUnavailableError,
         TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
@@ -691,9 +692,7 @@ def create_asgi_app():
                     )
                 root_path = Path(str(root.get("path") or ""))
                 if not root_path.is_dir():
-                    raise OSError(
-                        f"Library watcher catch-up root is unavailable: {root_id}"
-                    )
+                    raise LibraryRootUnavailableError(root_id)
                 result = targeted_reconciler.reconcile(
                     TargetedReconciliationRequest(
                         root_id=root_id,

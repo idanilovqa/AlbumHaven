@@ -434,7 +434,10 @@ def search_term_matches_field(term: str, field: str) -> bool:
     if normalized_term in normalized_field:
         return True
     field_words = [word for word in normalized_field.split() if word]
-    if any(search_word_matches(normalized_term, word) for word in field_words):
+    if all(
+        any(search_word_matches(term_word, word) for word in field_words)
+        for term_word in normalized_term.split()
+    ):
         return True
     compact_term = compact_search_key(normalized_term)
     compact_field = compact_search_key(normalized_field)

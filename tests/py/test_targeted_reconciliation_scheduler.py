@@ -4,6 +4,8 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
 
+import pytest
+
 from music_app.services.library_event_coordinator import (
     CoordinatorProblem,
     TargetedReconciliationRequest,
@@ -18,6 +20,59 @@ def _request(root_id: str, *paths: str) -> TargetedReconciliationRequest:
         root_id=root_id,
         paths=frozenset(Path(path) for path in paths),
     )
+
+
+@pytest.mark.parametrize("failed_root", ["offline", "outside-batch", ""])
+def test_unavailable_catch_up_preserves_exact_root_health_and_retry(failed_root):
+    from music_app.services.library_watch import LibraryEvent, LibraryEventKind
+    from music_app.services.library_watch_health import LibraryWatchHealthService
+    from music_app.services.targeted_reconciliation_scheduler import LibraryRootUnavailableError
+
+    class Store:
+        def __init__(self):
+            self.problems = {}
+
+        def upsert(self, problem):
+            self.problems[problem.root_id] = problem
+
+        def load(self):
+            return list(self.problems.values())
+
+    health = LibraryWatchHealthService(Store())
+    for root, kind in [("main", LibraryEventKind.OVERFLOW), ("offline", LibraryEventKind.ROOT_UNAVAILABLE)]:
+        health.record_event(LibraryEvent(kind, root, Path("C:/Fixture") / root))
+    attempts = []
+    cleared = []
+
+    def catch_up(roots):
+        attempts.append(roots)
+        if len(attempts) == 1:
+            raise LibraryRootUnavailableError(failed_root)
+
+    scheduler = TargetedReconciliationScheduler(
+        reconcile=lambda _request: None, catch_up=catch_up,
+        record_problem=health.record_problem, clear_recovered=cleared.append,
+    )
+    try:
+        scheduler.request_catch_up(frozenset({"main", "offline"}))
+        assert scheduler.wait_for_idle(timeout=2)
+        assert cleared == []
+        assert {problem.root_id: problem.state for problem in health.load_problems()} == (
+            {"main": "overflow", "offline": "root_unavailable"}
+            if failed_root == "offline"
+            else {"main": "reconciliation_failed", "offline": "reconciliation_failed"}
+        )
+        assert not health.root_allows_destructive_reconciliation("offline")
+        scheduler.submit(_request("offline", "C:/Fixture/offline/track.flac"))
+        assert scheduler.wait_for_idle(timeout=2)
+        assert attempts == [frozenset({"main", "offline"}), frozenset({"offline"})]
+        assert cleared == [frozenset({"offline"})]
+        scheduler.submit(_request("main", "C:/Fixture/main/track.flac"))
+        assert scheduler.wait_for_idle(timeout=2)
+        assert attempts[-1] == frozenset({"main"})
+        assert cleared == [frozenset({"offline"}), frozenset({"main"})]
+    finally:
+        scheduler.shutdown(wait=True, timeout=2)
 
 
 def test_explicit_catch_up_retains_health_until_successful_recovery():

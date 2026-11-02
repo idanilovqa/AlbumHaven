@@ -2254,6 +2254,10 @@ function buildApiUrl(view, options = {}) {
   ) {
     params.set('payload_tier', 'full');
   }
+  if (resolvedSurface === 'albums' && view.selected_artist && !view.query
+      && !view.all_artists_active && !options.rootSidebar && options.payloadTier !== 'sidebar') {
+    params.set('include_non_album', '1');
+  }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;
 }
@@ -11738,6 +11742,7 @@ function openNonAlbumModal(options = {}) {
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
     const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
@@ -11927,6 +11932,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
@@ -12804,6 +12810,7 @@ function albumRequiresHydration(album) {
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
@@ -12847,6 +12854,7 @@ function renderTrackModalLoadingState(album) {
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (els.title) {
     els.title.textContent = '';
   }
@@ -13249,6 +13257,7 @@ function renderTrackModalIdentitySplitChoices(releases) {
   const choices = Array.isArray(releases) ? releases : [];
   if (choices.length < 2) return false;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   state.ui.trackModalIdentitySplitChoices = choices;
   els.subtitle.textContent = 'This album was split—choose the current release';
   els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
@@ -13785,6 +13794,7 @@ function closeImageLightbox() {
 function closeTrackModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
   const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
@@ -18857,6 +18867,51 @@ function buildCompactDataTable(config = {}) {
 // END js/runtime/compact-data-table.js
 
 // BEGIN js/runtime/album-track-table.js
+
+const albumTrackCreditMotion = new WeakMap();
+
+function disposeAlbumTrackCreditMotion(root) {
+  albumTrackCreditMotion.get(root)?.();
+  albumTrackCreditMotion.delete(root);
+}
+
+function syncAlbumTrackCreditMotion(root) {
+  disposeAlbumTrackCreditMotion(root);
+  if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
+  const rows = Array.from(root.querySelectorAll('.album-track-table__secondary'));
+  if (!rows.length) return;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+  let disposed = false;
+  const refresh = () => {
+    frame = 0;
+    for (const row of rows) {
+      const text = row.firstElementChild;
+      const motion = resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
+      });
+      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+    }
+  };
+  const schedule = () => {
+    if (!disposed && !frame) frame = requestAnimationFrame(refresh);
+  };
+  const observer = new ResizeObserver(schedule);
+  for (const row of rows) {
+    observer.observe(row);
+    observer.observe(row.firstElementChild);
+  }
+  reduced.addEventListener('change', schedule);
+  document.fonts?.ready.then(schedule);
+  albumTrackCreditMotion.set(root, () => {
+    disposed = true;
+    cancelAnimationFrame(frame);
+    observer.disconnect();
+    reduced.removeEventListener('change', schedule);
+    for (const row of rows) row.classList.remove('is-credit-overflowing');
+  });
+  schedule();
+}
 
 function buildAlbumTrackPlayButtonHtml(track = {}) {
   const trackPath = String(track.path || '');
@@ -35251,6 +35306,7 @@ function renderTrackModalRelease(album) {
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;

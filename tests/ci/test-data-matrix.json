@@ -10309,5 +10309,85 @@
       "source-labels-and-header-handoff"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "alert removal action stays in place when hovered and accepts an edge click",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "alert-action-hover-geometry-stability",
+      "alert-removal-edge-click"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "bare lightbox close has no pointer outline and retains its keyboard focus ring",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "lightbox-close-pointer-style",
+      "lightbox-close-keyboard-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with artist section",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with gallery header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card metadata distinguishes numeric artists, unknown years, and absent artists",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
   }
 ]

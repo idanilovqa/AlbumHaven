@@ -1,3 +1,48 @@
+const albumTrackCreditMotion = new WeakMap();
+
+function disposeAlbumTrackCreditMotion(root) {
+  albumTrackCreditMotion.get(root)?.();
+  albumTrackCreditMotion.delete(root);
+}
+
+function syncAlbumTrackCreditMotion(root) {
+  disposeAlbumTrackCreditMotion(root);
+  if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
+  const rows = Array.from(root.querySelectorAll('.album-track-table__secondary'));
+  if (!rows.length) return;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+  let disposed = false;
+  const refresh = () => {
+    frame = 0;
+    for (const row of rows) {
+      const text = row.firstElementChild;
+      const motion = resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
+      });
+      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+    }
+  };
+  const schedule = () => {
+    if (!disposed && !frame) frame = requestAnimationFrame(refresh);
+  };
+  const observer = new ResizeObserver(schedule);
+  for (const row of rows) {
+    observer.observe(row);
+    observer.observe(row.firstElementChild);
+  }
+  reduced.addEventListener('change', schedule);
+  document.fonts?.ready.then(schedule);
+  albumTrackCreditMotion.set(root, () => {
+    disposed = true;
+    cancelAnimationFrame(frame);
+    observer.disconnect();
+    reduced.removeEventListener('change', schedule);
+    for (const row of rows) row.classList.remove('is-credit-overflowing');
+  });
+  schedule();
+}
+
 function buildAlbumTrackPlayButtonHtml(track = {}) {
   const trackPath = String(track.path || '');
   const title = String(track.playbackTitle || track.title || 'Track');

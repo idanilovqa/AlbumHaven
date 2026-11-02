@@ -2232,10 +2232,22 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
+                direct_content_artists = set()
+                for row in [*canonical_search_rows, *_canonicalize_artist_rows(search_missing_album_rows or [], alias_to_canonical)]:
+                    evidence = _row_mapping(row)
+                    source_artist_id = _coerce_int(evidence.get("source_artist_id"))
+                    matched_ids = evidence.get("search_matched_track_artist_ids") or []
+                    if (
+                        source_artist_id > 0 and source_artist_id in matched_ids
+                        or evidence.get("search_album_title_match") is True
+                        and _album_artist_relationship([evidence]) == "owned"
+                    ):
+                        direct_content_artists.add(_artist_display_dedupe_key(evidence.get("artist_name")))
                 matching_sidebar_artists = [
                     str(group.get("artist") or "").strip()
                     for group in sidebar_artist_groups
-                    if _artist_name_matches_search_query(
+                    if _artist_display_dedupe_key(group.get("artist")) in direct_content_artists
+                    or _artist_name_matches_search_query(
                         query,
                         str(group.get("artist") or "").strip(),
                         canonical_to_aliases.get(
@@ -9894,14 +9906,20 @@ def _search_preview_sql(
           where ({_visible_album_clause("library.local_albums")})
         ),
         eligible_matched_track_album_ids as materialized (
-          select distinct
+          select
             matched_track_album_ids.library_id,
-            matched_track_album_ids.album_id
+            matched_track_album_ids.album_id,
+            array_agg(distinct library.local_tracks.artist_id)
+              filter (where library.local_tracks.artist_id is not null) as matched_artist_ids
           from matched_track_album_ids
           join eligible_album_tracks
             on eligible_album_tracks.library_id = matched_track_album_ids.library_id
            and eligible_album_tracks.album_id = matched_track_album_ids.album_id
            and eligible_album_tracks.track_id = matched_track_album_ids.track_id
+          join library.local_tracks
+            on library.local_tracks.library_id = matched_track_album_ids.library_id
+           and library.local_tracks.id = matched_track_album_ids.track_id
+          group by matched_track_album_ids.library_id, matched_track_album_ids.album_id
         ),
         matched_album_ids as materialized (
           select album_title_matches.album_id
@@ -10088,6 +10106,13 @@ def _search_preview_sql(
           active_preview_rows as (
             select
               'active'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = matched_album_rows.library_id
+                  and album_title_matches.album_id = matched_album_rows.album_id
+              ) as search_album_title_match,
+              coalesce(eligible_matched_track_album_ids.matched_artist_ids, array[]::bigint[])
+                as search_matched_track_artist_ids,
               matched_album_rows.artist_id,
               matched_album_rows.display_artist as artist_name,
               matched_album_rows.artist_sort_name,
@@ -10111,12 +10136,26 @@ def _search_preview_sql(
               coalesce(track_rollups.track_count, 0) as track_count,
               coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
             from matched_album_rows
+            left join eligible_matched_track_album_ids
+              on eligible_matched_track_album_ids.library_id = matched_album_rows.library_id
+             and eligible_matched_track_album_ids.album_id = matched_album_rows.album_id
             left join track_rollups
               on track_rollups.album_id = matched_album_rows.album_id
           ),
           missing_preview_rows as (
             select
               'missing'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = missing_album_ids.library_id
+                  and album_title_matches.album_id = missing_album_ids.album_id
+              ) as search_album_title_match,
+              case when exists (
+                select 1 from matched_track_album_ids
+                where matched_track_album_ids.library_id = missing_album_ids.library_id
+                  and matched_track_album_ids.track_id = library.local_tracks.id
+              ) then array[library.local_tracks.artist_id] else array[]::bigint[] end
+                as search_matched_track_artist_ids,
               library.local_artists.id as artist_id,
               library.local_artists.name as artist_name,
               library.local_artists.sort_name as artist_sort_name,

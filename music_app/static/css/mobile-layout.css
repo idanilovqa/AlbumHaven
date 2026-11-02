@@ -320,7 +320,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-page-header .gallery-bar__context > .album-details-cover-source-markers {
     grid-column: 2; grid-row: 1; align-self: center; gap: 4px; margin: 0;
   }
-  .mobile-page-header .gallery-bar__context > .gallery-bar__summary { grid-column: 1 / -1; }
+  .mobile-page-header .gallery-bar__context:has(> .album-details-cover-source-markers:not([hidden])) > .gallery-bar__summary { grid-column: 1 / -1; }
   .mobile-page-header .album-details-source-marker > span { display: none; }
   .album-details-cover-source-markers[hidden] { display: none; }
   .album-details-cover-source-markers .album-details-source-marker svg { width: 14px; height: 14px; }

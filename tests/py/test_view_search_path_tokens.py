@@ -16,7 +16,15 @@ def test_absolute_path_drive_and_short_directories_do_not_match_unrelated_query(
 
 @pytest.mark.parametrize("query,field", [
     ("a", "A"), ("d", "D"), ("artist", "Scan Artist"),
-    ("scan artist", "Artist"), ("mornng", "Morning"),
+    ("scan art", "Scan Artist"), ("scn artist", "Scan Artist"), ("mornng", "Morning"),
 ])
 def test_path_token_guard_preserves_exact_short_names_prefixes_and_typos(query, field):
     assert search_term_matches_field(normalize_search_text(query), normalize_search_text(field))
+
+
+@pytest.mark.parametrize("query,field", [
+    ("Scan Owner", "Owner"), ("Scan Artist", "Artist"),
+    ("Scan Release", "Release"),
+])
+def test_multiword_query_does_not_match_only_one_unrelated_field_word(query, field):
+    assert not search_term_matches_field(normalize_search_text(query), normalize_search_text(field))

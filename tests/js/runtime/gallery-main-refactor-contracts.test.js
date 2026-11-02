@@ -462,7 +462,7 @@ function createStateForContract() {
   };
 }
 
-test('artist non-album tracks start loading with the gallery and remain clickable while pending', () => {
+test('artist non-album tracks stay clickable while deferred without a second gallery request', () => {
   const requested = [];
   const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
   const context = loadRuntime({
@@ -478,8 +478,7 @@ test('artist non-album tracks start loading with the gallery and remain clickabl
   });
   context.ensureGalleryMainState = () => ({ sources: {} });
   context.updateGalleryMainControls();
-  assert.equal(requested.length, 1);
-  assert.equal(requested[0].libraryWide, false);
+  assert.equal(requested.length, 0, 'selecting an artist keeps its gallery to one view-data request');
   assert.equal(button.disabled, false);
   assert.equal(button['aria-disabled'], 'false');
   context.state.view.non_album_tracks_deferred = false;

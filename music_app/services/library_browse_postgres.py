@@ -2467,7 +2467,8 @@ class PostgresLibraryBrowseRepository:
             ]
         )
         load_non_album_tracks = _should_load_non_album_tracks(params)
-        non_album_entries = (
+        include_library_wide_non_album = _request_flag(params.get("include_library_wide_non_album"))
+        loaded_non_album_entries = (
             self._load_non_album_entries(
                 view_state=view_state,
                 alias_to_canonical=(
@@ -2483,10 +2484,16 @@ class PostgresLibraryBrowseRepository:
                 visible_artist_names=non_album_scope_artists,
                 query=query,
                 connection=connection,
+                include_library_wide=include_library_wide_non_album,
             )
             if load_non_album_tracks
             else []
         )
+        library_non_album_entries = None
+        if isinstance(loaded_non_album_entries, tuple):
+            non_album_entries, library_non_album_entries = loaded_non_album_entries
+        else:
+            non_album_entries = loaded_non_album_entries
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
             config=self._config,
@@ -2604,6 +2611,11 @@ class PostgresLibraryBrowseRepository:
         }
         if search_context is not None:
             payload["search_context"] = search_context
+        if library_non_album_entries is not None:
+            payload["library_non_album_tracks"] = build_non_album_track_list(
+                library_non_album_entries,
+                config=self._config,
+            )
         phase_ms["finalize"] = (
             perf_counter() - finalize_started_at
         ) * 1000
@@ -3986,6 +3998,7 @@ def _non_album_entries_from_inventory_candidates(
     visible_artist_names: Iterable[object] = (),
     query: object = "",
 ) -> list[dict[str, object]]:
+    from music_app.services.relation_projection_builder import root_relative_parts
     from music_app.services.view_search import (
         normalize_search_text,
         search_terms_match_fields,
@@ -4007,7 +4020,13 @@ def _non_album_entries_from_inventory_candidates(
         )
         if normalize_search_text(alias)
     }
-    query_terms = split_search_terms(str(query or ""))
+    # Match each word on its own: whole-phrase fuzzy matching accepts any field word
+    # contained in the phrase, so "Scan Owner" would match every "Owner" track.
+    query_words = sorted({
+        word
+        for term in split_search_terms(str(query or ""))
+        for word in term.split()
+    })
     normalized_alias_to_canonical = {
         local_inventory_identity_key(alias): canonical
         for alias, canonical in alias_to_canonical.items()
@@ -4049,7 +4068,9 @@ def _non_album_entries_from_inventory_candidates(
             and not visible_path_parts.intersection(path_parts)
         ):
             continue
-        if query_terms:
+        if query_words:
+            # The library-relative path only: the absolute path's machine folders would match queries.
+            root_relative = root_relative_parts({**payload, "library_root_id": payload.get("root_id")})
             search_fields = [
                 normalize_search_text(str(value or ""))
                 for value in (
@@ -4060,12 +4081,11 @@ def _non_album_entries_from_inventory_candidates(
                     entry.get("title"),
                     entry.get("year"),
                     entry.get("exception_type"),
-                    payload.get("relative_path"),
-                    payload.get("private_path"),
+                    " ".join(root_relative[1]) if root_relative else "",
                 )
                 if str(value or "").strip()
             ]
-            if not search_terms_match_fields(query_terms, search_fields):
+            if not search_terms_match_fields(query_words, search_fields):
                 continue
         entries.append(entry)
     return entries
@@ -10848,6 +10868,7 @@ def _problematic_files_sql(
               '/[^/]*$', ''
             ) as physical_parent,
             regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
+            __PHYSICAL_ALBUM_CONTAINER__ as physical_album_container,
             library.local_track_files.track_id,
             coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
             case when library.local_tracks.track_number > 0
@@ -10913,7 +10934,7 @@ def _problematic_files_sql(
           join active_problem_rows source_files
             on source_files.library_id = exception_files.library_id
            and source_files.library_root_id = exception_files.library_root_id
-           and (__SOURCE_ALBUM_CONTAINER__) = (__EXCEPTION_ALBUM_CONTAINER__)
+           and source_files.physical_album_container = exception_files.physical_album_container
            and source_files.file_album = exception_files.file_album
            and source_files.file_album_artist = exception_files.file_album_artist
            and source_files.file_year is not distinct from exception_files.file_year
@@ -10932,9 +10953,9 @@ def _problematic_files_sql(
         + physical_file_ctes.replace(
             "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
         ).replace(
-            "__SOURCE_ALBUM_CONTAINER__", _physical_album_container_sql("source_files.private_path"),
-        ).replace(
-            "__EXCEPTION_ALBUM_CONTAINER__", _physical_album_container_sql("exception_files.private_path"),
+            # Computed once per row so the duplicate join can hash on it.
+            "__PHYSICAL_ALBUM_CONTAINER__",
+            _physical_album_container_sql("library.local_track_files.private_path"),
         )
     )
     candidate_ctes = ""

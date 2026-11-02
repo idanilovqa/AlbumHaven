@@ -1694,7 +1694,14 @@ def test_asgi_cover_route_maps_missing_priority_header_to_foreground(app, asgi_a
     assert observed_priorities == ["foreground"]
 
 
-def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("revision", "recorded"),
+    [("a" * 64, True), ("", False)],
+    ids=["revisioned", "app-local"],
+)
+def test_asgi_cover_route_records_only_revisioned_generated_preview(
+    app, asgi_app, monkeypatch, tmp_path, revision, recorded
+):
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (640, 640), color=(64, 96, 128)).save(
@@ -1714,6 +1721,7 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
         cache_root,
         max_size,
         priority,
+        revision="",
         on_published=None,
     ):
         observed_recorders.append(on_published)
@@ -1727,12 +1735,13 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
         asgi_app,
         "GET",
         "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        query={"path": str(cover_path), "size": "480", "v": revision},
     )
 
     assert status == 200
     assert body == bounded_variant.read_bytes()
-    assert observed_recorders == [recorder]
+    # App-local previews never enter relocation, or it would move them endlessly.
+    assert observed_recorders == [recorder if recorded else None]
 
 
 def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi_app, monkeypatch):

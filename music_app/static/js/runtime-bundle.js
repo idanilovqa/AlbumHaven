@@ -6901,7 +6901,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  if (String(state.view.query || '').trim() || hasSelectedArtist || galleryMainSurfaceController?.current?.()?.key === 'album-types'
+  // Selecting an artist stays one request; its loose tracks load when the menu opens.
+  if (String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
       || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }

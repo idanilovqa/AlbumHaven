@@ -2740,6 +2740,34 @@ def test_postgres_album_search_request_allows_search_preview_tier(app, asgi_app,
     assert asgi_read_routes._is_postgres_album_search_request(request) is True
 
 
+def test_postgres_album_search_request_allows_the_loose_track_follow_up(app, asgi_app, monkeypatch):
+    from starlette.requests import Request
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres.psycopg",
+        type("FakePsycopg", (), {"connect": lambda self: None})(),
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/view-data",
+            "query_string": (
+                "q=%D0%90%D1%80%D0%B8%D1%8F&surface=albums&all_artists=1&omit_sidebar=1"
+                "&include_non_album=1&include_library_wide_non_album=1"
+            ).encode(),
+            "headers": [],
+            "app": asgi_app,
+        }
+    )
+
+    assert asgi_read_routes._is_postgres_album_search_request(request) is True
+
+
 def test_postgres_album_search_request_allows_a_title_with_a_colon():
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

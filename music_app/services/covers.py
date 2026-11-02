@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from threading import Lock, RLock
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 try:
@@ -236,12 +237,28 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
             pass
 
 
+def _album_image_has_bytes(folder: Path, excluded: Path, data: bytes) -> bool:
+    for root, directories, files in os.walk(folder):
+        directories[:] = [name for name in directories if not is_managed_preview_path(Path(root) / name)]
+        for name in files:
+            path = Path(root) / name
+            if path == excluded or path.suffix.lower() not in _COVER_IMAGE_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size == len(data) and path.read_bytes() == data:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
     current_bytes = current_cover.read_bytes()
-    if current_bytes == raw_bytes:
+    # Keep the replaced cover only when no other album image already holds its bytes.
+    if current_bytes == raw_bytes or _album_image_has_bytes(folder, current_cover, current_bytes):
         return None
     index = 1
     while True:

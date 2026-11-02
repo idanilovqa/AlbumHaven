@@ -815,6 +815,8 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         "gallery_scale_percent",
         "category",
         "omit_sidebar",
+        "include_non_album",
+        "include_library_wide_non_album",
     }
     if any(str(key) not in allowed_search_params for key in request.query_params.keys()):
         return False

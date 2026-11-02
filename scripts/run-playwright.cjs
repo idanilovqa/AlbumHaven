@@ -1183,15 +1183,18 @@ async function prewarmFunctionalFixture(port, options = {}) {
       headers: requestHeaders,
     });
     if (viewResponse?.ok) break;
-    let pendingCode = null;
+    let pendingBody = {};
     try {
-      pendingCode = JSON.parse(String(viewResponse?.body || '')).code;
+      pendingBody = JSON.parse(String(viewResponse?.body || ''));
     } catch {
       // Non-JSON errors are terminal warmup failures.
     }
-    if (Number(viewResponse?.statusCode) !== 503
-      || !['search_projection_pending', 'gallery_projection_pending'].includes(pendingCode)
-      || nowFn() >= deadline) {
+    const statusCode = Number(viewResponse?.statusCode);
+    const projectionPending = statusCode === 503
+      && ['search_projection_pending', 'gallery_projection_pending'].includes(pendingBody?.code);
+    // The library changed during this read; a fresh read is the requested restart.
+    const browseRestartRequired = statusCode === 409 && pendingBody?.restart_required === true;
+    if ((!projectionPending && !browseRestartRequired) || nowFn() >= deadline) {
       reportFailure('view-data', viewResponse);
       return false;
     }

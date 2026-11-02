@@ -59,6 +59,10 @@ function createPlaybackOwnershipTabId() {
 }
 
 function getPlaybackOwnershipTabId() {
+  // Inside a native-playback APK the server claim belongs to the Android client.
+  const nativeClientId = typeof getAndroidNativePlaybackClientId === 'function'
+    ? getAndroidNativePlaybackClientId() : '';
+  if (nativeClientId) return nativeClientId;
   const ownership = getPlaybackOwnershipState();
   return ownership.tabId ||= createPlaybackOwnershipTabId();
 }
@@ -304,6 +308,8 @@ async function claimPlaybackOwnership(track, options = {}) {
     await previousOperation;
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
+    // Android acquires, heartbeats and releases its own claim before any native output.
+    if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return true;
     try {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);

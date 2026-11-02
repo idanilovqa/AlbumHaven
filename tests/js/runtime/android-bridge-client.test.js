@@ -92,8 +92,8 @@ test('playback stays unavailable before and after a handshake without an audio c
   assert.equal(api.isAndroidPlaybackUnavailable(), true);
 });
 
-test('interim WebView playback capability lifts the gate only after the handshake', async () => {
-  const bridge = fakeBridge(() => handshakePayload);
+test('a previous shell with interim WebView playback lifts the gate only after the handshake', async () => {
+  const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['sandbox.select.v1', 'playback.webview.v1'] }));
   const { api } = loadRuntime({ bridge });
   assert.equal(api.isAndroidPlaybackUnavailable(), true);
   await api.connectAndroidBridge();

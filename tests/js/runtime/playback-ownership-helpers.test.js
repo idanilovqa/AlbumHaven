@@ -1046,3 +1046,22 @@ test('APK without native playback stays visibly blocked without claiming ownersh
   assert.equal(requests.some(request => request.startsWith('PUT') || request.startsWith('POST')), false);
   assert.deepEqual(toasts, ['Playback is unavailable.']);
 });
+
+test('a native-playback shell leaves the claim to Android and reads ownership as its client', async () => {
+  const nativeClientId = '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70';
+  const requests = [];
+  const { context } = loadHelper({
+    isAndroidNativePlayback: () => true,
+    getAndroidNativePlaybackClientId: () => nativeClientId,
+    fetch: async (url, init = {}) => {
+      requests.push({ url, method: init.method || 'GET' });
+      return jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });
+    },
+  });
+
+  assert.equal(await context.canStartPlaybackInThisTab(localTrack), true);
+  assert.equal(context.getPlaybackOwnershipTabId(), nativeClientId);
+  await context.handlePlaybackOwnershipEvent();
+  assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
+  assert.equal(context.isActivePlaybackOwner(), false);
+});

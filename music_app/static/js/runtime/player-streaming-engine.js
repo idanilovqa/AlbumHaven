@@ -32,6 +32,11 @@ function streamingEngineState() {
   return state.player.streaming;
 }
 
+// Android native output replaces AudioWorklet output; the two never run together.
+function isNativeStreamingPlayback() {
+  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
+}
+
 function streamingFrames(seconds) {
   return Math.round(seconds * streamingEngineState().sampleRate);
 }
@@ -333,6 +338,11 @@ function setStreamingError(source, event) {
 }
 
 function failStreamingEngine(source, event, reason) {
+  if (isNativeStreamingPlayback()) {
+    failAndroidNativePlayback(source, event?.error?.message || event?.message);
+    void stopAndroidNativePlayback(reason, { preserveError: true }).catch(() => {});
+    return;
+  }
   setStreamingError(source, event);
   const cleanup = beginStreamingCleanup(reason, { preserveError: true });
   void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
@@ -2155,6 +2165,8 @@ async function startStreamingTrack(track, {
   onAutoplayStarted = null,
   transportRecoveryAttempt = null,
 } = {}) {
+  const nativeRoute = typeof androidNativePlaybackRoute === 'function' ? androidNativePlaybackRoute() : null;
+  if (nativeRoute && await nativeRoute) return startAndroidNativePlaybackTrack(track, { startSeconds, autoplay });
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
@@ -2407,6 +2419,7 @@ async function startStreamingTrack(track, {
 }
 
 async function pauseStreamingPlayback() {
+  if (isNativeStreamingPlayback()) return pauseAndroidNativePlayback();
   const engine = streamingEngineState();
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
@@ -2430,6 +2443,7 @@ async function resumeStreamingPlayback(
   onPlaybackStarted = null,
   expectedCurrentRole = null,
 ) {
+  if (isNativeStreamingPlayback()) return resumeAndroidNativePlayback(onPlaybackStarted);
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
     ?? (Number(engine.startRequestId) || 0);
@@ -2485,6 +2499,7 @@ async function resumeStreamingPlayback(
   return true;
 }
 async function seekStreamingPlayback(seconds) {
+  if (isNativeStreamingPlayback()) return seekAndroidNativePlayback(seconds);
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
   const currentTrack = engine.roles.current?.track;
@@ -2616,6 +2631,7 @@ async function seekStreamingPlayback(seconds) {
 }
 
 async function scheduleStreamingContinuity(track, options = {}) {
+  if (isNativeStreamingPlayback()) return scheduleAndroidNativeContinuity(track, options);
   const engine = streamingEngineState();
   if (!engine.roles.current) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
@@ -2692,6 +2708,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
 }
 
 function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
+  if (isNativeStreamingPlayback()) return setAndroidNativeLoop(active);
   const engine = streamingEngineState();
   if (!engine.node) return;
   const loop = engine.loopContinuity;
@@ -2847,10 +2864,12 @@ function beginStreamingCleanup(reason, options = {}) {
 }
 
 async function stopStreamingPlayback(reason = 'stopped', options = {}) {
+  if (isNativeStreamingPlayback()) return stopAndroidNativePlayback(reason, options);
   streamingEngineState().pendingTransportRecovery = null;
   return beginStreamingCleanup(reason, options);
 }
 function getStreamingPlaybackSnapshot() {
+  if (isNativeStreamingPlayback()) return getAndroidNativePlaybackSnapshot();
   const engine = streamingEngineState();
   return {
     ...engine.snapshot,

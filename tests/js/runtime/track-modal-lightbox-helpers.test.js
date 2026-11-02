@@ -582,6 +582,34 @@ test('stale album hydration sends its id and renders current split choices', asy
   );
 });
 
+test('this session opens the release it split without asking which one it meant', async () => {
+  const choices = [
+    { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
+    { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
+
+  context.rememberLocallyEditedAlbum(card);
+  context.openTrackModal(card);
+  await flushMicrotasks();
+
+  assert.equal(
+    context.fetchCalls[1].url,
+    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
+  );
+});
+
 test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
   const staleRenderedAlbum = {
     album_id: 17,

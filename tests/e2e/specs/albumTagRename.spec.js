@@ -97,6 +97,8 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
       FIXTURE_ARTIST,
       FAILURE_FIXTURE_ALBUM,
     );
+    // Status polling would otherwise replace the card as soon as the split lands.
+    await staleCardSession.context.setOffline(true);
   });
 
   await stepLogger.step('Split both tracks into distinct current releases', async () => {
@@ -145,6 +147,7 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
   });
 
   await stepLogger.step('Click the rendered stale card and resolve it to a current release', async () => {
+    await staleCardSession.context.setOffline(false);
     await staleCardSession.galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
       album: FAILURE_FIXTURE_ALBUM,

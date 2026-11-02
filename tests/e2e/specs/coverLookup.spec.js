@@ -1316,6 +1316,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     const requestPromise = page.waitForRequest((request) => (
       request.method() === 'POST'
       && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
+      && request.postDataJSON()?.album?.name === SPLIT_FIXTURE.splitAlbum
     ));
     await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
     const request = await requestPromise;
@@ -1324,10 +1325,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await coverLookupActions.waitForModalResultsReady();
     await expect(selector).toHaveCount(0);
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(SPLIT_FIXTURE.splitAlbum);
-    expect(request.postDataJSON()).toMatchObject({
-      album: expect.objectContaining({ name: SPLIT_FIXTURE.splitAlbum }),
-      task_id: taskId,
-    });
+    expect(request.postDataJSON()).toMatchObject({ task_id: taskId });
     await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
     await coverLookupActions.waitForRemoteCandidateId(candidateId);
     const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);

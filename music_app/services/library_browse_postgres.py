@@ -2254,7 +2254,11 @@ class PostgresLibraryBrowseRepository:
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
                     sidebar_artist_groups,
-                    artists=[exact_artist_match, *matching_sidebar_artists],
+                    artists=[
+                        exact_artist_match,
+                        *(group.get("artist") for group in family_artist_groups),
+                        *matching_sidebar_artists,
+                    ],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups

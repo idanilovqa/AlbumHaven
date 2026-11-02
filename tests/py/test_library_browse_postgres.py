@@ -4221,7 +4221,9 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
     assert [group["artist"] for group in payload["artist_groups"]] == [
         "Signal Artist", *expected_family,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Signal Artist"]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == [
+        "Signal Artist", "Signal Family",
+    ]
     assert payload["show_all_artists_sidebar_link"] is False
 
 
@@ -8182,8 +8184,10 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse"]
-    assert payload["artist_count"] == 1
+    assert [item["artist"] for item in payload["artists_sidebar"]] == [
+        "Neal Morse", "Cosmic Cathedral",
+    ]
+    assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
@@ -10912,7 +10916,8 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                 ],
                 "open_directory_paths": [r"D:\Music\Split Artist\Split Album\1999"],
                 "artist_relationship": "owned",
-                "preview_only": False,
+                "is_split_album": False,
+            "preview_only": False,
         }
     ]
 
@@ -11079,7 +11084,8 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             ],
                 "open_directory_paths": [r"D:\Synthetic Music\Exception Artist\Exception Album"],
                 "artist_relationship": "owned",
-                "preview_only": False,
+                "is_split_album": False,
+            "preview_only": False,
         }
     ]
     sql = str(executed[0])

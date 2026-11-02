@@ -84,12 +84,20 @@ test('connection is negotiated once per document', async () => {
   assert.equal(bridge.sent.length, 1);
 });
 
-test('playback stays unavailable before and after a handshake without native audio', async () => {
-  const bridge = fakeBridge(() => handshakePayload);
+test('playback stays unavailable before and after a handshake without an audio capability', async () => {
+  const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['sandbox.select.v1'] }));
   const { api } = loadRuntime({ bridge });
   assert.equal(api.isAndroidPlaybackUnavailable(), true);
   await api.connectAndroidBridge();
   assert.equal(api.isAndroidPlaybackUnavailable(), true);
+});
+
+test('interim WebView playback capability lifts the gate only after the handshake', async () => {
+  const bridge = fakeBridge(() => handshakePayload);
+  const { api } = loadRuntime({ bridge });
+  assert.equal(api.isAndroidPlaybackUnavailable(), true);
+  await api.connectAndroidBridge();
+  assert.equal(api.isAndroidPlaybackUnavailable(), false);
 });
 
 test('incompatible handshake leaves the shell gated and reports no info', async () => {

@@ -142,7 +142,7 @@ class ShellSmokeTest {
             assertTrue(payload.getBoolean("ok"))
             assertEquals(BuildConfig.CHANNEL, payload.getString("variant"))
             assertEquals(BuildConfig.DEV_ORIGIN, payload.getString("origin"))
-            assertEquals("unavailable", payload.getJSONObject("playback").getString("state"))
+            assertEquals("webview", payload.getJSONObject("playback").getString("state"))
             assertFalse(recoveryVisible(scenario))
         }
     }

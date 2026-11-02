@@ -2,8 +2,8 @@
   "protocol": 1,
   "maxMessageBytes": 65536,
   "capabilities": {
-    "stable": [],
-    "sandbox": ["sandbox.select.v1"]
+    "stable": ["playback.webview.v1"],
+    "sandbox": ["sandbox.select.v1", "playback.webview.v1"]
   },
   "handshakeRequest": {
     "protocol": 1,
@@ -26,9 +26,9 @@
       "bridgeProtocol": 1,
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,
-      "capabilities": ["sandbox.select.v1"],
+      "capabilities": ["sandbox.select.v1", "playback.webview.v1"],
       "origin": "https://sandbox2.albumhaven.org",
-      "playback": {"state": "unavailable"},
+      "playback": {"state": "webview"},
       "sandbox": {"slot": 2, "connectedSlot": null}
     }
   },

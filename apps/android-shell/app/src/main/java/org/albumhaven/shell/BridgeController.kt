@@ -82,7 +82,7 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
             .put("bridgeProtocolMax", PROTOCOL_MAX)
             .put("capabilities", JSONArray(capabilities()))
             .put("origin", host.selectedOrigin())
-            .put("playback", JSONObject().put("state", "unavailable"))
+            .put("playback", JSONObject().put("state", "webview"))
         if (identity.channel == ShellChannel.SANDBOX) {
             payload.put(
                 "sandbox",
@@ -95,7 +95,11 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
     }
 
     private fun capabilities(): List<String> =
-        if (identity.channel == ShellChannel.SANDBOX) listOf(SANDBOX_CAPABILITY) else emptyList()
+        if (identity.channel == ShellChannel.SANDBOX) {
+            listOf(SANDBOX_CAPABILITY, WEBVIEW_PLAYBACK_CAPABILITY)
+        } else {
+            listOf(WEBVIEW_PLAYBACK_CAPABILITY)
+        }
 
     private fun selectSandbox(message: BridgeMessage, protocol: Int, reply: (String) -> Unit) {
         val slot = message.payload.opt("slot") as? Int
@@ -118,6 +122,10 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
         const val PROTOCOL_MIN = 1
         const val PROTOCOL_MAX = 1
         const val SANDBOX_CAPABILITY = "sandbox.select.v1"
+
+        // Interim, owner-approved: the web player runs inside the WebView until
+        // native playback replaces it. It stops when the app is backgrounded.
+        const val WEBVIEW_PLAYBACK_CAPABILITY = "playback.webview.v1"
         private const val HANDSHAKE = "bridge.handshake"
         private const val SANDBOX_SELECT = "sandbox.select"
     }

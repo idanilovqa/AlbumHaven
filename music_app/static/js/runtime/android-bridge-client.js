@@ -13,10 +13,11 @@ function hasAndroidCapability(capability) {
   return Boolean(androidBridge.info?.capabilities?.includes(capability));
 }
 
-// Fails closed: until native audio is negotiated, the APK must stay silent
-// instead of starting a second audible engine in the WebView.
+// Fails closed: the APK stays silent until its shell negotiates an audio path,
+// either native audio or the interim web player inside the WebView.
 function isAndroidPlaybackUnavailable() {
-  return isAndroidShell() && !hasAndroidCapability('playback.native.v1');
+  return isAndroidShell() && !hasAndroidCapability('playback.native.v1')
+    && !hasAndroidCapability('playback.webview.v1');
 }
 
 function createAndroidBridgeMessageId() {

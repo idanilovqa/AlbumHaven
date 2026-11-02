@@ -346,9 +346,10 @@ async function playTrackFromPayload(track, options = {}) {
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  if (shouldAutoplay && !ownershipAlreadyClaimed
-      && typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) {
-    return false;
+  if (shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function') {
+    // A settled answer must not yield, or rapid queue steps would skip their starts.
+    const canStart = canStartPlaybackInThisTab(track);
+    if (canStart !== true && !await canStart) return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;

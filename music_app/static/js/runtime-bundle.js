@@ -34511,7 +34511,9 @@ async function confirmManualTagEdit() {
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
-    if (typeof rememberLocallyEditedAlbum === 'function') rememberLocallyEditedAlbum(album);
+    if (typeof rememberLocallyEditedAlbum === 'function') {
+      [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
+    }
     const response = await fetch('/utilities/edit-tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

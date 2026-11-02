@@ -128,7 +128,8 @@ export async function cleanupWatchedAlbumFixture({
   const cleanupFailures = [];
   try { await context.close(); } catch (error) { cleanupFailures.push(error); }
   try {
-    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
+    // On Windows the running app can still hold or write files here for a moment.
+    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true, maxRetries: 10, retryDelay: 200 });
   } catch (error) {
     cleanupFailures.push(error);
   }

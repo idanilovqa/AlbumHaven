@@ -289,8 +289,13 @@ export class TrackModalActions {
   }
 
   async waitForInteractiveSummary(options = {}) {
-    await this.waitForReady(options);
-    const summary = await this.readSummary();
+    // A library change reloads open details and briefly hides their rows, so wait it out.
+    let summary;
+    await expect.poll(async () => {
+      await this.waitForReady(options);
+      summary = await this.readSummary();
+      return summary.trackRows > 0 && summary.playButtons > 0;
+    }, { timeout: options.timeout || 60000 }).toBe(true);
     expect(summary.trackRows).toBeGreaterThan(0);
     expect(summary.playButtons).toBeGreaterThan(0);
     expect(summary.title).not.toEqual('');

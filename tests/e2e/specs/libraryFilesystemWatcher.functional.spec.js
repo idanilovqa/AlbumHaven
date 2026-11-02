@@ -490,14 +490,14 @@ test('FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity', {
     });
 
     await stepLogger.step('Expose one intact band identity and no punctuation fragment', async () => {
-      await galleryActions.goto('/?surface=albums');
-      await galleryActions.waitForGalleryReady();
-      await expect.poll(
-        () => navigationPanelActions.readSidebarArtistLabelCount(
+      // The library tree takes a new artist on its next full load, as a reload gives.
+      await expect.poll(async () => {
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
+        return navigationPanelActions.readSidebarArtistLabelCount(
           PUNCTUATION_BAND_TARGET.trackArtist,
-        ),
-        { timeout: 60000, intervals: [250, 500, 1000] },
-      ).toBe(1);
+        );
+      }, { timeout: 60000, intervals: [1000, 2000] }).toBe(1);
       expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
 
       await searchToolbarActions.search(PUNCTUATION_BAND_TARGET.trackArtist, {

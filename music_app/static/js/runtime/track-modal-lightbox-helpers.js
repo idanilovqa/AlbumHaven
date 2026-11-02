@@ -498,6 +498,19 @@ function selectTrackModalCurrentRelease(albumId) {
   return true;
 }
 
+// The card from this session's own edit can outlive its old key, but its name and year still
+// identify the release, so the chooser would only ask about a choice already made.
+function openLocallyEditedSplitRelease(albumKey, album, releases) {
+  if (!locallyEditedAlbumKeys.has(albumKey) || !Array.isArray(releases)) return false;
+  const matches = releases.filter((release) => (
+    String(release?.name || '') === String(album?.name || '')
+    && String(release?.year || '') === String(album?.year || '')
+  ));
+  if (matches.length !== 1) return false;
+  state.ui.trackModalIdentitySplitChoices = releases;
+  return selectTrackModalCurrentRelease(matches[0].album_id);
+}
+
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
@@ -720,6 +733,11 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+      if (openLocallyEditedSplitRelease(
+        albumKey,
+        albumWithPlaybackContext,
+        error.currentReleases,
+      )) return;
       if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);

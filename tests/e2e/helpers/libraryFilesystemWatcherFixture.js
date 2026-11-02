@@ -141,6 +141,10 @@ export async function cleanupWatchedAlbumFixture({
     cleanupFailures.push(error);
   }
   if (cleanupFailures.length) {
+    // Error codes only: messages here carry private fixture paths.
+    console.error(`[watcher-fixture-cleanup] ${JSON.stringify(cleanupFailures.map((error) => ({
+      name: error?.name, code: error?.code, syscall: error?.syscall,
+    })))}`);
     const failures = [...(originalFailure ? [originalFailure] : []), ...cleanupFailures];
     try { await managedAppLifecycle.reportFailure(); } catch (reportFailure) { failures.push(reportFailure); }
     if (failures.length > 1) throw new AggregateError(failures, 'Watcher scenario and fixture cleanup failed.');

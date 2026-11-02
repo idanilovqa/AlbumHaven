@@ -69,11 +69,31 @@ export function createTopQueuePlan(blocks, {mode = 'in_order', stopAfterAlbum = 
         && albumByTrack.get(order[next]) !== albumByTrack.get(order[index])) return null;
     return order[next];
   }
+  // Restart is bounded to the current album region, never the whole Top.
+  function restartCandidate(expected = snapshot) {
+    if (expected !== snapshot) return null;
+    const album = albumByTrack.get(order[index]);
+    let first = index;
+    while (first > 0 && albumByTrack.get(order[first - 1]) === album) first--;
+    for (let next = first; next < order.length && albumByTrack.get(order[next]) === album; next++) {
+      if (!unavailable.has(order[next])) return order[next];
+    }
+    return null;
+  }
   publish();
   return Object.freeze({
     snapshot: () => snapshot,
     albumFor: id => albumByTrack.get(id) || null,
     candidate,
+    restartCandidate,
+    rejectRestart(id, expected = snapshot) {
+      if (typeof id !== 'string' || id !== restartCandidate(expected)) return false;
+      unavailable.add(id); revision++; publish(); return true;
+    },
+    commitRestart(id, expected = snapshot) {
+      if (typeof id !== 'string' || id !== restartCandidate(expected)) return false;
+      index = order.indexOf(id); visitedEnd = index; revision++; publish(); return true;
+    },
     // The native queue commits only an actually accepted occurrence. Merely
     // preparing continuity or previewing Next cannot advance this history.
     commit(id, expected = snapshot) {

@@ -22,6 +22,17 @@
       this.count += 1;
       return true;
     }
+    // Used only by native verified packet ranges; never bridges an unknown gap.
+    addCoalesced(start, end, source, serial) {
+      if (this.count) {
+        const i = ((this.head + this.count - 1) % 256) * 4;
+        if (this.data[i + 1] === start && this.data[i + 3] === serial
+            && this.data[i + 2] + (this.data[i + 1] - this.data[i]) === source) {
+          this.data[i + 1] = end; return true;
+        }
+      }
+      return this.add(start, end, source, serial);
+    }
     select(frame, retained = false) {
       this.serial = 0;
       if (retained) {
@@ -30,14 +41,14 @@
         while (this.cursor < this.count) {
           const i = ((this.head + this.cursor) % 256) * 4;
           if (frame >= this.data[i + 1]) { this.cursor += 1; continue; }
-          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + frame - this.data[i]; }
+          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + (frame - this.data[i]); }
           return;
         }
       } else {
         while (this.count) {
           const i = this.head * 4;
           if (frame >= this.data[i + 1]) { this.head = (this.head + 1) % 256; this.count -= 1; continue; }
-          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + frame - this.data[i]; }
+          if (frame >= this.data[i]) { this.serial = this.data[i + 3]; this.source = this.data[i + 2] + (frame - this.data[i]); }
           return;
         }
       }
@@ -47,13 +58,13 @@
       for (let n = 0; n < this.count; n += 1) if (this.data[((this.head + n) % 256) * 4 + 3] === serial) return true;
       return false;
     }
-    copy(sourceQueue, first, count, targetStart) {
+    copy(sourceQueue, first, count, targetStart, coalesce = false) {
       for (let n = 0; n < sourceQueue.count; n += 1) {
         const i = ((sourceQueue.head + n) % 256) * 4;
         const start = Math.max(first, sourceQueue.data[i]);
         const end = Math.min(first + count, sourceQueue.data[i + 1]);
-        if (end > start && !this.add(targetStart + start - first, targetStart + end - first,
-            sourceQueue.data[i + 2] + start - sourceQueue.data[i], sourceQueue.data[i + 3])) return;
+        if (end > start && !this[coalesce ? 'addCoalesced' : 'add'](targetStart + (start - first), targetStart + (end - first),
+            sourceQueue.data[i + 2] + (start - sourceQueue.data[i]), sourceQueue.data[i + 3])) return;
       }
     }
   }
@@ -63,6 +74,8 @@
       samples: new Float32Array(capacityFrames * CHANNELS),
       captureRanges: new CaptureRanges(),
       captureReadFrame: 0,
+      rateAlias: 0, rateSource: 0, rateReceivedEnd: 0, ratePerPacket: false,
+      rateRanges: new CaptureRanges(),
       capacityFrames,
       readFrame: 0,
       writeFrame: 0,
@@ -78,6 +91,8 @@
   }
 
   function clearRing(ring) {
+    ring.rateAlias = 0; ring.rateSource = 0; ring.rateReceivedEnd = 0;
+    ring.ratePerPacket = false; ring.rateRanges.clear();
     ring.captureSerial = 0;
     ring.captureRanges.clear();
     ring.captureReadFrame = 0;
@@ -112,6 +127,128 @@
     right[outputFrame] = ring.samples[source + 1];
     ring.readFrame = (ring.readFrame + 1) % ring.capacityFrames;
     ring.bufferedFrames -= 1;
+  }
+
+  // Passive fixed-storage observation. No PCM, clock, ring or scheduling writes.
+  // Four transferred 16 KiB credits; at most 256 six-double rows per packet.
+  // Row: alias, coordinate start, frame count, repeat count, output start, continuity.
+  class RatePositionObserver {
+    constructor(port) {
+      this.port = port; this.enabled = false; this.initialized = false;
+      this.credits = []; this.inFlight = [false, false, false, false];
+      this.view = null; this.bufferId = 0; this.count = 0; this.packet = 0;
+      this.continuity = 1; this.pendingBreak = false; this.lastEnd = null;
+      this.runAlias = 0; this.runSource = 0; this.runCount = 0; this.runOutput = 0;
+      this.runContinuity = 1; this.lastFlush = null; this.lastLive = '';
+      this.liveAliases = () => [];
+    }
+    safe(n, min = 0) { return Number.isSafeInteger(n) && !Object.is(n, -0) && n >= min; }
+    disable(reason) {
+      if (!this.enabled) return;
+      this.enabled = false; this.runCount = 0;
+      try { this.port.postMessage({ type: 'rate-capture-disabled', reason }); } catch (_) {}
+    }
+    command(message) {
+      try {
+        if (message.type === 'rate-capture-enable') {
+          if (this.initialized || message.coordinateRateHz !== sampleRate || !Array.isArray(message.buffers)
+              || message.buffers.length !== 4 || new Set(message.buffers).size !== 4
+              || message.buffers.some(b => !(b instanceof ArrayBuffer) || b.byteLength !== 16384)) return;
+          this.initialized = true; this.enabled = true;
+          this.credits = message.buffers.map((buffer, index) => ({ buffer, id: index + 1 }));
+        } else if (message.type === 'rate-capture-credit') {
+          const id = message.bufferId;
+          if (!this.safe(id, 1) || id > 4 || !this.inFlight[id - 1]
+              || !(message.buffer instanceof ArrayBuffer) || message.buffer.byteLength !== 16384) {
+            this.disable('invalid_rate_capture_credit'); return;
+          }
+          this.inFlight[id - 1] = false;
+          if (this.enabled) this.credits.push({ buffer: message.buffer, id });
+        } else if (message.type === 'rate-capture-barrier') {
+          this.barrier(); this.flush();
+        } else if (message.type === 'rate-capture-flush') {
+          this.flush();
+          this.port.postMessage({ type: 'rate-capture-flushed', token: message.token, liveAliases: this.liveAliases() });
+        } else if (message.type === 'rate-capture-disable') this.disable('rate_capture_retired');
+      } catch (_) { this.disable('rate_capture_transport'); }
+    }
+    acquire() {
+      if (this.view) return true;
+      const credit = this.credits.pop();
+      if (!credit) { this.disable('rate_capture_credit_capacity'); return false; }
+      this.view = new Float64Array(credit.buffer); this.bufferId = credit.id; this.count = 0;
+      return true;
+    }
+    seal() {
+      if (!this.enabled || !this.runCount) return;
+      if (!this.acquire()) return;
+      let i = 4 + (this.count - 1) * 6;
+      if (this.count && this.view[i] === this.runAlias && this.view[i + 1] === this.runSource
+          && this.view[i + 2] === this.runCount && this.view[i + 5] === this.runContinuity
+          && this.view[i + 4] + this.view[i + 2] * this.view[i + 3] === this.runOutput
+          && this.safe(this.view[i + 3] + 1, 1)
+          && this.safe(this.runCount * (this.view[i + 3] + 1), 1)) {
+        this.view[i + 3] += 1;
+      } else {
+        if (this.count === 256) {
+          this.send();
+          if (!this.enabled || !this.acquire()) return;
+        }
+        i = 4 + this.count * 6;
+        this.view[i] = this.runAlias; this.view[i + 1] = this.runSource;
+        this.view[i + 2] = this.runCount; this.view[i + 3] = 1;
+        this.view[i + 4] = this.runOutput; this.view[i + 5] = this.runContinuity;
+        this.count += 1;
+      }
+      this.runCount = 0;
+    }
+    record(alias, source, output) {
+      if (!this.enabled) return;
+      if (!this.safe(source) || !this.safe(source + 1) || !this.safe(output) || !this.safe(output + 1)) {
+        this.disable('rate_capture_numeric_limit'); return;
+      }
+      if (!this.safe(alias, 1)) { this.barrier(); return; }
+      if (this.lastEnd !== null && output !== this.lastEnd) this.pendingBreak = true;
+      if (this.pendingBreak) {
+        this.seal(); this.continuity += 1; this.pendingBreak = false;
+        if (!this.safe(this.continuity, 1)) { this.disable('rate_capture_numeric_limit'); return; }
+      }
+      if (this.runCount && (this.runAlias !== alias || this.runSource + this.runCount !== source
+          || this.runOutput + this.runCount !== output || this.runContinuity !== this.continuity)) this.seal();
+      if (!this.enabled) return;
+      if (!this.runCount) {
+        this.runAlias = alias; this.runSource = source; this.runOutput = output;
+        this.runContinuity = this.continuity;
+      }
+      this.runCount += 1; this.lastEnd = output + 1;
+      if (this.lastFlush === null) this.lastFlush = output;
+      if (output - this.lastFlush >= sampleRate / 4) { this.flush(); this.lastFlush = output; }
+    }
+    barrier(reason = '') {
+      if (!this.enabled) return;
+      this.seal();
+      if (reason !== 'seamless-track' && reason !== 'seamless-loop') this.pendingBreak = true;
+    }
+    send() {
+      if (!this.enabled || !this.view || !this.count) return;
+      if (!this.safe(this.packet + 1, 1)) { this.disable('rate_capture_numeric_limit'); return; }
+      const buffer = this.view.buffer, id = this.bufferId;
+      this.view[0] = this.count; this.view[1] = ++this.packet; this.view[2] = id; this.view[3] = 1;
+      this.inFlight[id - 1] = true; this.view = null; this.count = 0;
+      try { this.port.postMessage({ type: 'rate-capture-packet', buffer }, [buffer]); }
+      catch (_) { this.disable('rate_capture_transport'); }
+    }
+    publishLive() {
+      if (!this.enabled) return;
+      try {
+        const liveAliases = this.liveAliases(), key = liveAliases.join(',');
+        if (key === this.lastLive) return;
+        this.flush();
+        this.lastLive = key;
+        this.port.postMessage({ type: 'rate-capture-live', liveAliases });
+      } catch (_) { this.disable('rate_capture_transport'); }
+    }
+    flush() { this.seal(); this.send(); }
   }
 
   // Capture has its own credits, coordinates and epochs. It never controls PCM.
@@ -371,8 +508,16 @@
     constructor() {
       super();
       this.positionCapture = new PositionCapture(this);
+      this.ratePosition = new RatePositionObserver(this.port);
+      this.ratePosition.liveAliases = () => [...new Set([
+        this.current?.bufferedFrames > 0 ? this.current.rateAlias : 0,
+        this.continuity?.bufferedFrames > 0 ? this.continuity.rateAlias : 0,
+        this.loopActive && this.retainedLoopFrames > 0 ? this.retainedRateAlias : 0,
+      ].filter(value => value > 0))];
+      this.retainedRateAlias = 0; this.retainedRateSource = 0;
       this.retainedCaptureSerial = 0;
       this.retainedCaptureSource = 0;
+      this.retainedRatePerPacket = false; this.retainedRateRanges = new CaptureRanges();
       this.retainedCaptureRanges = new CaptureRanges();
       this.generation = 0;
       this.sampleRate = 0;
@@ -382,6 +527,7 @@
       this.renderedFrames = 0;
       this.timelineFrame = 0;
       this.playing = false;
+      this.playbackIntentId = 0;
       this.startupBufferFrames = 1;
       this.underruns = 0;
       this.outgoingCaptureLeft = new Float32Array(MAX_BOUNDARY_CAPTURE_FRAMES);
@@ -409,9 +555,11 @@
     }
 
     reset(generation, timelineStartFrame = 0) {
-      this.positionCapture.barrier();
+      (this.positionCapture.barrier(), this.ratePosition.barrier());
+      this.retainedRateAlias = 0; this.retainedRateSource = 0;
       this.retainedCaptureSerial = 0;
       this.retainedCaptureSource = 0;
+      this.retainedRateRanges.clear();
       this.retainedCaptureRanges.clear();
       this.generation = generation;
       clearRing(this.current);
@@ -419,6 +567,7 @@
       this.renderedFrames = timelineStartFrame;
       this.timelineFrame = timelineStartFrame;
       this.playing = false;
+      this.playbackIntentId = 0;
       this.underruns = 0;
       this.outgoingCaptureCount = 0;
       this.outgoingCaptureWrite = 0;
@@ -434,12 +583,20 @@
       this.shortLoopRendering = false;
       this.pendingSeek = null;
       this.expectContinuity = false;
-      this.positionCapture.flush();
+      (this.positionCapture.flush(), this.ratePosition.flush());
     }
 
     handleCommand(message) {
+      try {
       if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
-      if (message.type.startsWith("capture-")) { this.positionCapture.command(message); return; }
+      if (message.type.startsWith('rate-capture-')) {
+        if (!this.positionCapture.enabled) this.ratePosition.command(message);
+        return;
+      }
+      if (message.type.startsWith("capture-")) {
+        if (!this.ratePosition.initialized) this.positionCapture.command(message);
+        return;
+      }
       if (message.type === 'configure') {
         this.configure(message);
         return;
@@ -449,8 +606,15 @@
         return;
       }
       if (!this.configured || message.generation !== this.generation) return;
-      if (['pause', 'play', 'stop'].includes(message.type)) this.positionCapture.barrier();
-      if (message.type === 'pause') this.positionCapture.flush();
+      if (message.type === 'play' || message.type === 'pause') {
+        if (Object.prototype.hasOwnProperty.call(message, 'playbackIntentId')) {
+          if (!Number.isSafeInteger(message.playbackIntentId)
+              || message.playbackIntentId <= this.playbackIntentId) return;
+          this.playbackIntentId = message.playbackIntentId;
+        } else if (this.playbackIntentId > 0) return;
+      }
+      if (['pause', 'play', 'stop'].includes(message.type)) (this.positionCapture.barrier(), this.ratePosition.barrier());
+      if (message.type === 'pause') (this.positionCapture.flush(), this.ratePosition.flush());
       if (message.type === 'enqueue') this.enqueue(message);
       else if (message.type === 'eos') this.markEos(message);
       else if (message.type === 'play') this.playing = true;
@@ -463,6 +627,7 @@
         this.expectContinuity = message.active === true;
       }
       else if (message.type === 'stop') this.stop(message);
+      } finally { this.ratePosition.publishLive(); }
     }
 
     configure(message) {
@@ -476,6 +641,7 @@
         : message.currentCapacityFrames;
       if (!isIntegerBetween(message.generation, 1)
           || !isIntegerBetween(message.sampleRate, 8_000, 192_000)
+          || message.sampleRate !== sampleRate
           || !isIntegerBetween(message.currentCapacityFrames, 1, 10_000_000)
           || !isIntegerBetween(message.continuityCapacityFrames, 1, 10_000_000)
           || !isIntegerBetween(startupBufferFrames, 1, startupCapacityFrames)) return;
@@ -551,6 +717,47 @@
           this.retainedCaptureSource = ring.captureSource;
         }
       }
+      if (this.ratePosition.enabled) {
+        const position = message.ratePosition;
+        if (position?.perPacket === true || ring.ratePerPacket) {
+          const valid = position?.perPacket === true && Number.isSafeInteger(position.alias) && position.alias > 0
+            && (!ring.receivedFrames || ring.ratePerPacket && ring.rateAlias === position.alias)
+            && Array.isArray(position.ranges) && position.ranges.length <= 32
+            && Number.isSafeInteger(ring.receivedFrames + message.frameCount);
+          if (!ring.receivedFrames) {
+            ring.ratePerPacket = true; ring.rateAlias = valid ? position.alias : 0;
+            if (message.streamId === this.retainedLoopStreamId) {
+              this.retainedRateAlias = ring.rateAlias; this.retainedRatePerPacket = true;
+            }
+          }
+          let end = 0, accepted = valid;
+          if (valid) for (const range of position.ranges) {
+            if (!Array.isArray(range) || range.length !== 3
+                || range.some(n => !Number.isSafeInteger(n) || Object.is(n, -0))
+                || range[0] < end || range[1] < 0 || range[2] < 1
+                || range[0] > message.frameCount - range[2]
+                || !Number.isSafeInteger(range[1] + range[2])) { accepted = false; break; }
+            end = range[0] + range[2];
+          }
+          if (accepted) for (const range of position.ranges) ring.rateRanges.addCoalesced(
+            ring.receivedFrames + range[0], ring.receivedFrames + range[0] + range[2], range[1], ring.rateAlias);
+          // Missing, invalid or over-capacity ranges remain holes. Never use rateSource here.
+        } else {
+        const valid = position && Number.isSafeInteger(position.alias) && position.alias > 0
+          && Number.isSafeInteger(position.startFrame) && position.startFrame >= 0
+          && Number.isSafeInteger(position.startFrame + message.frameCount)
+          && (!ring.receivedFrames || (ring.rateAlias === position.alias && ring.rateReceivedEnd === position.startFrame));
+        if (valid) {
+          if (!ring.receivedFrames) {
+            ring.rateAlias = position.alias; ring.rateSource = position.startFrame;
+            if (message.streamId === this.retainedLoopStreamId) {
+              this.retainedRateAlias = ring.rateAlias; this.retainedRateSource = ring.rateSource;
+            }
+          }
+          ring.rateReceivedEnd = position.startFrame + message.frameCount;
+        } else { ring.rateAlias = 0; this.ratePosition.barrier(); }
+        }
+      }
       const positions = message.capturePositions;
       if (positions && this.positionCapture.enabled && Number.isSafeInteger(ring.receivedFrames + message.frameCount)
           && Array.isArray(positions.ranges)
@@ -586,6 +793,7 @@
           this.retainedLoopSamples[target] = message.pcm[source];
           this.retainedLoopSamples[target + 1] = message.pcm[source + 1];
         }
+        this.retainedRateRanges.copy(ring.rateRanges, receivedBefore, retainedFrames, this.retainedLoopCapturedFrames, true);
         this.retainedCaptureRanges.copy(ring.captureRanges, receivedBefore, retainedFrames, this.retainedLoopCapturedFrames);
         this.retainedLoopCapturedFrames += retainedFrames;
       }
@@ -667,7 +875,7 @@
 
     setLoop(message) {
       if (typeof message.active !== 'boolean') return;
-      this.positionCapture.barrier();
+      (this.positionCapture.barrier(), this.ratePosition.barrier());
       if (!message.active) {
         const resumeTimelineFrame = this.shortLoopRendering
           ? this.loopEndFrame
@@ -716,8 +924,12 @@
         this.timelineFrame = Math.max(this.timelineFrame, this.renderedFrames);
       }
       this.retainedLoopStreamId = message.retainedStreamId;
+      this.retainedRateAlias = this.continuity.rateAlias || 0;
+      this.retainedRateSource = this.continuity.rateSource || 0;
+      this.retainedRatePerPacket = this.continuity.ratePerPacket;
       this.retainedCaptureSerial = this.continuity.captureSerial || 0;
       this.retainedCaptureSource = this.continuity.captureSource || 0;
+      this.retainedRateRanges.clear();
       this.retainedCaptureRanges.clear();
       this.retainedLoopFrames = shortLoop ? loopFrames : 0;
       this.retainedLoopCapturedFrames = 0;
@@ -733,6 +945,7 @@
         this.retainedLoopSamples[target] = this.continuity.samples[source];
         this.retainedLoopSamples[target + 1] = this.continuity.samples[source + 1];
       }
+      this.retainedRateRanges.copy(this.continuity.rateRanges, this.continuity.captureReadFrame, retainedFrames, 0, true);
       this.retainedCaptureRanges.copy(this.continuity.captureRanges, this.continuity.captureReadFrame, retainedFrames, 0);
       this.retainedLoopCapturedFrames = retainedFrames;
     }
@@ -753,7 +966,7 @@
       this.loopEndFrame = 0;
       this.shortLoopRendering = false;
       this.expectContinuity = false;
-      this.positionCapture.flush();
+      (this.positionCapture.flush(), this.ratePosition.flush());
       this.port.postMessage({
         type: 'stopped',
         generation: this.generation,
@@ -792,7 +1005,7 @@
     }
 
     promoteContinuity(reason = 'discontinuity') {
-      this.positionCapture.barrier(reason);
+      (this.positionCapture.barrier(reason), this.ratePosition.barrier(reason));
       const oldCurrent = this.current;
       this.current = this.continuity;
       this.continuity = oldCurrent;
@@ -842,7 +1055,7 @@
     }
 
     emitShortLoopBoundary(outgoingStreamId, renderedFrame) {
-      this.positionCapture.barrier('seamless-loop');
+      (this.positionCapture.barrier('seamless-loop'), this.ratePosition.barrier('seamless-loop'));
       const outgoingFrames = this.copyOutgoingCapture();
       this.boundaryIncomingLeft.fill(0);
       this.boundaryIncomingRight.fill(0);
@@ -955,7 +1168,7 @@
                 || this.retainedLoopCapturedFrames !== this.retainedLoopFrames) {
               const missingFrames = left.length - outputFrame;
               this.underruns += 1;
-              this.positionCapture.barrier();
+              (this.positionCapture.barrier(), this.ratePosition.barrier());
               this.port.postMessage({
                 type: 'underrun', generation: this.generation,
                 streamId: this.current.streamId, role: 'current',
@@ -988,7 +1201,7 @@
           }
           const missingFrames = left.length - outputFrame;
           this.underruns += 1;
-              this.positionCapture.barrier();
+              (this.positionCapture.barrier(), this.ratePosition.barrier());
           this.port.postMessage({
             type: 'underrun', generation: this.generation,
             streamId: this.current.streamId, role: 'current',
@@ -1009,6 +1222,11 @@
               this.retainedCaptureRanges.serial ? this.retainedCaptureRanges.source : this.retainedCaptureSource + this.retainedLoopReadFrame,
               currentFrame + outputFrame);
           }
+          if (this.retainedRatePerPacket) {
+            this.retainedRateRanges.select(this.retainedLoopReadFrame, true);
+            this.ratePosition.record(this.retainedRateRanges.serial, this.retainedRateRanges.source, currentFrame + outputFrame);
+          } else this.ratePosition.record(this.retainedRateAlias,
+            this.retainedRateSource + this.retainedLoopReadFrame, currentFrame + outputFrame);
           recordConsumedSample(
             this.current,
             this.retainedLoopStreamId,
@@ -1028,7 +1246,7 @@
               && this.continuity.streamId === this.pendingSeek.streamId) {
             const missingFrames = left.length - outputFrame;
             this.underruns += 1;
-              this.positionCapture.barrier();
+              (this.positionCapture.barrier(), this.ratePosition.barrier());
             pendingPlaybackNotification = {
               type: 'underrun', generation: this.generation,
               streamId: this.current.streamId, role: 'current',
@@ -1064,6 +1282,11 @@
               this.retainedCaptureRanges.serial ? this.retainedCaptureRanges.source : this.retainedCaptureSource + this.retainedLoopReadFrame,
               currentFrame + outputFrame);
           }
+            if (this.retainedRatePerPacket) {
+              this.retainedRateRanges.select(this.retainedLoopReadFrame, true);
+              this.ratePosition.record(this.retainedRateRanges.serial, this.retainedRateRanges.source, currentFrame + outputFrame);
+            } else this.ratePosition.record(this.retainedRateAlias,
+              this.retainedRateSource + this.retainedLoopReadFrame, currentFrame + outputFrame);
             recordConsumedSample(
               this.current,
               this.retainedLoopStreamId,
@@ -1087,7 +1310,7 @@
             if (this.expectContinuity && !this.continuity.eos) {
               if (this.current.firstFrameReported) {
                 this.underruns += 1;
-              this.positionCapture.barrier();
+              (this.positionCapture.barrier(), this.ratePosition.barrier());
                 pendingPlaybackNotification = {
                   type: 'underrun', generation: this.generation,
                   streamId: this.current.streamId, role: 'current',
@@ -1103,6 +1326,7 @@
               generation: this.generation,
               streamId: this.current.streamId,
               timelineFrame: this.timelineFrame,
+              ...(this.playbackIntentId > 0 ? {playbackIntentId: this.playbackIntentId} : {}),
             };
             this.playing = false;
             break;
@@ -1110,7 +1334,7 @@
           const missingFrames = left.length - outputFrame;
           if (this.current.firstFrameReported) {
             this.underruns += 1;
-              this.positionCapture.barrier();
+              (this.positionCapture.barrier(), this.ratePosition.barrier());
             pendingPlaybackNotification = {
               type: 'underrun',
               generation: this.generation,
@@ -1142,6 +1366,11 @@
             ring.captureRanges.serial ? ring.captureRanges.source : ring.captureSource, currentFrame + outputFrame);
           ring.captureSource += 1;
         }
+        if (ring.ratePerPacket) {
+          ring.rateRanges.select(ring.captureReadFrame);
+          this.ratePosition.record(ring.rateRanges.serial, ring.rateRanges.source, currentFrame + outputFrame);
+        } else this.ratePosition.record(ring.rateAlias, ring.rateSource, currentFrame + outputFrame);
+        ring.rateSource += 1;
         ring.captureReadFrame += 1;
         const leftSample = left[outputFrame];
         const rightSample = right[outputFrame];
@@ -1163,6 +1392,8 @@
         outputFrame += 1;
       }
 
+      this.ratePosition.publishLive();
+      if (boundaryPending || pendingPlaybackNotification) this.ratePosition.flush();
       if (firstConsumedRing) {
         this.port.postMessage({
           type: 'consumed',
@@ -1210,7 +1441,7 @@
         });
       }
       // Credit this block before a terminal or interruption event closes its listen segment.
-      if (pendingPlaybackNotification) this.positionCapture.flush();
+      if (pendingPlaybackNotification) (this.positionCapture.flush(), this.ratePosition.flush());
       if (pendingPlaybackNotification) this.port.postMessage(pendingPlaybackNotification);
       if (this.current?.firstFrameReported && outputFrame > 0) {
         this.port.postMessage({

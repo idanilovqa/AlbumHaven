@@ -1,4 +1,4 @@
-import {recordedTrackDetails} from './recorded-track-details.mjs';
+import {recordedTrackDetails, recordedSecondsLabel} from './recorded-track-details.mjs';
 // Pure, inactive presentation of separately admitted owner outputs. This does
 // not authenticate evidence, qualify listens, persist a target or wire the UI.
 import {isManualProgress} from './progress.mjs';
@@ -233,9 +233,8 @@ export function projectLocalAlbumRecordedPresentation(current, value) {
     || !projectLocalAlbumFullProgress(current,value).available))return invalid();
   const recorded=expanded == null ? null : recordedTrackDetails(expanded,expanded.target);
   if(expanded != null && !recorded)return invalid();
-  if(recorded?.recorded_frames != null) {
-    const seconds=Math.floor(recorded.recorded_frames/48000),minutes=Math.floor(seconds/60);
-    return freeze({available:true,text:`Recorded: at least ${minutes?`${minutes} min`:`${seconds} sec`}`,
+  if(recorded?.recorded_seconds != null) {
+    return freeze({available:true,text:`Recorded: at least ${recordedSecondsLabel(recorded.recorded_seconds)}`,
       detail:recorded.explanation});
   }
   const seconds=Math.floor(total/48000),minutes=Math.floor(seconds/60);
@@ -262,7 +261,7 @@ export function projectLocalAlbumFullProgress(current,value) {
   if(['not_started','recalculating'].includes(progress.status))return freeze({available:true,
     continuation:progress.continuation,revision:progress.state_revision,text:'Full listens: calculating…',
     detail:'Processing retained measured listening in bounded pages; no imported play counts are used.'});
-  if(progress.policy_version!=='local-edition-overlap-total-margin-v1'
+  if(!['local-edition-overlap-total-margin-v1','rate-checkpoint-full-composition-v1','rate-checkpoint-full-composition-v2'].includes(progress.policy_version)
     ||progress.basis!=='healthy-local-inventory-version-v1'||progress.history_complete!==false
     ||!['processing','complete_at_cutoff','lower_bound_at_cutoff','blocked'].includes(progress.status)
     ||!integer(progress.full)||!integer(progress.uninterrupted_full)

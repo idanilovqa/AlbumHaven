@@ -267,10 +267,12 @@ const state = {
     appearanceKey: 'backgrounds',
   },
   player: {
+    selectedTrack: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
       context: null,
+      sampleRate: 0,
       node: null,
       socket: null,
       preparePromise: null,
@@ -279,7 +281,7 @@ const state = {
       expectedSocketClose: null,
       deferredCreditFrames: { current: 0, continuity: 0 },
       roles: { current: null, continuity: null },
-      limits: { currentSeconds: 12, continuitySeconds: 5 },
+      limits: { currentSeconds: 12, continuitySeconds: 12 },
       snapshot: {
         currentTime: 0,
         duration: 0,

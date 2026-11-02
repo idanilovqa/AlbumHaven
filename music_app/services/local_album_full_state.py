@@ -13,6 +13,14 @@ from music_app.services.playback_position_transport import require_position_stor
 from music_app.services.local_album_full_fold import (
     PAGE_RUNS, MAX_STATE_BYTES, LocalFullCapacity, new_geometry, advance_geometry, geometry_lower_bound)
 from music_app.services.album_listening_metrics import LOCAL_FULL_POLICY
+from music_app.services.playback_rate_capture_postgres import require_rate_storage
+from music_app.services.playback_rate_evidence import RateEvidenceError
+from music_app.services.local_album_rate_reader import read_rate_facts
+from music_app.services.local_album_rate_state import (
+    STATE_VERSION as RATE_STATE_VERSION, start_rate, compatible_rate,
+    observe_legacy_identity, advance_rate_extension,
+)
+from music_app.services.local_album_rate_track_metrics import project_rate_details, rate_details_compatible
 from music_app.services.local_album_track_metrics import (DETAIL_POLICY, compatible as details_compatible,
     new_details, anchor_details, advance_details, project_details)
 
@@ -78,8 +86,10 @@ def _version_list(versions):
     return [[*key,value] for key,value in sorted(versions.items())]
 
 
-def _compatible(state, selected, versions, history, extents, *, best_only=False):
-    if (state.get('policy')!=LOCAL_FULL_POLICY or state.get('membership')!=selected.membership_revision
+def _compatible(state, selected, versions, history, extents, *, rate_facts, best_only=False):
+    if not compatible_rate(state, rate_facts, best_only=best_only):return False
+    expected_policy = RATE_STATE_VERSION if state.get('rate') is not None else LOCAL_FULL_POLICY
+    if (state.get('policy')!=expected_policy or state.get('membership')!=selected.membership_revision
         or state.get('invalidation')!=history['invalidation_revision']):return False
     # Added files/EOF facts are monotonic. Removed/changed versions or a formerly
     # trusted denominator becoming ambiguous invalidate the derived lower bound.
@@ -97,7 +107,7 @@ def _fresh_compatible(state, versions):
                for row in state.get('fresh_versions', []))
 
 
-def _new_pass(selected,versions,history,extents,prior=None):
+def _new_legacy_pass(selected,versions,history,extents,prior=None):
     membership=json.loads(selected.canonical_membership)
     full_supported=membership['order_status']=='supported'
     ids=[int(m['track_id']) for m in membership['members']]
@@ -117,6 +127,21 @@ def _new_pass(selected,versions,history,extents,prior=None):
         fresh_policy=FRESH_PLAY_POLICY,fresh_streams={},fresh_pruned=False,
         fresh_after=prior.get('fresh_after') if prior and _fresh_compatible(prior,versions) else None,
         fresh_versions=prior.get('fresh_versions',[]) if prior and _fresh_compatible(prior,versions) else [])
+
+
+def _new_pass(selected, versions, history, extents, *, rate_facts, rates, prior=None):
+    try:
+        return start_rate(_new_legacy_pass(selected, versions, history, extents, prior),
+                          rate_facts, rates, prior=prior)
+    except RateEvidenceError as error:
+        raise CaptureError('capture_unavailable', 503) from error
+
+
+def _rate_facts(connection, live, versions):
+    try:
+        return read_rate_facts(connection, live, versions)
+    except RateEvidenceError as error:
+        raise CaptureError('capture_unavailable', 503) from error
 
 
 def _facts(connection,live,versions):
@@ -259,16 +284,25 @@ def _bound_optional_details(state):
     prefix. Future bounded rebuilds may retry; no self-restarting loop.
     """
     keys=('details','completed_details')
-    base={key:value for key,value in state.items() if key not in keys}
+    base=deepcopy({key:value for key,value in state.items() if key not in keys})
+    if base.get('rate'):
+        base['rate'].pop('track_details', None)
+        base['rate'].pop('completed_track_details', None)
     budget=max(0,min(512*1024,MAX_STATE_BYTES-len(json.dumps(base).encode())-256))
-    def size():return len(json.dumps({key:state.get(key) for key in keys}).encode())
+    def size():
+        optional={key:state.get(key) for key in keys}
+        optional['rate']={key:state.get('rate',{}).get(key) for key in ('track_details','completed_track_details')}
+        return len(json.dumps(optional).encode())
+    for key in ('track_details','completed_track_details'):
+        if size()>budget and state.get('rate'):
+            state['rate'][key]=None;state['details_pruned']=True
     if size()>budget:
         state['details']=None;state['details_pruned']=True
     if size()>budget:
         state['completed_details']=None;state['details_pruned']=True
 
 
-def _advance(connection,live,selected,original):
+def _advance_legacy(connection,live,selected,original):
     state=deepcopy(original)
     if state['phase']=='complete':return state
     if state['phase']=='allocate':
@@ -288,6 +322,7 @@ def _advance(connection,live,selected,original):
         state['owner']=following;state['ordinal']=-1
     if state['phase']=='anchors':
         rows=_runs(connection,live,selected,state)
+        observe_legacy_identity(state, rows[:PAGE_RUNS])
         if state['details'] is not None:anchor_details(state['details'],rows[:PAGE_RUNS])
         for run in rows[:PAGE_RUNS]:
             key=str(run['track_id']);old=state['anchors'].get(key)
@@ -328,10 +363,23 @@ def _advance(connection,live,selected,original):
     return state
 
 
+def _advance(connection, live, selected, original):
+    if original['phase'] == 'rate':
+        return advance_rate_extension(connection, live, selected, deepcopy(original))
+    if original['phase'] == 'complete':
+        return deepcopy(original)
+    advanced = _advance_legacy(connection, live, selected, original)
+    if advanced['phase'] == 'complete':
+        advanced['phase'] = 'rate'
+        # Legacy completion is not completion of the shared historical cut.
+        advanced['completed_cutoff'] = original.get('completed_cutoff')
+    return advanced
+
+
 def _projection(row,state,history,*,pending_facts=False,target=None):
     pending=pending_facts or state.get('details_policy') != DETAIL_POLICY or state.get('fresh_policy') != FRESH_PLAY_POLICY or state['phase']!='complete' or state['append']!=history['append_revision'] or state['proof']!=history['proof_revision']
-    return dict(available=True,policy_version=LOCAL_FULL_POLICY,state_revision=str(row['state_revision']),
-        recorded_details=project_details(state.get('completed_details'),target) if state.get('full_supported',True) else None,
+    return dict(available=True,policy_version=state['policy'],state_revision=str(row['state_revision']),
+        recorded_details=project_rate_details(state,target) if state.get('full_supported',True) else None,
         recorded_details_reason='derived_detail_capacity' if state.get('details_pruned') else None,
         full=state['best_full'] if state.get('full_supported',True) else None,
         uninterrupted_full=state['best_uninterrupted'] if state.get('full_supported',True) else None,
@@ -355,16 +403,23 @@ def read_full_state(connection,live,selected,versions,history,*,extents=None,all
         where account_id=%s and original_library_id=%s and original_album_id=%s''',
         (live.actor.account_id,live.library_id,selected.album_id)).fetchone()
     if row is None:return dict(available=True,state_revision='0',status='not_started',continuation=True)
+    try:require_rate_storage(connection)
+    except CaptureError:return dict(available=False,reason='storage_unavailable')
+    rate_facts,rates=_rate_facts(connection,live,versions)
     if extents is None:extents=_facts(connection,live,versions)
-    if not _compatible(row['state'],selected,versions,history,extents,best_only=True):
+    if not _compatible(row['state'],selected,versions,history,extents,rate_facts=rate_facts,best_only=True):
         return dict(available=True,state_revision=str(row['state_revision']),status='recalculating',continuation=True)
     projected_state=deepcopy(row['state'])
     if not details_compatible(projected_state.get('completed_details'),versions,extents):
         projected_state['completed_details']=None
+    if not rate_details_compatible(projected_state, versions, rate_facts):
+        if projected_state.get('rate'):
+            projected_state['rate']['completed_track_details'] = None
     if not _fresh_compatible(projected_state,versions):
         projected_state['fresh_after']=None
     return _projection(row,projected_state,history,target=target,pending_facts=_version_list(versions)!=row['state']['versions']
-        or [[f,v,e] for (f,v),e in sorted(extents.items())]!=row['state']['extents'])
+        or [[f,v,e] for (f,v),e in sorted(extents.items())]!=row['state']['extents']
+        or row['state'].get('rate',{}).get('facts')!=[[f,v,r,e] for (f,v),(r,e) in sorted(rate_facts.items())])
 
 
 def advance_local_album_full(database_url,context,album_key,expected_revision,*,constraints=None,connect=None,clock=None,enabled=lambda:False):
@@ -391,6 +446,7 @@ def advance_local_album_full_on_connection(connection,live,now,album_key,expecte
     if not state_storage_ready(connection) or not decoder_observation_ready(connection) or not selection_schema_ready(connection):
         raise CaptureError('capture_unavailable',503)
     _require_full_indexes(connection)
+    require_rate_storage(connection)
     if top_freshness:
         from music_app.services.album_top_fresh_scope import current_top_listening_scope
         scope_reader=current_top_listening_scope
@@ -402,24 +458,26 @@ def advance_local_album_full_on_connection(connection,live,now,album_key,expecte
     account,global_budget=_budgets(connection,live.actor.account_id,now)
     history=_read_history_revision(connection,live.actor.account_id)
     extents=_facts(connection,live,versions)
+    rate_facts,rates=_rate_facts(connection,live,versions)
     row=connection.execute('''select * from integration.playback_album_metrics_state
         where account_id=%s and original_library_id=%s and original_album_id=%s for update''',
         (live.actor.account_id,live.library_id,selected.album_id)).fetchone()
     revision=row['state_revision'] if row else 0
-    compatible=row is not None and _compatible(row['state'],selected,versions,history,extents)
-    prior=row['state'] if row and _compatible(row['state'],selected,versions,history,extents,best_only=True) else None
-    state=row['state'] if compatible and row['state'].get('fresh_policy') == FRESH_PLAY_POLICY and row['state'].get('details_policy') == DETAIL_POLICY else _new_pass(selected,versions,history,extents,prior=prior)
+    compatible=row is not None and _compatible(row['state'],selected,versions,history,extents,rate_facts=rate_facts)
+    prior=row['state'] if row and _compatible(row['state'],selected,versions,history,extents,rate_facts=rate_facts,best_only=True) else None
+    state=row['state'] if compatible and row['state'].get('fresh_policy') == FRESH_PLAY_POLICY and row['state'].get('details_policy') == DETAIL_POLICY else _new_pass(selected,versions,history,extents,rate_facts=rate_facts,rates=rates,prior=prior)
     if revision==expected_revision and (row is None or (now-row['updated_at']).total_seconds()>=1):
         if state['phase']=='complete' and (state['append']!=history['append_revision'] or state['proof']!=history['proof_revision']
-            or state['versions']!=_version_list(versions) or state['extents']!=[[f,v,e] for (f,v),e in sorted(extents.items())]):
-            state=_new_pass(selected,versions,history,extents,prior=state)
+            or state['versions']!=_version_list(versions) or state['extents']!=[[f,v,e] for (f,v),e in sorted(extents.items())]
+            or state.get('rate',{}).get('facts')!=[[f,v,r,e] for (f,v),(r,e) in sorted(rate_facts.items())]):
+            state=_new_pass(selected,versions,history,extents,rate_facts=rate_facts,rates=rates,prior=state)
         try:
             state['blocked']=None
             advanced=_advance(connection,live,selected,state)
             _bound_optional_details(advanced)
             if len(json.dumps(advanced).encode())>MAX_STATE_BYTES:raise LocalFullCapacity('state_capacity')
             state=advanced
-        except LocalFullCapacity as error:
+        except (LocalFullCapacity, RateEvidenceError) as error:
             state['blocked']=str(error)
         encoded=json.dumps(state)
         charge=max(row['reservation_bytes'] if row else 0,1024+len(encoded.encode()))
@@ -440,7 +498,8 @@ def advance_local_album_full_on_connection(connection,live,now,album_key,expecte
     if enabled() is not True:raise CaptureError('capture_unavailable',503)
     # A stale retry does not mutate or count the same page a second time.
     result=_projection(row or {'state_revision':0},state,history,target=target,pending_facts=state['versions']!=_version_list(versions)
-        or state['extents']!=[[f,v,e] for (f,v),e in sorted(extents.items())])
+        or state['extents']!=[[f,v,e] for (f,v),e in sorted(extents.items())]
+        or state.get('rate',{}).get('facts')!=[[f,v,r,e] for (f,v),(r,e) in sorted(rate_facts.items())])
     if not compatible and prior is None and revision!=expected_revision:
         result=dict(available=True,state_revision=str(revision),status='recalculating',continuation=True)
     return dict(ok=True,version='local-album-full-progress-v1',album_key=album_key,

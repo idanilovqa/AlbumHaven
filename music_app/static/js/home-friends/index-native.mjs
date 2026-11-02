@@ -22,7 +22,7 @@ import {mountArtistPage} from '../artist-page/native.mjs';
 import {createFoobarHistoryOwner} from '../foobar-history/owner.mjs';
 import {createFoobarHistoryNativeActions} from '../foobar-history/native-actions.mjs';
 
-window.AlbumHavenRecommendationPresentation = Object.freeze(recommendationPresentation);
+window.AlbumHavenRecommendationPresentation = Object.freeze({...recommendationPresentation});
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, homeOwner = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null, notificationsView = null;

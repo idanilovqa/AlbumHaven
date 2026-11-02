@@ -193,22 +193,29 @@ function resetPlayerUnloadPersistence() {
 }
 
 function persistPlayerState(force = false, options = {}) {
-  if (playerUnloadStatePersisted && !options.allowAfterUnload) return;
+  if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+    || playerUnloadStatePersisted && !options.allowAfterUnload || getUnadmittedPlayerRestorePreview()) return false;
   let snapshot = '';
   try {
     const payload = buildPersistedPlayerState(options);
+    if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+      || getUnadmittedPlayerRestorePreview()) return false;
     if (!payload) {
       if (force) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
       state.player.lastPersistedSnapshot = '';
-      return;
+      return false;
     }
     snapshot = JSON.stringify(payload);
-    if (!force && snapshot === state.player.lastPersistedSnapshot) return;
-    setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
+    if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+      || getUnadmittedPlayerRestorePreview()) return false;
+    if (!force && snapshot === state.player.lastPersistedSnapshot) return false;
+    if (setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot) !== true) return false;
     state.player.lastPersistedSnapshot = snapshot;
+    return true;
   } catch (_error) {
     // Ignore storage errors so playback never breaks.
   }
+  return false;
 }
 
 function persistPlayerStateForUnload(reason) {
@@ -233,11 +240,62 @@ function persistPlayerStateForUnload(reason) {
   return true;
 }
 
+// Retired preview provenance protects the still-visible, unadmitted publication
+// from unload/visibility saves. It grants no playback or presentation authority.
+let playerRestorePreview = null;
+function getPlayerRestorePublication() {
+  const preview = playerRestorePreview;
+  if (!preview || !preview.track
+    || state.player.current !== preview.track) return null;
+  if (preview.publication) {
+    if (typeof isCurrentPlayerTrackPublication !== 'function'
+      || !isCurrentPlayerTrackPublication(preview.publication)) return null;
+  } else if (typeof playerTrackPublicationRevision !== 'undefined'
+    && playerTrackPublicationRevision !== preview.revision) return null;
+  return preview;
+}
+function getUnadmittedPlayerRestorePreview() {
+  const preview = getPlayerRestorePublication();
+  return preview && preview.phase !== 'admitted' ? preview : null;
+}
+function preserveRestoredPlayerLoopRange() {
+  const preview = getPlayerRestorePublication();
+  return Boolean(preview && !state.player.loopActive
+    && (preview.phase === 'pending' || preview.phase === 'admitted')
+    && currentPlayerRestoreAttempt(preview.attempt));
+}
+function getPlayerRestorePreview() {
+  const preview = getUnadmittedPlayerRestorePreview();
+  return preview && preview.phase !== 'retired' && currentPlayerRestoreAttempt(preview.attempt)
+    ? preview : null;
+}
+function getPublishingPlayerRestorePreview(guard) {
+  const preview = playerRestorePreview;
+  return preview?.phase === 'publishing' && preview.guard === guard
+    && playerRestoreAttempt === preview.attempt && preview.attempt.epoch === playerRestoreEpoch
+    ? preview : null;
+}
+function playerRestoreHasLogicalOwner() {
+  return Boolean(typeof playerSelectionOwnership !== 'undefined' && playerSelectionOwnership
+    || typeof hasPendingPlayerTrackStart === 'function' && hasPendingPlayerTrackStart()
+    || typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasPendingStart?.());
+}
+function playerRestoreColdStateCurrent(cold) {
+  const engine = streamingEngineState();
+  return !state.player.listenSession && !playerRestoreHasLogicalOwner() && !engine.stopPromise && !engine.pendingPromotion
+    && !engine.pendingSeek && getPlayerPlaybackSnapshot().paused
+    && (!cold || cold.engine === engine && cold.role === engine.roles.current
+      && cold.continuity === engine.roles.continuity && cold.request === engine.startRequestId
+      && cold.lifecycle === engine.lifecycleEpoch && cold.generation === engine.generation);
+}
 let playerRestoreEpoch = 0;
 let playerRestoreAttempt = null;
 function retirePlayerRestoreAttempt(reason = 'superseded') {
   const attempt = playerRestoreAttempt;
   if (!attempt) return;
+  if (playerRestorePreview?.attempt === attempt && playerRestorePreview.phase !== 'admitted') {
+    playerRestorePreview.phase = 'retired';
+  }
   ++playerRestoreEpoch; playerRestoreAttempt = null;
   if (attempt.pageshow) window.removeEventListener('pageshow', attempt.pageshow);
   attempt.pageshow = null;
@@ -249,7 +307,15 @@ function currentPlayerRestoreAttempt(attempt) {
     && !playerUnloadStatePersisted && isPlaybackOwnershipScopeCurrent(attempt.scope)
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true)
     && playerRestoreAttempt === attempt && attempt.epoch === playerRestoreEpoch
-    && (!attempt.handle || isPlaybackOwnershipHandleCurrent(attempt.handle)));
+    && (!attempt.handle || isPlaybackOwnershipHandleCurrent(attempt.handle))
+    && attempt.selectionToken === playerTrackSelectionToken && !playerRestoreHasLogicalOwner()
+    && (attempt.starting || playerRestoreColdStateCurrent(attempt.cold))
+    && (attempt.preview?.track ? state.player.current === attempt.preview.track
+      && (!attempt.preview.publication || isCurrentPlayerTrackPublication(attempt.preview.publication))
+      : !state.player.current || attempt.preview?.phase === 'publishing'
+        && state.player.current === attempt.preview.input
+        && (typeof playerTrackPublicationRevision === 'undefined'
+          || playerTrackPublicationRevision === attempt.preview.revision)));
 }
 function reconcileRestoredPlaybackOwnership(role) {
   const attempt = playerRestoreAttempt;
@@ -263,7 +329,7 @@ function restorePlayerState() {
   const entryRestoreEpoch = playerRestoreEpoch;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch
-    || state.player.restoredFromStorage) return;
+    || state.player.restoredFromStorage || state.player.current || !playerRestoreColdStateCurrent()) return;
   state.player.restoredFromStorage = true;
   let parsed;
   try { parsed = JSON.parse(getLocalStorageItem(PLAYER_STATE_STORAGE_KEY)); } catch { return; }
@@ -273,12 +339,17 @@ function restorePlayerState() {
   const scope = capturePlaybackOwnershipScope();
   if (!track || Array.isArray(track) || typeof track.src !== 'string' || !track.src.trim()
     || typeof track.path !== 'string' || !track.path.trim() || !scope || !isPlaybackOwnershipScopeCurrent(scope) || entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch) return;
+  if (state.player.current || !playerRestoreColdStateCurrent()) return;
+  const engine = streamingEngineState();
+  const cold = {engine, role: engine.roles.current, continuity: engine.roles.continuity,
+    request: engine.startRequestId, lifecycle: engine.lifecycleEpoch, generation: engine.generation};
   const expectedRetirementEpoch = entryRestoreEpoch + (playerRestoreAttempt ? 1 : 0);
   retirePlayerRestoreAttempt();
   if (entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch
-    || playerRestoreAttempt || !isPlaybackOwnershipScopeCurrent(scope)
+    || playerRestoreAttempt || state.player.current || !playerRestoreColdStateCurrent(cold) || !isPlaybackOwnershipScopeCurrent(scope)
     || entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch) return;
-  const attempt = { epoch: ++playerRestoreEpoch, scope, track, handle: null, engineAttempt: null,
+  const attempt = { epoch: ++playerRestoreEpoch, scope, track, cold, selectionToken: entrySelection,
+    starting: false, preview: null, handle: null, engineAttempt: null,
     pageshow: null, settle: null, role: null, autoplayHandled: false };
   playerRestoreAttempt = attempt;
   const savedPaused = typeof parsed.paused === 'boolean' ? parsed.paused : !Boolean(parsed.wasPlaying);
@@ -308,10 +379,15 @@ function restorePlayerState() {
     if (currentPlayerRestoreAttempt(attempt) && restoredQueueHasAlbumSnapshot
         && typeof createAlbumListeningIntent === 'function' && typeof bindAlbumListeningIntent === 'function') {
       const queue = state.player.playbackQueue;
+      if (!currentPlayerRestoreAttempt(attempt)) return;
       const intent = queue.tracks.find(queued => queued.albumListeningIntent)?.albumListeningIntent
         || createAlbumListeningIntent(queue.albumSnapshot);
       if (intent && currentPlayerRestoreAttempt(attempt)) {
-        for (const queued of queue.tracks) bindAlbumListeningIntent(queued, intent);
+        for (const queued of queue.tracks) {
+          if (!currentPlayerRestoreAttempt(attempt)) return;
+          bindAlbumListeningIntent(queued, intent);
+        }
+        if (!currentPlayerRestoreAttempt(attempt)) return;
         bindAlbumListeningIntent(track, intent);
       }
     }
@@ -340,8 +416,45 @@ function restorePlayerState() {
       : savedTime;
 
     if (!currentPlayerRestoreAttempt(attempt)) return;
+    const preview = {attempt, phase: 'publishing', input: track, track: null, publication: null,
+      revision: typeof playerTrackPublicationRevision === 'undefined' ? null : playerTrackPublicationRevision,
+      time: boundedTime, duration, guard: () => currentPlayerRestoreAttempt(attempt)};
+    attempt.preview = preview;
+    playerRestorePreview = preview;
+    let hasPublication = false;
+    const publishPreview = () => {
+      if (!currentPlayerRestoreAttempt(attempt)) return false;
+      const published = setCurrentPlayerTrack(track, {persist: false, isCurrent: preview.guard});
+      if (!currentPlayerRestoreAttempt(attempt)) return false;
+      const setterEntered = typeof playerTrackPublicationRevision !== 'undefined'
+        && playerTrackPublicationRevision !== preview.revision;
+      const confirmed = published && published === state.player.current && preview.track === published
+        && preview.publication && isCurrentPlayerTrackPublication(preview.publication);
+      const isolatedAssignment = !setterEntered && published === undefined && state.player.current === track;
+      if (confirmed || isolatedAssignment) {
+        if (isolatedAssignment) preview.track = track;
+        preview.phase = 'pending';
+        attempt.track = preview.track;
+        state.player.loopStart = loopStart;
+        state.player.loopEnd = restoredLoopEnd;
+        state.player.loopActive = restoredLoopActive;
+        updatePlayerUi();
+        if (!currentPlayerRestoreAttempt(attempt)) return false;
+      } else if (preview.track || typeof playerTrackPublicationAttempt === 'undefined'
+        || playerTrackPublicationAttempt?.revision !== preview.revision + 1
+        || playerTrackPublicationAttempt.status !== 'foreign-refused') {
+        retirePlayerRestoreAttempt('restore-publication-failed');
+        return false;
+      }
+      // A foreign lock can refuse publication without withdrawing media access.
+      // Keep preparation separate; an unassigned preview can never be admitted.
+      hasPublication = confirmed || isolatedAssignment;
+      return true;
+    };
+    let restoreAutoplay = !savedPaused;
+    let autoplayStatePersisted = false;
     const completeRestoredAutoplay = () => {
-      if (!currentPlayerRestoreAttempt(attempt) || !attempt.role || state.player.current?.path !== track.path
+      if (!hasPublication || preview.phase !== 'admitted' || !currentPlayerRestoreAttempt(attempt) || !attempt.role || state.player.current !== attempt.track
         || !isStreamingPlaybackAttemptCurrent(attempt.engineAttempt)
         || streamingEngineState().roles.current !== attempt.role || attempt.autoplayHandled) return;
       const playback = getPlayerPlaybackSnapshot();
@@ -349,27 +462,58 @@ function restorePlayerState() {
       attempt.autoplayHandled = true;
       reconcileRestoredPlaybackOwnership(attempt.role);
       if (!currentPlayerRestoreAttempt(attempt)) return;
-      beginStreamingPlayerListenSession(track, boundedTime);
+      beginStreamingPlayerListenSession(attempt.track, boundedTime);
       if (!currentPlayerRestoreAttempt(attempt)) return;
       updatePlayerUi();
-      if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
+      if (currentPlayerRestoreAttempt(attempt)) autoplayStatePersisted = persistPlayerState(true);
     };
     const startRestoredRole = () => {
       if (!currentPlayerRestoreAttempt(attempt)) return null;
       if (!savedPaused) {
-        attempt.handle = canRestoreActivePlayback(parsed, { isCurrent: () => currentPlayerRestoreAttempt(attempt) });
-        if (!attempt.handle || !currentPlayerRestoreAttempt(attempt)) return null;
+        const handle = canRestoreActivePlayback(parsed, { isCurrent: () => currentPlayerRestoreAttempt(attempt) });
+        if (!currentPlayerRestoreAttempt(attempt)) {
+          if (handle) releasePlaybackOwnership('stopped', handle);
+          return null;
+        }
+        if (handle === false) {
+          // Arbitration refuses active playback, not independently authorized
+          // paused media preparation. A pending local successor still wins.
+          if (!currentPlayerRestoreAttempt(attempt) || getActivePlaybackOwnershipHandle()) return null;
+          attempt.handle = false;
+          restoreAutoplay = false;
+        } else {
+          const handleCurrent = isPlaybackOwnershipHandleCurrent(handle);
+          if (!currentPlayerRestoreAttempt(attempt)) {
+            if (handle) releasePlaybackOwnership('stopped', handle);
+            return null;
+          }
+          if (!handleCurrent) {
+            retirePlayerRestoreAttempt('restore-ownership-refused');
+            return null;
+          }
+          attempt.handle = handle;
+          if (!currentPlayerRestoreAttempt(attempt)) {
+            releasePlaybackOwnership('stopped', handle);
+            return null;
+          }
+        }
+        if (restoreAutoplay && !hasPublication) {
+          retirePlayerRestoreAttempt('restore-publication-refused');
+          return null;
+        }
       }
-      return startStreamingTrack(track, {
-        startSeconds: boundedTime, autoplay: !savedPaused,
+      attempt.starting = true;
+      return startStreamingTrack(attempt.track, {
+        startSeconds: boundedTime, autoplay: restoreAutoplay,
         onStartAttempt(engineAttempt) {
           attempt.engineAttempt = engineAttempt;
           if (!currentPlayerRestoreAttempt(attempt)) { cancelPlaybackAttempt(engineAttempt, 'stale-restore'); return; }
           if (attempt.handle) bindPlaybackOwnershipAttempt(attempt.handle, engineAttempt);
         },
-        ...(!savedPaused ? { allowSuspendedAutoplayFallback: true, onAutoplayStarted: completeRestoredAutoplay } : {}),
+        ...(restoreAutoplay ? { allowSuspendedAutoplayFallback: true, onAutoplayStarted: completeRestoredAutoplay } : {}),
       });
     };
+    if (!savedPaused && !publishPreview()) return;
     const rolePromise = !savedPaused ? new Promise((resolve, reject) => {
       attempt.settle = resolve;
       attempt.pageshow = () => {
@@ -378,6 +522,21 @@ function restorePlayerState() {
       };
       window.addEventListener('pageshow', attempt.pageshow, { once: true });
     }) : startRestoredRole();
+    // Saved-paused retains its existing start-before-publication order, while
+    // cached metadata is still published synchronously before awaiting audio.
+    if (savedPaused) {
+      try { publishPreview(); }
+      catch (error) {
+        // Startup is already owned. Report its later rejection without giving
+        // it authority over a successor, then let existing cleanup retire now.
+        void Promise.resolve(rolePromise).catch(startError => {
+          try {
+            console.error('[AlbumHaven][Player] Paused preparation failed after preview publication.', startError);
+          } catch { /* A reporter cannot reject this owned observation. */ }
+        });
+        throw error;
+      }
+    }
     const role = await rolePromise;
     attempt.settle = null;
     if (!currentPlayerRestoreAttempt(attempt)) return;
@@ -386,25 +545,30 @@ function restorePlayerState() {
       retirePlayerRestoreAttempt('restore-failed'); return;
     }
     attempt.role = role;
-    setCurrentPlayerTrack(track, { persist: false, isCurrent: () => currentPlayerRestoreAttempt(attempt) && isStreamingPlaybackAttemptCurrent(attempt.engineAttempt) });
-    if (!currentPlayerRestoreAttempt(attempt) || state.player.current?.path !== track.path) return;
-    state.player.loopStart = loopStart; state.player.loopEnd = restoredLoopEnd; state.player.loopActive = restoredLoopActive;
-    reconcileRestoredPlaybackOwnership(role);
+    if (!hasPublication || state.player.current !== attempt.track) return;
+    preview.phase = 'admitted';
+    if (typeof bindPlayerTrackPresentation === 'function'
+      && bindPlayerTrackPresentation(attempt.track, role, attempt.engineAttempt)) {
+      notifyStreamingPlaybackPresentation(role, playerTrackPublication.presentation);
+    }
     if (!currentPlayerRestoreAttempt(attempt)) return;
-    completeRestoredAutoplay();
-    if (!currentPlayerRestoreAttempt(attempt)) return;
-    updatePlayerUi();
+    if (restoreAutoplay) {
+      reconcileRestoredPlaybackOwnership(role);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
+      completeRestoredAutoplay();
+    }
     if (!currentPlayerRestoreAttempt(attempt)) return;
     if (typeof handleStreamingPlaybackWaveformReady === 'function') {
       try { void Promise.resolve(handleStreamingPlaybackWaveformReady({ generation: role.generation,
         currentPath: track.path, continuityPath: '' })).catch(() => {}); } catch {}
     }
-    if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
+    if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(savedPaused || restoreAutoplay && !autoplayStatePersisted);
   };
   void restore().catch(error => {
     if (!currentPlayerRestoreAttempt(attempt)) return;
     retirePlayerRestoreAttempt('restore-failed');
     state.player.lastRestoreError = { name: error?.name || 'Error', message: error?.message || String(error) };
-    console.error('[AlbumHaven][Player] State restore failed.', error);
+    try { console.error('[AlbumHaven][Player] State restore failed.', error); }
+    catch { /* Reporting cannot replace the restore failure or reject its observer. */ }
   });
 }

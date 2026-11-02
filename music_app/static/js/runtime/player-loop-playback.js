@@ -105,9 +105,13 @@ function unixNowSeconds() {
 }
 
 function getPlayerDuration() {
+  const track = state.player.current, publication = playerTrackPublication;
+  const preview = typeof getPlayerRestorePreview === 'function' ? getPlayerRestorePreview() : null;
+  if (preview) return preview.duration;
   const editDuration = Number(state.player.loopEditDurationSeconds);
   if (state.player.loopActive && Number.isFinite(editDuration) && editDuration > 0) return editDuration;
   const playbackDuration = Number(getPlayerPlaybackSnapshot().duration);
+  if (state.player.current !== track || playerTrackPublication !== publication) return 0;
   if (Number.isFinite(playbackDuration) && playbackDuration > 0) {
     // Top payloads retain their exact fresh resolver provenance. The measured
     // clock remains the presentation duration; do not rewrite that DTO/alias.
@@ -135,7 +139,8 @@ function updateLoopInputsFromState() {
   const reconciledRange = els.loopRange?._loopRangeController?.render({
     startSeconds: state.player.loopStart,
     endSeconds: state.player.loopEnd,
-  });
+  }, {preserveAbsoluteRange: typeof preserveRestoredPlayerLoopRange === 'function'
+    && preserveRestoredPlayerLoopRange()});
   if (reconciledRange) {
     state.player.loopStart = reconciledRange.startSeconds;
     state.player.loopEnd = reconciledRange.endSeconds;
@@ -156,9 +161,55 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
+// A publication is distinct even when a caller installs the same track object.
+let playerTrackPublicationRevision = 0;
+let playerTrackPublicationAttempt = null;
+let playerTrackPublication = null;
+function isCurrentPlayerTrackPublication(publication) {
+  return Boolean(publication && playerTrackPublication === publication
+    && state.player.current === publication.track);
+}
+function bindPlayerTrackPresentation(track, role, attempt) {
+  const publication = playerTrackPublication;
+  const engine = streamingEngineState();
+  if (!isCurrentPlayerTrackPublication(publication) || publication.track !== track
+    || engine.roles.current !== role || !isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  publication.presentation = { role, attempt, engine, request: engine.startRequestId,
+    lifecycle: engine.lifecycleEpoch, generation: engine.generation };
+  return true;
+}
+function handleStreamingPlaybackPresentation(event) {
+  const publication = playerTrackPublication;
+  const relation = publication?.presentation;
+  const current = () => isCurrentPlayerTrackPublication(publication)
+    && publication.presentation === relation && relation && relation.role === event.role
+    && relation.attempt === event.attempt && relation.engine === event.engine
+    && relation.request === event.request && relation.lifecycle === event.lifecycle
+    && relation.generation === event.generation
+    && isStreamingPlaybackAttemptCurrent(relation.attempt)
+    && streamingEngineState().roles.current === relation.role;
+  if (!current()) return;
+  const paint = () => { if (current()) renderPlayerPresentation(current, paint); };
+  paint();
+}
 function updatePlayerUi() {
+  const publication = playerTrackPublication, track = state.player.current;
+  const current = () => playerTrackPublication === publication && state.player.current === track;
+  if (!renderPlayerPresentation(current, () => updatePlayerUi()) || !current()) return;
+  persistPlayerState();
+  if (!current()) return;
+  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
+}
+
+// Shared presentation only. The caller supplies its exact publication guard;
+// lock recursion returns without repeating the ordinary save/sync epilogue.
+function renderPlayerPresentation(currentPublication, lockChanged) {
+  if (!currentPublication()) return false;
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
+  const preview = typeof getPlayerRestorePreview === 'function' ? getPlayerRestorePreview() : null;
+  const presentationPaused = preview ? true : playback.paused;
+  if (!currentPublication()) return false;
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
@@ -166,7 +217,8 @@ function updatePlayerUi() {
   const displayTrack = lockedByAnotherTab ? (mirroredTrack || { title: 'Playing in another tab', artist: '', album: '' }) : state.player.current;
   if (lockedByAnotherTab) invalidatePlaybackPresentation();
   else if (state.player.coverWasOwnershipLocked) refreshPlayerCover(state.player.current);
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  if (!currentPublication()) return false;
+  state.player.lastKnownWasPlaying = Boolean(!preview && !lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
@@ -175,7 +227,8 @@ function updatePlayerUi() {
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
-    : Number(playback.currentTime) || 0;
+    : preview ? preview.time : Number(playback.currentTime) || 0;
+  if (!currentPublication()) return false;
   if (els.timeline) {
     els.timeline.max = String(Math.max(duration, 0.1));
     els.timeline.value = String(Math.min(current, duration || current));
@@ -198,12 +251,14 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
+    renderGlobalPlayerPlayGlyph(els.play, presentationPaused);
+    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (presentationPaused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
-  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) return updatePlayerUi();
-  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
+  if (!currentPublication()) return false;
+  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) { lockChanged(); return false; }
+  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, presentationPaused, hasTrack, lockedByAnotherTab });
+  if (!currentPublication()) return false;
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
     els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
@@ -214,32 +269,53 @@ function updatePlayerUi() {
   if (els.loopEndHandle) els.loopEndHandle.hidden = !state.player.loopActive;
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
-  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) return updatePlayerUi();
+  if (!currentPublication()) return false;
+  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) { lockChanged(); return false; }
   renderGlobalPlayerMetadata(els, displayTrack);
+  if (!currentPublication()) return false;
   updateLoopInputsFromState();
-  updateWaveformAppearance();
+  if (!currentPublication()) return false;
+  const waveformPaint = updateWaveformAppearance();
+  if (waveformPaint && typeof waveformPaint.then === 'function') {
+    if (typeof observeStreamingFacadeCallback === 'function') {
+      observeStreamingFacadeCallback(waveformPaint, 'presentation-waveform');
+    } else {
+      void Promise.resolve(waveformPaint).catch(error => console.error('Streaming facade callback failed', error));
+    }
+  }
+  if (!currentPublication()) return false;
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
   if (state.player.loopActive && els.waveformCanvas && compactPeaks) {
     const progress = duration > 0 ? current / duration : 0;
     drawWaveformOnCanvas(els.waveformCanvas, compactPeaks, progress);
   }
   refreshTrackModalPlaybackState();
+  if (!currentPublication()) return false;
   refreshNonAlbumModalPlaybackState();
-  persistPlayerState();
-  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
+  return currentPublication();
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
-  const current = () => (!options.isCurrent || options.isCurrent() === true)
-    && !isPlaybackLockedByAnotherTab();
-  if (!current()) return;
+  const revision = ++playerTrackPublicationRevision;
+  const invocation = {revision, status: 'cancelled'};
+  playerTrackPublicationAttempt = invocation;
+  const guarded = () => revision === playerTrackPublicationRevision
+    && (!options.isCurrent || options.isCurrent() === true)
+    && revision === playerTrackPublicationRevision;
+  const current = () => guarded() && !isPlaybackLockedByAnotherTab() && guarded();
+  const preview = typeof getPublishingPlayerRestorePreview === 'function'
+    ? getPublishingPlayerRestorePreview(options.isCurrent) : null;
+  if (!guarded()) return;
+  const lockedAtEntry = isPlaybackLockedByAnotherTab();
+  if (!guarded()) return;
+  if (lockedAtEntry) { invocation.status = 'foreign-refused'; return; }
   const els = getPlayerElements();
   const previousTrack = state.player.current;
   const previousTrackId = getTrackIdentity(previousTrack);
   const nextTrackId = getTrackIdentity(track);
   const previousSession = state.player.listenSession;
   const previousPlaybackSnapshot = options.previousPlaybackSnapshot || null;
-  if (previousTrack && previousTrackId && previousTrackId !== nextTrackId && previousSession) {
+  if (!preview && previousTrack && previousTrackId && previousTrackId !== nextTrackId && previousSession) {
     void finalizeListenSession('track-change', {
       session: previousSession,
       currentTime: Number(previousPlaybackSnapshot?.currentTime) || undefined,
@@ -258,12 +334,22 @@ function setCurrentPlayerTrack(track, options = {}) {
     }
   }
   if (!current()) return;
+  // Supersede the exact automatic restore even if its album/cover lookup has
+  // not reached preview assignment yet. Failed pre-assignment setters do not.
+  const pendingRestore = typeof playerRestoreAttempt !== 'undefined' ? playerRestoreAttempt : null;
+  if (!preview && pendingRestore && pendingRestore.preview?.phase !== 'admitted') {
+    retirePlayerRestoreAttempt('track-publication');
+    if (!current()) return;
+  }
   state.player.current = track;
+  const publication = { revision, track, presentation: null };
+  playerTrackPublication = publication;
+  if (preview) { preview.track = track; preview.publication = publication; }
   if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.currentChanged();
   if (!current() || state.player.current !== track) return;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
+  if (!preview && typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
       Number(state.player.streaming?.generation) || 0,
@@ -283,11 +369,17 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopEditDurationSeconds = 0;
   const locked = isPlaybackLockedByAnotherTab();
   renderGlobalPlayerMetadata(els, locked ? getMirroredPlaybackTrack() : track);
-  refreshPlayerCover(track);
-  updatePlayerUi();
   if (!current() || state.player.current !== track) return;
-  if (options.persist !== false) {
+  refreshPlayerCover(track);
+  if (!current() || state.player.current !== track) return;
+  if (!preview) updatePlayerUi();
+  if (!current() || state.player.current !== track) return;
+  if (!preview && options.persist !== false) {
     persistPlayerState(true);
+  }
+  if (current() && isCurrentPlayerTrackPublication(publication)) {
+    invocation.status = 'published';
+    return track;
   }
 }
 
@@ -386,9 +478,33 @@ function reconcilePlayerOwnership(role = streamingEngineState().roles.current) {
   return commitPlaybackOwnership(selection.handle, role, selection.track);
 }
 let topPlaybackStartEpoch = 0;
+let pendingPlayerTrackStart = null;
+function hasPendingPlayerTrackStart() { return pendingPlayerTrackStart !== null; }
+// A switch takes a moment to reach the listener; the click should not.
+function renderSelectedTrackState(track) {
+  if (track && typeof getPlayerElements === 'function') {
+    renderGlobalPlayerMetadata(getPlayerElements(), track);
+  }
+  if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
+  if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+}
+
+function showSelectedTrackImmediately(track, shouldAutoplay) {
+  if (!shouldAutoplay) return;
+  state.player.selectedTrack = track;
+  renderSelectedTrackState(track);
+}
+
+function clearSelectedTrack() {
+  if (!state.player.selectedTrack) return;
+  state.player.selectedTrack = null;
+  renderSelectedTrackState(state.player.current);
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const topEntryEpoch = topPlaybackStartEpoch;
   const entryToken = playerTrackSelectionToken;
+  const incomingSignal = options.signal, incomingReplay = options.contextReplay;
   const shouldAutoplay = options.autoplay !== false;
   const scope = capturePlaybackOwnershipScope();
   const allowed = () => {
@@ -408,98 +524,125 @@ async function playTrackFromPayload(track, options = {}) {
   if (topTrack && (typeof TopPlaybackRuntime === 'undefined' || !TopPlaybackRuntime.hasBinding(track))) return false;
   if (topTrack && (streamingEngineState().pendingPromotion || streamingEngineState().pendingSeek?.kind === 'replacement')) return false;
   if (topEntryEpoch !== topPlaybackStartEpoch) return false;
-  const topStartEpoch = ++topPlaybackStartEpoch;
-  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) TopPlaybackRuntime.cancel(state.player.playbackQueue);
-  if (topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) return false;
-  if (typeof retirePlayerRestoreAttempt === 'function') retirePlayerRestoreAttempt('manual-selection');
-  if (entryToken !== playerTrackSelectionToken || !allowed() || topStartEpoch !== topPlaybackStartEpoch) return false;
-  let admittedSelection = null;
-  if (topTrack) {
-    const engine = streamingEngineState();
-    if (engine.pendingPromotion || engine.pendingSeek?.kind === 'replacement') return false;
-    if (engine.roles?.continuity && closeStreamingContinuityRole('top-manual-selection') !== true) return false;
-    engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
-    track = await TopPlaybackRuntime.prepareStart(track, {signal: options.signal, isCurrent: () =>
-      topStartEpoch === topPlaybackStartEpoch && allowed()
-      && (admittedSelection ? currentPlayerSelection(admittedSelection) : entryToken === playerTrackSelectionToken)});
-    if (!track || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) {
-      if (track) TopPlaybackRuntime.cancelStart(track);
+  const reservation = {};
+  pendingPlayerTrackStart = reservation;
+  try {
+    const topStartEpoch = ++topPlaybackStartEpoch;
+    if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.retirePendingStartForSelection(incomingSignal, incomingReplay);
+    if (pendingPlayerTrackStart !== reservation || topStartEpoch !== topPlaybackStartEpoch
+      || entryToken !== playerTrackSelectionToken || !allowed()
+      || pendingPlayerTrackStart !== reservation || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken) return false;
+    if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) TopPlaybackRuntime.cancel(state.player.playbackQueue);
+    if (topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) return false;
+    if (typeof retirePlayerRestoreAttempt === 'function') retirePlayerRestoreAttempt('manual-selection');
+    if (entryToken !== playerTrackSelectionToken || !allowed() || topStartEpoch !== topPlaybackStartEpoch) return false;
+    let admittedSelection = null;
+    if (topTrack) {
+      const engine = streamingEngineState();
+      if (engine.pendingPromotion || engine.pendingSeek?.kind === 'replacement') return false;
+      if (engine.roles?.continuity && closeStreamingContinuityRole('top-manual-selection') !== true) return false;
+      engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
+      const restartOwnerCurrent = () => {
+        const pure = () => pendingPlayerTrackStart === reservation && topStartEpoch === topPlaybackStartEpoch
+          && (admittedSelection ? playerSelectionOwnership === admittedSelection
+            && admittedSelection.token === playerTrackSelectionToken : entryToken === playerTrackSelectionToken)
+          && !incomingSignal?.aborted;
+        return pure() && options.replayOwnerCurrent?.() === true && pure()
+          && isPlaybackOwnershipScopeCurrent(scope) && pure()
+          && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true)
+          && pure();
+      };
+      track = await TopPlaybackRuntime.prepareStart(track, {signal: options.signal, restart: options.topRestart,
+        restartOwnerCurrent, isCurrent: () => topStartEpoch === topPlaybackStartEpoch && allowed()
+        && (admittedSelection ? currentPlayerSelection(admittedSelection) : entryToken === playerTrackSelectionToken)});
+      if (!track || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) {
+        if (track) TopPlaybackRuntime.cancelStart(track);
+        return false;
+      }
+    }
+    const selection = { token: ++playerTrackSelectionToken, track, scope, handle: null, attempt: null,
+      signal: options.signal, isCurrent: options.isCurrent };
+    playerSelectionOwnership = selection;
+    admittedSelection = selection;
+    try {options.onSelectionAdmitted?.(selection.token);} catch (error) {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
+      throw error;
+    }
+    if (topStartEpoch !== topPlaybackStartEpoch) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.selectionStarted(incomingReplay) === false) {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;
+    }
+    if (!currentPlayerSelection(selection) || !allowed()) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    if (!shouldAutoplay) releasePlaybackOwnership('stopped', getActivePlaybackOwnershipHandle());
+    if (!currentPlayerSelection(selection)) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    selection.handle = shouldAutoplay ? canStartPlaybackInThisTab(track, { isCurrent: () => currentPlayerSelection(selection) && allowed() }) : null;
+    if (shouldAutoplay && !selection.handle || !currentPlayerSelection(selection) || !allowed()) {
+      if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
       return false;
     }
-  }
-  const selection = { token: ++playerTrackSelectionToken, track, scope, handle: null, attempt: null,
-    signal: options.signal, isCurrent: options.isCurrent };
-  playerSelectionOwnership = selection;
-  admittedSelection = selection;
-  try {options.onSelectionAdmitted?.(selection.token);} catch (error) {
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    throw error;
-  }
-  if (topStartEpoch !== topPlaybackStartEpoch) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
-  if (!currentPlayerSelection(selection) || !allowed()) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  if (!shouldAutoplay) releasePlaybackOwnership('stopped', getActivePlaybackOwnershipHandle());
-  if (!currentPlayerSelection(selection)) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  selection.handle = shouldAutoplay ? canStartPlaybackInThisTab(track, { isCurrent: () => currentPlayerSelection(selection) && allowed() }) : null;
-  if (shouldAutoplay && !selection.handle || !currentPlayerSelection(selection) || !allowed()) {
-    if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    return false;
-  }
-  const resetTime = options.resetTime !== false;
-  const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
-  const cancelSelection = () => {
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
-    else cancelPlaybackAttempt(selection.attempt, 'selection-cancelled');
-  };
-  options.signal?.addEventListener('abort', cancelSelection, { once: true });
-  try {
-    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch) { cancelSelection(); return false; }
-    const role = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
-      autoplay: shouldAutoplay,
-      onStartAttempt(attempt) {
-        selection.attempt = attempt;
-        if (!currentPlayerSelection(selection)) { cancelPlaybackAttempt(attempt, 'stale-selection'); return; }
-        if (selection.handle) bindPlaybackOwnershipAttempt(selection.handle, attempt);
-      },
-    });
-    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
-      cancelSelection(); return false;
-    }
-    if (!role || role.track?.path !== track.path || streamingEngineState().roles.current !== role) {
-      cancelSelection(); return false;
-    }
-    if (topTrack && (role.track !== track || !TopPlaybackRuntime.receiptCurrent(track) || !TopPlaybackRuntime.commit(track))) {
-      cancelSelection(); return false;
-    }
-    if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
-    if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
-    setCurrentPlayerTrack(track, { previousPlaybackSnapshot, isCurrent: () => currentPlayerSelection(selection) });
-    if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
-    selection.admitted = true;
-    reconcilePlayerOwnership(role);
-    if (selection.pauseAfterAdmission && getPlayerPlaybackSnapshot().paused) {
-      if (!releasePausedPlayerSelection(selection)) return false;
+    const resetTime = options.resetTime !== false;
+    const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+    const cancelSelection = () => {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
+      if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
+      else cancelPlaybackAttempt(selection.attempt, 'selection-cancelled');
+    };
+    options.signal?.addEventListener('abort', cancelSelection, { once: true });
+    try {
+      if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch) { cancelSelection(); return false; }
+      showSelectedTrackImmediately(track, shouldAutoplay);
+      const role = await startStreamingTrack(track, {
+        startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+        autoplay: shouldAutoplay,
+        allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+        onStartAttempt(attempt) {
+          selection.attempt = attempt;
+          if (!currentPlayerSelection(selection)) { cancelPlaybackAttempt(attempt, 'stale-selection'); return; }
+          if (selection.handle) bindPlaybackOwnershipAttempt(selection.handle, attempt);
+        },
+      });
+      if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
+        cancelSelection(); return false;
+      }
+      if (!role || role.track?.path !== track.path || streamingEngineState().roles.current !== role) {
+        cancelSelection(); return false;
+      }
+      if (topTrack && (role.track !== track || !TopPlaybackRuntime.receiptCurrent(track) || !TopPlaybackRuntime.commit(track))) {
+        cancelSelection(); return false;
+      }
+      if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true
+        && ExplicitQueueRuntime.replaced(incomingReplay) === false) {cancelSelection(); return false;}
+      if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
+      const publishedTrack = setCurrentPlayerTrack(track, { previousPlaybackSnapshot, isCurrent: () => currentPlayerSelection(selection) });
+      if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
+      selection.admitted = true;
+      if (publishedTrack) bindPlayerTrackPresentation(publishedTrack, role, selection.attempt);
+      reconcilePlayerOwnership(role);
+      if (selection.pauseAfterAdmission && getPlayerPlaybackSnapshot().paused) {
+        if (!releasePausedPlayerSelection(selection)) return false;
+        updatePlayerUi();
+        return currentPlayerSelection(selection);
+      }
+      if (role.firstFrameNotified) {
+        void Promise.resolve(handleStreamingPlaybackFirstFrame({ generation: role.generation,
+          streamId: role.streamId, trackPath: role.track.path })).catch(() => {});
+      }
+      if (!currentPlayerSelection(selection)) return false;
+      if (shouldAutoplay) beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+      if (!currentPlayerSelection(selection)) return false;
       updatePlayerUi();
       return currentPlayerSelection(selection);
+    } catch (error) {
+      const current = currentPlayerSelection(selection);
+      cancelSelection();
+      if (current) throw error;
+      return false;
+    } finally {
+      options.signal?.removeEventListener('abort', cancelSelection);
+      if (playerSelectionOwnership === selection && selection.token === playerTrackSelectionToken) clearSelectedTrack();
     }
-    if (role.firstFrameNotified) {
-      void Promise.resolve(handleStreamingPlaybackFirstFrame({ generation: role.generation,
-        streamId: role.streamId, trackPath: role.track.path })).catch(() => {});
-    }
-    if (!currentPlayerSelection(selection)) return false;
-    if (shouldAutoplay) beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
-    if (!currentPlayerSelection(selection)) return false;
-    updatePlayerUi();
-    return currentPlayerSelection(selection);
-  } catch (error) {
-    const current = currentPlayerSelection(selection);
-    cancelSelection();
-    if (current) throw error;
-    return false;
-  } finally { options.signal?.removeEventListener('abort', cancelSelection); }
+  } finally { if (pendingPlayerTrackStart === reservation) pendingPlayerTrackStart = null; }
 }
 
 let handledStreamingFirstFrameIdentity = '';
@@ -570,22 +713,35 @@ async function handleStreamingPlaybackPosition(event = {}) {
 let handledStreamingEndedIdentity = '';
 
 async function handleStreamingPlaybackEnded(event = {}) {
-  const track = state.player.current;
+  const track = state.player.current, engine = streamingEngineState();
   const trackPath = String(track?.path || '');
   if (!trackPath || String(event.trackPath || '') !== trackPath) return;
-  const role = streamingEngineState().roles.current;
+  const role = engine.roles.current;
   if (!role || role.generation !== event.generation || role.streamId !== event.streamId) return;
-  const endedHandle = getActivePlaybackOwnershipHandle();
+  // Capture the outgoing session before queue listeners or ownership storage can reenter.
+  const session = state.player.listenSession, endedHandle = getActivePlaybackOwnershipHandle();
+  const selection = playerSelectionOwnership, token = playerTrackSelectionToken;
+  const pauseIntent = engine.pauseIntentId, attempt = engine.playbackAttempt;
+  const playback = getPlayerPlaybackSnapshot();
   const identity = [event.generation, event.streamId, trackPath].join(':');
   if (identity === handledStreamingEndedIdentity) return;
+  let released = false;
+  const scope = capturePlaybackOwnershipScope();
+  const pure = () => streamingEngineState() === engine && engine.roles.current === role
+    && engine.pauseIntentId === pauseIntent && engine.playbackAttempt === attempt
+    && state.player.current === track && playerSelectionOwnership === selection && playerTrackSelectionToken === token;
+  const terminalCurrent = () => pure() && !pendingPlayerTrackStart && !pendingPlayerPlaybackHandoff && !state.player.loopActive
+    && role.endedNotified === true && getPlayerPlaybackSnapshot().ended === true
+    && isStreamingPlaybackAttemptCurrent(attempt) && pure() && isPlaybackOwnershipScopeCurrent(scope) && pure()
+    && (released || isPlaybackOwnershipHandleCurrent(endedHandle)) && pure();
+  const candidate = typeof ExplicitQueueRuntime !== 'undefined' && terminalCurrent()
+    ? ExplicitQueueRuntime.captureCompletedContext({isCurrent: terminalCurrent}) : null;
+  if (identity === handledStreamingEndedIdentity) return;
   handledStreamingEndedIdentity = identity;
-  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended();
-  const playback = getPlayerPlaybackSnapshot();
-  const session = state.player.listenSession;
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', endedHandle);
-  }
-  if (typeof finalizeListenSession === 'function') {
+  if (pure() && typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended(candidate);
+  released = true;
+  if (typeof releasePlaybackOwnership === 'function') releasePlaybackOwnership('paused', endedHandle);
+  if (session && typeof finalizeListenSession === 'function') {
     await finalizeListenSession('ended', {
       session,
       currentTime: Number(event.currentTime) || Number(playback.currentTime) || 0,
@@ -593,7 +749,12 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
-  updatePlayerUi();
+  if (terminalCurrent()) updatePlayerUi();
+  if (terminalCurrent() && event.sampleRateChangeTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+    await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
+  }
 }
 
 async function handleStreamingPlaybackBoundary(event = {}) {
@@ -932,7 +1093,7 @@ function setLoopPlaybackHead(value) {
   if (typeof seekStreamingPlayback !== 'function') return;
   const seek = seekStreamingPlayback(next);
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void Promise.resolve(seek).catch(error => console.warn('[AlbumHaven][Playback] Owned operation failed.', error));
+    observeStreamingFacadeCallback(seek, 'seek-control-error');
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
@@ -958,7 +1119,7 @@ function setPlayerPlaybackHead(value, options = {}) {
   if (typeof seekStreamingPlayback !== 'function') return;
   const seek = seekStreamingPlayback(next);
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void Promise.resolve(seek).catch(error => console.warn('[AlbumHaven][Playback] Owned operation failed.', error));
+    observeStreamingFacadeCallback(seek, 'seek-control-error');
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
@@ -1032,6 +1193,12 @@ function togglePlayerPlayback(options = {}) {
   if (!playback.paused) { pausePlayerPlaybackForHandoff(playback); return true; }
   if (!isNativePlayerSourceCurrent(track)) return false;
   if (playback.ended) {
+    const restart = typeof ExplicitQueueRuntime !== 'undefined' ? ExplicitQueueRuntime.restartCompletedContext() : null;
+    if (restart) {
+      void restart.catch(error => console.warn('[AlbumHaven][Playback] Context restart failed.', error));
+      return true;
+    }
+    if (state.player.playbackQueue) return false;
     void playTrackFromPayload(track, { resetTime: true, isCurrent: () => state.player.current === track }).catch(error => {
       console.warn('[AlbumHaven][Playback] Restart failed.', error);
     });
@@ -1069,6 +1236,11 @@ function togglePlayerPlayback(options = {}) {
 
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (isPlaybackLockedByAnotherTab()) return Promise.resolve(false);
+  if (typeof ExplicitQueueRuntime !== 'undefined') {
+    const selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+    ExplicitQueueRuntime.invalidateCompletedContext();
+    if ((typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return Promise.resolve(false);
+  }
   const handle = getActivePlaybackOwnershipHandle();
   const retiredHandoff = typeof captureStreamingRetiredOutgoingAttempt === 'function'
     ? captureStreamingRetiredOutgoingAttempt() : null;
@@ -1105,7 +1277,7 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   });
   pendingPlayerPlaybackHandoff = trackedPause;
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void trackedPause.catch(error => console.warn('[AlbumHaven][Playback] Pause failed.', error));
+    observeStreamingFacadeCallback(trackedPause, 'pause-control-error');
   } else {
     void trackedPause.catch(() => {});
   }

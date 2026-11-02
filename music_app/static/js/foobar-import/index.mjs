@@ -85,7 +85,7 @@ export function mountFoobarImport(target, {
   title.id = `${id}-title`;
   section.append(title,
     element('p', '', 'Choose a supported Text Tools TSV or finalized Enhanced SQLite artifact, review the proposed changes, then confirm. Choosing a file or running a dry run does not import it.'),
-    element('p', 'foobar-import__hint', 'The selected file is sent to this server for review and sent again when you confirm. Exports can contain sensitive local paths and listening history. Raw upload staging is temporary; the optional private source copy follows the retention limits below. Keep the original file if you may need to resume.'),
+    element('p', 'foobar-import__hint', 'The selected file is sent to this server for review and sent again when you confirm. Exports can contain sensitive local paths and listening history. Raw upload staging is temporary; no optional source copy is kept for reuse. When import completes, the uploaded source is unavailable. Physical cleanup may be delayed; server backups follow the operator’s retention policy. Imported history, ratings and favourites remain. Keep the original file if you may need to resume.'),
     element('p', 'foobar-import__hint', 'Export a new file for later activity. To resume an interrupted import, reselect the exact original file, then review the remaining work and confirm again; a fresh re-export is not the original file.'),
     element('p', 'foobar-import__hint', 'TSV dates without a UTC offset retain their raw text and unresolved timezone. Album Haven does not guess a timezone from your browser, current location or travel history. Supported Enhanced FILETIME timestamps preserve source precision and provenance. Reported entries may be incomplete and do not prove listening duration or full album plays.'),
     element('p', 'foobar-import__hint', 'Album Haven does not configure or launch Foobar, change its settings or presets, toggle components, or register scheduled tasks. It does not run the reference scripts, perform live synchronization, or write back to Foobar.'));
@@ -190,14 +190,6 @@ export function mountFoobarImport(target, {
   filename.id = `${id}-filename`;
   file.setAttribute('aria-describedby', filename.id);
   fileGroup.append(filename);
-  const retainSource = input('checkbox');
-  retainSource.id = `${id}-retain-source`;
-  const retainLabel = element('label','foobar-import__check');
-  retainLabel.htmlFor = retainSource.id;
-  retainLabel.append(retainSource,element('span','','Keep a private temporary source copy'));
-  const retainHint=element('p','foobar-import__hint','Optional: keep this upload in the app database for this account only, until completion or 24 hours from the first save. Reads stop at expiry; physical cleanup may wait for the service to restart. Server backups follow the operator’s retention policy. If storage is unavailable, select the original file again. Imported history, ratings and favourites are not deleted.');
-  retainHint.id=`${id}-retain-source-hint`;retainSource.setAttribute('aria-describedby',retainHint.id);
-  fileGroup.append(retainLabel,retainHint);
   const matching = input('checkbox');
   const matchingLabel = element('label', 'foobar-import__check');
   matching.id = `${id}-matching`;
@@ -213,7 +205,6 @@ export function mountFoobarImport(target, {
   action('preview', 'Run dry-run review', fileActions, true);
   action('cancelReview', 'Cancel dry run', fileActions);
   action('clear', 'Clear selected file', fileActions);
-  action('temporarySource','Use temporary copy',fileActions);
 
   const status = element('p', 'foobar-import__status');
   status.setAttribute('role', 'status');
@@ -713,9 +704,6 @@ export function mountFoobarImport(target, {
     setDisabled(buttons.defaultSource, locked || choosing);
     setDisabled(buttons.selectSource, locked || choosing);
     setDisabled(file, !state.source || busy || choosing || complete);
-    retainSource.checked=state.retainSource===true;
-    setDisabled(retainSource,busy||choosing||complete);
-    setDisabled(buttons.temporarySource,busy||choosing||complete||!state.jobRef||!state.source||pending.size>0);
     mapping.value=state.mapping||MAPPING;
     setDisabled(mapping,locked||choosing);
     const enhanced=state.mapping===ENHANCED_MAPPING;
@@ -742,6 +730,7 @@ export function mountFoobarImport(target, {
     setText(error, errorText);
     visible(error, Boolean(errorText));
 
+    if (complete) invalidatedReview = null;
     if (state.review !== renderedReview) {
       renderedReview = state.review;
       confirmedReview = null;
@@ -871,10 +860,6 @@ export function mountFoobarImport(target, {
       void run('source', () => controller.selectSource(selected));
     }
   });
-  on(retainSource,'change',()=>{if(guard())controller.setRetainSource(retainSource.checked);});
-  on(buttons.temporarySource,'click',()=>{void run('temporarySource',async()=>{
-    if(await controller.useTemporarySource()){reselectedForJob=true;}
-  });});
   on(file, 'change', () => {
     if (!guard()) return;
     const chosen = file.files?.[0];

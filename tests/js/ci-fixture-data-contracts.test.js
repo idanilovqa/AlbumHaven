@@ -33,6 +33,7 @@ const configuredPlaywrightSurfaces = [
   'playwright.utility-problematic-files.config.cjs',
   'playwright.non-album-rescan.config.js',
   'playwright.home-feedback.config.js',
+  'playwright.native-acceptance.config.js',
   'playwright.performance.config.cjs',
   'playwright.scan-performance.config.cjs',
 ];
@@ -60,6 +61,7 @@ function validateTestDataMatrix(matrix, options = {}) {
 
   const identities = new Set();
   const mutationOwners = new Set();
+  const databaseMutationOwners = new Set();
   const seenConfigs = new Set();
 
   for (const [index, entry] of matrix.entries()) {
@@ -113,12 +115,28 @@ function validateTestDataMatrix(matrix, options = {}) {
       }
       const databaseIdentity = entry.mutationOwnership?.databaseIdentity;
       const filesystemCopy = entry.mutationOwnership?.filesystemCopy;
-      if (!databaseIdentity || !filesystemCopy) {
+      const mutationScope = entry.mutationOwnership?.scope === undefined
+        ? 'database-and-filesystem' : entry.mutationOwnership.scope;
+      if (!['database-only', 'database-and-filesystem'].includes(mutationScope)) {
+        errors.push(`${identity} has invalid mutation ownership scope`);
+      }
+      if (mutationScope === 'database-only') {
+        if (typeof databaseIdentity !== 'string' || !databaseIdentity.trim()) errors.push(`${identity} must name its database identity`);
+        if (filesystemCopy !== undefined) {
+          errors.push(`${identity} database-only mutation cannot declare a writable filesystem copy`);
+        }
+      } else if (typeof databaseIdentity !== 'string' || !databaseIdentity.trim()
+        || typeof filesystemCopy !== 'string' || !filesystemCopy.trim()) {
         errors.push(`${identity} must name its database identity and writable filesystem copy`);
-      } else {
-        const owner = `${databaseIdentity}::${filesystemCopy}`;
+      }
+      if (databaseIdentity) {
+        const owner = `${databaseIdentity}::${filesystemCopy || '<read-only-media>'}`;
         if (mutationOwners.has(owner)) errors.push(`duplicate mutation ownership: ${owner}`);
         mutationOwners.add(owner);
+        if (databaseMutationOwners.has(databaseIdentity)) {
+          errors.push(`duplicate database mutation ownership: ${databaseIdentity}`);
+        }
+        databaseMutationOwners.add(databaseIdentity);
       }
     }
     if (entry.stateMode === 'global-mutation') {
@@ -508,7 +526,139 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 134 browser-functional cases exactly once', () => {
+function databaseOnlyEntry(overrides = {}) {
+  return validEntry({
+    setupScope: 'isolated',
+    stateMode: 'owned-mutation',
+    filesystemScenarios: ['audio-copy:lastfm-connect-scrobble'],
+    mutationOwnership: { scope: 'database-only', databaseIdentity: 'case:owned-capture' },
+    ...overrides,
+  });
+}
+
+test('database-only mutation permits declared read-only media without a writable copy', () => {
+  assert.deepEqual(validateTestDataMatrix([databaseOnlyEntry()]), []);
+});
+
+test('database-only exception requires an explicit known mutation scope', () => {
+  for (const scope of [undefined, 'unknown', '', null, false, 0, {}, []]) {
+    const mutationOwnership = { databaseIdentity: 'case:owned-capture' };
+    if (scope !== undefined) mutationOwnership.scope = scope;
+    assert.notDeepEqual(validateTestDataMatrix([databaseOnlyEntry({ mutationOwnership })]), [],
+      `scope ${JSON.stringify(scope)} must not exempt the writable-copy requirement`);
+  }
+  // A valid copy must not conceal an explicitly malformed scope.
+  for (const scope of ['unknown', '', null, false, 0, {}, []]) {
+    const errors = validateTestDataMatrix([databaseOnlyEntry({
+      mutationOwnership: { scope, databaseIdentity: 'case:owned-capture', filesystemCopy: 'media/owned' },
+    })]);
+    assert.equal(errors.some(error => error.includes('invalid mutation ownership scope')), true,
+      `scope ${JSON.stringify(scope)}`);
+  }
+});
+
+test('legacy and explicit combined mutation still require a writable filesystem copy', () => {
+  for (const scope of [undefined, 'database-and-filesystem']) {
+    const ownership = { databaseIdentity: 'case:combined', filesystemCopy: 'media/combined' };
+    if (scope !== undefined) ownership.scope = scope;
+    assert.deepEqual(validateTestDataMatrix([databaseOnlyEntry({ mutationOwnership: ownership })]), []);
+    delete ownership.filesystemCopy;
+    const errors = validateTestDataMatrix([databaseOnlyEntry({ mutationOwnership: ownership })]);
+    assert.equal(errors.some(error => error.includes('database identity and writable filesystem copy')), true);
+  }
+});
+
+test('database-only mutation requires a named database identity', () => {
+  for (const databaseIdentity of [undefined, null, '', '   ', 123, {}]) {
+    const errors = validateTestDataMatrix([databaseOnlyEntry({
+      mutationOwnership: { scope: 'database-only', databaseIdentity },
+    })]);
+    assert.equal(errors.some(error => error.includes('must name its database identity')), true,
+      `identity ${JSON.stringify(databaseIdentity)}`);
+  }
+});
+
+test('database-only mutation cannot use shared setup or read-only state', () => {
+  const sharedErrors = validateTestDataMatrix([databaseOnlyEntry({ setupScope: 'suite' })]);
+  assert.equal(sharedErrors.some(error => error.includes('owned mutation to shared suite setup')), true);
+  const readonlyErrors = validateTestDataMatrix([databaseOnlyEntry({ stateMode: 'read-only' })]);
+  assert.equal(readonlyErrors.some(error => error.includes('mutation data to shared read-only state')), true);
+});
+
+test('database-only mutation rejects every declared writable filesystem copy', () => {
+  for (const filesystemCopy of ['media/capture', '', null, false, 0]) {
+    const errors = validateTestDataMatrix([databaseOnlyEntry({
+      mutationOwnership: { scope: 'database-only', databaseIdentity: 'case:owned-capture', filesystemCopy },
+    })]);
+    assert.equal(errors.some(error => error.includes('database-only mutation cannot declare a writable filesystem copy')), true,
+      `copy ${JSON.stringify(filesystemCopy)}`);
+  }
+});
+
+test('database-only media inputs remain declared even though they are not writable copies', () => {
+  const entry = databaseOnlyEntry();
+  delete entry.filesystemScenarios;
+  assert.equal(validateTestDataMatrix([entry]).some(error => error.includes('must declare filesystemScenarios')), true);
+});
+
+test('owned database identities cannot be reused within or across mutation scopes', () => {
+  const first = databaseOnlyEntry();
+  const variants = [
+    { scope: 'database-only', databaseIdentity: 'case:owned-capture' },
+    { scope: 'database-and-filesystem', databaseIdentity: 'case:owned-capture', filesystemCopy: 'media/other' },
+    { databaseIdentity: 'case:owned-capture', filesystemCopy: 'media/legacy' },
+  ];
+  for (const mutationOwnership of variants) {
+    const second = databaseOnlyEntry({ case: 'different test sharing database ownership', mutationOwnership });
+    for (const entries of [[first, second], [second, first]]) {
+      assert.equal(validateTestDataMatrix(entries).includes('duplicate database mutation ownership: case:owned-capture'), true);
+    }
+  }
+  assert.deepEqual(validateTestDataMatrix([
+    first,
+    databaseOnlyEntry({
+      case: 'different test with independently owned database and same read-only media',
+      mutationOwnership: { scope: 'database-only', databaseIdentity: 'case:other-capture' },
+    }),
+  ]), []);
+});
+
+test('capture telemetry matrix retains both browser audio contracts with isolated database-only ownership', () => {
+  const entries = readJson(testDataMatrixPath)
+    .filter(entry => entry.test === 'tests/e2e/specs/playerCaptureTelemetry.spec.js');
+  const expected = [
+    {
+      case: 'short audible playback survives reload as positive private capture',
+      databaseIdentity: 'case:playback-capture-short',
+      expectedContracts: ['positive-short-listen-capture', 'durable-private-capture'],
+    },
+    {
+      case: 'visible backward seek retains repeated consumed positions in one capture',
+      databaseIdentity: 'case:playback-capture-seek',
+      expectedContracts: ['same-parent-backward-seek', 'repeated-source-positions'],
+    },
+  ];
+  assert.equal(entries.length, expected.length);
+  for (const contract of expected) {
+    const entry = entries.find(candidate => candidate.case === contract.case);
+    assert.ok(entry, contract.case);
+    assert.equal(entry.config, 'playwright.config.js');
+    assert.equal(entry.project, 'functional');
+    assert.equal(entry.profile, 'functional-core');
+    assert.equal(entry.setupScope, 'isolated');
+    assert.equal(entry.stateMode, 'owned-mutation');
+    assert.equal(entry.executionWave, 1);
+    assert.equal(entry.ownerApproval, 'approved');
+    assert.deepEqual(entry.databaseScenarios, []);
+    assert.deepEqual(entry.filesystemScenarios, ['audio-copy:lastfm-connect-scrobble']);
+    assert.deepEqual(entry.expectedContracts, contract.expectedContracts);
+    assert.deepEqual(entry.mutationOwnership, { databaseIdentity: contract.databaseIdentity, scope: 'database-only' });
+  }
+  assert.deepEqual(validateTestDataMatrix(entries), []);
+  assert.deepEqual(validateTestDataMatrix(readJson(testDataMatrixPath)), []);
+});
+
+test('functional shard contract owns all 141 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -519,13 +669,14 @@ test('functional shard contract owns all 134 browser-functional cases exactly on
         'playwright.lastfm-auto-timezone.config.js',
         'playwright.non-album-rescan.config.js',
         'playwright.home-feedback.config.js',
+        'playwright.native-acceptance.config.js',
       ].includes(entry.config))
       .map(caseIdentity),
   );
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 134);
+  assert.equal(expectedCases.size, 141);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -653,6 +804,12 @@ test('tracked E2E fixture sources contain only approved images and intentional p
   const fixtureRoot = path.join(repoRoot, 'tests', 'e2e', 'fixtures');
   const approvedImages = new Map();
   const intentionalDataFiles = new Map([
+    ['tests/e2e/fixtures/homeFeedbackTest.js', [
+      'tests/e2e/homeFeedback/homeFeedback.spec.js',
+    ]],
+    ['tests/e2e/fixtures/nativeAcceptanceTest.js', [
+      'tests/e2e/nativeAcceptance/nativeAcceptance.spec.js',
+    ]],
     ['tests/e2e/fixtures/mobileFeedbackTest.js', [
       'tests/e2e/mobile-feedback/appearanceRecovery.spec.js',
       'tests/e2e/mobile-feedback/mobileHeaderRegression.spec.js',
@@ -728,17 +885,17 @@ test('idle-memory fixture uses the owner-approved shared local and CI limits', (
 test('read-only inventory command reports complete discovery and ownership totals', () => {
   const inventory = discoverInventory();
 
-  assert.equal(inventory.configuredSurfaces, 13);
+  assert.equal(inventory.configuredSurfaces, 14);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 134,
-    component: 194,
+    browserFunctional: 141,
+    component: 406,
     mobile: 74,
     performance: 30,
-    total: 432,
+    total: 651,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 432,
-    functionalShards: 134,
+    testDataMatrix: 651,
+    functionalShards: 141,
     performanceTargets: 30,
   });
 });

@@ -7,7 +7,7 @@ const CLASSIC = ['button-component.js', 'runtime/markup-format-helpers.js', 'run
   'runtime/browser-scheduling-helpers.js', 'runtime/notification-ui-helpers.js',
   'runtime/album-artbox.js', 'runtime/gallery-main-components.js', 'runtime/gallery-card-component.js',
   'runtime/in-page-tabs.js', 'runtime/trigger-anchor.js', 'runtime/library-settings.js',
-  'runtime/browser-dialog-helpers.js', 'runtime/session-csrf-fetch.js', 'runtime/private-ui-transport.js']
+  'runtime/bottom-sheet.js', 'runtime/browser-dialog-helpers.js', 'runtime/session-csrf-fetch.js', 'runtime/private-ui-transport.js']
   .map(file => `music_app/static/js/${file}`);
 const header = (call, name) => new Headers(call.options.headers).get(name);
 const writes = h => h.calls.filter(call => call.options.method === 'POST');

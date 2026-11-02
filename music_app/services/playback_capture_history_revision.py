@@ -6,6 +6,8 @@ The caller already owns the current account and genuine account/global budgets.
 """
 from music_app.services.playback_capture import CaptureError, POSITION_PROTOCOL
 
+_HISTORY_PROTOCOLS = (POSITION_PROTOCOL, 'app-rate-tagged-position-v1')
+
 HISTORY_REVISION_BYTES = 1024
 _I64 = 9223372036854775807
 _FIELDS = ('append_revision', 'invalidation_revision', 'proof_revision')
@@ -45,8 +47,8 @@ def _prepare_history_revision(connection, account):
     retained = connection.execute('''select cp.id
         from integration.playback_capture_session p
         join integration.playback_capture_checkpoint cp on cp.session_id=p.id
-        where p.account_id=%s and p.evidence_version=%s limit 1''',
-        (account['account_id'], POSITION_PROTOCOL)).fetchone()
+        where p.account_id=%s and p.evidence_version=any(%s::text[]) limit 1''',
+        (account['account_id'], list(_HISTORY_PROTOCOLS))).fetchone()
     if retained is not None:
         _unavailable()
     return None, HISTORY_REVISION_BYTES
@@ -70,7 +72,7 @@ def _insert_reserved_history_revision(connection, account):
 
 
 def _append_history_checkpoint(connection, account_id, checkpoint_id, *, has_loss):
-    """One new real v2 checkpoint, including anchor/loss/terminal-only batches.
+    """One new real supported checkpoint, including anchor/loss/terminal-only batches.
 
     Must be called in its insertion transaction, never for duplicate receipts.
     Arithmetic overflow aborts rather than wrapping/reusing an earlier cut.
@@ -87,11 +89,11 @@ def _append_history_checkpoint(connection, account_id, checkpoint_id, *, has_los
           and (raw_checkpoint_cut is null or raw_checkpoint_cut<%s)
           and exists(select 1 from integration.playback_capture_checkpoint cp
               join integration.playback_capture_session p on p.id=cp.session_id
-              where cp.id=%s and p.account_id=%s and p.evidence_version=%s
+              where cp.id=%s and p.account_id=%s and p.evidence_version=any(%s::text[])
                 and not cp.evidence_redacted)
         returning account_id''',
         (int(has_loss), checkpoint_id, account_id, int(has_loss), checkpoint_id,
-         checkpoint_id, account_id, POSITION_PROTOCOL)).fetchone()
+         checkpoint_id, account_id, list(_HISTORY_PROTOCOLS))).fetchone()
     if changed is None:
         _unavailable()
 

@@ -261,11 +261,13 @@ async function updateWaveformAppearance(forceReload = false) {
 }
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return;
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
   const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   const playback = getPlayerPlaybackSnapshot();
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return;
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;
   const activePeaks = state.player.waveform.compactPeaks;

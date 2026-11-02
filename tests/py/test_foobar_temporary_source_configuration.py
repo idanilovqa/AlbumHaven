@@ -6,8 +6,8 @@ import subprocess
 import sys
 import pytest
 
-@pytest.mark.parametrize('value,expected', [(None,False), ('',False), ('false',False), ('1',False), ('yes',False), ('TRUE',True), (' true ',True)])
-def test_temporary_source_flag_reaches_real_runtime_configuration(value, expected, tmp_path):
+@pytest.mark.parametrize('value', [None, '', 'false', '1', 'yes', 'TRUE', ' true '])
+def test_obsolete_flag_cannot_enable_raw_retention_in_real_configuration(value, tmp_path):
     environment=dict(os.environ)
     environment['MUSIC_DATA_DIR']=str(tmp_path)
     key='ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED'
@@ -17,8 +17,8 @@ def test_temporary_source_flag_reaches_real_runtime_configuration(value, expecte
         environment[key]=value
     result=subprocess.run([sys.executable,'-c',
         'import json; from config import Config; from music_app import _build_runtime_config; '
-        'print(json.dumps([Config.ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED, '
-        '_build_runtime_config()["ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED"]]))'],
+        'print(json.dumps([getattr(Config,"ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED",False), '
+        '_build_runtime_config().get("ALBUM_HAVEN_FOOBAR_TEMPORARY_SOURCE_ENABLED",False)]))'],
         cwd=Path(__file__).resolve().parents[2],env=environment,capture_output=True,text=True,timeout=20,check=False)
     assert result.returncode==0,result.stderr
-    assert json.loads(result.stdout)==[expected,expected]
+    assert json.loads(result.stdout)==[False,False]

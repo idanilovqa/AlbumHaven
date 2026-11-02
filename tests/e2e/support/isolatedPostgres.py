@@ -621,7 +621,10 @@ def apply_migrations(setup_database_url: str, migration_paths: list[Path]) -> No
                 "select migration_name, checksum from ops.schema_migrations"
             ).fetchall()
         }
-        from scripts.postgres_migration_compatibility import validate_applied_migrations
+        from scripts.postgres_migration_compatibility import (
+            migration_compatibility_context,
+            validate_applied_migrations,
+        )
 
         validate_applied_migrations(connection, ROOT / "migrations" / "postgres", applied)
         for migration_path in migration_paths:
@@ -637,12 +640,17 @@ def apply_migrations(setup_database_url: str, migration_paths: list[Path]) -> No
                     migration_sql,
                     migration_path.name,
                 )
+                connection.execute(
+                    "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                    (migration_path.name, checksum),
+                )
             else:
-                connection.execute(migration_sql)
-            connection.execute(
-                "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
-                (migration_path.name, checksum),
-            )
+                with migration_compatibility_context(connection, migration_path.name):
+                    connection.execute(migration_sql)
+                    connection.execute(
+                        "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                        (migration_path.name, checksum),
+                    )
 
 
 def apply_all_migrations(setup_database_url: str) -> None:

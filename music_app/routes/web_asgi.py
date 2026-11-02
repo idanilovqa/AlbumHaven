@@ -270,6 +270,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             "top_listening_presentation_enabled": _app_config(request).get("ALBUM_HAVEN_TOP_LISTENING_PRESENTATION_ENABLED") is True,
             "duplicate_recovery_enabled": _app_config(request).get("ALBUM_HAVEN_DUPLICATE_RECOVERY_ENABLED") is True,
             "position_capture_enabled": _app_config(request).get("ALBUM_HAVEN_POSITION_CAPTURE_ENABLED") is True,
+            "native_rate_capture_enabled": _app_config(request).get("ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED") is True,
             "listening_selections_enabled": _app_config(request).get("ALBUM_HAVEN_LISTENING_SELECTIONS_ENABLED") is True,
             "account_foobar_allowed": account_foobar_allowed,
             "account_foobar_history_allowed": account_foobar_history_allowed,

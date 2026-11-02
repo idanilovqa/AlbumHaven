@@ -6718,10 +6718,12 @@ const state = {
     appearanceKey: 'backgrounds',
   },
   player: {
+    selectedTrack: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
       context: null,
+      sampleRate: 0,
       node: null,
       socket: null,
       preparePromise: null,
@@ -6730,7 +6732,7 @@ const state = {
       expectedSocketClose: null,
       deferredCreditFrames: { current: 0, continuity: 0 },
       roles: { current: null, continuity: null },
-      limits: { currentSeconds: 12, continuitySeconds: 5 },
+      limits: { currentSeconds: 12, continuitySeconds: 12 },
       snapshot: {
         currentTime: 0,
         duration: 0,
@@ -9626,26 +9628,545 @@ const PlaybackCaptureTelemetry = (() => {
 
 // END js/runtime/player-capture-telemetry.js
 
+// BEGIN js/runtime/player-rate-capture.js
+
+// Observation only. A failed report must never control playback or create a new clock.
+const PlaybackRateCapture = (() => {
+  'use strict';
+  const PROTOCOL = 'app-rate-tagged-position-v1';
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const LIMIT = 131072, BODY_LIMIT = 32768, ROW_CHARGE = 512;
+  const TERMINALS = new Set(['ended', 'stopped', 'track_change', 'owner_closed', 'capture_limit', 'transport_abandoned', 'error']);
+  const owners = new Set();
+  let job = null; // Retained until actual digest/fetch settlement, even after abandonment.
+  const safe = (n, min = 0) => Number.isSafeInteger(n) && !Object.is(n, -0) && n >= min;
+  const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+    : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`
+    : JSON.stringify(value);
+  function validSpan(s) {
+    return s && Object.keys(s).sort().join(',') === 'continuity_serial,coordinate_start_frame,frame_count,map_ref,output_start_frame,repeat_count'
+      && UUID.test(s.map_ref) && safe(s.coordinate_start_frame) && safe(s.output_start_frame)
+      && safe(s.frame_count, 1) && safe(s.repeat_count, 1) && safe(s.continuity_serial, 1)
+      && safe(s.coordinate_start_frame + s.frame_count)
+      && safe(s.frame_count * s.repeat_count, 1)
+      && safe(s.output_start_frame + s.frame_count * s.repeat_count);
+  }
+  function createOwner({ ownerUuid, coordinateRateHz, deviceUuid, postCheckpoint,
+    crypto: cryptoApi, clock, diagnostic = () => {}, onDisable = () => {} }) {
+    if (!UUID.test(ownerUuid) || !UUID.test(deviceUuid) || !safe(coordinateRateHz, 8000)
+        || coordinateRateHz > 192000 || owners.size >= 2) return null;
+    const parents = new Set(), groups = [];
+    let dead = false, retiring = false, timer = null, bytes = 0, ownerSequence = 1, frozen = null;
+    let lastOutputEnd = null;
+    const now = () => clock.now();
+    const arm = () => { if (!dead && timer === null) timer = clock.setTimeout(() => { timer = null; tick(); }, 100); };
+    function abandon(reason) {
+      if (dead) return;
+      dead = true;
+      if (timer !== null) clock.clearTimeout(timer);
+      timer = null;
+      frozen?.controller?.abort();
+      groups.length = 0; parents.clear(); bytes = 0; frozen = null;
+      owners.delete(api);
+      try { onDisable(); } catch (_) {}
+      try { diagnostic(reason); } catch (_) {}
+    }
+    function release(parent) {
+      if (parent.closed && !groups.some(g => g.parent === parent) && frozen?.parent !== parent) parents.delete(parent);
+    }
+    function bindParent({ editionSelectionRef = null, resolveSelection = null, readyForSeal = null } = {}) {
+      if (dead || retiring || parents.size >= 8 || editionSelectionRef !== null && !UUID.test(editionSelectionRef)
+          || resolveSelection !== null && typeof resolveSelection !== 'function'
+          || readyForSeal !== null && typeof readyForSeal !== 'function') return null;
+      const captureId = cryptoApi.randomUUID();
+      if (!UUID.test(captureId)) return null;
+      const parent = { captureId, sequence: 1, known: 0, admitted: false, closed: false,
+        selected: editionSelectionRef, resolver: resolveSelection, readyForSeal, sealed: false };
+      parents.add(parent); return parent;
+    }
+    function append(parent, spans) {
+      if (dead || !parents.has(parent) || parent.closed || !Array.isArray(spans) || spans.length > 256) return false;
+      for (const value of spans) {
+        if (!validSpan(value) || lastOutputEnd !== null && value.output_start_frame < lastOutputEnd) {
+          abandon('invalid_rate_capture_span'); return false;
+        }
+        let group = groups.at(-1);
+        if (!group || group.parent !== parent || group.terminal) {
+          group = { parent, spans: [], terminal: null, created: now() }; groups.push(group);
+        }
+        const tail = group.spans.at(-1), end = value.output_start_frame + value.frame_count * value.repeat_count;
+        if (tail && tail.map_ref === value.map_ref && tail.continuity_serial === value.continuity_serial
+            && tail.output_start_frame + tail.frame_count * tail.repeat_count === value.output_start_frame
+            && tail.coordinate_start_frame === value.coordinate_start_frame && tail.frame_count === value.frame_count
+            && safe(tail.repeat_count + value.repeat_count, 1)
+            && safe(tail.frame_count * (tail.repeat_count + value.repeat_count), 1)) {
+          tail.repeat_count += value.repeat_count;
+        } else if (tail && tail.repeat_count === 1 && value.repeat_count === 1
+            && tail.map_ref === value.map_ref && tail.continuity_serial === value.continuity_serial
+            && tail.output_start_frame + tail.frame_count === value.output_start_frame
+            && tail.coordinate_start_frame + tail.frame_count === value.coordinate_start_frame
+            && safe(tail.frame_count + value.frame_count, 1)) {
+          tail.frame_count += value.frame_count;
+        } else {
+          if (bytes + ROW_CHARGE > LIMIT || groups.length > 8) { abandon('rate_capture_capacity'); return false; }
+          group.spans.push({ ...value }); bytes += ROW_CHARGE;
+        }
+        lastOutputEnd = end;
+      }
+      arm(); return true;
+    }
+    function close(parent, reason) {
+      if (dead || !parents.has(parent) || parent.closed || !TERMINALS.has(reason)) return;
+      parent.closed = true;
+      let group = groups.at(-1);
+      if (!group || group.parent !== parent) {
+        if (!parent.admitted && frozen?.parent !== parent && !groups.some(g => g.parent === parent)) { release(parent); return; }
+        group = { parent, spans: [], terminal: null, created: now() }; groups.push(group);
+      }
+      group.terminal = reason;
+      if (groups.length > 8) { abandon('rate_capture_capacity'); return; }
+      arm();
+    }
+    function prepare() {
+      const group = groups[0], parent = group.parent;
+      if (!parent.sealed) {
+        if (!parent.selected && parent.resolver) {
+          try { const ref = parent.resolver(); if (UUID.test(ref || '')) parent.selected = ref; } catch (_) {}
+        }
+        parent.sealed = true; parent.resolver = null; parent.readyForSeal = null;
+      }
+      const spans = [];
+      const evidence = { owner_uuid: ownerUuid, owner_sequence: ownerSequence,
+        coordinate_rate_hz: coordinateRateHz, spans, terminal: false, terminal_reason: null };
+      const envelope = { protocol: PROTOCOL, device_uuid: deviceUuid, capture_uuid: parent.captureId,
+        sequence: parent.sequence, evidence, ...(parent.selected ? { edition_selection_ref: parent.selected } : {}) };
+      let body = '', count = 0;
+      // Test full UTF-8 envelope INCLUDING terminal metadata before accepting a row.
+      while (count < group.spans.length && count < 256) {
+        spans.push(group.spans[count]);
+        evidence.terminal = Boolean(group.terminal && count + 1 === group.spans.length);
+        evidence.terminal_reason = evidence.terminal ? group.terminal : null;
+        const candidate = JSON.stringify(envelope);
+        if (new TextEncoder().encode(candidate).length > BODY_LIMIT) { spans.pop(); break; }
+        body = candidate; count += 1;
+      }
+      evidence.terminal = Boolean(group.terminal && count === group.spans.length);
+      evidence.terminal_reason = evidence.terminal ? group.terminal : null;
+      body = JSON.stringify(envelope);
+      if (!count && !evidence.terminal || new TextEncoder().encode(body).length > BODY_LIMIT) throw new Error('capture body capacity');
+      const known = spans.reduce((n, s) => n + s.frame_count * s.repeat_count, 0);
+      if (!safe(known) || !safe(parent.known + known)) throw new Error('capture numeric capacity');
+      group.spans.splice(0, count); bytes -= count * ROW_CHARGE;
+      if (!group.spans.length) groups.shift();
+      return { parent, body, evidence, known, terminal: evidence.terminal, sequence: parent.sequence,
+        ownerSequence, digest: null, attempts: 0, started: null, retryAt: 0, controller: null };
+    }
+    async function send(batch) {
+      const token = {}; job = token;
+      if (batch.started === null) batch.started = now();
+      batch.attempts += 1;
+      const controller = new AbortController(); batch.controller = controller;
+      const timeout = clock.setTimeout(() => controller.abort(), 10000);
+      try {
+        if (!batch.digest) {
+          const input = new TextEncoder().encode(`${PROTOCOL}\n${batch.sequence}\n${canonical(batch.evidence)}`);
+          const hash = await cryptoApi.subtle.digest('SHA-256', input);
+          batch.digest = Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('');
+          batch.evidence = null;
+        }
+        if (dead) return;
+        const response = await postCheckpoint(batch.body, { signal: controller.signal });
+        if (dead || frozen !== batch) return;
+        const d = response.data;
+        if (response.status >= 200 && response.status < 300) {
+          if (!d || d.ok !== true || d.capture_uuid !== batch.parent.captureId || d.sequence !== batch.sequence
+              || d.owner_sequence !== batch.ownerSequence || d.digest !== batch.digest || d.terminal !== batch.terminal
+              || d.accepted_known_frames !== batch.parent.known + batch.known || d.accepted_lost_frames !== 0) {
+            abandon('invalid_rate_capture_receipt'); return;
+          }
+          batch.parent.known += batch.known; batch.parent.admitted = true;
+          batch.parent.sequence += 1; ownerSequence += 1;
+          if (!safe(ownerSequence, 1) || !safe(batch.parent.sequence, 1)) { abandon('rate_capture_numeric_limit'); return; }
+          frozen = null; release(batch.parent);
+        } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+          abandon(d?.error || 'rate_capture_rejected');
+        }
+      } catch (_) { /* Unknown commit outcome: retry exactly these bytes and sequences. */ }
+      finally {
+        clock.clearTimeout(timeout); batch.controller = null;
+        if (job === token) job = null;
+        if (!dead && frozen === batch) batch.retryAt = now() + [1000, 2000, 4000, 8000, 16000, 30000][Math.min(batch.attempts - 1, 5)];
+        for (const owner of owners) owner.wake();
+      }
+    }
+    function tick() {
+      if (dead) return;
+      if (frozen?.started !== null && frozen?.started !== undefined && now() - frozen.started >= 120000) { abandon('transport_abandoned'); return; }
+      if (!job) {
+        if (!frozen && groups.length && (groups.length > 1 || groups[0].terminal || now() - groups[0].created >= 2000)) {
+          try {
+            if (!groups[0].parent.sealed && groups[0].parent.readyForSeal && !groups[0].parent.readyForSeal()) { arm(); return; }
+            frozen = prepare();
+          } catch (_) { abandon('rate_capture_capacity'); return; }
+        }
+        if (frozen && now() >= frozen.retryAt) void send(frozen);
+      }
+      if (retiring && !parents.size && !frozen && !groups.length) { dead = true; owners.delete(api); return; }
+      if (frozen || groups.length) arm();
+    }
+    function retire(reason = 'owner_closed') {
+      if (dead) return;
+      retiring = true;
+      for (const parent of parents) close(parent, reason);
+      arm();
+    }
+    const api = { bindParent, append, close, retire, abandon, wake: arm, ownerUuid, coordinateRateHz };
+    owners.add(api); return api;
+  }
+  return { createOwner };
+})();
+
+// END js/runtime/player-rate-capture.js
+
+// BEGIN js/runtime/player-rate-capture-bridge.js
+
+// Native tracking owns no audio scheduling. Its lifetime follows an actual node/context.
+const streamingRateCaptureOwners = new WeakMap();
+function nativeStreamingCaptureEnabled() {
+  const shell = typeof document === 'undefined' ? null : document.getElementById('app-shell');
+  return shell?.dataset.nativeRateCaptureEnabled === 'true' && shell.dataset.positionCaptureEnabled === 'true';
+}
+function streamingRateCaptureBridge(node = streamingEngineState().node) {
+  return node ? streamingRateCaptureOwners.get(node) || null : null;
+}
+function prepareStreamingRateCapture(context, node, ownerUuid) {
+  if (!ownerUuid) return null;
+  const bridge = { native: true, ready: false, selectionReady: false, ownerUuid, node, context,
+    aliases: new Map(), pending: new Map(), pendingClose: new Map(), nextAlias: 1, nextFlush: 1, packet: 0, stopped: false };
+  streamingRateCaptureOwners.set(node, bridge); // Mode stays native even if optional setup fails.
+  const scope = typeof capturePlaybackOwnershipScope === 'function' ? capturePlaybackOwnershipScope() : null;
+  const guard = () => !bridge.stopped && nativeStreamingCaptureEnabled() && scope
+    && typeof isPlaybackOwnershipScopeCurrent === 'function' && isPlaybackOwnershipScopeCurrent(scope);
+  bridge.guard = guard;
+  const stateChanged = () => { try { node.port.postMessage({ type: 'rate-capture-barrier' }); } catch (_) {} };
+  context.addEventListener?.('statechange', stateChanged);
+  const fail = reason => { bridge.stopped = true; bridge.ready = false; bridge.owner?.abandon(reason); };
+  const request = new AbortController(), timeout = setTimeout(() => request.abort(), 2000);
+  bridge.contextPromise = fetch('/playback/capture/rate/context', { credentials: 'same-origin',
+    redirect: 'error', cache: 'no-store', signal: request.signal }).then(async response => {
+    if (!response.ok || !guard()) throw new Error('rate context unavailable');
+    const value = await response.json();
+    if (!guard() || value?.protocol !== 'app-rate-tagged-position-v1'
+        || value.native_rate_capture_available !== true || typeof value.expected_scope !== 'string'
+        || !value.expected_scope || value.expected_scope.length > 256) throw new Error('rate context unsupported');
+    bridge.scopeHeader = value.expected_scope; bridge.ready = true;
+    bridge.selectionReady = value.listening_selections_available === true;
+    return value;
+  }).catch(() => { fail('rate_capture_context_unavailable'); return null; }).finally(() => clearTimeout(timeout));
+  bridge.owner = PlaybackRateCapture.createOwner({ ownerUuid, coordinateRateHz: context.sampleRate,
+    deviceUuid: getMeasuredPlaybackDeviceId().toLowerCase(), crypto: window.crypto,
+    clock: { now: () => performance.now(), setTimeout, clearTimeout },
+    onDisable: () => {
+      bridge.stopped = true; bridge.ready = false;
+      context.removeEventListener?.('statechange', stateChanged);
+      for (const pending of bridge.pending.values()) clearTimeout(pending.timer);
+      bridge.pending.clear(); bridge.pendingClose.clear(); bridge.aliases.clear();
+      try { node.port.postMessage({ type: 'rate-capture-disable' }); } catch (_) {}
+    },
+    postCheckpoint: async (body, options) => {
+      const config = await bridge.contextPromise;
+      if (!config || !guard()) throw new Error('rate scope retired');
+      const response = await fetch('/playback/capture/rate/checkpoint', {
+        method: 'POST', credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Playback-Capture-Scope': config.expected_scope },
+        body, signal: options.signal,
+      });
+      if (!guard()) throw new Error('rate scope retired');
+      return { status: response.status, data: await response.json() };
+    },
+  });
+  if (!bridge.owner) { fail('rate_capture_owner_capacity'); return bridge; }
+  const buffers = Array.from({ length: 4 }, () => new ArrayBuffer(16384));
+  node.port.postMessage({ type: 'rate-capture-enable', coordinateRateHz: context.sampleRate, buffers }, buffers);
+  return bridge;
+}
+function bindStreamingRateCapture(role, message) {
+  const bridge = streamingRateCaptureBridge();
+  if (!bridge || !bridge.guard() || !bridge.owner || role.rateCaptureMode) return;
+  role.rateCaptureMode = 'native'; role.rateCaptureBridge = bridge; bridge.endedTailKnown = false;
+  // Never fall back to v2 after a missing, delayed or unsupported native map.
+  const map = message.rateCapture;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const integer = n => Number.isSafeInteger(n) && !Object.is(n, -0) && n >= 0;
+  if (message.coverageMode !== 'native' || !map
+      || map.delivery_positions !== undefined && map.delivery_positions !== 'per-packet'
+      || !uuid.test(map.map_ref || '')
+      || map.owner_uuid !== bridge.ownerUuid || map.coordinate_rate_hz !== bridge.context.sampleRate
+      || map.generation !== role.generation || map.stream_id !== role.streamId
+      || !integer(map.window_start_frame) || !integer(map.window_frames)
+      || !integer(map.window_start_frame + map.window_frames)) return;
+  if (bridge.aliases.size >= 8 || !Number.isSafeInteger(bridge.nextAlias + 1)) {
+    bridge.owner.abandon('rate_capture_binding_capacity'); return;
+  }
+  const current = streamingEngineState().roles.current;
+  const continuation = ['seek', 'short-loop', 'long-loop', 'whole-track-repeat'].includes(role.continuityOptions?.kind)
+    && !(streamingEngineState().pendingSeek?.kind === 'replacement'
+      && streamingEngineState().pendingSeek.streamId === role.streamId)
+    && current?.track?.path === role.track?.path && role.rateListeningIntent === current.rateListeningIntent
+    && role.rateSelectionRef === current.rateSelectionRef;
+  const intent = role.rateListeningIntent;
+  const parent = continuation && current.rateCaptureParent || bridge.owner.bindParent({
+    editionSelectionRef: role.rateSelectionRef,
+    resolveSelection: intent ? () => intent.ready()?.selection_ref || null : null,
+    readyForSeal: () => bridge.ready && !(intent?.pending?.()),
+  });
+  if (!parent) { bridge.owner.abandon('rate_capture_parent_capacity'); return; }
+  role.rateCaptureParent = parent; role.rateDeliveredFrames = 0;
+  role.rateCaptureAlias = bridge.nextAlias++;
+  bridge.aliases.set(role.rateCaptureAlias, { map: Object.freeze({ ...map }), parent, role, retired: false });
+  void bridge.contextPromise.then(() => {
+    if (bridge.guard() && bridge.selectionReady && intent) intent.start(() => bridge.guard());
+  });
+}
+function stageStreamingRatePositions(role, message) {
+  const bridge = role.rateCaptureBridge, binding = bridge?.aliases.get(role.rateCaptureAlias);
+  role.ratePendingPositions = null;
+  if (!binding || !bridge.guard() || binding.map.delivery_positions !== 'per-packet'
+      || !role.metadataAccepted || message.generation !== role.generation || message.streamId !== role.streamId
+      || message.map_ref !== binding.map.map_ref || message.sequence !== role.nextSequence
+      || message.sequence === role.ratePositionSequence || !Number.isSafeInteger(message.frameCount)
+      || message.frameCount < 1 || !Array.isArray(message.ranges) || message.ranges.length > 32) return;
+  role.ratePositionSequence = message.sequence;
+  let previousEnd = 0;
+  const ranges = [];
+  for (const range of message.ranges) {
+    if (!Array.isArray(range) || range.length !== 3
+        || range.some(n => !Number.isSafeInteger(n) || Object.is(n, -0))
+        || range[0] < previousEnd || range[2] < 1 || range[0] > message.frameCount - range[2]
+        || range[1] < binding.map.window_start_frame
+        || !Number.isSafeInteger(range[1] + range[2])
+        || range[1] + range[2] > binding.map.window_start_frame + binding.map.window_frames) return;
+    previousEnd = range[0] + range[2]; ranges.push([...range]);
+  }
+  role.ratePendingPositions = { sequence: message.sequence, frameCount: message.frameCount, ranges };
+}
+function streamingRateEnqueuePosition(role, frameCount) {
+  const bridge = role.rateCaptureBridge, binding = bridge?.aliases.get(role.rateCaptureAlias);
+  if (!binding || !bridge.guard()) return null;
+  if (binding.map.delivery_positions === 'per-packet') {
+    const pending = role.ratePendingPositions; role.ratePendingPositions = null;
+    // No extrapolation: an absent/mismatched position packet leaves these samples unmapped.
+    return { alias: role.rateCaptureAlias, perPacket: true,
+      ranges: pending?.sequence === role.nextSequence && pending.frameCount === frameCount ? pending.ranges : [] };
+  }
+  const start = role.rateDeliveredFrames;
+  if (!Number.isSafeInteger(start + frameCount) || start + frameCount > binding.map.window_frames) {
+    bridge.owner.abandon('rate_capture_delivery_window'); return null;
+  }
+  role.rateDeliveredFrames += frameCount;
+  return { alias: role.rateCaptureAlias, startFrame: binding.map.window_start_frame + start };
+}
+function requestStreamingRateFlush(bridge, callback) {
+  if (!bridge?.owner) return;
+  if (!bridge.guard()) { bridge.owner.abandon('rate_capture_scope_retired'); return; }
+  if (bridge.pending.size >= 8 || !Number.isSafeInteger(bridge.nextFlush + 1)) {
+    bridge.owner.abandon('rate_capture_flush_capacity'); return;
+  }
+  const token = bridge.nextFlush++;
+  const timer = setTimeout(() => bridge.owner.abandon('rate_capture_tail_unknown'), 2000);
+  bridge.pending.set(token, { callback, timer });
+  bridge.node.port.postMessage({ type: 'rate-capture-flush', token });
+}
+function retireStreamingRateCapture(role, successor = null, reason = 'track_change') {
+  const bridge = role?.rateCaptureBridge;
+  if (!bridge || !role.rateCaptureParent) return;
+  const binding = bridge.aliases.get(role.rateCaptureAlias);
+  if (binding) binding.retired = true;
+  const parent = role.rateCaptureParent;
+  if (reason === 'ended') {
+    // The worklet flushes all actual positions before its existing ended message.
+    bridge.endedTailKnown = true; bridge.owner.close(parent, reason); return;
+  }
+  if (parent !== successor?.rateCaptureParent) bridge.pendingClose.set(parent, reason);
+  requestStreamingRateFlush(bridge, live => settleStreamingRateAliases(bridge, live));
+}
+function retireStreamingRateOwner(node) {
+  const bridge = streamingRateCaptureBridge(node);
+  if (bridge?.endedTailKnown) { bridge.owner.retire('owner_closed'); return; }
+  requestStreamingRateFlush(bridge, () => bridge.owner.retire('owner_closed'));
+}
+function settleStreamingRateAliases(bridge, live) {
+  for (const [parent, reason] of bridge.pendingClose) {
+    if (![...bridge.aliases].some(([alias, value]) => value.parent === parent && live.has(alias))) {
+      bridge.pendingClose.delete(parent); bridge.owner.close(parent, reason);
+    }
+  }
+  for (const [alias, binding] of bridge.aliases) if (binding.retired && !live.has(alias)) bridge.aliases.delete(alias);
+}
+function acceptStreamingRateCaptureMessage(node, message) {
+  if (!message?.type?.startsWith('rate-capture-')) return false;
+  const bridge = streamingRateCaptureBridge(node);
+  if (!bridge?.owner) return true;
+  if (!bridge.guard()) { bridge.owner.abandon('rate_capture_scope_retired'); return true; }
+  if (message.type === 'rate-capture-disabled') {
+    bridge.owner.abandon(message.reason || 'rate_capture_disabled'); return true;
+  }
+  if (message.type === 'rate-capture-live') {
+    if (!Array.isArray(message.liveAliases) || message.liveAliases.length > 3
+        || message.liveAliases.some(n => !Number.isSafeInteger(n) || n < 1)) {
+      bridge.owner.abandon('invalid_rate_capture_live'); return true;
+    }
+    settleStreamingRateAliases(bridge, new Set(message.liveAliases)); return true;
+  }
+  if (message.type === 'rate-capture-flushed') {
+    const pending = bridge.pending.get(message.token);
+    if (!pending || !Array.isArray(message.liveAliases) || message.liveAliases.length > 3
+        || message.liveAliases.some(n => !Number.isSafeInteger(n) || n < 1)) {
+      bridge.owner.abandon('invalid_rate_capture_flush'); return true;
+    }
+    bridge.pending.delete(message.token); clearTimeout(pending.timer);
+    const live = new Set(message.liveAliases);
+    pending.callback(live);
+    settleStreamingRateAliases(bridge, live);
+    return true;
+  }
+  if (message.type !== 'rate-capture-packet') return true;
+  const buffer = message.buffer;
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== 16384) { bridge.owner.abandon('invalid_rate_capture_packet'); return true; }
+  const rows = new Float64Array(buffer), count = rows[0], packet = rows[1], id = rows[2];
+  if (!Number.isInteger(count) || count < 1 || count > 256 || packet !== bridge.packet + 1
+      || !Number.isInteger(id) || id < 1 || id > 4 || rows[3] !== 1) {
+    bridge.owner.abandon('invalid_rate_capture_packet'); return true;
+  }
+  bridge.packet = packet;
+  for (let n = 0; n < count; n += 1) {
+    const i = 4 + n * 6, alias = rows[i], binding = bridge.aliases.get(alias);
+    if (!binding) { bridge.owner.abandon('unknown_rate_capture_binding'); return true; }
+    const span = { map_ref: binding.map.map_ref, coordinate_start_frame: rows[i + 1], frame_count: rows[i + 2],
+      repeat_count: rows[i + 3], output_start_frame: rows[i + 4], continuity_serial: rows[i + 5] };
+    if (span.coordinate_start_frame < binding.map.window_start_frame
+        || span.coordinate_start_frame + span.frame_count > binding.map.window_start_frame + binding.map.window_frames
+        || !bridge.owner.append(binding.parent, [span])) { bridge.owner.abandon('invalid_rate_capture_span'); return true; }
+  }
+  // Rows have been copied into bounded owner state before the unique credit returns.
+  node.port.postMessage({ type: 'rate-capture-credit', bufferId: id, buffer }, [buffer]);
+  return true;
+}
+
+// END js/runtime/player-rate-capture-bridge.js
+
+// BEGIN js/runtime/player-streaming-decoders.js
+
+// Every client decodes with these pinned builds, never a browser or system decoder.
+const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
+const STREAMING_DECODER_BUILDS = {
+  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder' },
+  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder' },
+};
+const STREAMING_DECODER_SELF_CHECK_TOLERANCE = 0.01;
+const STREAMING_DECODER_SELF_CHECK_CLIPS = {
+  "mp3": {
+    "bytes": "//tQZAAAAYsL0h08YAAAAA0goAABC0DNPlnGgAAAADSDAAAACv22AV6vV6vV7PHu/VkU/xviFhqxcy5qMREABAIBiD4f4IcTg/wQdOdPu6fOdPu6fdghhhAAhOAIC//2YPDhhAV6EJI8Chk34oDCIYMLL1Iw5SYAgPgZIDp8D1E+Ea/EaJEeo4f8T4RoLsO0YX/yRMi8XkS7/+PUyLxeMS6Xf/9IvF4FQWBr/iUJA0r+/u8EAUmA8CKYIQGZgcALmBgDaYTQnZkQFAmPl5OYc//7UmQQAPHiC0WHewAAAAANIOAAAQa0KxlA58LAAAA0gAAABJrxj3g5GB4A6YCQHIcCqMwEpO9DP+r////2f/t8AAolIgmB2rhQ7Fn5cZOYRChfgwHtTzRIC4AADKMzYYhOUdl6oq/ZV02udRP7//1q/fu/9NeCCKK6zLVNi1QILmJvGAyJkZksAIoYA8AXg0AGWBgCQSKd6j9v//kFWI6fbr1cm2zi//9R4AEBIYEwIAKBYMAcB8wOAGjAdDnMgkuEywehzocOYMugYwwcgAiE//tSZC2P8YsLRIAa+LAAAA0gAAABB2gtFhXsAAAAADSCgAAECUwPQFzPsoG3BXH//+3b/7dKIQAAADAQA+g+uu4wBgCPJgpPME0QJWAwARGzRmAvMHwA4y4SOzBBAQMgsoQwFwI/AyAMBhl+BmAwGkIBIX/hY+A0PDGgtn/iaClyCCtBzf/xH4YzFoFgEGDL//5bIkSBBxc5DhkP//xOA6x3jTIIiYlYiH///jMEaOMWMhhUsAAADYkFgkFgsFYYAADFgDJpGOeC3PgaCI8qwMz/+1JkTYAD8E1LJnqAAAAADSDAAAAP0QlZuSmAEAAANIMAAAAQBQE0b4JzD0wGImpdQ4GtwGGwA0wUwdUiZeDfQ3QYjEfBgFJzFFvhCYP4CIwN2gIGGAHSWr/C3sG1gvSFkgn0LRgxaitkkv+JCHhDpgteD9w1QGKQ2YOL+r/8+TpNFIrlWkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqv/7UmQlj/AAAGkHAAAIAAANIOAAAQAAAaQAAAAgAAA0gAAABKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    "frames": 5760,
+    "magnitude": 189.017
+  },
+  "flac": {
+    "bytes": "ZkxhQwAAACIEAAQAAADqAAGYCsRC8AAADcg4Ot8jxz5ldGCP1KLOJYo0BAAALAwAAABMYXZmNjMuMS4xMDEBAAAAFAAAAGVuY29kZXI9TGF2ZjYzLjEuMTAxgQAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//ipiADmTgAAAZkDKwSsBhYHYAiDCXvmJAbkM8+gC2AbUE0A6j5egAFnDSRCk4czhMkpQJphKTJ5oWcLCycyZhSFJDnDJPDoFnM4SWQLJM5Jnh0wkQlCRJmUmGwJTySmcJSZSESUkzAoUkImQ0MM5PDmFhSknyFk0h4ScocnmZJSTJPJQwphLIWZhyhOQ8nJYTw8MySkzhykkzklmTnDOZmZnJmgcmTIULCFJMklMDSYWSIUCMCwsJnmBQyUDMPApNChnDlJlCSkLJMnMOTMyhoF4SmeBTJwyVCeHhM5KE+Q0IUoZPMJYUmZYekLMyTOYaBYSZMMQDwnKBEOZmHCk4RApMhEDnJJEJ5CQQkKkNCh4ULOZNAqEywlmTmThQ5hyhnDlmUhlDwmcOZJQpAiHKGkw5GAVJOTnChk2B8Dhyklk2BznkzOZyHMzCkIhwiUhSZKGZyUJLMnkOZUMOSmQqEkpCJOZOAAAADrP//4qYgB4U4JKQoDCqcLFgtLC0YLBgqO5if+yd375BgYFk+i4Sc++wAIUiGgUQKc4UJQyRAoZEDCkpPJCKBEhElApOBSTJMkOSEQmUwggUlwoFCkwoUCISZDhmgEECIEThTCkoUzMKE5hnJhSczCmZYXJQyQiBM5hhyGISJCIEQsoUphECkMlJCShMLgRJSUhEhTQlkksJQwLAoFJMlkmU0zOESZCwwoTCkmZJ5mEQzQnCIFDCgRCZCJCeSklJZKEQpQMzwsPJhTJmhk+c5ShlDMmgFkNDJkIgaEQNmUyZCIQsJOSkKYUlChoUmGhQ5hlCklhJZDmQpKhmkzQ4UOcMlCEQmZJmEQIhECkxAoRMw8MKSFCgRCFJQofNDIhzKYEQlMmHCaEzKHkocLCkKZoSIShmTJOFMIkiBiZ54EQLCZJhSTJnhoU0ORDKcPApMlIeFJKZLCISJDzPAsgRIEQOYZJKEQwiBQ0hSnMzyBEk5CISgUzNAiBTImSZQ5KEyZMyT4UyIXyEEJQpCkIgcmZCYZgUgAAACoEP/4qYgC6E4KvwojCVMIUgcoBdgEaQLl5iYs1bPobBAoIl/eoQ2+wAAMIkJyZmFChJEAiEKQiE4dDnKEpKBiBOSUCZpDock8ocKWQmhJMlAmUJzCknQlyVCVDlh4ZM5QJTwsNJIhQPMNCJDMsCySUkPnKcLKFNCUw5kKQocnCkkqAWESBRDJnJhOQphmTk0KS0ymUKQ0MnDJmUDOTkSFPDEMQJSgSRAoZKEmUhOFhQoRCU8mkMKGGGZJOc0ChZKaULhOYUlITyGFhoaFnM0KHCmGTCUJhwySIHlMpLDLJUCkyYUJlAoRAoThUJpoFw8ksAsDhZJyZZJIhLKFOSmShMzDKQnCh5kwiSbAslDMJQmTDJSSFlnwqGYRJwpCkKFCFkMpkLSaZKRDSFDJQhnIVApKQslKEQ5YdIUOQIkJkh0JhTDmIUJYEQKSZJQNA0hJwhSUPNA4hlnCk4RAnCSYUkphEMyheZw5hzQmYSnChSFISJQmIVAjDkySkJkyQiTkIw8oAAAA97X/+HmIAwHHo04DcAHgAEf+rf0Z+5X6JvjX5ixDsyAetBfX/0+EAXs+vgAAgEQiBEDSQoEIhAlJCwKEQIIFQpLzhTycCIFAlAwKBSeESF6EcIkIhKHIRAKSFApChCIQsKFkggUQImwIwLA4FCGThAgIARDmlKBFAuRAsyUChIgcDMKBkwiBEwqBBAqB0CMOShhhEAIgZww4aBE0IIUKwiBYaBlAoQiEKE0DkIIZBAImWGhSZmBSQKFAMmBTCw0NKU/QiBQzDDJAsJCIBBCZPShECIRCzSShmGSGYGSTMLgRCoXNCIcAAAAATQk=",
+    "frames": 3528,
+    "magnitude": 198.443
+  }
+};
+
+function loadStreamingDecoderScript(file) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const version = String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || '');
+    script.src = STREAMING_DECODER_BASE_URL + file
+      + (version ? `?v=${encodeURIComponent(version)}` : '');
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Failed to load ${file}`));
+    document.head.appendChild(script);
+  });
+}
+
+function createStreamingDecoder(codec) {
+  const { global, className } = STREAMING_DECODER_BUILDS[codec];
+  return new window[global][className]();
+}
+
+async function streamingDecoderPassesSelfCheck(codec) {
+  const clip = STREAMING_DECODER_SELF_CHECK_CLIPS[codec];
+  const bytes = Uint8Array.from(atob(clip.bytes), (char) => char.charCodeAt(0));
+  const decoder = createStreamingDecoder(codec);
+  await decoder.ready;
+  try {
+    const decoded = await decoder.decode(bytes);
+    const flushed = await decoder.flush?.();
+    const frames = decoded.samplesDecoded + (flushed?.samplesDecoded || 0);
+    let magnitude = 0;
+    for (const output of [decoded, flushed]) {
+      for (const sample of output?.channelData?.[0] || []) magnitude += Math.abs(sample);
+    }
+    return frames === clip.frames
+      && Math.abs(magnitude - clip.magnitude) <= STREAMING_DECODER_SELF_CHECK_TOLERANCE;
+  } finally {
+    decoder.free();
+  }
+}
+
+async function detectVerifiedStreamingCodecs() {
+  const codecs = [];
+  for (const [codec, build] of Object.entries(STREAMING_DECODER_BUILDS)) {
+    try {
+      await loadStreamingDecoderScript(build.file);
+      if (await streamingDecoderPassesSelfCheck(codec)) codecs.push(codec);
+      else console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+    } catch (error) {
+      console.warn(`[AlbumHaven][Playback] The ${codec} decoder is unavailable.`, error);
+    }
+  }
+  return codecs;
+}
+
+function ensureStreamingDecoders() {
+  const engine = state.player.streaming;
+  engine.decodersPromise ??= detectVerifiedStreamingCodecs().then((codecs) => {
+    engine.encodedCodecs = codecs;
+    return codecs;
+  });
+  return engine.decodersPromise;
+}
+
+// END js/runtime/player-streaming-decoders.js
+
 // BEGIN js/runtime/player-streaming-engine.js
 
-const STREAMING_SAMPLE_RATE = 48_000;
 const STREAMING_RUNTIME_ASSET_VERSION = encodeURIComponent(
   String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || ''),
 );
 const STREAMING_WORKLET_URL = '/static/js/audio-worklets/gapless-playback-processor.js'
   + (STREAMING_RUNTIME_ASSET_VERSION ? `?v=${STREAMING_RUNTIME_ASSET_VERSION}` : '');
 const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
-const STREAMING_MAX_CREDIT_FRAMES = 48_000;
-const STREAMING_CREDIT_LOW_WATER_FRAMES = 12_000;
-const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = STREAMING_CREDIT_LOW_WATER_FRAMES;
-const STREAMING_QUEUED_NEXT_PREPARE_FRAMES = 3 * STREAMING_SAMPLE_RATE;
-const STREAMING_REPLACEMENT_PREPARE_FRAMES = 2 * STREAMING_SAMPLE_RATE;
-const STREAMING_SEEK_PREPARE_FRAMES = 12_000;
-const STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES = STREAMING_SAMPLE_RATE;
-const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES = STREAMING_REPLACEMENT_PREPARE_FRAMES;
-const STREAMING_WAVEFORM_READY_FRAMES = 48_000;
+const STREAMING_MAX_CREDIT_SECONDS = 1;
+const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
+const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
+const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
+const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
+const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
+const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
+const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
+const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
+const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
 const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
+const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
+const STREAMING_ENCODED_BUFFER_SECONDS = { current: 120, continuity: 30 };
+const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
+const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
+const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
+const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
+const STREAMING_OUTPUT_REPORT_INTERVAL_MS = 5000;
 
 // Capture ownership is separate from playback attempt/lease ownership. The
 // staged gate cannot start a context request, timer or producer while false.
@@ -9664,10 +10185,13 @@ function streamingCaptureTransport() {
     checkpointPath: position ? '/playback/capture/position/checkpoint' : '/playback/capture/checkpoint'});
 }
 function canStartOrdinaryAlbumListening() {
+  const native = streamingRateCaptureBridge();
+  if (native) return Boolean(native.ready && native.selectionReady && native.guard());
   const bridge = streamingCaptureBridge();
   return Boolean(bridge?.positionReady && bridge?.selectionReady && bridge.guard());
 }
 function beginStreamingCaptureContext() {
+  if (nativeStreamingCaptureEnabled()) return null;
   if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED) return null;
   const scope = typeof capturePlaybackOwnershipScope === 'function' ? capturePlaybackOwnershipScope() : null;
   if (!scope) return null;
@@ -9691,6 +10215,7 @@ function beginStreamingCaptureContext() {
   return { scope, promise, transport, discard: () => controller.abort() };
 }
 function prepareStreamingCapture(engine, context, node, preparedContext = null) {
+  if (streamingRateCaptureBridge(node) || nativeStreamingCaptureEnabled()) return;
   if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED
       || typeof PlaybackCaptureTelemetry === 'undefined' || context.sampleRate !== 48000) {
     preparedContext?.discard();
@@ -9776,6 +10301,9 @@ function prepareStreamingCapture(engine, context, node, preparedContext = null) 
   }).catch(() => owner.onScopeLost());
 }
 function bindStreamingCapture(role, metadata) {
+  if (streamingRateCaptureBridge() || metadata.coverageMode === 'native') {
+    bindStreamingRateCapture(role, metadata); return;
+  }
   const engine = streamingEngineState(), bridge = streamingCaptureBridge();
   if (!bridge || !bridge.guard() || role.captureBinding || role.captureSkipped) return;
   bridge.generation = engine.generation;
@@ -9913,6 +10441,7 @@ function completeStreamingCaptureSource(role, message) {
   role.captureSource = Object.freeze({ ...source });
 }
 function retireStreamingCapture(role, successor = null, reason = 'track_change', node = streamingEngineState().node) {
+  retireStreamingRateCapture(role, successor, reason);
   if (role) { role.captureSource = null; role.capturePendingPositions = null; role.captureMappedBinding = null; }
   const bridge = streamingCaptureBridge(node);
   if (!bridge || !bridge.guard() || !role) return;
@@ -9928,8 +10457,32 @@ function streamingEngineState() {
 // Handles are opaque capabilities for local cancellation, never media authority.
 const streamingAttemptRecords = new WeakMap();
 const streamingUnsafeCleanupFailures = new WeakMap();
+// Resource provenance only: these nodes have never admitted a playback role.
+const streamingEmptyPreparations = new WeakMap();
 const streamingPreparationOutcomes = new WeakMap();
 const streamingCleanupOutcomes = new WeakMap();
+// Correlate transport controls without changing media or playback ownership.
+// The counter survives stop/configure; only the scheduling authority expires.
+const streamingPlaybackIntents = new WeakMap();
+function sendStreamingPlaybackIntent(engine, node, generation, kind) {
+  const intents = streamingPlaybackIntents.get(engine);
+  const configured = intents?.configured;
+  const message = {type: kind, generation};
+  if (configured?.node === node && configured.generation === generation
+      && engine.node === node && engine.generation === generation
+      && engine.roles.current?.generation === generation) {
+    if (intents.counter >= Number.MAX_SAFE_INTEGER) {
+      intents.active = null;
+      failStreamingEngine('processor', {message: 'Playback intent IDs exhausted'}, 'playback-intent-exhausted');
+      return false;
+    }
+    message.playbackIntentId = ++intents.counter;
+    intents.active = {node, generation, id: message.playbackIntentId, kind};
+  }
+  // Publish before the port effect, and never overwrite a reentrant successor.
+  node.port.postMessage(message);
+  return true;
+}
 function registerStreamingAttempt(engine, role = null, incomingTrack = null) {
   const handle = Object.freeze({});
   const record = { engine, request: engine.startRequestId, lifecycle: engine.lifecycleEpoch || 0,
@@ -9978,7 +10531,7 @@ function retireStreamingOutgoingRole(role, attempt) {
   engine.snapshot.paused = true;
   const current = () => isStreamingPlaybackAttemptCurrent(attempt)
     && engine.roles.current === role && engine.context === context && engine.node === node;
-  try { node.port.postMessage({type: 'pause', generation: engine.generation}); }
+  try { if (!sendStreamingPlaybackIntent(engine, node, engine.generation, 'pause')) return true; }
   catch (error) {
     if (current()) failStreamingEngine('processor', error, 'retired-outgoing-pause-error');
     return true;
@@ -10041,6 +10594,10 @@ function promoteStreamingAttempt(outgoing, incoming, pending = null) {
       : record.phase === 'role' && record.role === outgoing) advanceStreamingAttempt(handle, incoming);
 }
 
+function streamingFrames(seconds) {
+  return Math.round(seconds * streamingEngineState().sampleRate);
+}
+
 function publishStreamingDiagnostics() {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
@@ -10068,8 +10625,8 @@ function streamingWireRoleAccepted(roleState, wireRole) {
 function initialStreamingBackingCapacities() {
   const engine = streamingEngineState();
   return {
-    current: engine.limits.currentSeconds * STREAMING_SAMPLE_RATE,
-    continuity: engine.limits.continuitySeconds * STREAMING_SAMPLE_RATE,
+    current: streamingFrames(engine.limits.currentSeconds),
+    continuity: streamingFrames(engine.limits.continuitySeconds),
   };
 }
 
@@ -10082,7 +10639,7 @@ function ensureStreamingBackingCapacities() {
 function streamingRoleCapacityFrames(roleState) {
   const engine = streamingEngineState();
   const role = roleState?.role;
-  const logicalCapacityFrames = engine.limits[`${role}Seconds`] * STREAMING_SAMPLE_RATE;
+  const logicalCapacityFrames = streamingFrames(engine.limits[`${role}Seconds`]);
   const backingCapacityFrames = Number(roleState?.backingCapacityFrames)
     || Number(ensureStreamingBackingCapacities()[role])
     || logicalCapacityFrames;
@@ -10241,8 +10798,8 @@ function maybeNotifyStreamingWaveformReady({ includeCommittedFrames = false } = 
   const currentCapacityFrames = streamingRoleCapacityFrames(current);
   const currentPlayableFrames = streamingRolePlayableFrames(current);
   const currentTargetFrames = currentPlayableFrames === null
-    ? Math.min(currentCapacityFrames, STREAMING_WAVEFORM_READY_FRAMES)
-    : Math.min(currentCapacityFrames, STREAMING_WAVEFORM_READY_FRAMES, currentPlayableFrames);
+    ? Math.min(currentCapacityFrames, streamingFrames(STREAMING_WAVEFORM_READY_SECONDS))
+    : Math.min(currentCapacityFrames, streamingFrames(STREAMING_WAVEFORM_READY_SECONDS), currentPlayableFrames);
   if (typeof handleStreamingPlaybackWaveformReady !== 'function') return;
   const currentCommittedFrames = engine.diagnostics.bufferedFrames.current
     + (includeCommittedFrames ? engine.diagnostics.inFlightFrames.current : 0);
@@ -10256,10 +10813,10 @@ function maybeNotifyStreamingWaveformReady({ includeCommittedFrames = false } = 
   const continuityPlayableFrames = streamingRolePlayableFrames(continuity);
   const continuityCapacityFrames = continuity
     ? streamingRoleCapacityFrames(continuity)
-    : STREAMING_SAMPLE_RATE;
+    : streamingFrames(1);
   const continuityTargetFrames = continuityPlayableFrames === null
-    ? Math.min(STREAMING_SAMPLE_RATE, continuityCapacityFrames)
-    : Math.min(STREAMING_SAMPLE_RATE, continuityCapacityFrames, continuityPlayableFrames);
+    ? Math.min(streamingFrames(1), continuityCapacityFrames)
+    : Math.min(streamingFrames(1), continuityCapacityFrames, continuityPlayableFrames);
   const continuityReady = !continuity
     || continuityCommittedFrames >= continuityTargetFrames;
   if (!currentReady || !continuityReady) return;
@@ -10326,6 +10883,20 @@ function invokeStreamingFacadeCallback(callback, source, expectedRole, expectedG
   catch (error) { reportStreamingFacadeFailure(error, source, owner); }
 }
 
+// Optional display observation has no engine failure/cleanup authority.
+function notifyStreamingPlaybackPresentation(role, lineage) {
+  const engine = streamingEngineState();
+  if (!lineage || lineage.engine !== engine || lineage.role !== role
+    || engine.roles.current !== role || engine.playbackAttempt !== lineage.attempt
+    || engine.startRequestId !== lineage.request || engine.lifecycleEpoch !== lineage.lifecycle
+    || engine.generation !== lineage.generation
+    || typeof handleStreamingPlaybackPresentation !== 'function') return;
+  try {
+    const result = handleStreamingPlaybackPresentation(lineage);
+    if (result !== undefined) observeStreamingFacadeCallback(result, 'presentation');
+  } catch (error) { reportStreamingFacadeFailure(error, 'presentation', null); }
+}
+
 function normalizeStreamingContinuityOptions(options = {}) {
   const kind = ['queued-next', 'short-loop', 'long-loop', 'whole-track-repeat', 'seek']
     .includes(options.kind) ? options.kind : 'queued-next';
@@ -10358,7 +10929,7 @@ function protectedQueuedContinuityReady(engine, current, options) {
     && !engine.snapshot.paused
     && !engine.roles.continuity
     && (current.eosReceived === true
-      || engine.diagnostics.bufferedFrames.current >= STREAMING_SAMPLE_RATE);
+      || engine.diagnostics.bufferedFrames.current >= streamingFrames(1));
 }
 
 function maybeSchedulePendingStreamingContinuity() {
@@ -10408,8 +10979,8 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
         generation: continuity.generation,
         active: false,
         kind: options.kind,
-        startFrame: Math.round(options.startSeconds * STREAMING_SAMPLE_RATE),
-        endFrame: Math.round(options.endSeconds * STREAMING_SAMPLE_RATE),
+        startFrame: streamingFrames(options.startSeconds),
+        endFrame: streamingFrames(options.endSeconds),
         retainedStreamId: continuity.streamId,
       });
     }
@@ -10464,9 +11035,9 @@ function flushStreamingControls() {
 function streamingRoleCommittedCapacityFrames(roleState) {
   const engine = streamingEngineState();
   const capacityFrames = streamingRoleCapacityFrames(roleState);
-  const fullCurrentCapacityFrames = engine.limits.currentSeconds * STREAMING_SAMPLE_RATE;
+  const fullCurrentCapacityFrames = streamingFrames(engine.limits.currentSeconds);
   return roleState?.role === 'current' && capacityFrames === fullCurrentCapacityFrames
-    ? Math.max(1, capacityFrames - STREAMING_MAX_CREDIT_FRAMES)
+    ? Math.max(1, capacityFrames - streamingFrames(STREAMING_MAX_CREDIT_SECONDS))
     : capacityFrames;
 }
 
@@ -10485,7 +11056,7 @@ function grantStreamingCredit(roleState, requestedFrames) {
   if (outgoingReplacementCurrent) {
     const remainingSafetyFrames = Math.max(
       0,
-      STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES
+      streamingFrames(STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS)
         - bufferedFrames
         - inFlightFrames,
     );
@@ -10503,9 +11074,16 @@ function grantStreamingCredit(roleState, requestedFrames) {
     0,
     committedCapacityFrames - bufferedFrames - inFlightFrames,
   );
-  const serverAvailableFrames = Math.max(0, STREAMING_MAX_CREDIT_FRAMES - inFlightFrames);
+  const serverAvailableFrames = Math.max(0, streamingFrames(STREAMING_MAX_CREDIT_SECONDS) - inFlightFrames);
   const frames = Math.min(requestedFrames, availableFrames, serverAvailableFrames);
   if (frames <= 0) return 0;
+  if (roleState.encoded) {
+    if (roleState.eosReceived) return 0;
+    roleState.encoded.localCreditFrames += frames;
+    engine.diagnostics.inFlightFrames[role] += frames;
+    void pumpStreamingEncodedRole(roleState);
+    return frames;
+  }
   const accepted = sendStreamingControl({
     type: 'credit',
     generation: roleState.generation,
@@ -10529,9 +11107,9 @@ function refillStreamingRoleCredit(roleState, missingFrames) {
     return grantStreamingCredit(roleState, missingFrames);
   }
   const inFlightFrames = engine.diagnostics.inFlightFrames.current;
-  if (missingFrames < STREAMING_MAX_CREDIT_FRAMES
-      || inFlightFrames > STREAMING_CREDIT_LOW_WATER_FRAMES) return 0;
-  return grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES - inFlightFrames);
+  if (missingFrames < streamingFrames(STREAMING_MAX_CREDIT_SECONDS)
+      || inFlightFrames > streamingFrames(STREAMING_CREDIT_LOW_WATER_SECONDS)) return 0;
+  return grantStreamingCredit(roleState, streamingFrames(STREAMING_MAX_CREDIT_SECONDS) - inFlightFrames);
 }
 
 function continuityCreditNeedsOutgoingRenderCushion(roleState) {
@@ -10542,7 +11120,7 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   const queuedNextNeedsCushion = roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'queued-next'
     && !current?.eosReceived
-    && engine.diagnostics.bufferedFrames.current < STREAMING_SAMPLE_RATE;
+    && engine.diagnostics.bufferedFrames.current < streamingFrames(1);
   const replacementNeedsCushion = roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'seek'
     && pendingReplacement?.kind === 'replacement'
@@ -10550,7 +11128,7 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
     && pendingReplacement.streamId === roleState.streamId
     && pendingReplacement.currentStreamId === current?.streamId
     && !current.eosReceived
-    && engine.diagnostics.bufferedFrames.current < STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES;
+    && engine.diagnostics.bufferedFrames.current < streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
   return queuedNextNeedsCushion || replacementNeedsCushion;
 }
 
@@ -10567,7 +11145,7 @@ function settleStreamingReplacementCushionWaiter(ready) {
 function replacementOutgoingCushionReady(engine, current) {
   return current?.eosReceived === true
     || engine.diagnostics.bufferedFrames.current
-      >= STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES;
+      >= streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
 }
 
 function maybeResolveStreamingReplacementCushion() {
@@ -10609,8 +11187,8 @@ function grantStreamingInitialCredit(roleState) {
   }
   roleState.initialCreditDeferred = false;
   return grantStreamingCredit(roleState, Math.min(
-    STREAMING_MAX_CREDIT_FRAMES,
-    Number(roleState.targetBufferFrames) || STREAMING_MAX_CREDIT_FRAMES,
+    streamingFrames(STREAMING_MAX_CREDIT_SECONDS),
+    Number(roleState.targetBufferFrames) || streamingFrames(STREAMING_MAX_CREDIT_SECONDS),
   ));
 }
 
@@ -10624,8 +11202,12 @@ function validateStreamingMetadata(message, roleState) {
   return message.generation === roleState.generation
     && message.streamId === roleState.streamId
     && message.role === roleState.role
-    && message.sampleRate === STREAMING_SAMPLE_RATE
+    && message.sampleRate === streamingEngineState().sampleRate
     && message.channels === 2
+    && (message.codec === undefined
+      || (streamingEngineState().encodedCodecs?.includes(message.codec)
+        && Number.isInteger(message.skipFrames) && message.skipFrames >= 0
+        && Number.isInteger(message.totalFrames) && message.totalFrames >= 0))
     && Number.isInteger(message.provisionalTotalFrames)
     && message.provisionalTotalFrames >= 0
     && message.requestedStartFrame === roleState.startFrame
@@ -10636,13 +11218,29 @@ function validateStreamingMetadata(message, roleState) {
 function handleStreamingControl(message) {
   const engine = streamingEngineState();
   if (!message || typeof message !== 'object') return;
+  if (message.type === 'probe-result') {
+    settleStreamingSampleRateProbe(message.requestId, Number(message.sampleRate) || 0, {
+      fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
+      sizeBytes: Number(message.sizeBytes) || 0,
+      losslessBitsPerSecond: Number(message.losslessBitsPerSecond) || 0,
+    });
+    return;
+  }
   const roleState = streamingRoleForId(message.streamId);
   if (!roleState || message.generation !== engine.generation) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
+  if (message.type === 'rate-positions') {
+    streamingCaptureSafely(() => stageStreamingRatePositions(roleState, message));
+    return;
+  }
   if (message.type === 'capture-positions') {
     streamingCaptureSafely(() => stageStreamingCapturePositions(roleState, message));
+    return;
+  }
+  if (message.type === 'rate-mismatch') {
+    handleStreamingRateMismatch(roleState, message);
     return;
   }
   if (message.type === 'metadata') {
@@ -10654,8 +11252,22 @@ function handleStreamingControl(message) {
       );
       return;
     }
+    const presentation = {engine, role: roleState, attempt: engine.playbackAttempt,
+      request: engine.startRequestId, lifecycle: engine.lifecycleEpoch, generation: engine.generation};
     streamingCaptureSafely(() => bindStreamingCapture(roleState, message));
     roleState.metadataAccepted = true;
+    if (message.codec) {
+      createStreamingEncodedRole(roleState, message);
+      refillStreamingEncodedBytes(roleState);
+      // Compressed audio keeps arriving far faster than it plays, so a shorter head is safe.
+      if (engine.pendingSeek?.kind === 'replacement'
+          && engine.pendingSeek.streamId === roleState.streamId) {
+        roleState.targetBufferFrames = Math.min(
+          roleState.targetBufferFrames,
+          streamingFrames(STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS),
+        );
+      }
+    }
     roleState.provisionalTotalFrames = message.provisionalTotalFrames;
     roleState.timelineStartFrame = message.timelineStartFrame;
     if (roleState.continuityOptions?.kind === 'seek') {
@@ -10675,6 +11287,7 @@ function handleStreamingControl(message) {
     }
     grantStreamingInitialCredit(roleState);
     publishStreamingDiagnostics();
+    notifyStreamingPlaybackPresentation(roleState, presentation);
     return;
   }
   if (message.type === 'promoted') {
@@ -10708,12 +11321,19 @@ function handleStreamingControl(message) {
       return;
     }
     if (roleState.eosReceived) return;
+    if (roleState.encoded && !roleState.encoded.delivered) {
+      roleState.encoded.eos = message;
+      void pumpStreamingEncodedRole(roleState);
+      return;
+    }
+    const presentation = {engine, role: roleState, attempt: engine.playbackAttempt,
+      request: engine.startRequestId, lifecycle: engine.lifecycleEpoch, generation: engine.generation};
     streamingCaptureSafely(() => completeStreamingCaptureSource(roleState, message));
     roleState.eosReceived = true;
     roleState.closed = true;
     engine.diagnostics.inFlightFrames[roleState.role] = 0;
     if (roleState.role === 'current' && !roleState.seekTarget) {
-      engine.snapshot.duration = message.authoritativeTotalFrames / STREAMING_SAMPLE_RATE;
+      engine.snapshot.duration = message.authoritativeTotalFrames / engine.sampleRate;
     }
     engine.node.port.postMessage({
       type: 'eos',
@@ -10730,6 +11350,7 @@ function handleStreamingControl(message) {
     }
     maybePrepareStreamingSeek(roleState);
     publishStreamingDiagnostics();
+    notifyStreamingPlaybackPresentation(roleState, presentation);
     return;
   }
   if (message.type === 'error') {
@@ -10745,6 +11366,76 @@ function handleStreamingControl(message) {
     { message: `Unknown active streaming control: ${String(message.type)}` },
     'control-protocol-error',
   );
+}
+
+function leaveStreamingTrackForRateChange(track) {
+  const engine = streamingEngineState();
+  // One AudioContext has one rate, so this track starts its own context after `ended`.
+  engine.sampleRateChangeNext = { generation: engine.generation, path: String(track.path || '') };
+  engine.node?.port.postMessage({
+    type: 'expect-continuity',
+    generation: engine.generation,
+    active: false,
+  });
+}
+
+function handleStreamingRateMismatch(roleState, message) {
+  const engine = streamingEngineState();
+  rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
+    fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
+    sizeBytes: 0,
+  });
+  const replacement = engine.pendingSeek;
+  if (replacement?.kind === 'replacement' && replacement.streamId === roleState.streamId) {
+    if (!isStreamingPlaybackAttemptCurrent(engine.playbackAttempt)) return;
+    const callbacks = streamingAttemptRecords.get(engine.playbackAttempt);
+    engine.roles.continuity = null;
+    engine.pendingSeek = null;
+    refreshStreamingActiveRoles();
+    startStreamingTrack(roleState.track, {
+      startSeconds: roleState.continuityOptions.startSeconds,
+      onStartAttempt: callbacks.onStartAttempt,
+      onAutoplayStarted: callbacks.onAutoplayStarted,
+    })
+      .then(replacement.resolve, replacement.reject);
+    return;
+  }
+  if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
+    failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
+    return;
+  }
+  engine.roles.continuity = null;
+  engine.pcmEvidenceByStream?.delete(roleState.streamId);
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  refreshStreamingActiveRoles();
+  leaveStreamingTrackForRateChange(roleState.track);
+}
+
+function reportStreamingAudioOutput() {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const now = performance.now();
+  if (!context || now - (Number(engine.outputReportedAtMs) || 0)
+      < STREAMING_OUTPUT_REPORT_INTERVAL_MS) return;
+  const stats = context.playbackStats;
+  const underruns = Number(stats?.underrunEvents) || 0;
+  const alreadyReported = engine.outputReportedContext === context
+    && underruns <= (Number(engine.outputReportedUnderruns) || 0);
+  engine.outputReportedAtMs = now;
+  if (alreadyReported) return;
+  engine.outputReportedContext = context;
+  engine.outputReportedUnderruns = underruns;
+  engine.diagnostics.outputUnderruns = underruns;
+  sendStreamingControl({
+    type: 'output-report',
+    sampleRate: engine.sampleRate,
+    baseLatencyMs: Math.round((Number(context.baseLatency) || 0) * 1000),
+    outputLatencyMs: Math.round((Number(context.outputLatency) || 0) * 1000),
+    underruns,
+    underrunMs: Math.round((Number(stats?.underrunDuration) || 0) * 1000),
+    statsAvailable: Boolean(stats),
+  });
 }
 
 function maybePrepareStreamingSeek(roleState) {
@@ -10779,6 +11470,288 @@ function settlePendingStreamingCutover(error = null, roleState = null) {
   else resolve?.(roleState);
 }
 
+function acceptStreamingPcm(roleState, frameCount, pcm) {
+  const engine = streamingEngineState();
+  const role = roleState.role;
+  const capacityFrames = streamingRoleCapacityFrames(roleState);
+  const sequence = roleState.nextSequence;
+  let ratePosition = null;
+  streamingCaptureSafely(() => { ratePosition = streamingRateEnqueuePosition(roleState, frameCount); });
+  let capturePositions = null;
+  streamingCaptureSafely(() => { capturePositions = consumeStreamingCapturePositions(roleState, sequence, frameCount); });
+  if (roleState.captureSource) {
+    const received = roleState.captureReceivedFrames + frameCount;
+    if (Number.isSafeInteger(received)) roleState.captureReceivedFrames = received;
+    else roleState.captureSource = null;
+  }
+  recordStreamingPcmEvidence(roleState, frameCount, pcm);
+  roleState.nextSequence += 1;
+  engine.diagnostics.inFlightFrames[role] -= frameCount;
+  engine.diagnostics.bufferedFrames[role] += frameCount;
+  if (role === 'current') {
+    maybeResolveStreamingReplacementCushion();
+    maybeGrantDeferredReplacementCredit();
+    maybeSchedulePendingStreamingContinuity();
+  }
+  engine.node.port.postMessage({
+    type: 'enqueue',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role,
+    sequence,
+    frameCount,
+    pcm,
+    ...(capturePositions ? {capturePositions} : {}),
+    ...(ratePosition ? {ratePosition} : {}),
+  }, [pcm.buffer]);
+  if (!roleState.eosReceived) {
+    const targetFrames = Number(roleState.targetBufferFrames) || capacityFrames;
+    const missingFrames = targetFrames
+      - engine.diagnostics.bufferedFrames[role]
+      - engine.diagnostics.inFlightFrames[role];
+    refillStreamingRoleCredit(roleState, missingFrames);
+  }
+  maybeNotifyStreamingWaveformReady({ includeCommittedFrames: true });
+  maybePrepareStreamingSeek(roleState);
+  publishStreamingDiagnostics();
+}
+
+function sweepStreamingEncodedDecoders() {
+  const engine = streamingEngineState();
+  const live = [engine.roles.current?.encoded, engine.roles.continuity?.encoded];
+  for (const encoded of [...(engine.encodedStreams || [])]) {
+    if (live.includes(encoded) || encoded.pumping) continue;
+    engine.encodedStreams.delete(encoded);
+    void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
+  }
+}
+
+function createStreamingEncodedRole(roleState, message) {
+  const engine = streamingEngineState();
+  const decoder = createStreamingDecoder(message.codec);
+  const encoded = {
+    codec: message.codec,
+    decoder,
+    ready: false,
+    skipFrames: message.skipFrames,
+    remainingFrames: message.totalFrames,
+    deliveredFrames: 0,
+    queue: [],
+    queuedBytes: 0,
+    creditedBytes: Number(message.initialCreditBytes) || 0,
+    nextWireSequence: 0,
+    lastArrivalMs: 0,
+    localCreditFrames: 0,
+    decodedPcm: [],
+    decodedFrames: 0,
+    pumping: false,
+    eos: null,
+    flushed: false,
+    delivered: false,
+  };
+  engine.encodedStreams ??= new Set();
+  engine.encodedStreams.add(encoded);
+  roleState.encoded = encoded;
+  sweepStreamingEncodedDecoders();
+  decoder.ready.then(() => {
+    encoded.ready = true;
+    return pumpStreamingEncodedRole(roleState);
+  }).catch(() => failStreamingEncodedRole(roleState, 'decoder-unavailable'));
+}
+
+function streamingEncodedBufferBytes(roleState) {
+  const engine = streamingEngineState();
+  const sizeBytes = Number(engine.trackFormats?.get(String(roleState.track?.path || ''))?.sizeBytes);
+  const durationSeconds = Number(roleState.track?.durationSeconds);
+  const bytesPerSecond = roleState.quality !== '320' && sizeBytes > 0 && durationSeconds > 0
+    ? sizeBytes / durationSeconds
+    : STREAMING_FALLBACK_BYTES_PER_SECOND;
+  return Math.min(
+    STREAMING_ENCODED_BUFFER_MAX_BYTES,
+    Math.max(
+      STREAMING_ENCODED_BUFFER_MIN_BYTES,
+      bytesPerSecond * STREAMING_ENCODED_BUFFER_SECONDS[roleState.role],
+    ),
+  );
+}
+
+function refillStreamingEncodedBytes(roleState) {
+  const encoded = roleState.encoded;
+  if (encoded.eos || roleState.closed) return;
+  // The stream being left must not compete with the audio the listener just asked for.
+  if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
+  const missingBytes = streamingEncodedBufferBytes(roleState)
+    - encoded.queuedBytes - encoded.creditedBytes;
+  if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
+      || encoded.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
+  const frames = STREAMING_ENCODED_CREDIT_BYTES;
+  if (sendStreamingControl({
+    type: 'credit',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    frames,
+  })) encoded.creditedBytes += frames;
+}
+
+function appendStreamingDecodedAudio(encoded, decoded) {
+  const [left, right = left] = decoded.channelData;
+  const skipped = Math.min(encoded.skipFrames, decoded.samplesDecoded);
+  encoded.skipFrames -= skipped;
+  const kept = Math.min(decoded.samplesDecoded - skipped, encoded.remainingFrames);
+  if (kept <= 0) return;
+  const pcm = new Float32Array(kept * 2);
+  for (let frame = 0; frame < kept; frame += 1) {
+    pcm[frame * 2] = left[skipped + frame];
+    pcm[(frame * 2) + 1] = right[skipped + frame];
+  }
+  encoded.remainingFrames -= kept;
+  encoded.decodedPcm.push(pcm);
+  encoded.decodedFrames += kept;
+}
+
+function takeStreamingDecodedPcm(encoded, frameCount) {
+  const pcm = new Float32Array(frameCount * 2);
+  let written = 0;
+  while (written < pcm.length) {
+    const head = encoded.decodedPcm[0];
+    const taken = Math.min(head.length, pcm.length - written);
+    pcm.set(head.subarray(0, taken), written);
+    written += taken;
+    if (taken === head.length) encoded.decodedPcm.shift();
+    else encoded.decodedPcm[0] = head.subarray(taken);
+  }
+  encoded.decodedFrames -= frameCount;
+  return pcm;
+}
+
+function streamingRoleIsLive(roleState) {
+  return roleState.generation === streamingEngineState().generation
+    && streamingRoleForId(roleState.streamId) === roleState;
+}
+
+async function pumpStreamingEncodedRole(roleState) {
+  const encoded = roleState.encoded;
+  if (!encoded?.ready || encoded.pumping || !streamingRoleIsLive(roleState)) return;
+  encoded.pumping = true;
+  try {
+    while (streamingRoleIsLive(roleState)) {
+      if (encoded.localCreditFrames > 0 && encoded.decodedFrames > 0) {
+        const frameCount = Math.min(encoded.localCreditFrames, encoded.decodedFrames);
+        encoded.localCreditFrames -= frameCount;
+        encoded.deliveredFrames += frameCount;
+        acceptStreamingPcm(roleState, frameCount, takeStreamingDecodedPcm(encoded, frameCount));
+      } else if ((encoded.localCreditFrames > 0 || !encoded.remainingFrames)
+          && encoded.queue.length) {
+        const bytes = encoded.queue.shift();
+        encoded.queuedBytes -= bytes.length;
+        appendStreamingDecodedAudio(encoded, await encoded.decoder.decode(bytes));
+      } else if (encoded.eos && !encoded.flushed && !encoded.queue.length) {
+        encoded.flushed = true;
+        const flushed = await encoded.decoder.flush?.();
+        if (flushed?.samplesDecoded) appendStreamingDecodedAudio(encoded, flushed);
+      } else {
+        break;
+      }
+      refillStreamingEncodedBytes(roleState);
+    }
+    if (streamingRoleIsLive(roleState) && encoded.eos && encoded.flushed
+        && !encoded.decodedFrames && !encoded.queue.length) {
+      finishStreamingEncodedRole(roleState);
+    }
+  } catch (_error) {
+    failStreamingEncodedRole(roleState, 'decode-error');
+  } finally {
+    encoded.pumping = false;
+    sweepStreamingEncodedDecoders();
+  }
+}
+
+function finishStreamingEncodedRole(roleState) {
+  const encoded = roleState.encoded;
+  if (encoded.remainingFrames > 0) reportStreamingDecoderFallback('short-decode');
+  const startFrame = encoded.eos.authoritativeTotalFrames - encoded.deliveredFrames
+    - encoded.remainingFrames;
+  const eos = {
+    ...encoded.eos,
+    emittedFrames: encoded.deliveredFrames,
+    authoritativeTotalFrames: startFrame + encoded.deliveredFrames,
+  };
+  encoded.eos = null;
+  encoded.delivered = true;
+  handleStreamingControl(eos);
+}
+
+function reportStreamingDecoderFallback(reason) {
+  const engine = streamingEngineState();
+  engine.encodedCodecs = [];
+  engine.diagnostics.decoderFallback = reason;
+  sendStreamingControl({ type: 'decoder-fallback', reason });
+}
+
+function failStreamingEncodedRole(roleState, reason) {
+  const engine = streamingEngineState();
+  if (!streamingRoleIsLive(roleState)) return;
+  reportStreamingDecoderFallback(reason);
+  const { track, continuityOptions } = roleState;
+  if (roleState.role === 'continuity' && continuityOptions?.kind !== 'seek') {
+    closeStreamingContinuityRole('decoder-fallback');
+    engine.pendingContinuityTrack = track;
+    engine.pendingContinuityOptions = continuityOptions;
+    maybeSchedulePendingStreamingContinuity();
+    return;
+  }
+  if (!isStreamingPlaybackAttemptCurrent(engine.playbackAttempt)) return;
+  const callbacks = streamingAttemptRecords.get(engine.playbackAttempt);
+  const replay = startStreamingTrack(track, {
+    onStartAttempt: callbacks.onStartAttempt,
+    onAutoplayStarted: callbacks.onAutoplayStarted,
+    startSeconds: roleState.role === 'continuity'
+      ? continuityOptions.startSeconds
+      : Number(engine.snapshot.currentTime) || 0,
+    autoplay: !engine.snapshot.paused,
+  });
+  void replay.catch((error) => failStreamingEngine('decoder', error, 'decoder-fallback-error'));
+}
+
+function handleStreamingEncodedBytes(view, buffer, failProtocol) {
+  const engine = streamingEngineState();
+  const generation = view.getUint32(8, false);
+  const streamId = view.getUint32(12, false);
+  const sequence = view.getUint32(16, false);
+  const byteCount = view.getUint32(20, false);
+  if (byteCount <= 0 || buffer.byteLength !== 24 + byteCount) {
+    failProtocol('declared byte length does not match payload');
+    return;
+  }
+  const roleState = streamingRoleForId(streamId);
+  const encoded = roleState?.encoded;
+  if (!encoded || generation !== engine.generation || generation !== roleState.generation
+      || sequence !== encoded.nextWireSequence) {
+    engine.diagnostics.staleMessages += 1;
+    return;
+  }
+  if (byteCount > encoded.creditedBytes) {
+    failProtocol('frame exceeds granted byte credit');
+    return;
+  }
+  const now = performance.now();
+  if (encoded.lastArrivalMs) {
+    engine.transferBytes = (Number(engine.transferBytes) || 0) + byteCount;
+    engine.transferMs = (Number(engine.transferMs) || 0) + (now - encoded.lastArrivalMs);
+    if (engine.transferBytes > STREAMING_TRANSFER_WINDOW_BYTES) {
+      engine.transferBytes /= 2;
+      engine.transferMs /= 2;
+    }
+  }
+  encoded.nextWireSequence += 1;
+  encoded.creditedBytes -= byteCount;
+  encoded.lastArrivalMs = encoded.creditedBytes > 0 ? now : 0;
+  encoded.queue.push(new Uint8Array(buffer, 24, byteCount));
+  encoded.queuedBytes += byteCount;
+  refillStreamingEncodedBytes(roleState);
+  void pumpStreamingEncodedRole(roleState);
+}
+
 function handleStreamingPcm(buffer) {
   const engine = streamingEngineState();
   const failProtocol = (message) => failStreamingEngine(
@@ -10797,7 +11770,8 @@ function handleStreamingPcm(buffer) {
       failProtocol('bad AHPC magic');
       return;
     }
-    if (view.getUint8(4) !== 1) {
+    const version = view.getUint8(4);
+    if (version !== 1 && version !== 2) {
       failProtocol('unsupported AHPC version');
       return;
     }
@@ -10808,6 +11782,10 @@ function handleStreamingPcm(buffer) {
     }
     if (view.getUint16(6, false) !== 0) {
       failProtocol('nonzero reserved flags');
+      return;
+    }
+    if (version === 2) {
+      handleStreamingEncodedBytes(view, buffer, failProtocol);
       return;
     }
     const wireRole = roleCode === 0 ? 'current' : 'continuity';
@@ -10845,36 +11823,7 @@ function handleStreamingPcm(buffer) {
     for (let index = 0; index < pcm.length; index += 1) {
       pcm[index] = view.getFloat32(24 + (index * 4), true);
     }
-    let capturePositions = null;
-    streamingCaptureSafely(() => { capturePositions = consumeStreamingCapturePositions(roleState, sequence, frameCount); });
-    recordStreamingPcmEvidence(roleState, frameCount, pcm);
-    roleState.nextSequence += 1;
-    if (roleState.captureSource) {
-      const received = roleState.captureReceivedFrames + frameCount;
-      if (Number.isSafeInteger(received)) roleState.captureReceivedFrames = received;
-      else roleState.captureSource = null;
-    }
-    engine.diagnostics.inFlightFrames[role] -= frameCount;
-    engine.diagnostics.bufferedFrames[role] += frameCount;
-    if (role === 'current') {
-      maybeResolveStreamingReplacementCushion();
-      maybeGrantDeferredReplacementCredit();
-      maybeSchedulePendingStreamingContinuity();
-    }
-    engine.node.port.postMessage({
-      type: 'enqueue', generation, streamId, role, sequence, frameCount, pcm,
-      ...(capturePositions ? {capturePositions} : {}),
-    }, [pcm.buffer]);
-    if (!roleState.eosReceived) {
-      const targetFrames = Number(roleState.targetBufferFrames) || capacityFrames;
-      const missingFrames = targetFrames
-        - engine.diagnostics.bufferedFrames[role]
-        - engine.diagnostics.inFlightFrames[role];
-      refillStreamingRoleCredit(roleState, missingFrames);
-    }
-    maybeNotifyStreamingWaveformReady({ includeCommittedFrames: true });
-    maybePrepareStreamingSeek(roleState);
-    publishStreamingDiagnostics();
+    acceptStreamingPcm(roleState, frameCount, pcm);
   } catch (error) {
     failProtocol(error?.message || 'PCM decode failed');
   }
@@ -10931,6 +11880,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     const wasPaused = engine.snapshot.paused;
+    engine.diagnostics.cutoverPreparedFrames = engine.diagnostics.bufferedFrames.continuity;
     swapStreamingBackingCapacities(current, continuity);
     continuity.boundaryNotified = true;
     continuity.role = 'current';
@@ -10943,6 +11893,7 @@ function handleStreamingWorkletMessage(message) {
     promoteStreamingAttempt(current, continuity, engine.pendingSeek);
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
     engine.renderedPcmEvidenceByStream?.delete(current.streamId);
@@ -10957,7 +11908,7 @@ function handleStreamingWorkletMessage(message) {
     engine.diagnostics.seekCommittedAtMs = performance.now();
     engine.diagnostics.firstFrameAtMs = 0;
     Object.assign(engine.snapshot, {
-      currentTime: message.timelineFrame / STREAMING_SAMPLE_RATE,
+      currentTime: message.timelineFrame / engine.sampleRate,
       requestedStartFrame: pendingSeek.startFrame,
       timelineStartFrame: pendingSeek.startFrame,
       renderedFrame: message.renderedFrame,
@@ -11021,7 +11972,7 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.boundaryCapture = message.capture || null;
       engine.snapshot.currentTime = Math.max(
         loopState.startSeconds,
-        (Number(message.timelineFrame) || 0) / STREAMING_SAMPLE_RATE,
+        (Number(message.timelineFrame) || 0) / engine.sampleRate,
       );
       engine.snapshot.renderedFrame = Number(message.renderedFrame) || engine.snapshot.renderedFrame;
       return;
@@ -11055,7 +12006,7 @@ function handleStreamingWorkletMessage(message) {
       ...engine.snapshot,
       currentTime: Math.min(
         outgoingDuration || Number.POSITIVE_INFINITY,
-        outgoingFrame / STREAMING_SAMPLE_RATE,
+        outgoingFrame / engine.sampleRate,
       ),
       duration: outgoingDuration,
       src: String(current.track?.src || engine.snapshot.src || ''),
@@ -11070,6 +12021,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
     engine.renderedPcmEvidenceByStream?.delete(current.streamId);
@@ -11087,10 +12039,10 @@ function handleStreamingWorkletMessage(message) {
       ? message.timelineFrame
       : incomingBoundaryFrames;
     const timelineStartFrame = promotedLoop && promotedLoop.kind !== 'queued-next'
-      ? Math.round((Number(promotedLoop.startSeconds) || 0) * STREAMING_SAMPLE_RATE)
+      ? streamingFrames((Number(promotedLoop.startSeconds) || 0))
       : 0;
     Object.assign(engine.snapshot, {
-      currentTime: timelineFrame / STREAMING_SAMPLE_RATE,
+      currentTime: timelineFrame / engine.sampleRate,
       duration: Number(continuity.track?.durationSeconds) || 0,
       src: String(continuity.track?.src || ''),
       renderedFrame: incomingBoundaryFrames,
@@ -11151,9 +12103,10 @@ function handleStreamingWorkletMessage(message) {
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
       timelineFrame,
-      Math.round((Number(engine.snapshot.currentTime) || 0) * STREAMING_SAMPLE_RATE),
+      streamingFrames((Number(engine.snapshot.currentTime) || 0)),
     );
-    engine.snapshot.currentTime = monotonicTimelineFrame / STREAMING_SAMPLE_RATE;
+    engine.snapshot.currentTime = monotonicTimelineFrame / engine.sampleRate;
+    reportStreamingAudioOutput();
     const observedAtMs = performance.now();
     const previousObservedAtMs = Number(engine.positionFacadeAtMs) || 0;
     if (typeof handleStreamingPlaybackPosition === 'function'
@@ -11181,20 +12134,38 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
+    const intents = streamingPlaybackIntents.get(engine);
+    const configured = intents?.configured, active = intents?.active;
+    if (!configured || configured.node !== engine.node
+        || configured.generation !== engine.generation
+        || !active || active.node !== engine.node || active.generation !== engine.generation
+        || !Number.isSafeInteger(active.id) || active.id <= 0
+        || active.kind !== 'play' || engine.snapshot.paused) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    if (!Number.isSafeInteger(message.playbackIntentId) || message.playbackIntentId <= 0) {
+      failStreamingEngine('processor', {message: 'Uncorrelated playback ended message'}, 'playback-intent-mismatch');
+      return;
+    }
+    if (message.playbackIntentId !== active.id) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
     const pendingReplacement = engine.pendingSeek;
     if (pendingReplacement?.kind === 'replacement'
         && pendingReplacement.generation === message.generation
         && pendingReplacement.currentStreamId === current.streamId
         && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
       if (!engine.snapshot.paused) {
-        engine.node.port.postMessage({ type: 'play', generation: engine.generation });
+        if (!sendStreamingPlaybackIntent(engine, engine.node, engine.generation, 'play')) return;
       }
       return;
     }
     current.endedNotified = true;
     streamingCaptureSafely(() => retireStreamingCapture(current, null, 'ended'));
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
-    const currentTime = timelineFrame / STREAMING_SAMPLE_RATE;
+    const currentTime = timelineFrame / engine.sampleRate;
     Object.assign(engine.snapshot, {
       currentTime,
       renderedFrame: message.timelineFrame,
@@ -11211,6 +12182,9 @@ function handleStreamingWorkletMessage(message) {
           trackPath: String(current.track?.path || ''),
           timelineFrame,
           currentTime,
+          sampleRateChangeTrackPath: engine.sampleRateChangeNext?.generation === message.generation
+            ? engine.sampleRateChangeNext.path
+            : '',
         }), 'ended-facade-error', current, message.generation);
       } catch (error) {
         console.error('Streaming facade reporting failed', error);
@@ -11236,9 +12210,9 @@ function handleStreamingWorkletMessage(message) {
       ? (roleState.startFrame + Math.max(
           0,
           message.renderedFrame - roleState.renderedFrameBase,
-        )) / STREAMING_SAMPLE_RATE
+        )) / engine.sampleRate
       : streamingAbsoluteTimelineFrame(roleState, message.renderedFrame)
-        / STREAMING_SAMPLE_RATE;
+        / engine.sampleRate;
     Object.assign(engine.snapshot, {
       startedAtContextTime: message.contextTime,
       renderedFrame: message.renderedFrame,
@@ -11263,6 +12237,32 @@ function handleStreamingWorkletMessage(message) {
       && engine.generation === message.generation) maybeSchedulePendingStreamingContinuity();
     return;
   }
+  if (message.type === 'buffering-start') {
+    if (roleState.role !== 'current' || engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = true;
+    engine.mode = 'buffering';
+    engine.stallStartedAtMs = performance.now();
+    engine.lastStallAtMs = engine.stallStartedAtMs;
+    grantStreamingCredit(roleState, streamingFrames(STREAMING_MAX_CREDIT_SECONDS));
+    publishStreamingDiagnostics();
+    return;
+  }
+  if (message.type === 'buffering-end') {
+    if (roleState.role !== 'current' || !engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = false;
+    if (!engine.snapshot.paused && engine.mode !== 'error') engine.mode = 'playing';
+    sendStreamingControl({
+      type: 'stall-report',
+      generation: roleState.generation,
+      streamId: roleState.streamId,
+      durationMs: Math.max(0, Math.round(performance.now() - engine.stallStartedAtMs)),
+      targetBufferFrames: Number(roleState.targetBufferFrames)
+        || streamingRoleCommittedCapacityFrames(roleState),
+      pageVisible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
+    });
+    publishStreamingDiagnostics();
+    return;
+  }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
     if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
@@ -11273,7 +12273,7 @@ function handleStreamingWorkletMessage(message) {
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
     if (typeof recordMeasuredStreamingFrames === 'function') {
-      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+      recordMeasuredStreamingFrames(roleState, message, engine.sampleRate);
     }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
@@ -11289,11 +12289,9 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role === 'current') {
       engine.snapshot.currentTime = Math.max(
         0,
-        (Number(engine.snapshot.currentTime) || 0) + (message.frames / STREAMING_SAMPLE_RATE),
+        (Number(engine.snapshot.currentTime) || 0) + (message.frames / engine.sampleRate),
       );
-      const absoluteRenderedFrame = Math.round(
-        engine.snapshot.currentTime * STREAMING_SAMPLE_RATE,
-      );
+      const absoluteRenderedFrame = streamingFrames(engine.snapshot.currentTime);
       engine.snapshot.renderedFrame = !roleState.seekTarget && !roleState.continuityOptions
         ? Math.max(0, absoluteRenderedFrame - Math.max(0, Number(roleState.startFrame) || 0))
         : absoluteRenderedFrame;
@@ -11307,7 +12305,7 @@ function handleStreamingWorkletMessage(message) {
       if (restoringReplacementCushion) {
         grantStreamingCredit(
           roleState,
-          STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES,
+          streamingFrames(STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS),
         );
       } else {
         const targetFrames = Number(roleState.targetBufferFrames)
@@ -11324,30 +12322,163 @@ function handleStreamingWorkletMessage(message) {
   }
 }
 
-async function prepareStreamingPlaybackEngine() {
+function knownStreamingSampleRate(track) {
+  return streamingEngineState().trackSampleRates?.get(String(track?.path || '')) || 0;
+}
+
+function chooseStreamingQuality(track) {
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  if (!path.toLowerCase().endsWith('.flac') || !engine.encodedCodecs?.includes('mp3')) {
+    return 'original';
+  }
+  if (engine.roles.current?.track?.path === track?.path) {
+    return engine.roles.current.quality || 'original';
+  }
+  if (engine.qualityPreference === 'original') return 'original';
+  const transferBytes = Number(engine.transferBytes);
+  const transferSeconds = Number(engine.transferMs) / 1000;
+  const requiredBitsPerSecond = Number(engine.trackFormats?.get(path)?.losslessBitsPerSecond);
+  if (!Number.isFinite(transferBytes) || transferBytes <= 0
+      || !Number.isFinite(transferSeconds) || transferSeconds <= 0
+      || !Number.isFinite(requiredBitsPerSecond) || requiredBitsPerSecond <= 0) return 'original';
+  const measuredBitsPerSecond = (transferBytes * 8) / transferSeconds;
+  return Number.isFinite(measuredBitsPerSecond) && measuredBitsPerSecond > 0
+      && measuredBitsPerSecond < requiredBitsPerSecond
+    ? '320'
+    : 'original';
+}
+
+function streamingPlaybackRate(track) {
+  const engine = streamingEngineState();
+  const nativeRate = knownStreamingSampleRate(track);
+  if (chooseStreamingQuality(track) !== '320') return nativeRate;
+  return engine.trackFormats?.get(String(track?.path || ''))?.fallbackSampleRate || nativeRate;
+}
+
+function rememberStreamingTrackFormat(path, sampleRate, format) {
+  const engine = streamingEngineState();
+  engine.trackSampleRates ??= new Map();
+  engine.trackFormats ??= new Map();
+  if (engine.trackSampleRates.size >= STREAMING_MAX_KNOWN_TRACK_RATES) {
+    engine.trackSampleRates.clear();
+    engine.trackFormats.clear();
+  }
+  engine.trackSampleRates.set(path, sampleRate);
+  if (format) engine.trackFormats.set(path, format);
+}
+
+function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
+  const engine = streamingEngineState();
+  const probe = engine.sampleRateProbes?.get(requestId);
+  if (!probe) return;
+  engine.sampleRateProbes.delete(requestId);
+  if (sampleRate > 0) rememberStreamingTrackFormat(probe.path, sampleRate, format);
+  probe.resolve(sampleRate);
+}
+
+function requestStreamingSampleRate(track) {
+  const known = knownStreamingSampleRate(track);
+  if (known) return Promise.resolve(known);
+  const engine = streamingEngineState();
+  engine.sampleRateProbes ??= new Map();
+  engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
+  const requestId = engine.nextSampleRateProbeId;
+  return new Promise((resolve) => {
+    engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
+    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
+      settleStreamingSampleRateProbe(requestId, 0);
+    }
+  });
+}
+
+async function retireStreamingAudioGraph() {
+  const engine = streamingEngineState();
+  const { context, node, generation } = engine;
+  const capture = streamingCaptureBridge(node);
+  if (capture) streamingCaptureSafely(() => {
+    if (capture.guard()) capture.owner.close('owner_closed');
+    capture.detach();
+  });
+  engine.context = null;
+  engine.node = null;
+  engine.sampleRate = 0;
+  const cleanupErrors = [];
+  if (node) {
+    try {
+      node.port.postMessage({ type: 'stop', generation, reason: 'sample-rate-change' });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    streamingCaptureSafely(() => retireStreamingRateOwner(node));
+    try {
+      node.disconnect();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  try {
+    await context?.close();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length) {
+    const failure = new AggregateError(cleanupErrors, 'Streaming graph retirement failed');
+    Object.defineProperty(failure, 'retiredGraph', {
+      value: Object.freeze({context, node, generation}),
+    });
+    streamingUnsafeCleanupFailures.set(engine, failure);
+    throw failure;
+  }
+}
+
+async function prepareStreamingPlaybackEngine(sampleRate = 0) {
   const engine = streamingEngineState();
   if (engine.stopPromise) return null;
   if (streamingUnsafeCleanupFailures.has(engine)) throw streamingUnsafeCleanupFailures.get(engine);
-  if (engine.context && engine.node && engine.socket) return;
-  if (engine.preparePromise) return engine.preparePromise;
+  const audioGraphReady = !sampleRate
+    || (engine.context && engine.node && engine.sampleRate === sampleRate);
+  if (audioGraphReady && engine.socket) return;
+  if (engine.preparePromise) {
+    await engine.preparePromise;
+    return prepareStreamingPlaybackEngine(sampleRate);
+  }
   const lifecycle = engine.lifecycleEpoch || 0;
+  const preparationGeneration = engine.generation;
+  const preparationRequest = engine.startRequestId;
   const preparationOutcome = { settled: false, published: false, physicalSafe: false, intentionalRetirement: false, cleanupErrors: [] };
   const preparation = Promise.resolve().then(async () => {
     let context = null;
+    let rateOwnerUuid = null;
     let node = null;
     let socket = null;
-    const captureContext = streamingCaptureSafely(() => beginStreamingCaptureContext());
+    let openedSocket = false;
+    let emptyPreparation = null;
+    const captureContext = !audioGraphReady
+      ? streamingCaptureSafely(() => beginStreamingCaptureContext()) : null;
     try {
+      if (!audioGraphReady) {
+      await retireStreamingAudioGraph();
+      if ((engine.lifecycleEpoch || 0) !== lifecycle || engine.stopPromise) {
+        preparationOutcome.intentionalRetirement = true;
+        throw new Error('Preparation retired');
+      }
       const AudioContextType = window.AudioContext || window.webkitAudioContext;
-      context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
+      context = new AudioContextType({ sampleRate, latencyHint: 'playback' });
+      rateOwnerUuid = streamingCaptureSafely(() => nativeStreamingCaptureEnabled() ? window.crypto.randomUUID() : null);
+      if (typeof observeBrowserPlaybackAudioContext === 'function') {
+        observeBrowserPlaybackAudioContext(context);
+      }
       await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
       node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [2],
       });
+      streamingCaptureSafely(() => prepareStreamingRateCapture(context, node, rateOwnerUuid));
       node.connect(context.destination);
       node.port.onmessage = ({ data }) => {
+        if (streamingCaptureSafely(() => acceptStreamingRateCaptureMessage(node, data))) return;
         if (data?.type === 'capture-packet') {
           const bridge = streamingCaptureBridge(node);
           streamingCaptureSafely(() => { if (bridge?.guard()) bridge.owner.acceptPacket(data.buffer); });
@@ -11359,8 +12490,12 @@ async function prepareStreamingPlaybackEngine() {
         if (engine.node !== node) return;
         failStreamingEngine('processor', event, 'processor-error');
       };
+      }
+      socket = engine.socket;
+      if (!socket) {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
+      openedSocket = true;
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => { if (engine.socket === socket) flushStreamingControls(); };
       socket.onerror = (event) => {
@@ -11394,25 +12529,45 @@ async function prepareStreamingPlaybackEngine() {
           failStreamingEngine('socket', error, 'json-protocol-error');
         }
       };
+      }
       if ((engine.lifecycleEpoch || 0) !== lifecycle || engine.stopPromise) {
         preparationOutcome.intentionalRetirement = true;
         throw new Error('Preparation retired');
       }
-      engine.context = context; engine.node = node; engine.socket = socket;
-      streamingCaptureSafely(() => prepareStreamingCapture(engine, context, node, captureContext));
-      engine.backingCapacityFrames = initialStreamingBackingCapacities();
-      engine.pendingControls = [];
+      if (context && node) {
+        engine.context = context; engine.node = node; engine.sampleRate = sampleRate;
+      }
+      engine.socket = socket;
+      if (context && node && engine.startRequestId === preparationRequest && engine.generation === preparationGeneration
+          && !engine.playbackAttempt && !engine.roles.current && !engine.roles.continuity) {
+        emptyPreparation = { context, node, socket, request: preparationRequest,
+          lifecycle, generation: preparationGeneration, published: false };
+        streamingEmptyPreparations.set(engine, emptyPreparation);
+      }
+      if (context && node) {
+        streamingCaptureSafely(() => prepareStreamingCapture(engine, context, node, captureContext));
+        engine.backingCapacityFrames = initialStreamingBackingCapacities();
+      }
+      if (openedSocket) engine.pendingControls = [];
       engine.nextStreamId ??= 1;
       engine.mode = 'prepared';
+      // Capture setup may reenter selection/stop; it cannot certify their resources.
+      if (emptyPreparation && streamingEmptyPreparations.get(engine) === emptyPreparation) {
+        emptyPreparation.published = engine.context === context && engine.node === node
+          && engine.socket === socket && engine.startRequestId === preparationRequest
+          && (engine.lifecycleEpoch || 0) === lifecycle && engine.generation === preparationGeneration
+          && !engine.stopPromise && !engine.playbackAttempt && !engine.roles.current && !engine.roles.continuity;
+      }
       Object.assign(preparationOutcome, {settled: true, published: true, context, node, socket});
     } catch (error) {
+      if (streamingEmptyPreparations.get(engine) === emptyPreparation) streamingEmptyPreparations.delete(engine);
       streamingCaptureSafely(() => captureContext?.discard());
-      if (engine.socket === socket) engine.socket = null;
+      if (openedSocket && engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
-      if (engine.context === context) engine.context = null;
+      if (context && engine.context === context) { engine.context = null; engine.sampleRate = 0; }
       if ((engine.lifecycleEpoch || 0) === lifecycle && !engine.stopPromise) engine.mode = 'stopped';
       const cleanupErrors = [];
-      if (socket) {
+      if (openedSocket && socket) {
         try {
           socket.close();
         } catch (cleanupError) {
@@ -11420,6 +12575,11 @@ async function prepareStreamingPlaybackEngine() {
         }
       }
       if (node) {
+        try {
+          node.port.postMessage({ type: 'stop', generation: preparationGeneration, reason: 'preparation-retired' });
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
         try {
           node.disconnect();
         } catch (cleanupError) {
@@ -11435,6 +12595,12 @@ async function prepareStreamingPlaybackEngine() {
       }
       Object.assign(preparationOutcome, {settled: true, published: false, physicalSafe: cleanupErrors.length === 0, cleanupErrors});
       if (cleanupErrors.length) streamingUnsafeCleanupFailures.set(engine, new AggregateError(cleanupErrors, 'Preparation cleanup failed'));
+      if (cleanupErrors.length && error && (typeof error === 'object' || typeof error === 'function')) {
+        // Diagnostic only: successor safety remains in the private outcome record.
+        try { Object.defineProperty(error, 'cleanupErrors', { value: cleanupErrors.slice(), configurable: true }); }
+        catch (_error) { /* Preserve frozen, primitive and accessor-backed primary rejections. */ }
+      }
+      if (preparationOutcome.intentionalRetirement && preparationOutcome.physicalSafe) return null;
       throw error;
     }
   });
@@ -11449,6 +12615,7 @@ async function prepareStreamingPlaybackEngine() {
 
 function openStreamingRole(role, track, startFrame = 0, continuityOptions = null, attempt = null) {
   const engine = streamingEngineState();
+  streamingEmptyPreparations.delete(engine);
   if (engine.stopPromise) return null;
   const request=engine.startRequestId,lifecycle=engine.lifecycleEpoch;
   const roleState = {
@@ -11457,21 +12624,24 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     generation: engine.generation,
     streamId: engine.nextStreamId,
     startFrame,
+    rateListeningIntent: track?.albumListeningIntent || null,
+    rateSelectionRef: track?.listeningSelection?.selection_ref || null,
     renderedFrameBase: role === 'current' ? 0 : null,
     openedAtMs: 0,
     nextSequence: 0,
     metadataAccepted: false,
     continuityOptions,
+    quality: chooseStreamingQuality(track),
     backingCapacityFrames: ensureStreamingBackingCapacities()[role],
   };
   if (role === 'continuity') {
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const requestedFrames = continuityOptions?.kind === 'queued-next'
-      ? STREAMING_QUEUED_NEXT_PREPARE_FRAMES
+      ? streamingFrames(STREAMING_QUEUED_NEXT_PREPARE_SECONDS)
       : continuityOptions?.kind === 'seek'
-        ? STREAMING_SEEK_PREPARE_FRAMES
+        ? streamingFrames(STREAMING_SEEK_PREPARE_SECONDS)
       : continuityOptions?.kind === 'short-loop'
-        ? Math.max(1, (Math.round(continuityOptions.endSeconds * STREAMING_SAMPLE_RATE) - startFrame))
+        ? Math.max(1, (streamingFrames(continuityOptions.endSeconds) - startFrame))
         : capacityFrames;
     roleState.targetBufferFrames = Math.min(capacityFrames, requestedFrames);
     roleState.continuityIdentity = streamingContinuityIdentity(track, continuityOptions);
@@ -11501,8 +12671,11 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     role,
     path: track.path,
     startFrame,
-    sampleRate: STREAMING_SAMPLE_RATE,
+    sampleRate: engine.sampleRate,
     durationSeconds: Number(track.durationSeconds) || 0,
+    ...(streamingRateCaptureBridge()?.ownerUuid ? { trackingOwnerUuid: streamingRateCaptureBridge().ownerUuid } : {}),
+    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs } : {}),
+    ...(roleState.quality === '320' ? { quality: '320' } : {}),
   });
   if (engine.startRequestId!==request || engine.lifecycleEpoch!==lifecycle || engine.roles[role]!==roleState
       || attempt && !isStreamingPlaybackAttemptCurrent(attempt)) return null;
@@ -11518,6 +12691,21 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
   return roleState;
 }
 
+function probeStreamingTrackWaveform(track) {
+  if (typeof probeCachedWaveformPeaks !== 'function') return;
+  try {
+    const cachedWaveformProbe = probeCachedWaveformPeaks(
+      String(track?.path || ''),
+      streamingEngineState().generation,
+    );
+    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
+      void cachedWaveformProbe.catch(() => {});
+    }
+  } catch (_error) {
+    // Cached waveform probing is optional and must never interrupt playback.
+  }
+}
+
 async function startStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
@@ -11526,10 +12714,12 @@ async function startStreamingTrack(track, {
   onStartAttempt = null,
 } = {}) {
   const engine = streamingEngineState();
+  streamingEmptyPreparations.delete(engine);
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   engine.lifecycleEpoch ??= 0;
   const attempt = registerStreamingAttempt(engine, null, track);
+  Object.assign(streamingAttemptRecords.get(attempt), {onStartAttempt, onAutoplayStarted});
   try { if (typeof onStartAttempt === 'function') onStartAttempt(attempt); }
   catch (error) {
     if (isStreamingPlaybackAttemptCurrent(attempt)) {
@@ -11559,22 +12749,32 @@ async function startStreamingTrack(track, {
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
   settleStreamingReplacementCushionWaiter(false);
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
-  const pendingPromotion = engine.pendingPromotion;
-  const promotionAllowsReplacement = !pendingPromotion
-    || (pendingPromotion.kind === 'replacement'
-      && pendingPromotion.generation === engine.generation
-      && pendingPromotion.streamId === engine.roles.current?.streamId
-      && engine.roles.current?.firstFrameNotified === true);
-  const canPrepareReplacement = autoplay
-    && engine.roles.current
-    && engine.diagnostics.firstFrameAtMs > 0
-    && engine.node
-    && engine.socket?.readyState === WebSocket.OPEN
-    && !engine.snapshot.paused
-    && promotionAllowsReplacement
-    && !engine.pendingSeek;
+  const canPrepareReplacement = () => {
+    const pendingPromotion = engine.pendingPromotion;
+    const promotionAllowsReplacement = !pendingPromotion
+      || (pendingPromotion.kind === 'replacement'
+        && pendingPromotion.generation === engine.generation
+        && pendingPromotion.streamId === engine.roles.current?.streamId
+        && engine.roles.current?.firstFrameNotified === true);
+    return autoplay
+      && engine.roles.current
+      && engine.diagnostics.firstFrameAtMs > 0
+      && engine.node
+      && engine.socket?.readyState === WebSocket.OPEN
+      && !engine.snapshot.paused
+      && promotionAllowsReplacement
+      && !engine.pendingSeek;
+  };
+  // A switch to a track's start can open at this rate; the server refuses a wrong one.
+  if (canPrepareReplacement() && !knownStreamingSampleRate(track)
+      && (startSeconds > 0 || chooseStreamingQuality(track) === '320')) {
+    await requestStreamingSampleRate(track);
+    if (engine.startRequestId !== startRequestId) return null;
+  }
   preparedReplacement: {
-    if (!canPrepareReplacement) break preparedReplacement;
+    if (!canPrepareReplacement()
+        || (knownStreamingSampleRate(track)
+          && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
     if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
     if (engine.roles.continuity
@@ -11597,14 +12797,15 @@ async function startStreamingTrack(track, {
           || engine.socket?.readyState !== WebSocket.OPEN) return null;
       if (!cushionReady) break preparedReplacement;
     }
-    const startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
+    const startFrame = streamingFrames(Math.max(0, startSeconds));
     const replacement = openStreamingRole('continuity', track, startFrame, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     }, attempt);
     if (!replacement) return null;
+    probeStreamingTrackWaveform(track);
     replacement.targetBufferFrames = Math.min(
       streamingRoleCapacityFrames(replacement),
-      STREAMING_REPLACEMENT_PREPARE_FRAMES,
+      streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
     );
     const completion = new Promise((resolve, reject) => {
       engine.pendingSeek = {
@@ -11631,8 +12832,21 @@ async function startStreamingTrack(track, {
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
+  let sampleRate = 0;
   try {
     await prepareStreamingPlaybackEngine();
+    if (!isStreamingPlaybackAttemptCurrent(attempt)
+        || engine.lifecycleEpoch !== lifecycleEpoch) return null;
+    if (typeof ensureStreamingDecoders === 'function') await ensureStreamingDecoders();
+    if (!isStreamingPlaybackAttemptCurrent(attempt)
+        || engine.lifecycleEpoch !== lifecycleEpoch) return null;
+    await requestStreamingSampleRate(track);
+    if (!isStreamingPlaybackAttemptCurrent(attempt)
+        || engine.lifecycleEpoch !== lifecycleEpoch) return null;
+    sampleRate = streamingPlaybackRate(track);
+    if (engine.startRequestId === startRequestId && !sampleRate) {
+      throw new Error('The track sample rate could not be read');
+    }
   } catch (error) {
     if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
     throw error;
@@ -11649,6 +12863,11 @@ async function startStreamingTrack(track, {
       reason: 'replacement',
     });
     if (!accepted || !isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  }
+  const previousIntents = streamingPlaybackIntents.get(engine);
+  if (previousIntents) {
+    previousIntents.configured = null;
+    previousIntents.active = null;
   }
   engine.generation += 1;
   const attemptRecord = streamingAttemptRecords.get(attempt);
@@ -11670,7 +12889,18 @@ async function startStreamingTrack(track, {
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
   engine.deferredCreditFrames = { current: 0, continuity: 0 };
-  const startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
+  try {
+    await prepareStreamingPlaybackEngine(sampleRate);
+  } catch (error) {
+    if (engine.startRequestId !== startRequestId) return null;
+    throw error;
+  }
+  if (engine.startRequestId !== startRequestId
+      || engine.lifecycleEpoch !== lifecycleEpoch) return null;
+  // Native-rate graph preparation publishes "prepared". This still-current
+  // admitted start is not an idle preparation, including if resume rejects.
+  engine.mode = 'starting';
+  const startFrame = streamingFrames(Math.max(0, startSeconds));
   Object.assign(engine.snapshot, {
     currentTime: Math.max(0, startSeconds),
     duration: Number(track.durationSeconds) || 0,
@@ -11678,7 +12908,7 @@ async function startStreamingTrack(track, {
     ended: false,
     src: track.src || '',
     readyState: 0,
-    sampleRate: STREAMING_SAMPLE_RATE,
+    sampleRate: engine.sampleRate,
     requestedStartFrame: startFrame,
     timelineStartFrame: startFrame,
   });
@@ -11689,29 +12919,25 @@ async function startStreamingTrack(track, {
   }
   const current = openStreamingRole('current', track, startFrame, null, attempt);
   if (!current || !advanceStreamingAttempt(attempt, current)) return null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    try {
-      const cachedWaveformProbe = probeCachedWaveformPeaks(
-        String(track?.path || ''),
-        engine.generation,
-      );
-      if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-        void cachedWaveformProbe.catch(() => {});
-      }
-    } catch (_error) {
-      // Cached waveform probing is optional and must never interrupt playback.
-    }
-  }
+  probeStreamingTrackWaveform(track);
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
-  engine.node.port.postMessage({
+  const configuredNode = engine.node, configuredGeneration = engine.generation;
+  configuredNode.port.postMessage({
     type: 'configure',
-    generation: engine.generation,
-    sampleRate: STREAMING_SAMPLE_RATE,
-    currentCapacityFrames: engine.limits.currentSeconds * STREAMING_SAMPLE_RATE,
-    continuityCapacityFrames: engine.limits.continuitySeconds * STREAMING_SAMPLE_RATE,
-    startupBufferFrames: STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES,
+    generation: configuredGeneration,
+    sampleRate: engine.sampleRate,
+    currentCapacityFrames: streamingFrames(engine.limits.currentSeconds),
+    continuityCapacityFrames: streamingFrames(engine.limits.continuitySeconds),
+    startupBufferFrames: streamingFrames(STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS),
   });
-  if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  if (!isStreamingPlaybackAttemptCurrent(attempt)
+      || engine.node !== configuredNode || engine.generation !== configuredGeneration) return null;
+  let intents = streamingPlaybackIntents.get(engine);
+  if (!intents) {
+    intents = {counter: 0, configured: null, active: null};
+    streamingPlaybackIntents.set(engine, intents);
+  }
+  intents.configured = {node: configuredNode, generation: configuredGeneration};
   if (!autoplay || attemptRecord.retiredOutgoing?.resume === false) {
     if (engine.context.state !== 'suspended') {
       await engine.context.suspend();
@@ -11803,18 +13029,56 @@ async function startStreamingTrack(track, {
 async function pauseStreamingPlayback() {
   const engine = streamingEngineState();
   if (engine.stopPromise || !engine.context || !engine.node) return;
+  engine.pauseIntentId = (Number(engine.pauseIntentId) || 0) + 1;
   const attempt = engine.playbackAttempt, owner = attempt && streamingAttemptRecords.get(attempt);
   const retiredHandoff = owner?.retiredOutgoing && isStreamingPlaybackAttemptCurrent(attempt);
   if (retiredHandoff) owner.retiredOutgoing.resume = false;
   const context=engine.context, node=engine.node, request=engine.startRequestId;
   engine.snapshot.paused = true;
-  engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
+  if (!sendStreamingPlaybackIntent(engine, node, engine.generation, 'pause')) return;
   // Keep the processor available to commit an admitted replacement, but never
   // restart its playback after this explicit pause.
   if (retiredHandoff && owner.phase === 'replacement' && isStreamingPlaybackAttemptCurrent(attempt)) return;
   await context.suspend();
   if (engine.context!==context || engine.node!==node || engine.startRequestId!==request) return;
   if (engine.mode !== 'error') engine.mode = 'paused';
+}
+
+// Resume an empty browser context without acquiring any playback authority.
+async function resumeEmptyStreamingPreparation(engine, pauseIntentId, isCurrent) {
+  const prepared = streamingEmptyPreparations.get(engine);
+  const ownsPreparation = () => prepared?.published === true
+    && streamingEngineState() === engine && streamingEmptyPreparations.get(engine) === prepared
+    && !streamingUnsafeCleanupFailures.has(engine) && !engine.stopPromise
+    && engine.context === prepared.context && engine.node === prepared.node && engine.socket === prepared.socket
+    && engine.startRequestId === prepared.request && (engine.lifecycleEpoch || 0) === prepared.lifecycle
+    && engine.generation === prepared.generation && (Number(engine.pauseIntentId) || 0) === pauseIntentId
+    && !engine.playbackAttempt && !engine.roles.current && !engine.roles.continuity
+    && !engine.pendingSeek && !engine.pendingPromotion && !engine.pendingContinuityTrack
+    && !engine.pendingContinuityOptions && !engine.replacementCushionWaiter
+    && !engine.pendingControls?.length && engine.snapshot.paused === true
+    && (engine.mode === 'prepared' || engine.mode === 'paused') && prepared.context.state !== 'closed';
+  if (!ownsPreparation()) return false;
+  if (typeof isCurrent === 'function' && !isCurrent()) return false;
+  if (!ownsPreparation()) return false;
+  try {
+    // Invoke before the first await so the caller's user gesture remains live.
+    await prepared.context.resume();
+  } catch (error) {
+    if (!ownsPreparation()) return false;
+    throw error;
+  }
+  if (!ownsPreparation()) return false;
+  if (typeof isCurrent === 'function' && !isCurrent()) return false;
+  if (!ownsPreparation() || prepared.context.state !== 'running') return false;
+  // An unconfigured processor ignores play; later configure resets it to paused.
+  try {
+    prepared.node.port.postMessage({ type: 'play', generation: prepared.generation });
+  } catch (error) {
+    if (!ownsPreparation()) return false;
+    throw error;
+  }
+  return ownsPreparation();
 }
 
 async function resumeStreamingPlayback(
@@ -11825,24 +13089,37 @@ async function resumeStreamingPlayback(
   isCurrent = null,
 ) {
   const engine = streamingEngineState();
+  const pauseIntentId = Number(engine.pauseIntentId) || 0;
+  if (!engine.roles.current) {
+    if (expectedStartRequestId !== null || onPlaybackStarted !== null
+        || expectedCurrentRole !== null || expectedAttempt !== null) return false;
+    return resumeEmptyStreamingPreparation(engine, pauseIntentId, isCurrent);
+  }
   if (typeof isCurrent === 'function' && !isCurrent()) return false;
   if (engine.stopPromise || !engine.roles.current) return false;
   const attempt = expectedAttempt || captureStreamingPlaybackAttempt();
-  if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  const ownsResume = () => (Number(engine.pauseIntentId) || 0) === pauseIntentId
+    && isStreamingPlaybackAttemptCurrent(attempt);
+  if (!ownsResume()) return false;
   expectedCurrentRole ||= engine.roles.current;
   if (expectedCurrentRole.track?.albumListeningIntent && typeof beginOrdinaryAlbumListening === 'function') {
-    beginOrdinaryAlbumListening(expectedCurrentRole.track, () => isStreamingPlaybackAttemptCurrent(attempt)
+    beginOrdinaryAlbumListening(expectedCurrentRole.track, () => ownsResume()
       && engine.roles.current === expectedCurrentRole && (typeof isCurrent !== 'function' || isCurrent() === true));
-    if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+    if (!ownsResume()) return false;
   }
   if (!engine.context || !engine.node) return false;
   const context = engine.context;
   const node = engine.node;
   const lifecycleEpoch = engine.lifecycleEpoch;
   const generation = engine.generation;
-  await context.resume();
+  try {
+    await context.resume();
+  } catch (error) {
+    if ((Number(engine.pauseIntentId) || 0) !== pauseIntentId) return false;
+    throw error;
+  }
   if (typeof isCurrent === 'function' && !isCurrent()) return false;
-  if (!isStreamingPlaybackAttemptCurrent(attempt) || engine.context !== context || engine.node !== node
+  if (!ownsResume() || engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
       || context.state !== 'running'
       || (expectedStartRequestId !== null
@@ -11852,14 +13129,14 @@ async function resumeStreamingPlayback(
     return false;
   }
   if (engine.snapshot.paused === false) return true;
-  node.port.postMessage({ type: 'play', generation });
+  if (!sendStreamingPlaybackIntent(engine, node, generation, 'play')) return false;
   if (typeof isCurrent === 'function' && !isCurrent()) return false;
-  if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  if (!ownsResume()) return false;
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();
-  if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  if (!ownsResume()) return false;
   maybeSchedulePendingStreamingContinuity();
-  if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  if (!ownsResume()) return false;
   engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
   for (const role of ['current', 'continuity']) {
     const roleState = engine.roles[role];
@@ -11867,12 +13144,12 @@ async function resumeStreamingPlayback(
     engine.deferredCreditFrames[role] = 0;
     if (!roleState || deferredFrames <= 0) continue;
     const grantedFrames = grantStreamingCredit(roleState, deferredFrames);
-    if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
+    if (!ownsResume()) return false;
     engine.deferredCreditFrames[role] = deferredFrames - grantedFrames;
   }
   if (engine.mode !== 'error' && engine.roles.current) engine.mode = 'starting';
   if (typeof onPlaybackStarted === 'function') onPlaybackStarted();
-  return isStreamingPlaybackAttemptCurrent(attempt);
+  return ownsResume();
 }
 async function seekStreamingPlayback(seconds) {
   const engine = streamingEngineState();
@@ -11937,7 +13214,7 @@ async function seekStreamingPlayback(seconds) {
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   const startSeconds = Math.max(0, Number(seconds) || 0);
-  const startFrame = Math.round(startSeconds * STREAMING_SAMPLE_RATE);
+  const startFrame = streamingFrames(startSeconds);
   const replacement = openStreamingRole('continuity', currentTrack, startFrame, {
     kind: 'seek', startSeconds, endSeconds: startSeconds,
   });
@@ -11974,6 +13251,19 @@ async function scheduleStreamingContinuity(track, options = {}) {
   const owns=()=>!engine.stopPromise&&engine.roles.current===current&&engine.startRequestId===request&&engine.lifecycleEpoch===lifecycle&&intentCurrent();
   if (!owns()) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
+  if (normalized.kind === 'queued-next') {
+    // Most albums share one rate, so an unknown track is opened at this rate and
+    // the server refuses it if wrong. Only a 320 kbps stream needs its rate first.
+    if (!knownStreamingSampleRate(track) && chooseStreamingQuality(track) === '320') {
+      return await requestStreamingSampleRate(track)
+        ? scheduleStreamingContinuity(track, normalized)
+        : null;
+    }
+    if (knownStreamingSampleRate(track) && streamingPlaybackRate(track) !== engine.sampleRate) {
+      leaveStreamingTrackForRateChange(track);
+      return null;
+    }
+  }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
     return engine.roles.continuity;
@@ -12011,7 +13301,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
     beginOrdinaryAlbumListening(track, sourceCurrent);
     if (!sourceCurrent()) return null;
   }
-  const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
+  const startFrame = streamingFrames(normalized.startSeconds);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity || !owns()) return null;
   if (normalized.kind === 'queued-next') {
@@ -12034,7 +13324,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
       active: true,
       kind: normalized.kind,
       startFrame,
-      endFrame: Math.round(normalized.endSeconds * STREAMING_SAMPLE_RATE),
+      endFrame: streamingFrames(normalized.endSeconds),
       retainedStreamId: continuity.streamId,
     });
   }
@@ -12054,8 +13344,8 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
   };
   if (!active && loop) {
     message.kind = loop.kind;
-    message.startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
-    message.endFrame = Math.round(Math.max(0, endSeconds) * STREAMING_SAMPLE_RATE);
+    message.startFrame = streamingFrames(Math.max(0, startSeconds));
+    message.endFrame = streamingFrames(Math.max(0, endSeconds));
     message.retainedStreamId = loop.streamId;
     if (continuity?.streamId === loop.streamId) {
       if (!closeStreamingContinuityRole('loop-disabled', { releaseWorklet: false })) return false;
@@ -12065,8 +13355,8 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
     engine.pendingContinuityOptions = null;
   } else if (active && continuity) {
     message.kind = loop?.kind || continuity.continuityOptions?.kind || 'long-loop';
-    message.startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
-    message.endFrame = Math.round(Math.max(0, endSeconds) * STREAMING_SAMPLE_RATE);
+    message.startFrame = streamingFrames(Math.max(0, startSeconds));
+    message.endFrame = streamingFrames(Math.max(0, endSeconds));
     message.retainedStreamId = continuity.streamId;
   }
   engine.node.port.postMessage(message);
@@ -12098,6 +13388,7 @@ async function cleanupStreamingResources(record) {
   }, true);
   if (node) {
     invoke(() => node.port.postMessage({type:'stop', generation, reason}), true);
+    streamingCaptureSafely(() => retireStreamingRateOwner(node));
     invoke(() => node.disconnect(), true);
   }
   if (socket && !options.socketAlreadyClosed) invoke(() => socket.close(), true);
@@ -12170,6 +13461,7 @@ function stopStreamingPlayback(reason = 'stopped', options = {}) {
     if (dispatch) dispatch();
     return Promise.resolve(true);
   }
+  streamingEmptyPreparations.delete(engine);
   engine.lifecycleEpoch = lifecycle + 1;
   let resolveCleanup, rejectCleanup;
   const cleanup = new Promise((resolve,reject) => {resolveCleanup=resolve;rejectCleanup=reject;});
@@ -12181,8 +13473,14 @@ function stopStreamingPlayback(reason = 'stopped', options = {}) {
     preparation:engine.preparePromise, waiter:engine.replacementCushionWaiter,
     cutover:engine.pendingSeek, waveform:Boolean(engine.roles.current || engine.roles.continuity || engine.waveformReadyIdentity)};
   engine.stopPromise = cleanup;
+  const intents = streamingPlaybackIntents.get(engine);
+  if (intents) {
+    intents.configured = null;
+    intents.active = null;
+  }
   if (owner) owner.cleanup = cleanup;
   engine.context = null; engine.node = null; engine.socket = null;
+  engine.sampleRate = 0;
   engine.roles.current = null; engine.roles.continuity = null;
   engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
   engine.pendingPromotion = null; engine.pendingSeek = null;
@@ -12196,6 +13494,10 @@ function stopStreamingPlayback(reason = 'stopped', options = {}) {
   engine.diagnostics.inFlightFrames = {current:0,continuity:0};
   engine.diagnostics.activeRoles = [];
   Object.assign(engine.snapshot,{currentTime:0,duration:0,paused:true,ended:false,src:'',readyState:0});
+  for (const requestId of [...(engine.sampleRateProbes?.keys() || [])]) {
+    settleStreamingSampleRateProbe(requestId, 0);
+  }
+  sweepStreamingEncodedDecoders();
   record.queueDispatch = queue ? ExplicitQueueRuntime.commitStop(queue) : null;
   const finish = (fulfilled, error) => {
     // Unknown/escaped/falsy rejections remain failures. Only our private record
@@ -17135,6 +18437,7 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   if (!peaks || playerWaveformForegroundSuspensionDepth > 0
       || Number(state.player?.streaming?.generation) !== generation
       || String(state.player?.current?.path || '') !== path) return null;
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return peaks;
   state.player.waveform.compactPeaks = { path, generation, data: peaks };
   try {
     await updateWaveformAppearance();
@@ -17336,6 +18639,7 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
   }
   if (!peaks || state.player.streaming.generation !== generation
       || String(state.player.current?.path || '') !== rawPath) return null;
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return peaks;
   playerWaveformPeakCurrentIdentity = identity;
   trimWaveformPeakCache();
   state.player.waveform.compactPeaks = { path: rawPath, generation, data: peaks };
@@ -17611,10 +18915,11 @@ function createLoopRangeController({
     elementListeners.push([element, name, handler]);
   };
 
-  const render = (range = currentRange) => {
+  const render = (range = currentRange, options = {}) => {
     const duration = Math.max(0, Number(getDuration?.()) || 0);
     let candidate = range;
-    if (currentDuration > 0 && duration > 0 && Math.abs(duration - currentDuration) > 0.001) {
+    if (options.preserveAbsoluteRange !== true && currentDuration > 0 && duration > 0
+      && Math.abs(duration - currentDuration) > 0.001) {
       const scale = duration / currentDuration;
       candidate = {
         startSeconds: Number(range?.startSeconds) * scale,
@@ -18397,11 +19702,13 @@ async function updateWaveformAppearance(forceReload = false) {
 }
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return;
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
   const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   const playback = getPlayerPlaybackSnapshot();
+  if (typeof getUnadmittedPlayerRestorePreview === 'function' && getUnadmittedPlayerRestorePreview()) return;
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;
   const activePeaks = state.player.waveform.compactPeaks;
@@ -37232,7 +38539,9 @@ function createAlbumListeningIntent(album) {
   let started = false, settled = false, descriptor = null;
   return Object.freeze({albumKey, start(isCurrent) {
     const valid = () => {try {return current() && isCurrent() === true;} catch {return false;}};
-    if (!valid() || started || typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || PLAYBACK_CAPTURE_ENABLED !== true) return;
+    const trackingEnabled = typeof nativeStreamingCaptureEnabled === 'function' && nativeStreamingCaptureEnabled()
+      || typeof PLAYBACK_CAPTURE_ENABLED !== 'undefined' && PLAYBACK_CAPTURE_ENABLED === true;
+    if (!valid() || started || !trackingEnabled) return;
     if (typeof document === 'undefined' || document.getElementById('app-shell')?.dataset.listeningSelectionsEnabled !== 'true') return;
     if (typeof canStartOrdinaryAlbumListening !== 'function' || !canStartOrdinaryAlbumListening()) return;
     if (typeof PrivateUITransport === 'undefined' || typeof PrivateUITransport.request !== 'function') return;
@@ -37253,7 +38562,7 @@ function createAlbumListeningIntent(album) {
           && value.selection_ref !== '00000000-0000-0000-0000-000000000000'
           && typeof value.membership_revision === 'string' && /^[0-9a-f]{64}$/.test(value.membership_revision)) descriptor = Object.freeze({...value});
     }).catch(() => {descriptor = null;}).finally(() => {clearTimeout(timer); settled = true;});
-  }, ready() {return settled && current() ? descriptor : null;}});
+  }, ready() {return settled && current() ? descriptor : null;}, pending() {return started && !settled;}});
 }
 
 function bindAlbumListeningIntent(track, intent) {
@@ -37464,9 +38773,14 @@ function refreshTrackModalPlaybackState() {
   const trackModal = typeof getTrackModalContentRoot === 'function' ? getTrackModalContentRoot() : document.getElementById('track-modal');
   if (!trackModal || (typeof isTrackModalContentVisible === 'function' ? !isTrackModalContentVisible() : trackModal.hidden)) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
@@ -37475,7 +38789,8 @@ function refreshTrackModalPlaybackState() {
   rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -37514,15 +38829,21 @@ function refreshNonAlbumModalPlaybackState() {
   const nonAlbumModal = document.getElementById('non-album-modal');
   if (!nonAlbumModal || nonAlbumModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   let durationGrew = false;
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -37930,22 +39251,29 @@ function resetPlayerUnloadPersistence() {
 }
 
 function persistPlayerState(force = false, options = {}) {
-  if (playerUnloadStatePersisted && !options.allowAfterUnload) return;
+  if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+    || playerUnloadStatePersisted && !options.allowAfterUnload || getUnadmittedPlayerRestorePreview()) return false;
   let snapshot = '';
   try {
     const payload = buildPersistedPlayerState(options);
+    if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+      || getUnadmittedPlayerRestorePreview()) return false;
     if (!payload) {
       if (force) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
       state.player.lastPersistedSnapshot = '';
-      return;
+      return false;
     }
     snapshot = JSON.stringify(payload);
-    if (!force && snapshot === state.player.lastPersistedSnapshot) return;
-    setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
+    if (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab()
+      || getUnadmittedPlayerRestorePreview()) return false;
+    if (!force && snapshot === state.player.lastPersistedSnapshot) return false;
+    if (setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot) !== true) return false;
     state.player.lastPersistedSnapshot = snapshot;
+    return true;
   } catch (_error) {
     // Ignore storage errors so playback never breaks.
   }
+  return false;
 }
 
 function persistPlayerStateForUnload(reason) {
@@ -37970,11 +39298,62 @@ function persistPlayerStateForUnload(reason) {
   return true;
 }
 
+// Retired preview provenance protects the still-visible, unadmitted publication
+// from unload/visibility saves. It grants no playback or presentation authority.
+let playerRestorePreview = null;
+function getPlayerRestorePublication() {
+  const preview = playerRestorePreview;
+  if (!preview || !preview.track
+    || state.player.current !== preview.track) return null;
+  if (preview.publication) {
+    if (typeof isCurrentPlayerTrackPublication !== 'function'
+      || !isCurrentPlayerTrackPublication(preview.publication)) return null;
+  } else if (typeof playerTrackPublicationRevision !== 'undefined'
+    && playerTrackPublicationRevision !== preview.revision) return null;
+  return preview;
+}
+function getUnadmittedPlayerRestorePreview() {
+  const preview = getPlayerRestorePublication();
+  return preview && preview.phase !== 'admitted' ? preview : null;
+}
+function preserveRestoredPlayerLoopRange() {
+  const preview = getPlayerRestorePublication();
+  return Boolean(preview && !state.player.loopActive
+    && (preview.phase === 'pending' || preview.phase === 'admitted')
+    && currentPlayerRestoreAttempt(preview.attempt));
+}
+function getPlayerRestorePreview() {
+  const preview = getUnadmittedPlayerRestorePreview();
+  return preview && preview.phase !== 'retired' && currentPlayerRestoreAttempt(preview.attempt)
+    ? preview : null;
+}
+function getPublishingPlayerRestorePreview(guard) {
+  const preview = playerRestorePreview;
+  return preview?.phase === 'publishing' && preview.guard === guard
+    && playerRestoreAttempt === preview.attempt && preview.attempt.epoch === playerRestoreEpoch
+    ? preview : null;
+}
+function playerRestoreHasLogicalOwner() {
+  return Boolean(typeof playerSelectionOwnership !== 'undefined' && playerSelectionOwnership
+    || typeof hasPendingPlayerTrackStart === 'function' && hasPendingPlayerTrackStart()
+    || typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasPendingStart?.());
+}
+function playerRestoreColdStateCurrent(cold) {
+  const engine = streamingEngineState();
+  return !state.player.listenSession && !playerRestoreHasLogicalOwner() && !engine.stopPromise && !engine.pendingPromotion
+    && !engine.pendingSeek && getPlayerPlaybackSnapshot().paused
+    && (!cold || cold.engine === engine && cold.role === engine.roles.current
+      && cold.continuity === engine.roles.continuity && cold.request === engine.startRequestId
+      && cold.lifecycle === engine.lifecycleEpoch && cold.generation === engine.generation);
+}
 let playerRestoreEpoch = 0;
 let playerRestoreAttempt = null;
 function retirePlayerRestoreAttempt(reason = 'superseded') {
   const attempt = playerRestoreAttempt;
   if (!attempt) return;
+  if (playerRestorePreview?.attempt === attempt && playerRestorePreview.phase !== 'admitted') {
+    playerRestorePreview.phase = 'retired';
+  }
   ++playerRestoreEpoch; playerRestoreAttempt = null;
   if (attempt.pageshow) window.removeEventListener('pageshow', attempt.pageshow);
   attempt.pageshow = null;
@@ -37986,7 +39365,15 @@ function currentPlayerRestoreAttempt(attempt) {
     && !playerUnloadStatePersisted && isPlaybackOwnershipScopeCurrent(attempt.scope)
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true)
     && playerRestoreAttempt === attempt && attempt.epoch === playerRestoreEpoch
-    && (!attempt.handle || isPlaybackOwnershipHandleCurrent(attempt.handle)));
+    && (!attempt.handle || isPlaybackOwnershipHandleCurrent(attempt.handle))
+    && attempt.selectionToken === playerTrackSelectionToken && !playerRestoreHasLogicalOwner()
+    && (attempt.starting || playerRestoreColdStateCurrent(attempt.cold))
+    && (attempt.preview?.track ? state.player.current === attempt.preview.track
+      && (!attempt.preview.publication || isCurrentPlayerTrackPublication(attempt.preview.publication))
+      : !state.player.current || attempt.preview?.phase === 'publishing'
+        && state.player.current === attempt.preview.input
+        && (typeof playerTrackPublicationRevision === 'undefined'
+          || playerTrackPublicationRevision === attempt.preview.revision)));
 }
 function reconcileRestoredPlaybackOwnership(role) {
   const attempt = playerRestoreAttempt;
@@ -38000,7 +39387,7 @@ function restorePlayerState() {
   const entryRestoreEpoch = playerRestoreEpoch;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch
-    || state.player.restoredFromStorage) return;
+    || state.player.restoredFromStorage || state.player.current || !playerRestoreColdStateCurrent()) return;
   state.player.restoredFromStorage = true;
   let parsed;
   try { parsed = JSON.parse(getLocalStorageItem(PLAYER_STATE_STORAGE_KEY)); } catch { return; }
@@ -38010,12 +39397,17 @@ function restorePlayerState() {
   const scope = capturePlaybackOwnershipScope();
   if (!track || Array.isArray(track) || typeof track.src !== 'string' || !track.src.trim()
     || typeof track.path !== 'string' || !track.path.trim() || !scope || !isPlaybackOwnershipScopeCurrent(scope) || entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch) return;
+  if (state.player.current || !playerRestoreColdStateCurrent()) return;
+  const engine = streamingEngineState();
+  const cold = {engine, role: engine.roles.current, continuity: engine.roles.continuity,
+    request: engine.startRequestId, lifecycle: engine.lifecycleEpoch, generation: engine.generation};
   const expectedRetirementEpoch = entryRestoreEpoch + (playerRestoreAttempt ? 1 : 0);
   retirePlayerRestoreAttempt();
   if (entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch
-    || playerRestoreAttempt || !isPlaybackOwnershipScopeCurrent(scope)
+    || playerRestoreAttempt || state.player.current || !playerRestoreColdStateCurrent(cold) || !isPlaybackOwnershipScopeCurrent(scope)
     || entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch) return;
-  const attempt = { epoch: ++playerRestoreEpoch, scope, track, handle: null, engineAttempt: null,
+  const attempt = { epoch: ++playerRestoreEpoch, scope, track, cold, selectionToken: entrySelection,
+    starting: false, preview: null, handle: null, engineAttempt: null,
     pageshow: null, settle: null, role: null, autoplayHandled: false };
   playerRestoreAttempt = attempt;
   const savedPaused = typeof parsed.paused === 'boolean' ? parsed.paused : !Boolean(parsed.wasPlaying);
@@ -38045,10 +39437,15 @@ function restorePlayerState() {
     if (currentPlayerRestoreAttempt(attempt) && restoredQueueHasAlbumSnapshot
         && typeof createAlbumListeningIntent === 'function' && typeof bindAlbumListeningIntent === 'function') {
       const queue = state.player.playbackQueue;
+      if (!currentPlayerRestoreAttempt(attempt)) return;
       const intent = queue.tracks.find(queued => queued.albumListeningIntent)?.albumListeningIntent
         || createAlbumListeningIntent(queue.albumSnapshot);
       if (intent && currentPlayerRestoreAttempt(attempt)) {
-        for (const queued of queue.tracks) bindAlbumListeningIntent(queued, intent);
+        for (const queued of queue.tracks) {
+          if (!currentPlayerRestoreAttempt(attempt)) return;
+          bindAlbumListeningIntent(queued, intent);
+        }
+        if (!currentPlayerRestoreAttempt(attempt)) return;
         bindAlbumListeningIntent(track, intent);
       }
     }
@@ -38077,8 +39474,45 @@ function restorePlayerState() {
       : savedTime;
 
     if (!currentPlayerRestoreAttempt(attempt)) return;
+    const preview = {attempt, phase: 'publishing', input: track, track: null, publication: null,
+      revision: typeof playerTrackPublicationRevision === 'undefined' ? null : playerTrackPublicationRevision,
+      time: boundedTime, duration, guard: () => currentPlayerRestoreAttempt(attempt)};
+    attempt.preview = preview;
+    playerRestorePreview = preview;
+    let hasPublication = false;
+    const publishPreview = () => {
+      if (!currentPlayerRestoreAttempt(attempt)) return false;
+      const published = setCurrentPlayerTrack(track, {persist: false, isCurrent: preview.guard});
+      if (!currentPlayerRestoreAttempt(attempt)) return false;
+      const setterEntered = typeof playerTrackPublicationRevision !== 'undefined'
+        && playerTrackPublicationRevision !== preview.revision;
+      const confirmed = published && published === state.player.current && preview.track === published
+        && preview.publication && isCurrentPlayerTrackPublication(preview.publication);
+      const isolatedAssignment = !setterEntered && published === undefined && state.player.current === track;
+      if (confirmed || isolatedAssignment) {
+        if (isolatedAssignment) preview.track = track;
+        preview.phase = 'pending';
+        attempt.track = preview.track;
+        state.player.loopStart = loopStart;
+        state.player.loopEnd = restoredLoopEnd;
+        state.player.loopActive = restoredLoopActive;
+        updatePlayerUi();
+        if (!currentPlayerRestoreAttempt(attempt)) return false;
+      } else if (preview.track || typeof playerTrackPublicationAttempt === 'undefined'
+        || playerTrackPublicationAttempt?.revision !== preview.revision + 1
+        || playerTrackPublicationAttempt.status !== 'foreign-refused') {
+        retirePlayerRestoreAttempt('restore-publication-failed');
+        return false;
+      }
+      // A foreign lock can refuse publication without withdrawing media access.
+      // Keep preparation separate; an unassigned preview can never be admitted.
+      hasPublication = confirmed || isolatedAssignment;
+      return true;
+    };
+    let restoreAutoplay = !savedPaused;
+    let autoplayStatePersisted = false;
     const completeRestoredAutoplay = () => {
-      if (!currentPlayerRestoreAttempt(attempt) || !attempt.role || state.player.current?.path !== track.path
+      if (!hasPublication || preview.phase !== 'admitted' || !currentPlayerRestoreAttempt(attempt) || !attempt.role || state.player.current !== attempt.track
         || !isStreamingPlaybackAttemptCurrent(attempt.engineAttempt)
         || streamingEngineState().roles.current !== attempt.role || attempt.autoplayHandled) return;
       const playback = getPlayerPlaybackSnapshot();
@@ -38086,27 +39520,58 @@ function restorePlayerState() {
       attempt.autoplayHandled = true;
       reconcileRestoredPlaybackOwnership(attempt.role);
       if (!currentPlayerRestoreAttempt(attempt)) return;
-      beginStreamingPlayerListenSession(track, boundedTime);
+      beginStreamingPlayerListenSession(attempt.track, boundedTime);
       if (!currentPlayerRestoreAttempt(attempt)) return;
       updatePlayerUi();
-      if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
+      if (currentPlayerRestoreAttempt(attempt)) autoplayStatePersisted = persistPlayerState(true);
     };
     const startRestoredRole = () => {
       if (!currentPlayerRestoreAttempt(attempt)) return null;
       if (!savedPaused) {
-        attempt.handle = canRestoreActivePlayback(parsed, { isCurrent: () => currentPlayerRestoreAttempt(attempt) });
-        if (!attempt.handle || !currentPlayerRestoreAttempt(attempt)) return null;
+        const handle = canRestoreActivePlayback(parsed, { isCurrent: () => currentPlayerRestoreAttempt(attempt) });
+        if (!currentPlayerRestoreAttempt(attempt)) {
+          if (handle) releasePlaybackOwnership('stopped', handle);
+          return null;
+        }
+        if (handle === false) {
+          // Arbitration refuses active playback, not independently authorized
+          // paused media preparation. A pending local successor still wins.
+          if (!currentPlayerRestoreAttempt(attempt) || getActivePlaybackOwnershipHandle()) return null;
+          attempt.handle = false;
+          restoreAutoplay = false;
+        } else {
+          const handleCurrent = isPlaybackOwnershipHandleCurrent(handle);
+          if (!currentPlayerRestoreAttempt(attempt)) {
+            if (handle) releasePlaybackOwnership('stopped', handle);
+            return null;
+          }
+          if (!handleCurrent) {
+            retirePlayerRestoreAttempt('restore-ownership-refused');
+            return null;
+          }
+          attempt.handle = handle;
+          if (!currentPlayerRestoreAttempt(attempt)) {
+            releasePlaybackOwnership('stopped', handle);
+            return null;
+          }
+        }
+        if (restoreAutoplay && !hasPublication) {
+          retirePlayerRestoreAttempt('restore-publication-refused');
+          return null;
+        }
       }
-      return startStreamingTrack(track, {
-        startSeconds: boundedTime, autoplay: !savedPaused,
+      attempt.starting = true;
+      return startStreamingTrack(attempt.track, {
+        startSeconds: boundedTime, autoplay: restoreAutoplay,
         onStartAttempt(engineAttempt) {
           attempt.engineAttempt = engineAttempt;
           if (!currentPlayerRestoreAttempt(attempt)) { cancelPlaybackAttempt(engineAttempt, 'stale-restore'); return; }
           if (attempt.handle) bindPlaybackOwnershipAttempt(attempt.handle, engineAttempt);
         },
-        ...(!savedPaused ? { allowSuspendedAutoplayFallback: true, onAutoplayStarted: completeRestoredAutoplay } : {}),
+        ...(restoreAutoplay ? { allowSuspendedAutoplayFallback: true, onAutoplayStarted: completeRestoredAutoplay } : {}),
       });
     };
+    if (!savedPaused && !publishPreview()) return;
     const rolePromise = !savedPaused ? new Promise((resolve, reject) => {
       attempt.settle = resolve;
       attempt.pageshow = () => {
@@ -38115,6 +39580,21 @@ function restorePlayerState() {
       };
       window.addEventListener('pageshow', attempt.pageshow, { once: true });
     }) : startRestoredRole();
+    // Saved-paused retains its existing start-before-publication order, while
+    // cached metadata is still published synchronously before awaiting audio.
+    if (savedPaused) {
+      try { publishPreview(); }
+      catch (error) {
+        // Startup is already owned. Report its later rejection without giving
+        // it authority over a successor, then let existing cleanup retire now.
+        void Promise.resolve(rolePromise).catch(startError => {
+          try {
+            console.error('[AlbumHaven][Player] Paused preparation failed after preview publication.', startError);
+          } catch { /* A reporter cannot reject this owned observation. */ }
+        });
+        throw error;
+      }
+    }
     const role = await rolePromise;
     attempt.settle = null;
     if (!currentPlayerRestoreAttempt(attempt)) return;
@@ -38123,26 +39603,31 @@ function restorePlayerState() {
       retirePlayerRestoreAttempt('restore-failed'); return;
     }
     attempt.role = role;
-    setCurrentPlayerTrack(track, { persist: false, isCurrent: () => currentPlayerRestoreAttempt(attempt) && isStreamingPlaybackAttemptCurrent(attempt.engineAttempt) });
-    if (!currentPlayerRestoreAttempt(attempt) || state.player.current?.path !== track.path) return;
-    state.player.loopStart = loopStart; state.player.loopEnd = restoredLoopEnd; state.player.loopActive = restoredLoopActive;
-    reconcileRestoredPlaybackOwnership(role);
+    if (!hasPublication || state.player.current !== attempt.track) return;
+    preview.phase = 'admitted';
+    if (typeof bindPlayerTrackPresentation === 'function'
+      && bindPlayerTrackPresentation(attempt.track, role, attempt.engineAttempt)) {
+      notifyStreamingPlaybackPresentation(role, playerTrackPublication.presentation);
+    }
     if (!currentPlayerRestoreAttempt(attempt)) return;
-    completeRestoredAutoplay();
-    if (!currentPlayerRestoreAttempt(attempt)) return;
-    updatePlayerUi();
+    if (restoreAutoplay) {
+      reconcileRestoredPlaybackOwnership(role);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
+      completeRestoredAutoplay();
+    }
     if (!currentPlayerRestoreAttempt(attempt)) return;
     if (typeof handleStreamingPlaybackWaveformReady === 'function') {
       try { void Promise.resolve(handleStreamingPlaybackWaveformReady({ generation: role.generation,
         currentPath: track.path, continuityPath: '' })).catch(() => {}); } catch {}
     }
-    if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
+    if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(savedPaused || restoreAutoplay && !autoplayStatePersisted);
   };
   void restore().catch(error => {
     if (!currentPlayerRestoreAttempt(attempt)) return;
     retirePlayerRestoreAttempt('restore-failed');
     state.player.lastRestoreError = { name: error?.name || 'Error', message: error?.message || String(error) };
-    console.error('[AlbumHaven][Player] State restore failed.', error);
+    try { console.error('[AlbumHaven][Player] State restore failed.', error); }
+    catch { /* Reporting cannot replace the restore failure or reject its observer. */ }
   });
 }
 
@@ -42928,9 +44413,13 @@ function unixNowSeconds() {
 }
 
 function getPlayerDuration() {
+  const track = state.player.current, publication = playerTrackPublication;
+  const preview = typeof getPlayerRestorePreview === 'function' ? getPlayerRestorePreview() : null;
+  if (preview) return preview.duration;
   const editDuration = Number(state.player.loopEditDurationSeconds);
   if (state.player.loopActive && Number.isFinite(editDuration) && editDuration > 0) return editDuration;
   const playbackDuration = Number(getPlayerPlaybackSnapshot().duration);
+  if (state.player.current !== track || playerTrackPublication !== publication) return 0;
   if (Number.isFinite(playbackDuration) && playbackDuration > 0) {
     // Top payloads retain their exact fresh resolver provenance. The measured
     // clock remains the presentation duration; do not rewrite that DTO/alias.
@@ -42958,7 +44447,8 @@ function updateLoopInputsFromState() {
   const reconciledRange = els.loopRange?._loopRangeController?.render({
     startSeconds: state.player.loopStart,
     endSeconds: state.player.loopEnd,
-  });
+  }, {preserveAbsoluteRange: typeof preserveRestoredPlayerLoopRange === 'function'
+    && preserveRestoredPlayerLoopRange()});
   if (reconciledRange) {
     state.player.loopStart = reconciledRange.startSeconds;
     state.player.loopEnd = reconciledRange.endSeconds;
@@ -42979,9 +44469,55 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
+// A publication is distinct even when a caller installs the same track object.
+let playerTrackPublicationRevision = 0;
+let playerTrackPublicationAttempt = null;
+let playerTrackPublication = null;
+function isCurrentPlayerTrackPublication(publication) {
+  return Boolean(publication && playerTrackPublication === publication
+    && state.player.current === publication.track);
+}
+function bindPlayerTrackPresentation(track, role, attempt) {
+  const publication = playerTrackPublication;
+  const engine = streamingEngineState();
+  if (!isCurrentPlayerTrackPublication(publication) || publication.track !== track
+    || engine.roles.current !== role || !isStreamingPlaybackAttemptCurrent(attempt)) return false;
+  publication.presentation = { role, attempt, engine, request: engine.startRequestId,
+    lifecycle: engine.lifecycleEpoch, generation: engine.generation };
+  return true;
+}
+function handleStreamingPlaybackPresentation(event) {
+  const publication = playerTrackPublication;
+  const relation = publication?.presentation;
+  const current = () => isCurrentPlayerTrackPublication(publication)
+    && publication.presentation === relation && relation && relation.role === event.role
+    && relation.attempt === event.attempt && relation.engine === event.engine
+    && relation.request === event.request && relation.lifecycle === event.lifecycle
+    && relation.generation === event.generation
+    && isStreamingPlaybackAttemptCurrent(relation.attempt)
+    && streamingEngineState().roles.current === relation.role;
+  if (!current()) return;
+  const paint = () => { if (current()) renderPlayerPresentation(current, paint); };
+  paint();
+}
 function updatePlayerUi() {
+  const publication = playerTrackPublication, track = state.player.current;
+  const current = () => playerTrackPublication === publication && state.player.current === track;
+  if (!renderPlayerPresentation(current, () => updatePlayerUi()) || !current()) return;
+  persistPlayerState();
+  if (!current()) return;
+  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
+}
+
+// Shared presentation only. The caller supplies its exact publication guard;
+// lock recursion returns without repeating the ordinary save/sync epilogue.
+function renderPlayerPresentation(currentPublication, lockChanged) {
+  if (!currentPublication()) return false;
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
+  const preview = typeof getPlayerRestorePreview === 'function' ? getPlayerRestorePreview() : null;
+  const presentationPaused = preview ? true : playback.paused;
+  if (!currentPublication()) return false;
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
@@ -42989,7 +44525,8 @@ function updatePlayerUi() {
   const displayTrack = lockedByAnotherTab ? (mirroredTrack || { title: 'Playing in another tab', artist: '', album: '' }) : state.player.current;
   if (lockedByAnotherTab) invalidatePlaybackPresentation();
   else if (state.player.coverWasOwnershipLocked) refreshPlayerCover(state.player.current);
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  if (!currentPublication()) return false;
+  state.player.lastKnownWasPlaying = Boolean(!preview && !lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
@@ -42998,7 +44535,8 @@ function updatePlayerUi() {
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
-    : Number(playback.currentTime) || 0;
+    : preview ? preview.time : Number(playback.currentTime) || 0;
+  if (!currentPublication()) return false;
   if (els.timeline) {
     els.timeline.max = String(Math.max(duration, 0.1));
     els.timeline.value = String(Math.min(current, duration || current));
@@ -43021,12 +44559,14 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
+    renderGlobalPlayerPlayGlyph(els.play, presentationPaused);
+    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (presentationPaused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
-  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) return updatePlayerUi();
-  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
+  if (!currentPublication()) return false;
+  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) { lockChanged(); return false; }
+  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, presentationPaused, hasTrack, lockedByAnotherTab });
+  if (!currentPublication()) return false;
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
     els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
@@ -43037,32 +44577,53 @@ function updatePlayerUi() {
   if (els.loopEndHandle) els.loopEndHandle.hidden = !state.player.loopActive;
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
-  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) return updatePlayerUi();
+  if (!currentPublication()) return false;
+  if (isPlaybackLockedByAnotherTab() !== lockedByAnotherTab) { lockChanged(); return false; }
   renderGlobalPlayerMetadata(els, displayTrack);
+  if (!currentPublication()) return false;
   updateLoopInputsFromState();
-  updateWaveformAppearance();
+  if (!currentPublication()) return false;
+  const waveformPaint = updateWaveformAppearance();
+  if (waveformPaint && typeof waveformPaint.then === 'function') {
+    if (typeof observeStreamingFacadeCallback === 'function') {
+      observeStreamingFacadeCallback(waveformPaint, 'presentation-waveform');
+    } else {
+      void Promise.resolve(waveformPaint).catch(error => console.error('Streaming facade callback failed', error));
+    }
+  }
+  if (!currentPublication()) return false;
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
   if (state.player.loopActive && els.waveformCanvas && compactPeaks) {
     const progress = duration > 0 ? current / duration : 0;
     drawWaveformOnCanvas(els.waveformCanvas, compactPeaks, progress);
   }
   refreshTrackModalPlaybackState();
+  if (!currentPublication()) return false;
   refreshNonAlbumModalPlaybackState();
-  persistPlayerState();
-  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
+  return currentPublication();
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
-  const current = () => (!options.isCurrent || options.isCurrent() === true)
-    && !isPlaybackLockedByAnotherTab();
-  if (!current()) return;
+  const revision = ++playerTrackPublicationRevision;
+  const invocation = {revision, status: 'cancelled'};
+  playerTrackPublicationAttempt = invocation;
+  const guarded = () => revision === playerTrackPublicationRevision
+    && (!options.isCurrent || options.isCurrent() === true)
+    && revision === playerTrackPublicationRevision;
+  const current = () => guarded() && !isPlaybackLockedByAnotherTab() && guarded();
+  const preview = typeof getPublishingPlayerRestorePreview === 'function'
+    ? getPublishingPlayerRestorePreview(options.isCurrent) : null;
+  if (!guarded()) return;
+  const lockedAtEntry = isPlaybackLockedByAnotherTab();
+  if (!guarded()) return;
+  if (lockedAtEntry) { invocation.status = 'foreign-refused'; return; }
   const els = getPlayerElements();
   const previousTrack = state.player.current;
   const previousTrackId = getTrackIdentity(previousTrack);
   const nextTrackId = getTrackIdentity(track);
   const previousSession = state.player.listenSession;
   const previousPlaybackSnapshot = options.previousPlaybackSnapshot || null;
-  if (previousTrack && previousTrackId && previousTrackId !== nextTrackId && previousSession) {
+  if (!preview && previousTrack && previousTrackId && previousTrackId !== nextTrackId && previousSession) {
     void finalizeListenSession('track-change', {
       session: previousSession,
       currentTime: Number(previousPlaybackSnapshot?.currentTime) || undefined,
@@ -43081,12 +44642,22 @@ function setCurrentPlayerTrack(track, options = {}) {
     }
   }
   if (!current()) return;
+  // Supersede the exact automatic restore even if its album/cover lookup has
+  // not reached preview assignment yet. Failed pre-assignment setters do not.
+  const pendingRestore = typeof playerRestoreAttempt !== 'undefined' ? playerRestoreAttempt : null;
+  if (!preview && pendingRestore && pendingRestore.preview?.phase !== 'admitted') {
+    retirePlayerRestoreAttempt('track-publication');
+    if (!current()) return;
+  }
   state.player.current = track;
+  const publication = { revision, track, presentation: null };
+  playerTrackPublication = publication;
+  if (preview) { preview.track = track; preview.publication = publication; }
   if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.currentChanged();
   if (!current() || state.player.current !== track) return;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
+  if (!preview && typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
       Number(state.player.streaming?.generation) || 0,
@@ -43106,11 +44677,17 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopEditDurationSeconds = 0;
   const locked = isPlaybackLockedByAnotherTab();
   renderGlobalPlayerMetadata(els, locked ? getMirroredPlaybackTrack() : track);
-  refreshPlayerCover(track);
-  updatePlayerUi();
   if (!current() || state.player.current !== track) return;
-  if (options.persist !== false) {
+  refreshPlayerCover(track);
+  if (!current() || state.player.current !== track) return;
+  if (!preview) updatePlayerUi();
+  if (!current() || state.player.current !== track) return;
+  if (!preview && options.persist !== false) {
     persistPlayerState(true);
+  }
+  if (current() && isCurrentPlayerTrackPublication(publication)) {
+    invocation.status = 'published';
+    return track;
   }
 }
 
@@ -43209,9 +44786,33 @@ function reconcilePlayerOwnership(role = streamingEngineState().roles.current) {
   return commitPlaybackOwnership(selection.handle, role, selection.track);
 }
 let topPlaybackStartEpoch = 0;
+let pendingPlayerTrackStart = null;
+function hasPendingPlayerTrackStart() { return pendingPlayerTrackStart !== null; }
+// A switch takes a moment to reach the listener; the click should not.
+function renderSelectedTrackState(track) {
+  if (track && typeof getPlayerElements === 'function') {
+    renderGlobalPlayerMetadata(getPlayerElements(), track);
+  }
+  if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
+  if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+}
+
+function showSelectedTrackImmediately(track, shouldAutoplay) {
+  if (!shouldAutoplay) return;
+  state.player.selectedTrack = track;
+  renderSelectedTrackState(track);
+}
+
+function clearSelectedTrack() {
+  if (!state.player.selectedTrack) return;
+  state.player.selectedTrack = null;
+  renderSelectedTrackState(state.player.current);
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const topEntryEpoch = topPlaybackStartEpoch;
   const entryToken = playerTrackSelectionToken;
+  const incomingSignal = options.signal, incomingReplay = options.contextReplay;
   const shouldAutoplay = options.autoplay !== false;
   const scope = capturePlaybackOwnershipScope();
   const allowed = () => {
@@ -43231,98 +44832,125 @@ async function playTrackFromPayload(track, options = {}) {
   if (topTrack && (typeof TopPlaybackRuntime === 'undefined' || !TopPlaybackRuntime.hasBinding(track))) return false;
   if (topTrack && (streamingEngineState().pendingPromotion || streamingEngineState().pendingSeek?.kind === 'replacement')) return false;
   if (topEntryEpoch !== topPlaybackStartEpoch) return false;
-  const topStartEpoch = ++topPlaybackStartEpoch;
-  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) TopPlaybackRuntime.cancel(state.player.playbackQueue);
-  if (topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) return false;
-  if (typeof retirePlayerRestoreAttempt === 'function') retirePlayerRestoreAttempt('manual-selection');
-  if (entryToken !== playerTrackSelectionToken || !allowed() || topStartEpoch !== topPlaybackStartEpoch) return false;
-  let admittedSelection = null;
-  if (topTrack) {
-    const engine = streamingEngineState();
-    if (engine.pendingPromotion || engine.pendingSeek?.kind === 'replacement') return false;
-    if (engine.roles?.continuity && closeStreamingContinuityRole('top-manual-selection') !== true) return false;
-    engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
-    track = await TopPlaybackRuntime.prepareStart(track, {signal: options.signal, isCurrent: () =>
-      topStartEpoch === topPlaybackStartEpoch && allowed()
-      && (admittedSelection ? currentPlayerSelection(admittedSelection) : entryToken === playerTrackSelectionToken)});
-    if (!track || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) {
-      if (track) TopPlaybackRuntime.cancelStart(track);
+  const reservation = {};
+  pendingPlayerTrackStart = reservation;
+  try {
+    const topStartEpoch = ++topPlaybackStartEpoch;
+    if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.retirePendingStartForSelection(incomingSignal, incomingReplay);
+    if (pendingPlayerTrackStart !== reservation || topStartEpoch !== topPlaybackStartEpoch
+      || entryToken !== playerTrackSelectionToken || !allowed()
+      || pendingPlayerTrackStart !== reservation || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken) return false;
+    if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) TopPlaybackRuntime.cancel(state.player.playbackQueue);
+    if (topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) return false;
+    if (typeof retirePlayerRestoreAttempt === 'function') retirePlayerRestoreAttempt('manual-selection');
+    if (entryToken !== playerTrackSelectionToken || !allowed() || topStartEpoch !== topPlaybackStartEpoch) return false;
+    let admittedSelection = null;
+    if (topTrack) {
+      const engine = streamingEngineState();
+      if (engine.pendingPromotion || engine.pendingSeek?.kind === 'replacement') return false;
+      if (engine.roles?.continuity && closeStreamingContinuityRole('top-manual-selection') !== true) return false;
+      engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
+      const restartOwnerCurrent = () => {
+        const pure = () => pendingPlayerTrackStart === reservation && topStartEpoch === topPlaybackStartEpoch
+          && (admittedSelection ? playerSelectionOwnership === admittedSelection
+            && admittedSelection.token === playerTrackSelectionToken : entryToken === playerTrackSelectionToken)
+          && !incomingSignal?.aborted;
+        return pure() && options.replayOwnerCurrent?.() === true && pure()
+          && isPlaybackOwnershipScopeCurrent(scope) && pure()
+          && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true)
+          && pure();
+      };
+      track = await TopPlaybackRuntime.prepareStart(track, {signal: options.signal, restart: options.topRestart,
+        restartOwnerCurrent, isCurrent: () => topStartEpoch === topPlaybackStartEpoch && allowed()
+        && (admittedSelection ? currentPlayerSelection(admittedSelection) : entryToken === playerTrackSelectionToken)});
+      if (!track || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) {
+        if (track) TopPlaybackRuntime.cancelStart(track);
+        return false;
+      }
+    }
+    const selection = { token: ++playerTrackSelectionToken, track, scope, handle: null, attempt: null,
+      signal: options.signal, isCurrent: options.isCurrent };
+    playerSelectionOwnership = selection;
+    admittedSelection = selection;
+    try {options.onSelectionAdmitted?.(selection.token);} catch (error) {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
+      throw error;
+    }
+    if (topStartEpoch !== topPlaybackStartEpoch) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.selectionStarted(incomingReplay) === false) {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;
+    }
+    if (!currentPlayerSelection(selection) || !allowed()) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    if (!shouldAutoplay) releasePlaybackOwnership('stopped', getActivePlaybackOwnershipHandle());
+    if (!currentPlayerSelection(selection)) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
+    selection.handle = shouldAutoplay ? canStartPlaybackInThisTab(track, { isCurrent: () => currentPlayerSelection(selection) && allowed() }) : null;
+    if (shouldAutoplay && !selection.handle || !currentPlayerSelection(selection) || !allowed()) {
+      if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
       return false;
     }
-  }
-  const selection = { token: ++playerTrackSelectionToken, track, scope, handle: null, attempt: null,
-    signal: options.signal, isCurrent: options.isCurrent };
-  playerSelectionOwnership = selection;
-  admittedSelection = selection;
-  try {options.onSelectionAdmitted?.(selection.token);} catch (error) {
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    throw error;
-  }
-  if (topStartEpoch !== topPlaybackStartEpoch) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
-  if (!currentPlayerSelection(selection) || !allowed()) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  if (!shouldAutoplay) releasePlaybackOwnership('stopped', getActivePlaybackOwnershipHandle());
-  if (!currentPlayerSelection(selection)) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
-  selection.handle = shouldAutoplay ? canStartPlaybackInThisTab(track, { isCurrent: () => currentPlayerSelection(selection) && allowed() }) : null;
-  if (shouldAutoplay && !selection.handle || !currentPlayerSelection(selection) || !allowed()) {
-    if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    return false;
-  }
-  const resetTime = options.resetTime !== false;
-  const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
-  const cancelSelection = () => {
-    if (topTrack) TopPlaybackRuntime.cancelStart(track);
-    if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
-    else cancelPlaybackAttempt(selection.attempt, 'selection-cancelled');
-  };
-  options.signal?.addEventListener('abort', cancelSelection, { once: true });
-  try {
-    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch) { cancelSelection(); return false; }
-    const role = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
-      autoplay: shouldAutoplay,
-      onStartAttempt(attempt) {
-        selection.attempt = attempt;
-        if (!currentPlayerSelection(selection)) { cancelPlaybackAttempt(attempt, 'stale-selection'); return; }
-        if (selection.handle) bindPlaybackOwnershipAttempt(selection.handle, attempt);
-      },
-    });
-    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
-      cancelSelection(); return false;
-    }
-    if (!role || role.track?.path !== track.path || streamingEngineState().roles.current !== role) {
-      cancelSelection(); return false;
-    }
-    if (topTrack && (role.track !== track || !TopPlaybackRuntime.receiptCurrent(track) || !TopPlaybackRuntime.commit(track))) {
-      cancelSelection(); return false;
-    }
-    if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
-    if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
-    setCurrentPlayerTrack(track, { previousPlaybackSnapshot, isCurrent: () => currentPlayerSelection(selection) });
-    if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
-    selection.admitted = true;
-    reconcilePlayerOwnership(role);
-    if (selection.pauseAfterAdmission && getPlayerPlaybackSnapshot().paused) {
-      if (!releasePausedPlayerSelection(selection)) return false;
+    const resetTime = options.resetTime !== false;
+    const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+    const cancelSelection = () => {
+      if (topTrack) TopPlaybackRuntime.cancelStart(track);
+      if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
+      else cancelPlaybackAttempt(selection.attempt, 'selection-cancelled');
+    };
+    options.signal?.addEventListener('abort', cancelSelection, { once: true });
+    try {
+      if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch) { cancelSelection(); return false; }
+      showSelectedTrackImmediately(track, shouldAutoplay);
+      const role = await startStreamingTrack(track, {
+        startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+        autoplay: shouldAutoplay,
+        allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+        onStartAttempt(attempt) {
+          selection.attempt = attempt;
+          if (!currentPlayerSelection(selection)) { cancelPlaybackAttempt(attempt, 'stale-selection'); return; }
+          if (selection.handle) bindPlaybackOwnershipAttempt(selection.handle, attempt);
+        },
+      });
+      if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
+        cancelSelection(); return false;
+      }
+      if (!role || role.track?.path !== track.path || streamingEngineState().roles.current !== role) {
+        cancelSelection(); return false;
+      }
+      if (topTrack && (role.track !== track || !TopPlaybackRuntime.receiptCurrent(track) || !TopPlaybackRuntime.commit(track))) {
+        cancelSelection(); return false;
+      }
+      if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true
+        && ExplicitQueueRuntime.replaced(incomingReplay) === false) {cancelSelection(); return false;}
+      if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
+      const publishedTrack = setCurrentPlayerTrack(track, { previousPlaybackSnapshot, isCurrent: () => currentPlayerSelection(selection) });
+      if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
+      selection.admitted = true;
+      if (publishedTrack) bindPlayerTrackPresentation(publishedTrack, role, selection.attempt);
+      reconcilePlayerOwnership(role);
+      if (selection.pauseAfterAdmission && getPlayerPlaybackSnapshot().paused) {
+        if (!releasePausedPlayerSelection(selection)) return false;
+        updatePlayerUi();
+        return currentPlayerSelection(selection);
+      }
+      if (role.firstFrameNotified) {
+        void Promise.resolve(handleStreamingPlaybackFirstFrame({ generation: role.generation,
+          streamId: role.streamId, trackPath: role.track.path })).catch(() => {});
+      }
+      if (!currentPlayerSelection(selection)) return false;
+      if (shouldAutoplay) beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+      if (!currentPlayerSelection(selection)) return false;
       updatePlayerUi();
       return currentPlayerSelection(selection);
+    } catch (error) {
+      const current = currentPlayerSelection(selection);
+      cancelSelection();
+      if (current) throw error;
+      return false;
+    } finally {
+      options.signal?.removeEventListener('abort', cancelSelection);
+      if (playerSelectionOwnership === selection && selection.token === playerTrackSelectionToken) clearSelectedTrack();
     }
-    if (role.firstFrameNotified) {
-      void Promise.resolve(handleStreamingPlaybackFirstFrame({ generation: role.generation,
-        streamId: role.streamId, trackPath: role.track.path })).catch(() => {});
-    }
-    if (!currentPlayerSelection(selection)) return false;
-    if (shouldAutoplay) beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
-    if (!currentPlayerSelection(selection)) return false;
-    updatePlayerUi();
-    return currentPlayerSelection(selection);
-  } catch (error) {
-    const current = currentPlayerSelection(selection);
-    cancelSelection();
-    if (current) throw error;
-    return false;
-  } finally { options.signal?.removeEventListener('abort', cancelSelection); }
+  } finally { if (pendingPlayerTrackStart === reservation) pendingPlayerTrackStart = null; }
 }
 
 let handledStreamingFirstFrameIdentity = '';
@@ -43393,22 +45021,35 @@ async function handleStreamingPlaybackPosition(event = {}) {
 let handledStreamingEndedIdentity = '';
 
 async function handleStreamingPlaybackEnded(event = {}) {
-  const track = state.player.current;
+  const track = state.player.current, engine = streamingEngineState();
   const trackPath = String(track?.path || '');
   if (!trackPath || String(event.trackPath || '') !== trackPath) return;
-  const role = streamingEngineState().roles.current;
+  const role = engine.roles.current;
   if (!role || role.generation !== event.generation || role.streamId !== event.streamId) return;
-  const endedHandle = getActivePlaybackOwnershipHandle();
+  // Capture the outgoing session before queue listeners or ownership storage can reenter.
+  const session = state.player.listenSession, endedHandle = getActivePlaybackOwnershipHandle();
+  const selection = playerSelectionOwnership, token = playerTrackSelectionToken;
+  const pauseIntent = engine.pauseIntentId, attempt = engine.playbackAttempt;
+  const playback = getPlayerPlaybackSnapshot();
   const identity = [event.generation, event.streamId, trackPath].join(':');
   if (identity === handledStreamingEndedIdentity) return;
+  let released = false;
+  const scope = capturePlaybackOwnershipScope();
+  const pure = () => streamingEngineState() === engine && engine.roles.current === role
+    && engine.pauseIntentId === pauseIntent && engine.playbackAttempt === attempt
+    && state.player.current === track && playerSelectionOwnership === selection && playerTrackSelectionToken === token;
+  const terminalCurrent = () => pure() && !pendingPlayerTrackStart && !pendingPlayerPlaybackHandoff && !state.player.loopActive
+    && role.endedNotified === true && getPlayerPlaybackSnapshot().ended === true
+    && isStreamingPlaybackAttemptCurrent(attempt) && pure() && isPlaybackOwnershipScopeCurrent(scope) && pure()
+    && (released || isPlaybackOwnershipHandleCurrent(endedHandle)) && pure();
+  const candidate = typeof ExplicitQueueRuntime !== 'undefined' && terminalCurrent()
+    ? ExplicitQueueRuntime.captureCompletedContext({isCurrent: terminalCurrent}) : null;
+  if (identity === handledStreamingEndedIdentity) return;
   handledStreamingEndedIdentity = identity;
-  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended();
-  const playback = getPlayerPlaybackSnapshot();
-  const session = state.player.listenSession;
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', endedHandle);
-  }
-  if (typeof finalizeListenSession === 'function') {
+  if (pure() && typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended(candidate);
+  released = true;
+  if (typeof releasePlaybackOwnership === 'function') releasePlaybackOwnership('paused', endedHandle);
+  if (session && typeof finalizeListenSession === 'function') {
     await finalizeListenSession('ended', {
       session,
       currentTime: Number(event.currentTime) || Number(playback.currentTime) || 0,
@@ -43416,7 +45057,12 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
-  updatePlayerUi();
+  if (terminalCurrent()) updatePlayerUi();
+  if (terminalCurrent() && event.sampleRateChangeTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+    await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
+  }
 }
 
 async function handleStreamingPlaybackBoundary(event = {}) {
@@ -43755,7 +45401,7 @@ function setLoopPlaybackHead(value) {
   if (typeof seekStreamingPlayback !== 'function') return;
   const seek = seekStreamingPlayback(next);
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void Promise.resolve(seek).catch(error => console.warn('[AlbumHaven][Playback] Owned operation failed.', error));
+    observeStreamingFacadeCallback(seek, 'seek-control-error');
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
@@ -43781,7 +45427,7 @@ function setPlayerPlaybackHead(value, options = {}) {
   if (typeof seekStreamingPlayback !== 'function') return;
   const seek = seekStreamingPlayback(next);
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void Promise.resolve(seek).catch(error => console.warn('[AlbumHaven][Playback] Owned operation failed.', error));
+    observeStreamingFacadeCallback(seek, 'seek-control-error');
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
@@ -43855,6 +45501,12 @@ function togglePlayerPlayback(options = {}) {
   if (!playback.paused) { pausePlayerPlaybackForHandoff(playback); return true; }
   if (!isNativePlayerSourceCurrent(track)) return false;
   if (playback.ended) {
+    const restart = typeof ExplicitQueueRuntime !== 'undefined' ? ExplicitQueueRuntime.restartCompletedContext() : null;
+    if (restart) {
+      void restart.catch(error => console.warn('[AlbumHaven][Playback] Context restart failed.', error));
+      return true;
+    }
+    if (state.player.playbackQueue) return false;
     void playTrackFromPayload(track, { resetTime: true, isCurrent: () => state.player.current === track }).catch(error => {
       console.warn('[AlbumHaven][Playback] Restart failed.', error);
     });
@@ -43892,6 +45544,11 @@ function togglePlayerPlayback(options = {}) {
 
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (isPlaybackLockedByAnotherTab()) return Promise.resolve(false);
+  if (typeof ExplicitQueueRuntime !== 'undefined') {
+    const selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+    ExplicitQueueRuntime.invalidateCompletedContext();
+    if ((typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return Promise.resolve(false);
+  }
   const handle = getActivePlaybackOwnershipHandle();
   const retiredHandoff = typeof captureStreamingRetiredOutgoingAttempt === 'function'
     ? captureStreamingRetiredOutgoingAttempt() : null;
@@ -43928,7 +45585,7 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   });
   pendingPlayerPlaybackHandoff = trackedPause;
   if (typeof observeStreamingFacadeCallback === 'function') {
-    void trackedPause.catch(error => console.warn('[AlbumHaven][Playback] Pause failed.', error));
+    observeStreamingFacadeCallback(trackedPause, 'pause-control-error');
   } else {
     void trackedPause.catch(() => {});
   }
@@ -44675,6 +46332,7 @@ function syncCompactPlayerUi(snapshot = {}) {
   const els = compactPlayerElements();
   if (!els.player) return;
   const playback = snapshot.playback || getPlayerPlaybackSnapshot();
+  const presentationPaused = snapshot.presentationPaused ?? playback.paused;
   const locked = snapshot.lockedByAnotherTab ?? isPlaybackLockedByAnotherTab();
   const track = locked ? (Object.prototype.hasOwnProperty.call(snapshot, 'displayTrack') ? snapshot.displayTrack : getMirroredPlaybackTrack())
     : (snapshot.displayTrack || state.player.current);
@@ -44707,8 +46365,8 @@ function syncCompactPlayerUi(snapshot = {}) {
     els.cover.setAttribute('aria-label', openLabel);
   }
   if (els.play) {
-    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
-    els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
+    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', presentationPaused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
+    els.play.setAttribute('aria-label', presentationPaused ? 'Play' : 'Pause');
     els.play.disabled = !hasTrack || locked;
   }
   const queue = state.player.playbackQueue;
@@ -51798,6 +53456,9 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (!loopOwned && engine?.roles?.continuity && (typeof closeStreamingContinuityRole !== 'function'
     || closeStreamingContinuityRole('playlist-queue-mode') !== true)) throw new Error('Queue mode change was not accepted.');
   state.player.playbackQueue = next;
+  const selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.invalidateCompletedContext();
+  if (state.player.playbackQueue !== next || (typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return next;
   const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
   if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
   if (engine && !loopOwned && !explicitProgression) {
@@ -51832,8 +53493,8 @@ const TopPlaybackRuntime = (() => {
     entry.queue.currentIndex = snapshot.currentIndex;
     return snapshot;
   }
-  function bind(entry, receipt) {
-    const record = {entry, id: receipt.occurrenceId, receipt};
+  function bind(entry, receipt, restart = null) {
+    const record = {entry, id: receipt.occurrenceId, receipt, restart};
     tracks.set(receipt.payload, record);
     entry.values.set(record.id, receipt.payload);
     entry.prepared = receipt;
@@ -51896,13 +53557,103 @@ const TopPlaybackRuntime = (() => {
     if (!entry.source.isReceiptCurrent(receipt, receipt.payload)) throw unavailable();
     return bind(entry, receipt);
   }
+  const restarts = new WeakMap();
+  function isRestartCurrent(token) {
+    const restart = token && restarts.get(token);
+    if (!restart || restart.phase === 'invalid') return false;
+    const {entry, expected, phase} = restart;
+    const pure = () => !entry.retired && restart.expected === expected && restart.phase === phase
+      && entry.source.snapshot() === expected;
+    return pure() && current(entry) && pure();
+  }
+  function captureRestart(queue) {
+    const entry = entryFor(queue);
+    if (!current(entry)) return null;
+    const expected = entry.source.snapshot();
+    if (entry.source.candidate({direction: 1, automatic: true}) !== null
+      || !expected.currentAlbumId || entry.source.snapshot() !== expected || !current(entry)
+      || entry.source.snapshot() !== expected) return null;
+    const carrier = entry.values.get(expected.currentId);
+    if (recordFor(carrier)?.entry !== entry) return null;
+    const token = Object.freeze({});
+    restarts.set(token, {entry, expected, carrier, phase: 'captured'});
+    return token;
+  }
+  function restartCarrier(token) {
+    return isRestartCurrent(token) && restarts.get(token).phase === 'captured'
+      ? restarts.get(token).carrier : null;
+  }
+  function unavailableProgress(entry, before, after) {
+    const equal = (left, right) => left.length === right.length && left.every((value, index) => value === right[index]);
+    if (after.revision !== before.revision + 1
+      || ['currentId', 'currentIndex', 'currentAlbumId', 'visitedEnd', 'mode', 'stopAfterAlbum'].some(key => after[key] !== before[key])
+      || !equal(before.order, after.order) || after.unavailableIds.length !== before.unavailableIds.length + 1
+      || !before.unavailableIds.every((id, index) => after.unavailableIds[index] === id)) return false;
+    const added = after.unavailableIds[after.unavailableIds.length - 1];
+    return before.order.includes(added) && !before.unavailableIds.includes(added)
+      && entry.source.albumFor(added) === before.currentAlbumId;
+  }
+  async function prepareRestartStart(track, options) {
+    const token = options.restart, restart = token && restarts.get(token), entry = recordFor(track)?.entry;
+    if (!restart || restart.entry !== entry || restart.phase !== 'captured' || !isRestartCurrent(token)
+      || typeof options.restartOwnerCurrent !== 'function' || options.restartOwnerCurrent() !== true
+      || !isRestartCurrent(token)) throw unavailable();
+    const intent = {};
+    entry.starting = intent; entry.prepared = null; restart.phase = 'preparing';
+    const owned = () => !entry.retired && entry.starting === intent
+      && ['preparing', 'prepared'].includes(restart.phase) && !options.signal?.aborted;
+    const progressCurrent = () => {
+      if (!owned() || options.restartOwnerCurrent() !== true || !owned()) return false;
+      const next = entry.source.snapshot();
+      if (next !== restart.expected) {
+        if (restart.phase !== 'preparing' || !unavailableProgress(entry, restart.expected, next) || !owned()
+          || options.restartOwnerCurrent() !== true || !owned() || entry.source.snapshot() !== next) {
+          restart.phase = 'invalid'; return false;
+        }
+        restart.expected = next;
+      }
+      if (options.isCurrent?.() !== true || !owned() || entry.source.snapshot() !== restart.expected) {
+        restart.phase = 'invalid'; return false;
+      }
+      return true;
+    };
+    try {
+      const receipt = await entry.source.prepareRestart({expected: restart.expected, signal: options.signal, isCurrent: progressCurrent});
+      if (!owned() || !isRestartCurrent(token) || options.isCurrent?.() !== true || !owned()) throw unavailable();
+      if (!receipt) {restart.phase = 'captured'; entry.starting = null; sync(entry); return null;}
+      if (receipt.snapshot !== restart.expected || !entry.source.isReceiptCurrent(receipt, receipt.payload)
+        || !owned() || !isRestartCurrent(token)) throw unavailable();
+      restart.phase = 'prepared'; restart.ownerCurrent = options.restartOwnerCurrent;
+      return bind(entry, receipt, token);
+    } catch (error) {
+      if (entry.starting === intent) entry.starting = null;
+      if (restart.phase === 'preparing') restart.phase = entry.source.snapshot() === restart.expected
+        && !options.signal?.aborted ? 'captured' : 'invalid';
+      throw error;
+    }
+  }
   function commit(track) {
     const record = recordFor(track), entry = record?.entry;
     if (!current(entry) || entry.prepared !== record.receipt
       || !entry.source.commit(record.receipt, track)) return false;
+    if (record.restart) {
+      const restart = restarts.get(record.restart), accepted = entry.source.snapshot(), before = record.receipt.snapshot;
+      const index = before.order.indexOf(record.id);
+      const exact = () => restart?.phase === 'prepared' && entry.prepared === record.receipt
+        && entry.source.snapshot() === accepted && accepted.revision === before.revision + 1
+        && accepted.currentId === record.id && accepted.currentIndex === index && accepted.visitedEnd === index
+        && accepted.currentAlbumId === before.currentAlbumId && accepted.mode === before.mode
+        && accepted.stopAfterAlbum === before.stopAfterAlbum
+        && accepted.order.length === before.order.length && before.order.every((id, i) => accepted.order[i] === id)
+        && accepted.unavailableIds.length === before.unavailableIds.length
+        && before.unavailableIds.every((id, i) => accepted.unavailableIds[i] === id);
+      if (!exact() || restart.ownerCurrent?.() !== true || !exact()) return false;
+      restart.expected = accepted; restart.phase = 'committed'; restart.ownerCurrent = null;
+    }
     entry.prepared = null; entry.pending = false; entry.starting = null; sync(entry); return true;
   }
   return Object.freeze({
+    captureRestart, restartCarrier, isRestartCurrent,
     create({capture, createSource, isCurrent, onRetire}) {
       if (typeof createSource !== 'function' || typeof isCurrent !== 'function'
         || !Array.isArray(capture?.albums) || !capture.albums.length) throw new TypeError('Invalid Top queue.');
@@ -52026,6 +53777,9 @@ const TopPlaybackRuntime = (() => {
       if (!state.player.loopActive && engine.roles?.continuity && closeStreamingContinuityRole('top-queue-mode') !== true) return false;
       if (!entry.source.configure(options)) return false;
       entry.prepared = null; sync(entry);
+      const configured = entry.source.snapshot(), selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+      if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.invalidateCompletedContext();
+      if (entry.retired || entry.source.snapshot() !== configured || (typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return true;
       if (!state.player.loopActive) {engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;}
       if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) ExplicitQueueRuntime.modeChanged(queue, queue);
       else if (!state.player.loopActive) {
@@ -52036,6 +53790,7 @@ const TopPlaybackRuntime = (() => {
       return true;
     },
     async prepareStart(track, options) {
+      if (options.restart) return prepareRestartStart(track, options);
       const record = recordFor(track), entry = record?.entry;
       if (!current(entry)) throw unavailable();
       const value = entry.source.snapshot();
@@ -52477,6 +54232,196 @@ const ExplicitQueueRuntime = (() => {
     if(target.availability!=='local'||target.playback_state?.can_start_here!==true)source.target=null;
     return accepted;
   }
+  // A terminal receipt retains the native context, never a second queue history.
+  let completedContext = null;
+  const completionCandidates = new WeakMap();
+  const selectionEpoch = () => typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+  const sameScope = (scope, expected) => Boolean(scope?.actor && scope?.library
+    && scope.token === expected.token && scope.actor === expected.actor && scope.library === expected.library);
+  const queueStamp = queue => ({tracks: queue.tracks, first: queue.tracks?.[0], length: queue.tracks?.length,
+    firstPath: queue.tracks?.[0]?.path, firstItem: queue.tracks?.[0]?.playlistItemId,
+    revision: queue.playlistRevision, contextGeneration: queue.contextGeneration,
+    playlistId: queue.playlistId, albumRef: queue.albumRef, albumSnapshot: queue.albumSnapshot,
+    mix: queue.libraryMixRef, protocol: queue.libraryMixProtocol, sourceKind: queue.libraryMixSourceKind,
+    entries: queue.sourceEntryRefs, displayed: queue.displayedItemIds,
+    repeat: queue.repeatMode, shuffle: queue.shuffle, playbackContext: queue.playbackContext});
+  function sameQueueStamp(queue, stamp) {
+    const next = queueStamp(queue);
+    return Object.keys(stamp).every(key => next[key] === stamp[key]);
+  }
+  function completedOwnerCurrent(record) {
+    const pure = () => record.owner === planner && record.epoch === ownershipEpoch
+      && record.generation === generation && record.session === session
+      && record.plannerState === planner.getSnapshot() && state.player.playbackQueue === record.publishedQueue
+      && !pendingStart && !state.player.loopActive;
+    if (!pure()) return false;
+    const scope = TrackActionsRuntime.scope();
+    if (!pure() || !sameScope(scope, record.scope) || scope.token !== scopeToken) return false;
+    if (record.isCurrent() !== true || !pure()) return false;
+    if (record.top ? !TopPlaybackRuntime.isRestartCurrent(record.top) : !sameQueueStamp(record.queue, record.stamp)) return false;
+    return pure() && sameScope(TrackActionsRuntime.scope(), record.scope) && pure();
+  }
+  function captureCompletedContext({isCurrent}) {
+    if (typeof isCurrent !== 'function' || !isCurrent() || !sync() || !isCurrent()
+      || pendingStart || state.player.loopActive || isPlaybackLockedByAnotherTab()) return null;
+    const entryQueue = state.player.playbackQueue;
+    if (entryQueue && !entryQueue.explicitQueue && !TopPlaybackRuntime.hasQueue(entryQueue) && !queues.has(entryQueue)) {
+      describe(entryQueue, state.player.current, entryQueue.currentIndex);
+      if (!isCurrent() || state.player.playbackQueue !== entryQueue) return null;
+    }
+    const owner = planner, plannerState = planner.getSnapshot(), epoch = ownershipEpoch;
+    const capturedGeneration = generation, capturedSession = session, nativeQueue = state.player.playbackQueue;
+    const pure = () => owner === planner && planner.getSnapshot() === plannerState && epoch === ownershipEpoch
+      && generation === capturedGeneration && session === capturedSession && !pendingStart
+      && state.player.playbackQueue === nativeQueue && !state.player.loopActive;
+    const scope = TrackActionsRuntime.scope();
+    if (!pure() || !scope.actor || !scope.library || scope.token !== scopeToken || !isCurrent() || !pure()) return null;
+    let before;
+    if (nativeQueue?.explicitQueue) before = {...nativeQueue.explicitContext, ended: false};
+    else {
+      const index = nativeQueue?.playlistId
+        ? playlistQueueCurrentIndex(nativeQueue, String(state.player.current?.path || ''), state.player.current?.playlistItemId)
+        : typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(nativeQueue)
+          ? TopPlaybackRuntime.currentIndex(nativeQueue) : nativeQueue?.currentIndex;
+      if (!Number.isSafeInteger(index) || index < 0) return null;
+      before = describe(nativeQueue, state.player.current, index);
+    }
+    if (!before || !pure() || !isCurrent() || !pure()) return null;
+    const after = successor(before, true);
+    const next = planner.preview(before, after, {stopPriority: stopPriority(before, true)}).next;
+    if (!pure() || !isCurrent() || !pure() || next && !next.ended && next.tracks?.[next.index]) return null;
+    const context = before.source === 'explicit' ? plannerState.returnContext : before;
+    if (!context || before.source === 'explicit' && !context.ended) return null;
+    const queue = context.nativeQueue;
+    if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
+    let top = null;
+    if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) {
+      top = TopPlaybackRuntime.captureRestart(queue);
+      if (!top) return null;
+    } else {
+      const playlist = queue.playlistId && queue.playlistRevision && queue.contextGeneration != null
+        && queue.tracks.every(track => track.playlistItemId)
+        && new Set(queue.tracks.map(track => track.playlistItemId)).size === queue.tracks.length;
+      const generated = queue.libraryMixRef && queue.playlistRevision && queue.contextGeneration != null
+        && ['library_mix_selection_v1','artist_popular_selection_v1','artist_loved_selection_v1','sample_playlist_selection_v1'].includes(queue.libraryMixProtocol)
+        && Array.isArray(queue.sourceEntryRefs) && Array.isArray(queue.displayedItemIds)
+        && queue.tracks.every(track => track.playlistItemId);
+      if (!(playlist || generated || queue.albumRef && queue.albumSnapshot)
+        || queue.repeatMode === 'one' || queue.repeatMode === 'all' || !queue.tracks[0]?.path) return null;
+    }
+    if (!pure() || !isCurrent() || !pure()) return null;
+    const record = {owner, plannerState, epoch, generation, session, scope, queue, top,
+      stamp: top ? null : queueStamp(queue), isCurrent, publishedQueue: nativeQueue};
+    const candidate = Object.freeze({});
+    completionCandidates.set(candidate, record);
+    return candidate;
+  }
+  function replayRecord(token) {
+    const record = pendingStart && startRollbacks.get(pendingStart);
+    return record?.kind === 'completed-context' && record.token === token ? record : null;
+  }
+  function replayOwnerCurrent(record) {
+    const pure = () => pendingStart === record.controller && startRollbacks.get(record.controller) === record
+      && !record.controller.signal.aborted && record.owner === planner && record.epoch === ownershipEpoch
+      && record.generation === generation && record.session === session && record.installed === planner.getSnapshot()
+      && state.player.playbackQueue === record.selectedQueue && playerTrackSelectionToken === record.selectionToken
+      && !state.player.loopActive;
+    if (!pure()) return false;
+    const scope = TrackActionsRuntime.scope();
+    return pure() && sameScope(scope, record.scope) && scope.token === scopeToken && pure();
+  }
+  function replayCurrent(record) {
+    if (!replayOwnerCurrent(record)) return false;
+    const completion = record.completion;
+    if (completion.top ? !TopPlaybackRuntime.isRestartCurrent(completion.top)
+      : !sameQueueStamp(completion.queue, completion.stamp)) return false;
+    return replayOwnerCurrent(record);
+  }
+  function acceptedReplayCurrent(accepted) {
+    const engine = streamingEngineState(), role = engine.roles.current, track = state.player.current;
+    const pure = () => engine === accepted.engine && engine === streamingEngineState()
+      && engine.generation === accepted.generation && playerTrackSelectionToken === accepted.selectionToken
+      && isStreamingPlaybackAttemptCurrent(accepted.attempt) && engine.roles.current === role
+      && state.player.current === track && role?.track?.path === track?.path;
+    if (!pure() || !sameScope(TrackActionsRuntime.scope(), accepted.scope) || !pure()) return false;
+    return isNativePlayerSourceCurrent(track) && pure()
+      && sameScope(TrackActionsRuntime.scope(), accepted.scope) && pure();
+  }
+  function invalidateCompletedContext() {
+    completedContext = null;
+    const start = pendingStart, record = start && startRollbacks.get(start);
+    if (record?.kind !== 'completed-context') return;
+    pendingStart = null;
+    startRollbacks.delete(start);
+    generation++;
+    start.abort();
+  }
+  function restartCompletedContext() {
+    const running = pendingStart && startRollbacks.get(pendingStart);
+    if (running?.kind === 'completed-context') return running.promise;
+    const completion = completedContext;
+    if (!completion) return null;
+    if (pendingStart || !completedOwnerCurrent(completion)) {
+      if (completedContext === completion) completedContext = null;
+      return Promise.resolve(false);
+    }
+    const controller = new AbortController(), token = Object.freeze({});
+    const record = {kind: 'completed-context', token, controller, completion, scope: completion.scope,
+      owner: planner, epoch: ownershipEpoch, generation, session, previous: planner.getSnapshot(), installed: planner.getSnapshot(),
+      previousQueue: state.player.playbackQueue, previousIndex: state.player.playbackQueue?.currentIndex,
+      previousCurrent: state.player.current, selectedQueue: state.player.playbackQueue,
+      selectionToken: playerTrackSelectionToken, staged: false};
+    let guardState = record;
+    const ownerCurrent = () => guardState.kind === 'accepted' ? acceptedReplayCurrent(guardState) : replayOwnerCurrent(guardState);
+    const isCurrent = () => guardState.kind === 'accepted' ? acceptedReplayCurrent(guardState) : replayCurrent(guardState);
+    let resolvePromise, rejectPromise;
+    record.promise = new Promise((resolve,reject) => {resolvePromise=resolve;rejectPromise=reject;});
+    pendingStart = controller;startRollbacks.set(controller, record);
+    const run = async () => {
+      let started = false;
+      try {
+        let track = completion.top ? TopPlaybackRuntime.restartCarrier(completion.top)
+          : await refreshExplicitQueueReturnTrack({nativeQueue: completion.queue}, completion.stamp.first, {signal: controller.signal});
+        if (!track || !isCurrent()) return false;
+        record.selectedQueue = completion.queue;record.staged = true;
+        state.player.playbackQueue = completion.queue;
+        if (!completion.top) completion.queue.currentIndex = 0;
+        started = await playTrackFromPayload(track, {resetTime: true, signal: controller.signal,
+          contextReplay: token, topRestart: completion.top, replayOwnerCurrent: ownerCurrent, isCurrent,
+          onSelectionAdmitted: value => {if (guardState.kind === 'completed-context') guardState.selectionToken=value;}});
+        if (!started || !isCurrent()) return false;
+        const engine = streamingEngineState(), attempt = captureStreamingPlaybackAttempt();
+        if (!attempt || !isStreamingPlaybackAttemptCurrent(attempt)
+          || engine.roles.current?.track?.path !== state.player.current?.path || !isCurrent()) return false;
+        guardState = {kind: 'accepted', scope: record.scope, engine, generation: engine.generation,
+          attempt, selectionToken: record.selectionToken};
+        completedContext = null;
+        startRollbacks.delete(controller);pendingStart = null;
+        return true;
+      } finally {
+        if (pendingStart === controller && startRollbacks.get(controller) === record) {
+          const owned = replayOwnerCurrent(record);
+          if (pendingStart !== controller || startRollbacks.get(controller) !== record) return false;
+          if (!started && owned && record.staged && state.player.current === record.previousCurrent) {
+            state.player.playbackQueue = record.previousQueue;
+            if (record.previousQueue) record.previousQueue.currentIndex = record.previousIndex;
+          }
+          startRollbacks.delete(controller);pendingStart = null;
+          const expected = {epoch:ownershipEpoch,generation,session,plannerState:planner.getSnapshot(),publishedQueue:state.player.playbackQueue};
+          const retryCurrent = () => !pendingStart && planner===record.owner && ownershipEpoch===expected.epoch
+            && generation===expected.generation && session===expected.session && planner.getSnapshot()===expected.plannerState
+            && state.player.playbackQueue===expected.publishedQueue && playerTrackSelectionToken===record.selectionToken;
+          if (!started && owned && retryCurrent() && completion.isCurrent() && retryCurrent()
+            && (completion.top ? TopPlaybackRuntime.isRestartCurrent(completion.top) : sameQueueStamp(completion.queue,completion.stamp))
+            && retryCurrent()) {
+            Object.assign(completion,expected);completedContext=completion;
+          } else if (completedContext === completion) completedContext=null;
+        }
+      }
+    };
+    void run().then(resolvePromise,rejectPromise);
+    return record.promise;
+  }
   function captureStop() {
     const epoch=ownershipEpoch, owner=planner, refresh=refreshController, start=pendingStart;
     let scope;
@@ -52490,11 +54435,12 @@ const ExplicitQueueRuntime = (() => {
   function commitStop(capture) {
     if(!isStopCurrent(capture))return null;
     const refresh=refreshController,start=pendingStart;
+    completedContext=null;
     const rollback=start&&startRollbacks.get(start);
     // Undo only this captured, not-yet-audible selection before abort dispatch.
     // A changed scope, planner, selection, native queue or current media belongs
     // to another owner and must never be restored by this retired attempt.
-    if(capture.scope.token===scopeToken&&rollback&&rollback.owner===planner
+    if(capture.scope.token===scopeToken&&rollback&&(rollback.kind!=='completed-context'||rollback.staged)&&rollback.owner===planner
       &&planner.getSnapshot()===rollback.installed&&state.player.playbackQueue===rollback.selectedQueue
       &&state.player.current===rollback.previousCurrent&&playerTrackSelectionToken===rollback.selectionToken) {
       planner.restore(rollback.installed,{...rollback.previous,halted:rollback.installed.halted||rollback.previous.halted});
@@ -52518,6 +54464,42 @@ const ExplicitQueueRuntime = (() => {
       if(errors.length)throw new AggregateError(errors,'Queue retirement failed');
     };
   }
+  function retirePendingStartForSelection(incomingSignal=null,incomingReplay=null) {
+    const old=pendingStart,rollback=old&&startRollbacks.get(old);
+    if(old&&incomingSignal===old.signal
+      &&(rollback?.kind!=='completed-context'||rollback.token===incomingReplay))return false;
+    if(!old){completedContext=null;return false;}
+    const generationBeforeScope=generation,sessionBeforeScope=session;
+    const capture=captureStop();
+    const capturedCurrent=()=>generation===generationBeforeScope&&session===sessionBeforeScope
+      &&isStopCurrent(capture)&&capture.start===old&&pendingStart===old&&startRollbacks.get(old)===rollback;
+    if(!capturedCurrent())return false;
+    const canRollback=Boolean(capture.scope.actor&&capture.scope.library&&capture.scope.token===scopeToken
+      &&rollback&&(rollback.kind!=='completed-context'||rollback.staged)&&rollback.owner===planner&&planner.getSnapshot()===rollback.installed
+      &&state.player.playbackQueue===rollback.selectedQueue&&state.player.current===rollback.previousCurrent
+      &&playerTrackSelectionToken===rollback.selectionToken);
+    if(!capturedCurrent())return false;
+    completedContext=null;pendingStart=null;startRollbacks.delete(old);generation++;
+    if(canRollback) {
+      planner.restore(rollback.installed,{...rollback.previous,halted:rollback.installed.halted||rollback.previous.halted});
+      state.player.playbackQueue=rollback.previousQueue;
+      if(rollback.previousQueue&&rollback.previousIndex!==undefined)rollback.previousQueue.currentIndex=rollback.previousIndex;
+    }
+    const epoch=ownershipEpoch,owner=planner,committedGeneration=generation,committedSession=session;
+    const restored=canRollback?planner.getSnapshot():null;
+    const committedCurrent=()=>epoch===ownershipEpoch&&owner===planner&&committedGeneration===generation
+      &&committedSession===session&&pendingStart===null&&refreshController===capture.refresh
+      &&planner.getSnapshot()===restored&&state.player.playbackQueue===rollback.previousQueue
+      &&state.player.current===rollback.previousCurrent&&playerTrackSelectionToken===rollback.selectionToken
+      &&(rollback.previousIndex===undefined||rollback.previousQueue?.currentIndex===rollback.previousIndex);
+    old.abort();
+    if(canRollback&&committedCurrent()) {
+      let scope;
+      try {scope=TrackActionsRuntime.scope();} catch {return true;}
+      if(committedCurrent()&&scope.actor&&scope.library&&scope.token===capture.scope.token&&scope.token===scopeToken)notify();
+    }
+    return true;
+  }
   function sync() {
     const epoch=ownershipEpoch,scope=TrackActionsRuntime.scope();
     if(epoch!==ownershipEpoch)return Boolean(scope.actor&&scope.library);
@@ -52526,7 +54508,7 @@ const ExplicitQueueRuntime = (() => {
       const attempt=typeof streamingEngineState==='function'?streamingEngineState().playbackAttempt:null;
       const oldRefresh=refreshController,oldStart=pendingStart;
       // Commit the new scope before abort callbacks can register a successor.
-      refreshController=null;pendingStart=null;generation++;prepared=null;successorCache=null;
+      completedContext=null;refreshController=null;pendingStart=null;generation++;prepared=null;successorCache=null;
       sources.clear();scopeToken=scope.token;planner=createExplicitQueuePlanner({canPlay:playable});session++;snapshot=null;
       const committedEpoch=++ownershipEpoch;
       // Retire the captured engine before dispatch; never recapture after abort.
@@ -52551,6 +54533,11 @@ const ExplicitQueueRuntime = (() => {
   }
   const trackKey=track=>{if(!trackKeys.has(track))trackKeys.set(track,`ordinary-${++serial}`);return trackKeys.get(track);};
   function describe(queue=state.player.playbackQueue,current=state.player.current,indexOverride=null) {
+    // A cached, unadmitted publication is display state, not a queue anchor.
+    if(indexOverride===null&&queue===state.player.playbackQueue&&current===state.player.current
+      &&typeof getUnadmittedPlayerRestorePreview==='function'&&getUnadmittedPlayerRestorePreview()?.track===current) {
+      queue=null;current=null;
+    }
     if(queue?.explicitQueue===true) return playback().ended ? Object.freeze({...queue.explicitContext,ended:true}) : queue.explicitContext;
     if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.hasQueue(queue)) {
       const context=TopPlaybackRuntime.describe(queue,indexOverride);
@@ -52622,18 +54609,20 @@ const ExplicitQueueRuntime = (() => {
     refreshController?.abort();generation++;prepared=null;
     if(engine&&!state.player.loopActive){engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;}
   }
-  async function resolve(source,signal) {
+  async function resolve(source,signal,isCurrent=null) {
     if(signal.aborted||!sourceCurrent(source))throw aborted();
     const authorityEpoch=source.authorityEpoch,target=await source.capture.resolve({signal});
     if(signal.aborted||!sourceCurrent(source)||source.authorityEpoch!==authorityEpoch)throw aborted();
     if(target?.source_readable===false||target?.allowed_actions?.can_read===false)throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
     if(!target||['missing','unknown','unresolved'].includes(target.availability)
       ||target.allowed_actions?.can_play===false||target.playback_state?.can_start_here!==true||!TrackActionsRuntime.canPlay(target))throw new Error('This queued track is unavailable.');
+    if(signal.aborted||source.authorityEpoch!==authorityEpoch||isCurrent&&!isCurrent())throw aborted();
     bindIdentity(source,target);
     return Object.freeze({...target});
   }
   async function refresh({automatic=true}={}) {
     sync();if(stopPriority())return null;
+    if(typeof getUnadmittedPlayerRestorePreview==='function'&&getUnadmittedPlayerRestorePreview())return null;
     if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.isStarting(state.player.playbackQueue))return null;
     const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
     const topProgression=typeof TopPlaybackRuntime!=='undefined'
@@ -52689,7 +54678,13 @@ const ExplicitQueueRuntime = (() => {
   }
   function reschedule() {const pending=refresh();if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(pending,'explicit-queue-refresh');else void pending.catch(()=>{});}
   function prune() {const retained=new Set(planner.getSnapshot().entries.map(entry=>entry.trackId));for(const key of sources.keys())if(!retained.has(key))sources.delete(key);}
-  function changed() {prune();notify();reschedule();}
+  function changed() {
+    const owner=planner,epoch=ownershipEpoch,reservation=selectionEpoch();
+    invalidateCompletedContext();
+    if(planner!==owner||ownershipEpoch!==epoch||selectionEpoch()!==reservation)return;
+    prune();notify();
+    if(planner===owner&&ownershipEpoch===epoch&&selectionEpoch()===reservation)reschedule();
+  }
   function install(context) {
     if(context?.source==='explicit'&&!context.ended)state.player.playbackQueue={explicitQueue:true,explicitContext:context,
       tracks:[payload(context)],currentIndex:0};
@@ -52884,16 +54879,27 @@ const ExplicitQueueRuntime = (() => {
       sync();const value=planner.getSnapshot(),entry=value.entries.find(item=>item.id===id),source=sources.get(entry?.trackId);
       const current=playback().ended||!state.player.current?null:describe();
       if(stopPriority()||!planner.canStart(id,current)||!source)throw new Error('This Queue entry is not ready to play.');
-      editable();const controller=new AbortController(),token=++generation,actor=scopeToken;
+      editable();const controller=new AbortController(),token=++generation,actor=scopeToken,owner=planner,authorityEpoch=source.authorityEpoch;
       const previousQueue=state.player.playbackQueue;let installed=null,started=false,selectedToken=null;
       const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});pendingStart=controller;
+      const requestOwned=()=>pendingStart===controller&&!controller.signal.aborted
+        &&token===generation&&planner===owner&&planner.getSnapshot()===value
+        &&sources.get(entry.trackId)===source&&source.authorityEpoch===authorityEpoch;
+      const requestCurrent=()=>{
+        try {return requestOwned()&&!options.signal?.aborted&&actor===TrackActionsRuntime.scope().token&&sourceCurrent(source)
+          &&(!options.isCurrent||options.isCurrent()===true)&&requestOwned();}catch{return false;}
+      };
       try {
-        try {source.target=await resolve(source,controller.signal);source.playFailed=false;}catch(error){source.target=null;source.playFailed=true;notify();throw error;}
-        if(options.signal?.aborted||controller.signal.aborted||token!==generation||actor!==TrackActionsRuntime.scope().token
-          ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
+        let target;
+        try {target=await resolve(source,controller.signal,requestCurrent);}catch(error){
+          if(!requestCurrent())throw aborted();
+          source.target=null;source.playFailed=true;notify();throw error;
+        }
+        if(!requestCurrent())throw aborted();
+        source.target=target;source.playFailed=false;
         const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
         const previousCurrent=state.player.current;
-        install(context);installed=planner.getSnapshot();const authorityEpoch=source.authorityEpoch;
+        install(context);installed=planner.getSnapshot();
         const rollback={owner:planner,previous:value,installed,previousQueue,previousCurrent,
           selectedQueue:state.player.playbackQueue,selectionToken:playerTrackSelectionToken};
         startRollbacks.set(controller,rollback);notify();
@@ -52920,7 +54926,17 @@ const ExplicitQueueRuntime = (() => {
   return Object.freeze({
     referencesOrdinaryQueue(queue){return planner?.getSnapshot().returnContext?.nativeQueue===queue;},
     currentChanged(){notify();},
-    selectionStarted(){const old=refreshController;refreshController=null;ownershipEpoch++;generation++;prepared=null;successorCache=null;old?.abort();},
+    hasPendingStart(){return pendingStart !== null;},
+    retirePendingStartForSelection, captureCompletedContext, restartCompletedContext, invalidateCompletedContext,
+    selectionStarted(token){
+      const replay=replayRecord(token);
+      if(token&&(!replay||!replayOwnerCurrent(replay)))return false;
+      if(!replay)completedContext=null;
+      const old=refreshController;refreshController=null;ownershipEpoch++;generation++;prepared=null;successorCache=null;
+      if(replay)Object.assign(replay,{epoch:ownershipEpoch,generation,session,installed:planner.getSnapshot()});
+      old?.abort();
+      return !replay||replayOwnerCurrent(replay);
+    },
     hasNext(){sync();if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId)return false;return Boolean(payload(preview(false)));},
     async skip(offset) {
       sync();const before=describe();if(offset<0)return before.source==='explicit'?false:undefined;
@@ -52961,9 +54977,22 @@ const ExplicitQueueRuntime = (() => {
       const promoted=prepared&&sameContext(prepared.next,context)?prepared.track:track;
       install(context);prepared=null;prune();snapshot=null;return promoted;},
     prepareNext:refresh,
-    replaced(){sync();refreshController?.abort();generation++;prepared=null;successorCache=null;session++;
-      if(state.player.playbackQueue)queues.set(state.player.playbackQueue,session);planner.replaceContext();notify();},
-    modeChanged(previous,next){sync();successorCache=null;
+    replaced(token){
+      const replay=replayRecord(token);
+      if(token&&(!replay||!replayOwnerCurrent(replay)))return false;
+      sync();if(replay&&!replayOwnerCurrent(replay))return false;
+      if(!replay)completedContext=null;
+      const old=refreshController;refreshController=null;generation++;prepared=null;successorCache=null;session++;
+      if(state.player.playbackQueue)queues.set(state.player.playbackQueue,session);planner.replaceContext();
+      if(replay)Object.assign(replay,{epoch:ownershipEpoch,generation,session,installed:planner.getSnapshot()});
+      old?.abort();if(replay&&!replayOwnerCurrent(replay))return false;
+      notify();return !replay||replayOwnerCurrent(replay);
+    },
+    modeChanged(previous,next){
+      const queue=state.player.playbackQueue,reservation=selectionEpoch();
+      invalidateCompletedContext();
+      if(state.player.playbackQueue!==queue||selectionEpoch()!==reservation)return;
+      sync();successorCache=null;
       if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.hasQueue(next)&&previous===next) {
         const value=planner.getSnapshot();
         if(value.returnContext?.nativeQueue===previous) {
@@ -52977,11 +55006,28 @@ const ExplicitQueueRuntime = (() => {
       if(sameSource&&queues.has(previous))queues.set(next,queues.get(previous));
       else {queues.set(next,++session);planner.replaceContext();}
       planner.reconcile(describe(next));prepared=null;notify();reschedule();},
-    ended(){sync();refreshController?.abort();generation++;const before=describe();
+    ended(candidate=null){
+      const initial={owner:planner,epoch:ownershipEpoch,generation,session,queue:state.player.playbackQueue,token:playerTrackSelectionToken};
+      const unchanged=()=>planner===initial.owner&&ownershipEpoch===initial.epoch&&generation===initial.generation
+        &&session===initial.session&&state.player.playbackQueue===initial.queue&&playerTrackSelectionToken===initial.token;
+      sync();if(!unchanged())return;
+      const completion=candidate&&completionCandidates.get(candidate);
+      const publish=completion&&completedOwnerCurrent(completion);
+      if(!unchanged())return;
+      const before=describe();if(!unchanged())return;
+      const old=refreshController;refreshController=null;generation++;
       const retained=planner.getSnapshot().returnContext;
       planner.advance(before,{...before,ended:true},{stopPriority:true});
       if(before.source==='explicit'&&retained?.source==='album-top')state.player.playbackQueue=retained.nativeQueue;
-      prepared=null;prune();notify();},
+      prepared=null;prune();completedContext=null;
+      if(publish){
+        Object.assign(completion,{epoch:ownershipEpoch,generation,session,plannerState:planner.getSnapshot(),publishedQueue:state.player.playbackQueue});
+        completedContext=completion;
+      }
+      const owner=planner,epoch=ownershipEpoch,endedGeneration=generation;
+      old?.abort();
+      if(owner===planner&&epoch===ownershipEpoch&&endedGeneration===generation)notify();
+    },
     captureStop,isStopCurrent,commitStop,
     stopped(){const captured=captureStop(),dispatch=commitStop(captured);if(dispatch)dispatch();},
   });

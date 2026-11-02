@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import math
 from pathlib import Path
+import re
 import struct
+import subprocess
 from typing import Awaitable, Callable, Literal
 from uuid import UUID, uuid4
 
@@ -13,6 +16,7 @@ from music_app.services.ffmpeg_runtime import (
     resolve_ffmpeg_executable,
 )
 from music_app.services.mp3_gapless import Mp3GaplessProbe
+from music_app.services.playback_pcm_position import NativePcmObservation, NativePcmRange
 
 
 PcmRole = Literal["current", "continuity"]
@@ -26,6 +30,16 @@ _CLEANUP_JOIN_SECONDS = 4.0
 _EOF_SETTLEMENT_SECONDS = 3.0
 _STARTUP_WAIT_SECONDS = 10.0
 _ROLE_CODES: dict[PcmRole, int] = {"current": 0, "continuity": 1}
+_SAMPLE_RATE_PROBE_TIMEOUT_SECONDS = 30
+_FFMPEG_AUDIO_STREAM_RATE = re.compile(r"Stream #\S+.*?: Audio: .*?, (\d+) Hz")
+
+
+class SampleRateMismatch(ValueError):
+    """The client assumed a rate this file does not have."""
+
+    def __init__(self, native_rate: int) -> None:
+        super().__init__("sample_rate does not match the file's native rate")
+        self.native_rate = native_rate
 
 
 def _validate_nonnegative_integer(name: str, value: object) -> int:
@@ -168,6 +182,8 @@ class PcmChunk:
     frame_count: int
     pcm: bytes
     verified_absolute_ranges: tuple[tuple[int, int, int], ...] = ()
+    native_observation: NativePcmObservation | None = None
+    native_ranges: tuple[NativePcmRange, ...] = ()
 
 
 ProcessFactory = Callable[..., Awaitable[asyncio.subprocess.Process]]
@@ -214,6 +230,52 @@ def pack_pcm_frame(
     return header + pcm
 
 
+@lru_cache(maxsize=512)
+def _probe_sample_rate(path: str, _size: int, _mtime_ns: int, executable: str) -> int:
+    # FFmpeg always exits nonzero without an output; its stream report is the answer.
+    report = subprocess.run(
+        [executable, "-hide_banner", "-nostdin", "-i", path],
+        capture_output=True,
+        creationflags=hidden_subprocess_creation_flags(),
+        check=False,
+        timeout=_SAMPLE_RATE_PROBE_TIMEOUT_SECONDS,
+    ).stderr.decode(errors="replace")
+    match = _FFMPEG_AUDIO_STREAM_RATE.search(report)
+    if match is None:
+        raise RuntimeError("ffmpeg did not report an audio sample rate")
+    return int(match.group(1))
+
+
+def read_native_sample_rate(path: Path, *, ffmpeg_executable: str | None = None) -> int:
+    """Return the rate FFmpeg decodes this file at, so PCM is never resampled."""
+    executable = ffmpeg_executable or resolve_ffmpeg_executable()
+    if not executable:
+        raise RuntimeError("ffmpeg was not found")
+    stat = path.stat()
+    return _probe_sample_rate(str(path), stat.st_size, stat.st_mtime_ns, executable)
+
+
+def pack_encoded_frame(
+    *,
+    generation: int,
+    stream_id: int,
+    role: PcmRole,
+    sequence: int,
+    payload: bytes,
+) -> bytes:
+    """Version 2 frames carry encoded bytes; the count field holds their length."""
+    return b"AHPC" + struct.pack(
+        ">BBHIIII",
+        2,
+        _ROLE_CODES[role],
+        0,
+        generation,
+        stream_id,
+        sequence,
+        len(payload),
+    ) + payload
+
+
 class PcmDecoderProcess:
     def __init__(
         self,
@@ -258,6 +320,18 @@ class PcmDecoderProcess:
         self._absolute_observer = None
         self._absolute_source = None
         self.absolute_metadata = None
+        self._native_observer = None
+        self._native_snapshot = None
+        self._native_source_id = None
+        self._native_identity = None
+        self._native_source_extent = None
+        self._native_source_rate = None
+        self._native_lost = False
+        self._native_revision = 0
+        self._native_qualified_frames = 0
+        self.rate_capture_facts = None
+        self.rate_capture_requires_positions = False
+        self.rate_capture_origin_confirmed = False
         self._eos = False
         if process is not None:
             self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -299,6 +373,17 @@ class PcmDecoderProcess:
     async def _launch(self, executable: str, process_factory: ProcessFactory) -> None:
         command = self.command
 
+        native_sample_rate = await asyncio.to_thread(
+            read_native_sample_rate,
+            command.path,
+            ffmpeg_executable=executable,
+        )
+        if command.sample_rate != native_sample_rate:
+            raise SampleRateMismatch(native_sample_rate)
+
+        if self._cancelled:
+            return
+
         requested_seek_seconds = command.start_frame / command.sample_rate
         input_seek: tuple[str, ...] = ()
         output_seek: tuple[str, ...] = ()
@@ -323,7 +408,7 @@ class PcmDecoderProcess:
             return
         audio_filter: tuple[str, ...] = ()
         if gapless is not None:
-            coarse_seconds, filters = gapless.decode_filters(command.sample_rate, command.start_frame)
+            coarse_seconds, filters = gapless.decode_filters(command.start_frame)
             input_seek = ("-ss", str(coarse_seconds)) if coarse_seconds else ()
             output_seek = ()
             audio_filter = ("-af", filters)
@@ -332,18 +417,41 @@ class PcmDecoderProcess:
             self.metadata = replace(self.metadata, provisional_total_frames=round(
                 command.provisional_duration_seconds * command.sample_rate))
         absolute_source = None
+        native_profile = (command.sample_rate == 44100
+            and max(command.start_frame, command.generation, command.stream_id) <= 2**53 - 1)
         if (command.capture_absolute_coordinates and command.capture_local_coordinates
-                and command.start_frame > 0 and command.sample_rate == 48000
+                and (native_profile or command.sample_rate == 48000)
                 and gapless is None and command.path.suffix.lower() in {".wav", ".wave"}):
             from music_app.services.playback_pcm_fd_capability import fd_capture_ready
             if fd_capture_ready(executable):
-                from music_app.services.playback_pcm_wave_source import open_qualified_wave
-                absolute_source = await asyncio.to_thread(open_qualified_wave, command.path)
+                from music_app.services.playback_pcm_wave_source import (
+                    open_qualified_wave, open_qualified_native_wave)
+                qualifier = open_qualified_native_wave if native_profile else open_qualified_wave
+                absolute_source = await asyncio.to_thread(qualifier, command.path)
                 if self._cancelled:
                     if absolute_source is not None:
                         absolute_source.close()
                     return
-        if absolute_source is not None:
+        native_profile = native_profile and absolute_source is not None
+        if native_profile:
+            from music_app.services.playback_pcm_position import NativePcmPositionObserver
+            self._absolute_source = absolute_source
+            self._native_observer = NativePcmPositionObserver(
+                source_frames=absolute_source.qualification_frames,
+                expected_start_frame=command.start_frame)
+            self._native_source_id = str(uuid4())
+            self._native_identity = (command.generation, command.stream_id)
+            self._native_source_extent = absolute_source.qualification_frames
+            self._native_source_rate = absolute_source.qualification_rate
+            # Exact rational nearest/ties-even formatting; only a seek request.
+            nanos, remainder = divmod(command.start_frame * 10**9, 44100)
+            if remainder * 2 > 44100 or remainder * 2 == 44100 and nanos % 2:
+                nanos += 1
+            seconds, fraction = divmod(nanos, 10**9)
+            input_seek = ("-ss", f"{seconds}.{fraction:09d}")
+            output_seek = ()
+            audio_filter = ("-af", "aformat=sample_fmts=flt,asettb=expr=1/44100,ashowinfo")
+        elif absolute_source is not None:
             from music_app.services.playback_pcm_position import PcmPositionObserver
             self._absolute_source = absolute_source
             self._absolute_observer = PcmPositionObserver(require_wav_header=True,
@@ -352,6 +460,17 @@ class PcmDecoderProcess:
             self.absolute_metadata = replace(self.metadata, capture_source_id=str(uuid4()),
                 capture_local_coordinates=False, capture_absolute_coordinates=True)
             audio_filter = ("-af", "aformat=sample_fmts=flt:sample_rates=48000:channel_layouts=stereo,asettb=expr=1/48000,ashowinfo")
+        if (absolute_source is not None
+                and command.sample_rate == absolute_source.qualification_rate
+                and command.start_frame <= absolute_source.qualification_frames):
+            from music_app.services.playback_rate_observation import RateCaptureFacts
+            # This describes a pending window, not a confirmed seek origin.
+            # Only checksum/PTS-bound ranges below can publish its mapping.
+            self.rate_capture_facts = RateCaptureFacts(command.sample_rate,
+                absolute_source.qualification_rate, command.start_frame,
+                absolute_source.qualification_frames - command.start_frame,
+                absolute_source.qualification_frames)
+            self.rate_capture_requires_positions = True
         self._process_launch_started = True
         try:
             process = await process_factory(
@@ -370,10 +489,7 @@ class PcmDecoderProcess:
             "f32le",
             "-acodec",
             "pcm_f32le",
-            "-ac",
-            "2",
-            "-ar",
-            str(command.sample_rate),
+            *(("-ac", "2") if not native_profile else ()),
             "pipe:1",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -489,13 +605,151 @@ class PcmDecoderProcess:
                 self._check_absolute_source()
                 if not self._absolute_observer.available or len(ranges) > 32:
                     ranges = []
-            return PcmChunk(frame_count=frame_count, pcm=pcm, verified_absolute_ranges=tuple(ranges))
+            observation, native_ranges = self._publish_native_chunk(pcm, chunk_start)
+            return PcmChunk(frame_count=frame_count, pcm=pcm, verified_absolute_ranges=tuple(ranges),
+                native_observation=observation, native_ranges=native_ranges)
         except BaseException as error:
+            self._lose_native('decoder_read_failed')
             self._capture_failed = True
             self.outstanding_credit_frames += reservation
             if isinstance(error, asyncio.CancelledError):
                 self.request_cancel()
             raise
+
+    def rate_capture_ranges(self, chunk):
+        """Return only this delivered chunk's existing checksum/PTS proof."""
+        if (not self.rate_capture_requires_positions or self.rate_capture_facts is None
+                or self._cancelled or self._capture_failed or chunk.frame_count <= 0):
+            return ()
+        chunk_start = self.emitted_frames - chunk.frame_count
+        if self._native_observer is not None:
+            snapshot = chunk.native_observation
+            if (not self.native_observation_is_current(snapshot)
+                    or snapshot.source_origin_frame != self.command.start_frame
+                    or snapshot.source_rate_hz != self.command.sample_rate
+                    or snapshot.decoded_rate_hz != self.command.sample_rate):
+                return ()
+            ranges = tuple((r.chunk_offset_frames, r.source_start_frame, r.frames)
+                for r in chunk.native_ranges
+                if r.decoded_start_frame == chunk_start + r.chunk_offset_frames)
+            if len(ranges) != len(chunk.native_ranges):
+                return ()
+        elif self._absolute_observer is not None:
+            if self._absolute_source is None:
+                return ()
+            self._check_absolute_source()
+            if not self._absolute_observer.available:
+                return ()
+            ranges = chunk.verified_absolute_ranges
+        else:
+            return ()
+        if not isinstance(ranges, tuple) or not ranges or len(ranges) > 32:
+            return ()
+        end = 0
+        for item in ranges:
+            if not isinstance(item, tuple) or len(item) != 3:
+                return ()
+            offset, source, frames = item
+            if (any(type(v) is not int for v in item) or offset < end or frames <= 0
+                    or offset + frames > chunk.frame_count
+                    or source != self.command.start_frame + chunk_start + offset
+                    or source + frames > self.rate_capture_facts.source_extent_frames):
+                return ()
+            end = offset + frames
+        self.rate_capture_origin_confirmed = True
+        return ranges
+
+    def _lose_native(self, reason):
+        self._native_lost = True
+        self._native_snapshot = None
+        if self._native_observer is not None:
+            self._native_observer.lose(reason)
+
+    def _check_native_source(self):
+        observer = self._native_observer
+        if observer is None or self._native_lost:
+            return False
+        if (self._cancelled or self._capture_failed or not observer.available
+                or self._native_identity != (self.command.generation, self.command.stream_id)
+                or self.command.sample_rate != 44100):
+            self._lose_native('native_owner_invalid')
+            return False
+        if self._absolute_source is None:
+            # Only a successful completed snapshot survives the ordinary FD close.
+            if self._eos and self._native_snapshot is not None and self._native_snapshot.decoder_complete:
+                return True
+            self._lose_native('native_source_closed')
+            return False
+        from music_app.services.playback_pcm_wave_source import qualified_wave_unchanged
+        if not qualified_wave_unchanged(self._absolute_source):
+            self._lose_native('source_changed')
+            return False
+        return True
+
+    def native_observation_snapshot(self):
+        # The retained facade does not construct this ordinary producer state.
+        if getattr(self, '_native_observer', None) is None:
+            return None
+        return self._native_snapshot if self._check_native_source() else None
+
+    def native_observation_is_current(self, snapshot):
+        return snapshot is not None and snapshot is self.native_observation_snapshot()
+
+    def _publish_native_snapshot(self, *, complete=False):
+        if not self._check_native_source():
+            return None
+        self._native_revision += 1
+        observer = self._native_observer
+        if self._native_revision > 2**53 - 1 or not 0 <= self.emitted_frames <= 2**53 - 1:
+            self._lose_native('native_counter_limit')
+            return None
+        if observer.source_origin_frame is None:
+            return None
+        try:
+            snapshot = NativePcmObservation(
+                source_id=self._native_source_id,
+                generation=self._native_identity[0], stream_id=self._native_identity[1],
+                revision=self._native_revision, source_rate_hz=self._native_source_rate,
+                decoded_rate_hz=observer.sample_rate,
+                source_origin_frame=observer.source_origin_frame,
+                source_extent_frames=self._native_source_extent,
+                decoded_extent_frames=self.emitted_frames if complete else None,
+                emitted_frames=self.emitted_frames,
+                qualified_emitted_frames=self._native_qualified_frames,
+                decoder_complete=complete)
+        except (ValueError, TypeError):
+            self._lose_native('invalid_native_snapshot')
+            return None
+        self._native_snapshot = snapshot
+        return snapshot
+
+    def _publish_native_chunk(self, pcm, chunk_start):
+        if not self._check_native_source():
+            return None, ()
+        observer = self._native_observer
+        ranges = []
+        for offset in range(0, len(pcm), 131072):
+            for interval in observer.consume_pcm(pcm[offset:offset + 131072]):
+                begin = max(chunk_start, interval.output_start_frame)
+                end = min(self.emitted_frames, interval.output_start_frame + interval.frames)
+                if begin < end:
+                    try:
+                        ranges.append(NativePcmRange(begin - chunk_start, begin,
+                            interval.source_start_frame + begin - interval.output_start_frame, end - begin))
+                    except (ValueError, TypeError):
+                        self._lose_native('invalid_native_range')
+                        return None, ()
+                    if len(ranges) > 32:
+                        self._lose_native('native_range_limit')
+                        return None, ()
+        if not self._check_native_source():
+            return None, ()
+        self._native_qualified_frames += sum(item.frames for item in ranges)
+        snapshot = self._publish_native_snapshot()
+        if snapshot is None:
+            return None, ()
+        # No await from the final stamp check through the caller's chunk return.
+        return snapshot, tuple(ranges)
 
     def _check_absolute_source(self):
         if self._absolute_observer is None:
@@ -518,6 +772,7 @@ class PcmDecoderProcess:
         return self.metadata
 
     def request_cancel(self) -> None:
+        self._lose_native('decoder_cancelled')
         self._gapless_probe.request_cancel()
         if not self._cancelled:
             self._cancelled = True
@@ -636,15 +891,27 @@ class PcmDecoderProcess:
     async def _drain_stderr(self) -> None:
         if self._process.stderr is None:
             return
-        while True:
-            chunk = await self._process.stderr.read(8192)
-            if not chunk:
-                break
-            if self._absolute_observer is not None:
-                self._absolute_observer.feed_stderr(chunk)
-            self._stderr_bytes.extend(chunk)
-            if len(self._stderr_bytes) > _STDERR_TAIL_LIMIT:
-                del self._stderr_bytes[:-_STDERR_TAIL_LIMIT]
+        try:
+            while True:
+                chunk = await self._process.stderr.read(8192)
+                if not chunk:
+                    break
+                if self._absolute_observer is not None:
+                    self._absolute_observer.feed_stderr(chunk)
+                if self._native_observer is not None:
+                    self._native_observer.feed_stderr(chunk)
+                    if not self._native_observer.available:
+                        self._lose_native('native_descriptor_lost')
+                self._stderr_bytes.extend(chunk)
+                if len(self._stderr_bytes) > _STDERR_TAIL_LIMIT:
+                    del self._stderr_bytes[:-_STDERR_TAIL_LIMIT]
+        except BaseException:
+            # A diagnostic read fault ends evidence authority immediately, not
+            # only when EOF settlement eventually observes this task's error.
+            # Preserve the original task failure and existing cleanup semantics.
+            if self._native_observer is not None:
+                self._lose_native('native_drain_failed')
+            raise
 
     def _ensure_wait_task(self) -> asyncio.Task[int]:
         if self._wait_task is None:
@@ -675,6 +942,7 @@ class PcmDecoderProcess:
         if self._cancelled:
             raise RuntimeError("PCM decoder was cancelled")
         if return_code != 0:
+            self._lose_native('decoder_exit_failed')
             diagnostic = self.stderr_tail.strip()
             detail = f": {diagnostic}" if diagnostic else ""
             raise RuntimeError(f"ffmpeg exited with code {return_code}{detail}")
@@ -684,6 +952,11 @@ class PcmDecoderProcess:
             extent = self._absolute_observer.source_end48
             self.absolute_metadata = replace(self.absolute_metadata,
                 authoritative_total_frames=extent, capture_extent_frames48=extent)
+        if self._native_observer is not None:
+            if self._check_native_source() and self._native_observer.finish():
+                self._publish_native_snapshot(complete=True)
+            else:
+                self._lose_native('native_eof_unqualified')
         self._close_absolute_source()
         self.metadata = replace(
             self.metadata,

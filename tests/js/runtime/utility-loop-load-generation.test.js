@@ -8,11 +8,25 @@ const loader = source.slice(source.indexOf('async function loadUtilityLoops('), 
 function harness() {
   let resolve; const pending = new Promise(done => { resolve = done; });
   const events=[];
-  const context=vm.createContext({state:{utility:{loops:[{id:'existing'}],activeTab:'loops',loopDataGeneration:4,loopMutationGeneration:2}},
-    fetch:()=>pending,renderUtilityModalContent:()=>events.push('render'),showToast:()=>events.push('toast'),console,
+  const errors=[];
+  const toasts=[];
+  const storage = new Map();
+  const window = {localStorage: {
+    getItem: key => storage.get(String(key)) ?? null,
+    setItem: (key, value) => storage.set(String(key), String(value)),
+    removeItem: key => storage.delete(String(key)),
+  }};
+  const context=vm.createContext({window,state:{utility:{loops:[{id:'existing'}],activeTab:'loops',loopDataGeneration:4,loopMutationGeneration:2}},
+    fetch:()=>pending,renderUtilityModalContent:()=>events.push('render'),
+    showToast:(...args)=>{toasts.push(args);events.push('toast');},
+    console:{...console,error:(...args)=>{errors.push(args);console.error(...args);}},
     groupUtilityLoops:items=>[{key:'track:1',loops:items}],collapseAllUtilityLoopGroups(){},syncLoopCreateCapability(){}});
+  for (const file of ['browser-storage-helpers.js', 'playback-ownership-helpers.js']) {
+    const filename = path.resolve(__dirname, '../../../music_app/static/js/runtime', file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
+  }
   vm.runInContext(loader,context);
-  return {context,events,resolve:()=>resolve({ok:true,json:async()=>({ok:true,allowed_actions:{'library.loops.create':true},loops:[{id:'stale'}]})})};
+  return {context,events,errors,toasts,resolve:()=>resolve({ok:true,json:async()=>({ok:true,allowed_actions:{'library.loops.create':true},loops:[{id:'stale'}]})})};
 }
 test('fresh authorized load advances data generation so older reorder cannot replace cache',async()=>{
   const h=harness();const pending=h.context.loadUtilityLoops(true);
@@ -59,15 +73,28 @@ test('main save invalidates an older pending loop list response before replacing
 for(const operation of ['create','delete']) test(`saved ${operation} invalidates an earlier pending collection load`,async()=>{
   const h=harness();const pending=h.context.loadUtilityLoops(true);
   h.context.state.utility.loopEditors={existing:{active:true,startSeconds:0,endSeconds:1}};
+  h.context.state.utility.loops[0].duration_seconds = 2;
   const expected=operation==='delete'?[]:[{id:'new-child'}];
   Object.assign(h.context,{showLoopNameDialog:async()=> 'Child',buildUtilityLoopGroupKey:()=> 'track:1',
-    mountSavedLoopControls:()=>({}),getSavedLoopRangeDuration:()=>2,setSavedLoopEditorBusy(){},
-    loopEditSessionExpiryController:{stop(){}},getSavedLoopExpiryOwnerId:()=> 'owner',cssEscape:value=>value,
+    loopEditSessionExpiryController:{stop(){}},cssEscape:value=>value,
     document:{querySelector:()=>null},fetch:async()=>({ok:true,json:async()=>({ok:true,loop:expected[0],loops:expected})})});
   const saved=fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/js/runtime/utility-loop-playback.js'),'utf8');
-  vm.runInContext(saved.slice(saved.indexOf('async function createLoopFromSavedLoop('),saved.indexOf('function getUtilityLoopOrderScope(')),h.context);
-  if(operation==='create') await h.context.createLoopFromSavedLoop('existing');
-  else await h.context.deleteSavedLoop('existing',{confirmed:true});
+  vm.runInContext(saved,h.context);
+  if(operation==='create') {
+    await h.context.createLoopFromSavedLoop('existing');
+    assert.deepEqual(h.errors,[], 'creation must finish without a caught runtime error');
+    assert.equal(h.context.state.utility.loopEditors.existing.active,false);
+    assert.equal(h.context.state.utility.selectedLoopId,'new-child');
+    assert.deepEqual(h.toasts,[['Loop saved.','success',2600]]);
+  } else {
+    assert.equal(await h.context.deleteSavedLoop('existing',{confirmed:true}),true);
+    assert.deepEqual(h.errors,[], 'deletion must finish without a caught runtime error');
+    assert.deepEqual(h.toasts,[['Loop removed.','success',2400]]);
+  }
+  assert.deepEqual(h.context.state.utility.loops,expected);
+  assert.equal(h.context.state.utility.loopsLoaded,true);
+  assert.equal(h.context.state.utility.loopMutationGeneration,3);
   h.events.length=0;h.resolve();await pending;
   assert.deepEqual(h.context.state.utility.loops,expected);assert.deepEqual(h.events,[]);
+  assert.deepEqual(h.errors,[]);
 });

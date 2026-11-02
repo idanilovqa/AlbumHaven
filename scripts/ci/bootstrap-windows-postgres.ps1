@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Contract', 'Provision', 'Teardown')][string]$Mode,
+    [ValidateSet('Contract', 'Provision', 'Teardown')][string]$Mode,
     [string]$ServiceName = 'postgresql-x64-17',
     [ValidateSet('17', '18')][string]$ExpectedMajorVersion = '17',
     [string]$Pgbin = $env:PGBIN,
@@ -14,15 +14,33 @@ param(
     [string]$PythonPath = 'python',
     [int]$Port = 5432,
     [ValidateSet('Direct', 'Inherited')][string]$AppPrivilegeMode = 'Direct',
-    [switch]$SkipFixtureLoad
+    [switch]$SkipFixtureLoad,
+    [ValidateSet('tracking-rollback', 'historical-0153')][string]$TrackingCohort,
+    [ValidateSet(0, 153)][int]$MigrationThrough = 0,
+    [ValidateSet('before-roles','after-roles-commit','after-roles-record','before-database','after-database-create','after-database-record','before-seal','after-seal')][string]$TrackingFailurePoint
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 $allowedHosts = @('localhost', '127.0.0.1', '::1')
 $requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
+if ($TrackingCohort) {
+    $bootstrapMode = $Mode
+    . (Join-Path $PSScriptRoot 'tracking-postgres-admission.ps1')
+    $Mode = $bootstrapMode
+}
 
 function Assert-ContractInputs {
+    if ($TrackingCohort) {
+        $context = Get-TrackingContext $TrackingCohort
+        if ($DatabaseSuffix -cne $context.suffix -or $StatePath -ine $context.state_path -or
+            [IO.Path]::GetFullPath($RepositoryRoot) -ine $script:TrackingRepository -or
+            [IO.Path]::GetFullPath($RunnerTemp) -ine [IO.Path]::GetFullPath($env:RUNNER_TEMP) -or
+            $ExpectedMajorVersion -cne '17' -or $HostName -cne '127.0.0.1' -or $Port -lt 1024 -or
+            $MigrationThrough -ne 153 -or $AppPrivilegeMode -cne 'Inherited' -or -not $SkipFixtureLoad) {
+            throw 'Tracking bootstrap bindings are invalid.'
+        }
+    } elseif ($TrackingFailurePoint -or $MigrationThrough -ne 0) { throw 'Tracking options require an explicit tracking cohort.' }
     $expectedServiceName = "postgresql-x64-$ExpectedMajorVersion"
     if ($ServiceName -cne $expectedServiceName) { throw "PostgreSQL service must be $expectedServiceName." }
     $escapedMajorVersion = [regex]::Escape($ExpectedMajorVersion)
@@ -64,6 +82,14 @@ function Get-MigrationContract {
     $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
     $paths = @(Get-ChildItem -LiteralPath $migrationRoot -Filter '*.sql' -File | Sort-Object Name)
     if ($paths.Count -eq 0) { throw 'No PostgreSQL migrations were found.' }
+    if ($MigrationThrough -eq 153) {
+        $paths = @($paths | Where-Object { $_.Name -cmatch '^[0-9]{4}_[a-z0-9_]+\.sql$' -and [int]$_.Name.Substring(0,4) -le 153 })
+        $inventory = [ordered]@{}
+        foreach ($path in $paths) { $inventory[$path.Name] = (Get-FileHash -LiteralPath $path.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($inventory | ConvertTo-Json -Compress))
+        $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        if ($paths.Count -ne 147 -or [int]$paths[-1].Name.Substring(0,4) -ne 153 -or $digest -cne $script:TrackingInventory) { throw 'Tracking predecessor inventory mismatch.' }
+    }
     return @($paths | ForEach-Object {
         $isNontransactional = $_.Name -ceq '0083_add_album_raw_artist_search_index.sql'
         $arguments = @('-w', '-v', 'ON_ERROR_STOP=1')
@@ -95,10 +121,11 @@ function Get-PasswordlessUrl([string]$Role, [string]$Database) {
 function Get-Contract {
     $names = Get-Names
     $pgpassPath = Join-Path $RunnerTemp "album-haven-postgres-$DatabaseSuffix.pgpass"
+    if ($TrackingCohort) { $pgpassPath = (Get-TrackingContext $TrackingCohort).pgpass_path }
     $migratorUrl = Get-PasswordlessUrl $names.Roles.migrator $names.Database
     $appUrl = Get-PasswordlessUrl $names.Roles.app $names.Database
     $readonlyUrl = Get-PasswordlessUrl $names.Roles.readonly $names.Database
-    return [ordered]@{
+    $result = [ordered]@{
         service = [ordered]@{
             name = $ServiceName
             expectedMajorVersion = [int]$ExpectedMajorVersion
@@ -163,6 +190,20 @@ function Get-Contract {
             beforeTestExecution = $true
         }
     }
+    if ($TrackingCohort) {
+        $context = Get-TrackingContext $TrackingCohort
+        $result.githubEnvExports = [ordered]@{}
+        foreach ($entry in @(@('SETUP_URL',$migratorUrl), @('APP_URL',$appUrl), @('READONLY_URL',$readonlyUrl), @('PGPASSFILE',$pgpassPath), @('CI_RECEIPT',$context.receipt_path))) {
+            $result.githubEnvExports[$context.prefix + $entry[0]] = $entry[1]
+        }
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_MIGRATION_ADMISSION'] = 'windows-ci'
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_MIGRATION_TEST'] = 'exclusive-isolated-rollback'
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_MIGRATION_BASELINE'] = 'aad200d9'
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_MIGRATION_TOPOLOGY'] = 'separate-owner'
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_MIGRATION_RUNNER'] = 'operational-function'
+        $result.githubEnvExports['ALBUM_HAVEN_TRACKING_HISTORICAL_COHORT'] = '0153-aad200d9'
+    }
+    return $result
 }
 
 function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
@@ -173,6 +214,90 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 function Invoke-PsqlText([string]$Psql, [string]$Role, [string]$Database, [string]$Sql) {
     $Sql | & $Psql -X -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $Role -d $Database
     if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL command failed.' }
+}
+
+function Write-TrackingMigrationLedgerDiagnostics(
+    [string]$Psql,
+    [string]$Role,
+    [string]$Database,
+    [object]$Contract
+) {
+    $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
+    try {
+        $trackingPath = Join-Path $migrationRoot '0169_install_listening_tracking_storage.sql'
+        $trackingSql = [IO.File]::ReadAllText($trackingPath)
+        $inventoryMatch = [regex]::Match(
+            $trackingSql, '\$inventory_contract\$(.*?)\$inventory_contract\$::jsonb',
+            [Text.RegularExpressions.RegexOptions]::Singleline
+        )
+        if (-not $inventoryMatch.Success) { throw 'Missing canonical inventory.' }
+        $canonicalInventories = $inventoryMatch.Groups[1].Value | ConvertFrom-Json -AsHashtable
+        $expected153 = $canonicalInventories['153']
+        $expected168 = $canonicalInventories['168']
+        if ($expected153 -isnot [System.Collections.IDictionary] -or $expected168 -isnot [System.Collections.IDictionary]) {
+            throw 'Invalid canonical inventories.'
+        }
+    } catch {
+        throw 'Could not read canonical tracking migration inventories.'
+    }
+
+    $allowedNames = @()
+    $workingFiles = @(
+        foreach ($migration in $Contract.migrations) {
+            $migrationName = $migration.name
+            if ($migrationName -cnotmatch '^[0-9]{4}_[a-z0-9_]+\.sql$') {
+                throw 'Invalid public migration basename in tracking diagnostics.'
+            }
+            if ([int]$migrationName.Substring(0, 4) -ge 169) { continue }
+            $allowedNames += $migrationName
+            $migrationPath = Join-Path $migrationRoot $migrationName
+            try {
+                $bytes = [IO.File]::ReadAllBytes($migrationPath)
+                # Count LF-only, CRLF and bare CR endings separately.
+                $lfCount = 0
+                $crlfCount = 0
+                $bareCrCount = 0
+                for ($index = 0; $index -lt $bytes.Length; $index++) {
+                    if ($bytes[$index] -eq 13) {
+                        if ($index + 1 -lt $bytes.Length -and $bytes[$index + 1] -eq 10) {
+                            $crlfCount++
+                            $index++
+                        } else {
+                            $bareCrCount++
+                        }
+                    } elseif ($bytes[$index] -eq 10) {
+                        $lfCount++
+                    }
+                }
+                [ordered]@{
+                    migration = $migrationName
+                    workingSha256 = (Get-FileHash -LiteralPath $migrationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    expected153Sha256 = $expected153[$migrationName]
+                    expected168Sha256 = $expected168[$migrationName]
+                    lfCount = $lfCount
+                    crlfCount = $crlfCount
+                    bareCrCount = $bareCrCount
+                }
+            } catch {
+                throw 'Could not read predecessor bytes for tracking diagnostics.'
+            }
+        }
+    )
+    $workingFiles | ConvertTo-Json -Depth 4 -Compress
+    $allowedSql = ($allowedNames | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ','
+    $ledgerSql = @"
+select json_build_object(
+    'count', count(*),
+    'unexpectedCount', count(*) filter (where not migration_name = any(array[$allowedSql]::text[])),
+    'entries', coalesce(
+        json_agg(json_build_object('migration', migration_name, 'sha256', checksum) order by migration_name)
+            filter (where migration_name = any(array[$allowedSql]::text[])),
+        '[]'::json
+    )
+)
+from ops.schema_migrations;
+"@
+    Invoke-PsqlText $Psql $Role $Database $ledgerSql
 }
 
 function Get-MigrationIndexState(
@@ -271,7 +396,130 @@ function Assert-ProvisionPreflight([object]$Contract) {
     return $psql
 }
 
+function Invoke-TrackingQuery([string]$Psql, [string]$Database, [string]$Sql) {
+    $raw = (& $Psql -X -q -A -t -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $AdminRole -d $Database -c $Sql 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $raw.Length -gt 32768 -or -not $raw) { throw 'Tracking PostgreSQL identity query failed.' }
+    return ($raw | ConvertFrom-Json -AsHashtable)
+}
+
+function Get-TrackingServer([string]$Psql) {
+    return (Invoke-TrackingQuery $Psql 'postgres' "select json_build_object('host',inet_server_addr()::text,'port',inet_server_port(),'server_version_num',current_setting('server_version_num')::int,'server_start_epoch',floor(extract(epoch from pg_postmaster_start_time()))::bigint,'server_system_identifier',(select system_identifier::text from pg_control_system()));")
+}
+
+function Get-TrackingOrdinaryDatabases {
+    $portText = if ($Port -eq 5432) { '' } else { ":$Port" }
+    $run = "$($env:GITHUB_RUN_ID)_$($env:GITHUB_RUN_ATTEMPT)"
+    $persistent = "album_haven_ci_py_contract_$run"
+    $destructive = "album_haven_ci_py_$run"
+    if ($env:DATABASE_MIGRATOR_URL -cne "postgresql://album_haven_migrator_py_contract_$run@127.0.0.1$portText/$persistent" -or
+        $env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL -cne "postgresql://album_haven_migrator_py_$run@127.0.0.1$portText/$destructive") { throw 'Tracking ordinary database bindings are invalid.' }
+    $four = @($persistent,$destructive,"album_haven_ci_tr169_$run","album_haven_ci_hist153_$run")
+    if (@($four | Sort-Object -Unique).Count -ne 4) { throw 'Tracking requires four distinct database targets.' }
+    return [ordered]@{persistent=$persistent; destructive=$destructive}
+}
+
+function New-TrackingCreationState([string]$Psql, $Names) {
+    $context = Get-TrackingContext $TrackingCohort
+    $null = Get-TrackingOrdinaryDatabases
+    $server = Get-TrackingServer $Psql
+    if ($server.host -cne '127.0.0.1' -or $server.port -ne $Port -or $server.server_version_num -lt 170000 -or $server.server_version_num -ge 180000) { throw 'Tracking endpoint is not the expected loopback PostgreSQL 17 server.' }
+    $identity = [ordered]@{}
+    foreach ($key in @('repository','workflow','job','run_id','run_attempt','github_sha','checkout_sha','event_pr_head_sha','event_pr_base_sha','event_pr_repository','runner_sid','root')) { $identity[$key] = $context[$key] }
+    foreach ($key in $server.Keys) { $identity[$key] = $server[$key] }
+    return [ordered]@{
+        schema_version=2; identity=$identity; roles_status='pending'; database_status='pending'
+        roles=[ordered]@{setup=[ordered]@{name=$Names.Roles.migrator;oid=$null}; app=[ordered]@{name=$Names.Roles.app;oid=$null}; readonly=[ordered]@{name=$Names.Roles.readonly;oid=$null}}
+        database=[ordered]@{name=$Names.Database;oid=$null;owner=$Names.Roles.migrator}
+    }
+}
+
+function Write-TrackingState($State) {
+    Write-TrackingFile $TrackingCohort 'state.json' ([Text.UTF8Encoding]::new($false).GetBytes(($State | ConvertTo-Json -Depth 8 -Compress)))
+}
+
+function Invoke-TrackingFailurePoint([string]$Point) {
+    if ($TrackingFailurePoint -and $TrackingFailurePoint -ceq $Point) { throw "tracking-native-failpoint:$Point" }
+}
+
+function Get-TrackingConfirmedCreation {
+    if (-not $script:TrackingConfirmedCreation) { throw 'No in-memory tracking creation confirmation.' }
+    return ($script:TrackingConfirmedCreation | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json -AsHashtable)
+}
+
+function Complete-TrackingReceipt([string]$Psql, $State, $Contract) {
+    $context = Get-TrackingContext $TrackingCohort
+    $previous = Set-AdminAuthentication
+    try {
+        $server = Get-TrackingServer $Psql
+        foreach ($key in $server.Keys) { if ($server[$key] -cne $State.identity[$key]) { throw 'Tracking server changed during provisioning.' } }
+        $ledger = Invoke-TrackingQuery $Psql $State.database.name 'select coalesce(json_object_agg(migration_name,checksum order by migration_name),''{}''::json) from ops.schema_migrations;'
+        if ($ledger.Count -ne 147) { throw 'Tracking ledger count mismatch.' }
+        foreach ($migration in $Contract.migrations) { if ($ledger[$migration.name] -cne $migration.sha256) { throw 'Tracking ledger checksum mismatch.' } }
+    } finally { Restore-AdminAuthentication $previous }
+    $receipt = [ordered]@{schema_version=1; mode='windows-ci'; cohort=$TrackingCohort}
+    foreach ($key in $State.identity.Keys) { $receipt[$key] = $State.identity[$key] }
+    $receipt.receipt_path = $context.receipt_path
+    $receipt.pgpass_path = $context.pgpass_path
+    $receipt.pgbin = [IO.Path]::GetFullPath($Pgbin)
+    $receipt.ordinary_pgpass_path = [IO.Path]::GetFullPath($env:PGPASSFILE)
+    $receipt.powershell_path = $script:TrackingPowerShell
+    $receipt.powershell_sha256 = (Get-FileHash -LiteralPath $script:TrackingPowerShell -Algorithm SHA256).Hash.ToLowerInvariant()
+    $receipt.inspector_path = Join-Path $script:TrackingRepository 'scripts\ci\tracking-postgres-admission.ps1'
+    $receipt.inspector_sha256 = (Get-FileHash -LiteralPath $receipt.inspector_path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $receipt.baseline='aad200d9'; $receipt.migration_through=153; $receipt.migration_count=147
+    $receipt.inventory_sha256=$script:TrackingInventory; $receipt.configured_service=$ServiceName
+    $receipt.database=$State.database.name; $receipt.database_oid=$State.database.oid; $receipt.database_owner=$State.database.owner
+    $receipt.roles=$State.roles
+    $receipt.urls=[ordered]@{setup=$Contract.githubEnvExports[$context.prefix+'SETUP_URL'];app=$Contract.githubEnvExports[$context.prefix+'APP_URL'];readonly=$Contract.githubEnvExports[$context.prefix+'READONLY_URL']}
+    $receipt.ordinary_databases=Get-TrackingOrdinaryDatabases
+    $receipt.pgpass_identity=$null
+    Seal-TrackingReceipt $TrackingCohort $receipt
+}
+
+function Invoke-TrackingTeardown {
+    Assert-ContractInputs
+    $state = Get-TrackingState $TrackingCohort
+    $names = Get-Names
+    if ($state.database.name -cne $names.Database -or $state.database.owner -cne $names.Roles.migrator) { throw 'Unowned tracking database in state.' }
+    foreach ($key in @('setup','app','readonly')) {
+        $nameKey = if ($key -ceq 'setup') { 'migrator' } else { $key }
+        if ($state.roles[$key].name -cne $names.Roles[$nameKey]) { throw 'Unowned tracking role in state.' }
+    }
+    $previous = Set-AdminAuthentication
+    try {
+        $psql = Join-Path $Pgbin 'psql.exe'
+        $server = Get-TrackingServer $psql
+        foreach ($key in $server.Keys) { if ($server[$key] -cne $state.identity[$key]) { throw 'Tracking cleanup server identity mismatch.' } }
+        $observed = Invoke-TrackingQuery $psql 'postgres' "select json_build_object('roles',coalesce((select json_object_agg(rolname,oid) from pg_roles where rolname in ('$($names.Roles.migrator)','$($names.Roles.app)','$($names.Roles.readonly)')),'{}'::json),'database',(select json_build_object('oid',oid,'owner',pg_get_userbyid(datdba)) from pg_database where datname='$($names.Database)'));"
+        if ($state.roles_status -ceq 'created') {
+            if ($observed.roles.Count -ne 3) { throw 'Tracking cleanup role confirmation is incomplete.' }
+            foreach ($role in $state.roles.Values) {
+                if ($role.oid -isnot [long] -and $role.oid -isnot [int]) { throw 'Invalid tracking role OID.' }
+                if ($role.oid -le 0 -or $observed.roles[$role.name] -ne $role.oid) { throw 'Tracking role was replaced.' }
+            }
+        } elseif ($observed.roles.Count -ne 0) { throw 'Tracking roles exist without creation confirmation.' }
+        if ($state.database_status -ceq 'created') {
+            if ($state.roles_status -cne 'created' -or $state.database.oid -le 0 -or
+                $observed.database.oid -ne $state.database.oid -or $observed.database.owner -cne $state.database.owner) { throw 'Tracking database was replaced or not confirmed.' }
+        } elseif ($null -ne $observed.database) { throw 'Tracking database exists without creation confirmation.' }
+        # Validate every owned identity before deleting any resource. No CASCADE,
+        # shared base role deletion, or prefix-only DROP is permitted.
+        if ($state.database_status -ceq 'created') {
+            Invoke-PsqlText $psql $AdminRole 'postgres' "select pg_terminate_backend(pid) from pg_stat_activity where datid=$($state.database.oid) and pid<>pg_backend_pid(); drop database $($names.Database);"
+        }
+        if ($state.roles_status -ceq 'created') {
+            $checks = ($state.roles.Values | ForEach-Object { "exists(select 1 from pg_roles where rolname='$($_.name)' and oid=$($_.oid))" }) -join ' and '
+            Invoke-PsqlText $psql $AdminRole 'postgres' "begin; do `$guard`$ begin if not ($checks) then raise exception 'Tracking role cleanup identity changed'; end if; end `$guard`$; drop role $($names.Roles.app); drop role $($names.Roles.readonly); drop role $($names.Roles.migrator); commit;"
+        }
+    } finally { Restore-AdminAuthentication $previous }
+    Remove-TrackingFiles $TrackingCohort
+}
+
 function Invoke-Provision([object]$Contract) {
+    Assert-ContractInputs
+    $previousPgpass = $env:PGPASSFILE
+    $entryAdminAuthentication = $env:PGPASSWORD
+    try {
     $previousAdminAuthentication = Set-AdminAuthentication
     try {
         $psql = Assert-ProvisionPreflight $Contract
@@ -318,9 +566,33 @@ commit;
         port = $Port
     }
     try {
-        [IO.File]::WriteAllText($StatePath, ($state | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
-        Invoke-PsqlText $psql $AdminRole 'postgres' $roleSql
-        Invoke-PsqlText $psql $AdminRole 'postgres' "create database $($names.Database) owner $($names.Roles.migrator);"
+        if ($TrackingCohort) {
+            $state = New-TrackingCreationState $psql $names
+            New-TrackingRoot $TrackingCohort
+            Write-TrackingState $state
+            $script:TrackingConfirmedCreation = @{ roles_status='pending'; roles=$state.roles; database_status='pending'; database=$state.database }
+            Invoke-TrackingFailurePoint 'before-roles'
+            $roleIdentitySql = "select json_build_object('setup',json_build_object('name','$($names.Roles.migrator)','oid',(select oid from pg_roles where rolname='$($names.Roles.migrator)')),'app',json_build_object('name','$($names.Roles.app)','oid',(select oid from pg_roles where rolname='$($names.Roles.app)')),'readonly',json_build_object('name','$($names.Roles.readonly)','oid',(select oid from pg_roles where rolname='$($names.Roles.readonly)')));"
+            $createdRoles = Invoke-TrackingQuery $psql 'postgres' ($roleSql.Replace('commit;', $roleIdentitySql + "`ncommit;"))
+            $script:TrackingConfirmedCreation.roles = $createdRoles
+            $script:TrackingConfirmedCreation.roles_status = 'created'
+            Invoke-TrackingFailurePoint 'after-roles-commit'
+            $state.roles = $createdRoles; $state.roles_status = 'created'; Write-TrackingState $state
+            Invoke-TrackingFailurePoint 'after-roles-record'
+            Invoke-TrackingFailurePoint 'before-database'
+            Invoke-PsqlText $psql $AdminRole 'postgres' "create database $($names.Database) owner $($names.Roles.migrator);"
+            $createdDatabase = Invoke-TrackingQuery $psql 'postgres' "select json_build_object('name',datname,'oid',oid,'owner',pg_get_userbyid(datdba)) from pg_database where datname='$($names.Database)' and datdba=$($createdRoles.setup.oid);"
+            if (-not $createdDatabase.oid) { throw 'Tracking created database identity unavailable.' }
+            $script:TrackingConfirmedCreation.database = $createdDatabase
+            $script:TrackingConfirmedCreation.database_status = 'created'
+            Invoke-TrackingFailurePoint 'after-database-create'
+            $state.database = $createdDatabase; $state.database_status = 'created'; Write-TrackingState $state
+            Invoke-TrackingFailurePoint 'after-database-record'
+        } else {
+            [IO.File]::WriteAllText($StatePath, ($state | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
+            Invoke-PsqlText $psql $AdminRole 'postgres' $roleSql
+            Invoke-PsqlText $psql $AdminRole 'postgres' "create database $($names.Database) owner $($names.Roles.migrator);"
+        }
         Invoke-PsqlText $psql $AdminRole $names.Database "revoke all on database $($names.Database) from public; grant connect on database $($names.Database) to album_haven_app, album_haven_readonly, $($names.Roles.app); grant temporary on database $($names.Database) to album_haven_app, $($names.Roles.app);"
     } finally {
         Clear-AdminAuthentication
@@ -331,7 +603,11 @@ commit;
         "$HostName`:$Port`:$($names.Database)`:$($names.Roles.app)`:$($secrets.app)",
         "$HostName`:$Port`:$($names.Database)`:$($names.Roles.readonly)`:$($secrets.readonly)"
     )
-    [IO.File]::WriteAllLines($Contract.pgpass.path, $pgpassLines, (New-Object Text.UTF8Encoding($false)))
+    if ($TrackingCohort) {
+        Write-TrackingFile $TrackingCohort 'pgpass.conf' ([Text.UTF8Encoding]::new($false).GetBytes(($pgpassLines -join "`n") + "`n"))
+    } else {
+        [IO.File]::WriteAllLines($Contract.pgpass.path, $pgpassLines, (New-Object Text.UTF8Encoding($false)))
+    }
     $env:PGPASSFILE = $Contract.pgpass.path
 
     $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
@@ -349,6 +625,9 @@ commit;
             try {
                 if ($migration.requiredValidIndexes.Count -gt 0) {
                     Remove-InvalidMigrationIndexes $psql $names.Roles.migrator $names.Database $migration.requiredValidIndexes $migration.indexDefinitionVerifier
+                }
+                if ($migration.name -ceq '0169_install_listening_tracking_storage.sql') {
+                    Write-TrackingMigrationLedgerDiagnostics $psql $names.Roles.migrator $names.Database $Contract
                 }
                 Invoke-Checked $psql $migrationArguments
                 foreach ($indexName in $migration.requiredValidIndexes) {
@@ -548,6 +827,13 @@ end $probe$;
         Invoke-Checked $PythonPath @($loader, '--fixture-root', $env:ALBUM_HAVEN_FIXTURE_ROOT, '--profile', $env:ALBUM_HAVEN_FIXTURE_PROFILE, '--database-url', $Contract.githubEnvExports.DATABASE_MIGRATOR_URL)
     }
 
+    if ($TrackingCohort) {
+        # Sealing binds the ordinary passfile, not the temporary migration connection.
+        $env:PGPASSFILE = $previousPgpass
+        Invoke-TrackingFailurePoint 'before-seal'
+        Complete-TrackingReceipt $psql $state $Contract
+        Invoke-TrackingFailurePoint 'after-seal'
+    }
     $lines = @($Contract.githubEnvExports.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     $githubEnvWriter = [IO.StreamWriter]::new(
         $GithubEnv,
@@ -559,9 +845,16 @@ end $probe$;
     } finally {
         $githubEnvWriter.Dispose()
     }
+    } finally {
+        if ($TrackingCohort) {
+            $env:PGPASSFILE = $previousPgpass
+            Restore-AdminAuthentication $entryAdminAuthentication
+        }
+    }
 }
 
 function Invoke-Teardown {
+    if ($TrackingCohort) { Invoke-TrackingTeardown; return }
     if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) { throw 'Bootstrap state is required for teardown.' }
     try { $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json } catch { throw 'Bootstrap state is invalid.' }
     $names = Get-Names
@@ -591,6 +884,8 @@ function Invoke-Teardown {
     Remove-Item -LiteralPath $StatePath -Force
 }
 
+if ($MyInvocation.InvocationName -eq '.') { return }
+if (-not $Mode) { throw 'Bootstrap mode is required.' }
 if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = Join-Path $RunnerTemp "album-haven-postgres-$DatabaseSuffix.state.json" }
 Assert-ContractInputs
 $contract = Get-Contract

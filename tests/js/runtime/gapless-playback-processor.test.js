@@ -19,7 +19,7 @@ const processorPath = path.join(
 const PROCESSOR_NAME = 'album-haven-gapless-playback';
 const QUANTUM_FRAMES = 128;
 
-function loadProcessorModule() {
+function loadProcessorModule({ sampleRate = 48_000 } = {}) {
   const registrations = [];
   const ports = [];
   const context = {
@@ -44,7 +44,7 @@ function loadProcessorModule() {
     registerProcessor(name, Processor) {
       registrations.push({ name, Processor });
     },
-    sampleRate: 48_000,
+    sampleRate,
   };
   vm.createContext(context);
   const source = fs.readFileSync(processorPath, 'utf8');
@@ -58,9 +58,9 @@ function createProcessor({
   currentCapacityFrames = 512,
   continuityCapacityFrames = 512,
   startupBufferFrames = 1,
+  configureInitially = true,
 } = {}) {
-  const loaded = loadProcessorModule();
-  loaded.context.sampleRate = sampleRate;
+  const loaded = loadProcessorModule({ sampleRate });
   const registration = loaded.registrations.find(({ name }) => name === PROCESSOR_NAME);
   assert.ok(registration, `${PROCESSOR_NAME} must be registered`);
   const processor = new registration.Processor();
@@ -78,7 +78,7 @@ function createProcessor({
       return processor.port.events.filter((event) => event.type === type);
     },
   };
-  fixture.send({
+  if (configureInitially) fixture.send({
     type: 'configure',
     generation,
     sampleRate,
@@ -1424,36 +1424,98 @@ test('stop clears playback and reports the exact rendered position', () => {
 });
 
 
-function measuredProcessorReceiver(fixture, initialSeconds) {
-  const track = {path:'/owned/terminal',title:'Terminal',artist:'Artist'};
-  const role = {role:'current',streamId:41,generation:fixture.generation,track,eosReceived:true};
-  const engine = {generation:fixture.generation,roles:{current:role},context:{sampleRate:48000},snapshot:{currentTime:0,duration:200},diagnostics:{staleMessages:0,underruns:0,bufferedFrames:{current:128},inFlightFrames:{current:0}}};
-  const completions=[];const requests=[];
-  const c={window:{},console,crypto:require('node:crypto'),state:{player:{current:track}},isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,getPlayerPlaybackSnapshot:()=>engine.snapshot,
+async function measuredProcessorReceiver(fixture, initialSeconds, t, {prewarm = false} = {}) {
+  const track = {path:'/owned/terminal',src:'/owned/terminal',title:'Terminal',artist:'Artist',durationSeconds:200};
+  const completions = [], requests = [], commands = [], nodes = [], sockets = [];
+  class FiniteAudioContext {
+    constructor() {this.sampleRate=48000;this.currentTime=0;this.state='suspended';this.destination={};this.audioWorklet={addModule:async()=>{}};}
+    async resume() {if(this.state!=='closed')this.state='running';}
+    async suspend() {if(this.state!=='closed')this.state='suspended';}
+    async close() {this.state='closed';}
+  }
+  class ProcessorBridgeNode {
+    constructor() {
+      this.port={onmessage:null,postMessage(message) {commands.push(structuredClone(message));fixture.send(message);}};
+      nodes.push(this);
+    }
+    connect(destination) {return destination;}
+    disconnect() {}
+  }
+  class FiniteSocket {
+    static OPEN=1;
+    constructor() {this.readyState=1;this.sent=[];sockets.push(this);queueMicrotask(()=>this.onopen?.({}));}
+    send(message) {this.sent.push(JSON.parse(message));}
+    close() {this.readyState=3;this.onclose?.({code:1000});}
+  }
+  const window={AudioContext:FiniteAudioContext,WebSocket:FiniteSocket,location:{protocol:'http:',host:'measurement.test'},
+    performance:{now:()=>1000,timeOrigin:1700000000000},setTimeout,clearTimeout};
+  const c={window,console,crypto:require('node:crypto'),AudioContext:FiniteAudioContext,AudioWorkletNode:ProcessorBridgeNode,
+    WebSocket:FiniteSocket,ArrayBuffer,DataView,Float32Array,TextDecoder,URL,performance:window.performance,
+    queueMicrotask,setTimeout,clearTimeout,state:{player:{current:track,streaming:{mode:'stopped',generation:0,
+      context:null,node:null,socket:null,roles:{current:null,continuity:null},limits:{currentSeconds:12,continuitySeconds:5},
+      snapshot:{currentTime:0,duration:0,paused:true,ended:false,src:'',readyState:0},diagnostics:{firstFrameAtMs:0,
+        bufferedFrames:{current:0,continuity:0},inFlightFrames:{current:0,continuity:0},underruns:0,staleMessages:0,activeRoles:[]}}}},
+    isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,
     fetch:async(_url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({ok:true})};}};
+  c.getPlayerPlaybackSnapshot=()=>c.state.player.streaming.snapshot;
   vm.createContext(c);
-  for(const name of ['player-streaming-engine.js','player-listen-session-helpers.js'])vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);
-  c.streamingEngineState=()=>engine;c.streamingRoleForId=id=>id===41?role:null;
-  c.streamingRoleCapacityFrames=()=>512;c.recordStreamingRenderedPcmEvidence=()=>{};c.maybeNotifyStreamingWaveformReady=()=>{};
-  c.streamingAbsoluteTimelineFrame=(_role,frame)=>frame;c.observeStreamingFacadeCallback=promise=>completions.push(promise);
-  c.failStreamingEngine=(_kind,error)=>{throw error;};
+  for(const name of ['player-streaming-engine.js','player-listen-session-helpers.js'])
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);
+  const observe=c.observeStreamingFacadeCallback;
+  c.observeStreamingFacadeCallback=(result,...args)=>{if(result&&typeof result.then==='function')completions.push(result);return observe(result,...args);};
+  t.after(async()=>{await c.stopStreamingPlayback('measurement-fixture-cleanup');await Promise.all(completions);});
   c.startListenSession(track);const session=c.state.player.listenSession;
-  session.measurement.total=initialSeconds;session.measurement.contiguous=initialSeconds;session.measurement.longest=initialSeconds;role.measuredListenSession=session;
   c.handleStreamingPlaybackEnded=()=>c.finalizeListenSession('ended',{session,skipCloseSegment:true,duration:200});
-  return {c,session,requests,completions,deliver(){for(const message of fixture.port.events.filter(item=>['consumed','ended','underrun'].includes(item.type)))c.handleStreamingWorkletMessage(message);}};
+  assert.equal(fixture.processor.configured,false,'Real processor constructor has no prior configure');
+  const role=await c.startStreamingTrack(track);
+  assert.ok(role);assert.equal(c.state.player.streaming.roles.current,role);
+  fixture.generation=role.generation;
+  const configured=commands.findIndex(message=>message.type==='configure');
+  const played=commands.findIndex(message=>message.type==='play');
+  assert.ok(configured>=0&&played>configured,'Actual owner configure precedes actual causal PLAY');
+  assert.equal(fixture.processor.configured,true);
+  assert.equal(fixture.processor.generation,role.generation);
+  assert.equal(fixture.processor.current.capacityFrames,commands[configured].currentCapacityFrames);
+  assert.equal(fixture.processor.startupBufferFrames,commands[configured].startupBufferFrames);
+  assert.equal(fixture.processor.playing,true);
+  const causalPlay=commands[played];
+  let delivered=0;
+  function deliver() {
+    while(delivered<fixture.port.events.length) nodes[0].port.onmessage({data:fixture.port.events[delivered++]});
+  }
+  let sequence=0;
+  if(prewarm) {
+    // Reach real startup via PCM, not a smaller configure or direct processor-state edit.
+    const startupFrames=commands[configured].startupBufferFrames;
+    assert.ok(Number.isInteger(startupFrames)&&startupFrames>0&&startupFrames<=48000);
+    const frames=Math.ceil(startupFrames/QUANTUM_FRAMES)*QUANTUM_FRAMES;
+    assert.ok(frames<=fixture.processor.current.capacityFrames);
+    enqueue(fixture,{streamId:role.streamId,role:'current',sequence:sequence++,left:Array(frames).fill(0.25)});
+    for(let offset=0;offset<frames;offset+=QUANTUM_FRAMES){renderQuantum(fixture);deliver();}
+    assert.equal(fixture.processor.current.bufferedFrames,0);
+    assert.equal(fixture.events('underrun').length,0);
+    assert.equal(fixture.events('consumed').reduce((total,message)=>total+message.frames,0),frames);
+    assert.ok(session.measurement.total>0);
+  }
+  // Preserve the pre-existing measurement starting totals, never playback authority.
+  session.measurement.total=initialSeconds;session.measurement.contiguous=initialSeconds;session.measurement.longest=initialSeconds;
+  return {c,session,requests,completions,role,sequence,causalPlay,deliver};
 }
 
-test('processor terminal quantum credits rendered frames through engine before finalizing measurement',async()=>{
-  const fixture=createProcessor();enqueue(fixture,{streamId:41,role:'current',sequence:0,left:sequence(1,64)});
-  markEos(fixture,{streamId:41,role:'current',emittedFrames:64});play(fixture);
-  const receiver=measuredProcessorReceiver(fixture,10);renderQuantum(fixture);receiver.deliver();await Promise.all(receiver.completions);
+test('processor terminal quantum credits rendered frames through engine before finalizing measurement',async(t)=>{
+  const fixture=createProcessor({configureInitially:false});const receiver=await measuredProcessorReceiver(fixture,10,t);
+  enqueue(fixture,{streamId:receiver.role.streamId,role:'current',sequence:receiver.sequence,left:sequence(1,64)});
+  markEos(fixture,{streamId:receiver.role.streamId,role:'current',emittedFrames:64});
+  renderQuantum(fixture);receiver.deliver();await Promise.all(receiver.completions);
+  assert.equal(fixture.events('ended')[0].playbackIntentId,receiver.causalPlay.playbackIntentId);
   assert.equal(receiver.session.measurement.total,10+64/48000);
   assert.equal(receiver.requests.length,1);assert.equal(receiver.requests[0].measured_listened_seconds,10.001);
 });
 
-test('processor partial underrun credits preceding frames before ending the measured contiguous segment',()=>{
-  const fixture=createProcessor();enqueue(fixture,{streamId:41,role:'current',sequence:0,left:sequence(1,32)});play(fixture);
-  const receiver=measuredProcessorReceiver(fixture,2);renderQuantum(fixture);receiver.deliver();
+test('processor partial underrun credits preceding frames before ending the measured contiguous segment',async(t)=>{
+  const fixture=createProcessor({configureInitially:false});const receiver=await measuredProcessorReceiver(fixture,2,t,{prewarm:true});
+  enqueue(fixture,{streamId:receiver.role.streamId,role:'current',sequence:receiver.sequence,left:sequence(1,32)});
+  renderQuantum(fixture);receiver.deliver();
   assert.equal(receiver.session.measurement.total,2+32/48000);
   assert.equal(receiver.session.measurement.longest,2+32/48000);
   assert.equal(receiver.session.measurement.contiguous,0);
@@ -1690,3 +1752,248 @@ test('fresh node admits retained engine owner before configure but rejects stale
     sourceRate: 48000, outputRate: 48000, buffers: Array.from({ length: 4 }, () => new ArrayBuffer(16384)) });
   assert.equal(processor.positionCapture.owner, 1, 'one-time admission never replaces the original port owner');
 });
+
+// Processor/command evidence only; this is not real-browser audible-playback proof.
+test('empty warmup play is ignored by a genuinely unconfigured processor and configure remains paused', () => {
+  const loaded = loadProcessorModule();
+  const registration = loaded.registrations.find(({ name }) => name === PROCESSOR_NAME);
+  assert.ok(registration);
+  const processor = new registration.Processor();
+  const fixture = { ...loaded, processor, renderedFrames: 0 };
+  const send = message => processor.port.onmessage({ data: message });
+  assert.equal(processor.configured, false);
+  assertRenderedSilence(fixture);
+  send({ type: 'play', generation: 0 });
+  send({ type: 'play', generation: 0 });
+  assert.equal(processor.configured, false);
+  assert.equal(processor.playing, false);
+  assertRenderedSilence(fixture);
+  assert.deepEqual(processor.port.events, []);
+  const configure = generation => send({
+    type: 'configure', generation, sampleRate: 48000,
+    currentCapacityFrames: 512, continuityCapacityFrames: 512, startupBufferFrames: 1,
+  });
+  configure(1);
+  assert.equal(processor.configured, true);
+  assert.equal(processor.playing, false);
+  send({ type: 'enqueue', generation: 1, streamId: 1, role: 'current', sequence: 0,
+    frameCount: 2, pcm: stereoFrames([0.25, 0.5]) });
+  assertRenderedSilence(fixture);
+  assert.equal(processor.port.events.some(event => event.type === 'first-frame'), false);
+  send({ type: 'play', generation: 1 });
+  assert.equal(processor.playing, true);
+  configure(2);
+  assert.equal(processor.playing, false, 'later legitimate configure resets prior playing state');
+  assertRenderedSilence(fixture);
+});
+
+// Necessary clock invariant in the real processor VM, not browser/device,
+// conversion-reference, capture coverage, or end-to-end gapless qualification.
+for (const graphRate of [44_100, 48_000]) {
+  test(`graph-rate invariant: matched ${graphRate} configure consumes exact stereo frames`, () => {
+    const fixture = createProcessor({ sampleRate: graphRate });
+    assert.equal(fixture.context.sampleRate, graphRate);
+    assert.equal(fixture.processor.configured, true);
+    assert.equal(fixture.processor.sampleRate, graphRate);
+    const left = sequence(1 / 256, QUANTUM_FRAMES, 1 / 256);
+    const right = sequence(-1 / 512, QUANTUM_FRAMES, -1 / 512);
+    enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left, right });
+    play(fixture);
+    assertRenderedStereo(fixture, left, right);
+    assert.equal(fixture.processor.renderedFrames, QUANTUM_FRAMES);
+    assert.equal(fixture.processor.current.bufferedFrames, 0);
+    assert.equal(fixture.events('consumed').reduce((frames, event) => frames + event.frames, 0), QUANTUM_FRAMES);
+    assert.equal(fixture.events('first-frame').length, 1);
+    assert.equal(fixture.events('underrun').length, 0);
+  });
+
+  const wrongRate = graphRate === 44_100 ? 48_000 : 44_100;
+  test(`graph-rate invariant: actual ${graphRate} rejects initial configure ${wrongRate} before PCM allocation`, () => {
+    const loaded = loadProcessorModule({ sampleRate: graphRate });
+    const registration = loaded.registrations.find(({ name }) => name === PROCESSOR_NAME);
+    assert.ok(registration);
+    const processor = new registration.Processor();
+    const fixture = { ...loaded, processor, renderedFrames: 0 };
+    const send = message => processor.port.onmessage({ data: message });
+    const current = processor.current, continuity = processor.continuity;
+    const retained = processor.retainedLoopSamples;
+    const allocations = [];
+    // Observe only the finite typed-array allocation boundary after construction.
+    // Processor configuration/state itself is changed solely through commands.
+    loaded.context.Float32Array = class extends Float32Array {
+      constructor(...args) { super(...args); allocations.push(this.length); }
+    };
+    send({ type: 'configure', generation: 7, sampleRate: wrongRate,
+      currentCapacityFrames: 512, continuityCapacityFrames: 512, startupBufferFrames: 1 });
+    assert.deepEqual(allocations, [], 'mismatch must not allocate playback PCM buffers');
+    assert.strictEqual(processor.current, current);
+    assert.strictEqual(processor.continuity, continuity);
+    assert.strictEqual(processor.retainedLoopSamples, retained);
+    assert.equal(processor.configured, false);
+    assert.equal(processor.generation, 0);
+    assert.equal(processor.sampleRate, 0);
+    send({ type: 'enqueue', generation: 7, streamId: 41, role: 'current', sequence: 0,
+      frameCount: 2, pcm: stereoFrames([0.25, 0.5]) });
+    send({ type: 'play', generation: 7 });
+    assert.equal(processor.playing, false);
+    assert.equal(processor.current.bufferedFrames, 0);
+    assertRenderedSilence(fixture);
+    assert.equal(processor.renderedFrames, 0);
+    assert.deepEqual(processor.port.events, [], 'no accepted PCM/first-frame/consumption evidence');
+  });
+
+  test(`graph-rate invariant: actual ${graphRate} retains accepted generation and PCM after newer ${wrongRate} configure`, () => {
+    const fixture = createProcessor({ sampleRate: graphRate });
+    const processor = fixture.processor;
+    const current = processor.current, continuity = processor.continuity;
+    const currentSamples = current.samples, continuitySamples = continuity.samples;
+    const retained = processor.retainedLoopSamples;
+    const left = sequence(1 / 256, 2 * QUANTUM_FRAMES, 1 / 256);
+    const right = sequence(-1 / 512, 2 * QUANTUM_FRAMES, -1 / 512);
+    enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left, right });
+    play(fixture);
+    assertRenderedStereo(fixture, left.slice(0, QUANTUM_FRAMES), right.slice(0, QUANTUM_FRAMES));
+    assert.equal(processor.renderedFrames, QUANTUM_FRAMES);
+    assert.equal(processor.timelineFrame, QUANTUM_FRAMES);
+    assert.equal(processor.current.readFrame, QUANTUM_FRAMES);
+    fixture.send({ type: 'configure', generation: 8, sampleRate: wrongRate,
+      currentCapacityFrames: 1024, continuityCapacityFrames: 1024, startupBufferFrames: 128 });
+    assert.equal(processor.generation, 7, 'rejected higher generation cannot replace the accepted owner');
+    assert.equal(processor.sampleRate, graphRate);
+    assert.equal(processor.renderedFrames, QUANTUM_FRAMES, 'rejected configure cannot rewind the rendered clock');
+    assert.equal(processor.timelineFrame, QUANTUM_FRAMES, 'rejected configure cannot rewind the timeline');
+    assert.equal(processor.current.readFrame, QUANTUM_FRAMES);
+    assert.equal(processor.startupBufferFrames, 1);
+    assert.equal(processor.playing, true);
+    assert.strictEqual(processor.current, current);
+    assert.strictEqual(processor.continuity, continuity);
+    assert.strictEqual(processor.current.samples, currentSamples);
+    assert.strictEqual(processor.continuity.samples, continuitySamples);
+    assert.strictEqual(processor.retainedLoopSamples, retained);
+    assert.equal(processor.current.streamId, 41);
+    assert.equal(processor.current.bufferedFrames, QUANTUM_FRAMES);
+    assert.equal(processor.current.nextSequence, 1);
+    assertRenderedStereo(fixture, left.slice(QUANTUM_FRAMES), right.slice(QUANTUM_FRAMES));
+    assert.equal(processor.renderedFrames, 2 * QUANTUM_FRAMES);
+    assert.equal(processor.timelineFrame, 2 * QUANTUM_FRAMES);
+    fixture.send({ type: 'configure', generation: 8, sampleRate: graphRate,
+      currentCapacityFrames: 512, continuityCapacityFrames: 512, startupBufferFrames: 1 });
+    assert.equal(processor.generation, 8, 'same next generation remains available for a valid command');
+    assert.equal(processor.sampleRate, graphRate);
+    assert.equal(processor.playing, false);
+    assert.equal(processor.renderedFrames, 0, 'accepted next generation resets its own clock');
+    assert.equal(processor.timelineFrame, 0);
+    fixture.generation = 8;
+    const next = sequence(1 / 512, QUANTUM_FRAMES, 1 / 512);
+    enqueue(fixture, { streamId: 42, role: 'current', sequence: 0, left: next });
+    play(fixture);
+    assertRenderedStereo(fixture, next);
+    assert.equal(processor.renderedFrames, QUANTUM_FRAMES);
+  });
+}
+
+// E2a correlation: real processor command/output tests, not speaker/device proof.
+test('E2a processor tags actual EOS and reemits retained EOS for a later play without extra consumed frames', () => {
+  const fixture = createProcessor(); enablePositionCapture(fixture); bindPositionCapture(fixture, 41, 123456);
+  enqueue(fixture, {streamId: 41, role: 'current', sequence: 0, left: [0.25, 0.5, 0.75, 1]});
+  markEos(fixture, {streamId: 41, role: 'current', emittedFrames: 4});
+  fixture.send({type: 'play', generation: 7, playbackIntentId: 1});
+  const firstOutput = renderCapturedQuantum(fixture), first = fixture.events('ended')[0];
+  assert.deepEqual(firstOutput.left.slice(0, 4), [0.25, 0.5, 0.75, 1]);
+  assert.equal(first.playbackIntentId, 1);
+  const before = {timeline: fixture.processor.timelineFrame, rendered: fixture.processor.renderedFrames,
+    read: fixture.processor.current.readFrame, ordinal: fixture.processor.positionCapture.ordinal,
+    consumed: fixture.events('consumed').reduce((sum, event) => sum + event.frames, 0)};
+  fixture.send({type: 'pause', generation: 7, playbackIntentId: 2});
+  fixture.send({type: 'play', generation: 7, playbackIntentId: 3});
+  assert.equal(fixture.processor.renderedFrames, before.rendered, 'Control commands do not reset the graph clock');
+  assertRenderedSilence(fixture);
+  const latest = fixture.events('ended').at(-1);
+  assert.equal(fixture.events('ended').length, 2); assert.equal(latest.playbackIntentId, 3);
+  assert.equal(first.playbackIntentId, 1, 'A retained old notification keeps its causal token');
+  assert.equal(latest.generation, first.generation); assert.equal(latest.streamId, first.streamId);
+  assert.equal(latest.timelineFrame, first.timelineFrame);
+  assert.equal(fixture.processor.timelineFrame, before.timeline); assert.equal(fixture.processor.current.readFrame, before.read);
+  assert.equal(fixture.processor.positionCapture.ordinal, before.ordinal);
+  assert.equal(fixture.events('consumed').reduce((sum, event) => sum + event.frames, 0), before.consumed);
+});
+
+for (const type of ['play', 'pause']) for (const bad of ['missing', 'null', 'zero', 'negative', 'fraction', 'unsafe', 'duplicate', 'regressing', 'string', 'boolean']) {
+  test('E2a processor invalid correlated control has no play or capture effect: ' + type + '/' + bad, () => {
+    const fixture = createProcessor(); enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+    enqueue(fixture, {streamId: 41, role: 'current', sequence: 0, left: [1, 2, 3, 4]});
+    fixture.send({type: 'play', generation: 7, playbackIntentId: 10});
+    if (type === 'play') fixture.send({type: 'pause', generation: 7, playbackIntentId: 11});
+    const latest = type === 'play' ? 11 : 10;
+    const values = {null: null, zero: 0, negative: -1, fraction: 1.5, unsafe: Number.MAX_SAFE_INTEGER + 1,
+      duplicate: latest, regressing: latest - 1, string: '12', boolean: true};
+    const before = {playing: fixture.processor.playing, epoch: fixture.processor.positionCapture.epoch,
+      ordinal: fixture.processor.positionCapture.ordinal, packets: fixture.events('capture-packet').length,
+      read: fixture.processor.current.readFrame, buffered: fixture.processor.current.bufferedFrames};
+    fixture.send({type, generation: 7, ...(bad === 'missing' ? {} : {playbackIntentId: values[bad]})});
+    assert.equal(fixture.processor.playing, before.playing);
+    assert.equal(fixture.processor.positionCapture.epoch, before.epoch);
+    assert.equal(fixture.processor.positionCapture.ordinal, before.ordinal);
+    assert.equal(fixture.events('capture-packet').length, before.packets);
+    assert.equal(fixture.processor.current.readFrame, before.read); assert.equal(fixture.processor.current.bufferedFrames, before.buffered);
+    markEos(fixture, {streamId: 41, role: 'current', emittedFrames: 4});
+    fixture.send({type: 'play', generation: 7, playbackIntentId: 12}); renderCapturedQuantum(fixture);
+    assert.equal(fixture.events('ended').at(-1).playbackIntentId, 12, 'Invalid commands did not consume the next valid token');
+  });
+}
+
+test('E2a processor legacy control and EOS schema stay unchanged before correlation', () => {
+  const fixture = createProcessor();
+  enqueue(fixture, {streamId: 41, role: 'current', sequence: 0, left: [1]});
+  markEos(fixture, {streamId: 41, role: 'current', emittedFrames: 1});
+  play(fixture); renderQuantum(fixture);
+  assert.deepEqual(fixture.events('ended')[0], {type: 'ended', generation: 7, streamId: 41, timelineFrame: 1});
+  fixture.send({type: 'pause', generation: 7}); play(fixture); renderQuantum(fixture);
+  assert.equal(fixture.events('ended').length, 2); assert.equal(Object.hasOwn(fixture.events('ended')[1], 'playbackIntentId'), false);
+});
+
+for (const reset of ['configure', 'seek-reset']) test('E2a processor generation reset drops correlation without accepting old lineage: ' + reset, () => {
+  const fixture = createProcessor(); fixture.send({type: 'play', generation: 7, playbackIntentId: 50});
+  if (reset === 'configure') fixture.send({type: 'configure', generation: 8, sampleRate: 48000,
+    currentCapacityFrames: 512, continuityCapacityFrames: 512, startupBufferFrames: 1});
+  else fixture.send({type: 'seek-reset', generation: 8, streamId: 42, timelineStartFrame: 0});
+  fixture.generation = 8;
+  fixture.send({type: 'play', generation: 7, playbackIntentId: 51});
+  assert.equal(fixture.processor.playing, false);
+  enqueue(fixture, {streamId: 42, role: 'current', sequence: 0, left: [1]});
+  markEos(fixture, {streamId: 42, role: 'current', emittedFrames: 1});
+  play(fixture); renderQuantum(fixture);
+  assert.equal(Object.hasOwn(fixture.events('ended').at(-1), 'playbackIntentId'), false);
+  fixture.send({type: 'play', generation: 8, playbackIntentId: 1}); renderQuantum(fixture);
+  assert.equal(fixture.events('ended').at(-1).playbackIntentId, 1);
+});
+
+test('E2a processor accepts maximum safe intent and rejects overflow without wrapping', () => {
+  const fixture = createProcessor(); enablePositionCapture(fixture);
+  fixture.send({type: 'play', generation: 7, playbackIntentId: Number.MAX_SAFE_INTEGER});
+  const epoch = fixture.processor.positionCapture.epoch;
+  fixture.send({type: 'pause', generation: 7, playbackIntentId: Number.MAX_SAFE_INTEGER + 1});
+  assert.equal(fixture.processor.playing, true); assert.equal(fixture.processor.positionCapture.epoch, epoch);
+  enqueue(fixture, {streamId: 41, role: 'current', sequence: 0, left: [1]});
+  markEos(fixture, {streamId: 41, role: 'current', emittedFrames: 1}); renderCapturedQuantum(fixture);
+  assert.equal(fixture.events('ended').at(-1).playbackIntentId, Number.MAX_SAFE_INTEGER);
+});
+
+
+for (const type of ['play', 'pause']) for (const malformed of [null, 0, Number.MAX_SAFE_INTEGER + 1]) {
+  test('E2a processor present malformed first token cannot enter legacy control: ' + type + '/' + String(malformed), () => {
+    const fixture = createProcessor(); enablePositionCapture(fixture); bindPositionCapture(fixture, 41);
+    if (type === 'pause') play(fixture); // Genuine legacy playing state, still no positive token.
+    const before = {playing: fixture.processor.playing, epoch: fixture.processor.positionCapture.epoch,
+      ordinal: fixture.processor.positionCapture.ordinal, packets: fixture.events('capture-packet').length};
+    fixture.send({type, generation: 7, playbackIntentId: malformed});
+    assert.equal(fixture.processor.playing, before.playing);
+    assert.equal(fixture.processor.positionCapture.epoch, before.epoch);
+    assert.equal(fixture.processor.positionCapture.ordinal, before.ordinal);
+    assert.equal(fixture.events('capture-packet').length, before.packets);
+    enqueue(fixture, {streamId: 41, role: 'current', sequence: 0, left: [1]});
+    markEos(fixture, {streamId: 41, role: 'current', emittedFrames: 1});
+    fixture.send({type: 'play', generation: 7, playbackIntentId: 1}); renderCapturedQuantum(fixture);
+    assert.equal(fixture.events('ended').at(-1).playbackIntentId, 1);
+  });
+}

@@ -133,7 +133,28 @@ test('album editions render the same keyboard tab component as Home', () => {
   assert.equal(tabs.hidden, false);
   assert.match(tabs.innerHTML, /class="in-page-tabs"/);
   assert.match(tabs.innerHTML, /role="tablist" aria-label="Album editions"/);
-  assert.match(tabs.innerHTML, /data-in-page-tab="1" aria-selected="true" tabindex="0"/);
+  const { createNativeHomeRuntime } = require('./native-home-harness.cjs');
+  const rendered = createNativeHomeRuntime().document.createElement('div');
+  rendered.innerHTML = tabs.innerHTML;
+  const tablists = rendered.querySelectorAll('[role="tablist"]');
+  assert.equal(tablists.length, 1);
+  assert.equal(tablists[0].getAttribute('id'), 'album-edition-tabs');
+  assert.equal(tablists[0].getAttribute('aria-label'), 'Album editions');
+  const buttons = tablists[0].querySelectorAll('[data-in-page-tab]');
+  assert.equal(buttons.length, 2);
+  for (const [index, button] of buttons.entries()) {
+    assert.equal(button.tagName, 'BUTTON');
+    assert.equal(button.getAttribute('type'), 'button');
+    assert.equal(button.getAttribute('role'), 'tab');
+    assert.equal(button.getAttribute('id'), `album-edition-tabs-${index}`);
+    assert.equal(button.getAttribute('data-in-page-tab'), String(index));
+    assert.equal(button.getAttribute('data-tab-label'), context.state.modalReleases[index].tabLabel);
+    assert.equal(button.textContent, context.state.modalReleases[index].tabLabel);
+    assert.equal(button.getAttribute('aria-selected'), String(index === 1));
+    assert.equal(button.getAttribute('tabindex'), index === 1 ? '0' : '-1');
+  }
+  assert.equal(tablists[0].querySelectorAll('[aria-selected="true"]').length, 1);
+  assert.equal(tablists[0].querySelectorAll('[tabindex="0"]').length, 1);
   assert.match(tabs.innerHTML, /Original - 1998/);
   assert.match(tabs.innerHTML, /Anniversary Remix - 2018/);
 });
@@ -148,6 +169,21 @@ test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeco
   });
 
   assert.equal(payload.durationSeconds, 123.5);
+});
+
+test('buildPlayerTrackPayload preserves supplied inventory identity and makes absence explicit', () => {
+  const context = loadHelper([]);
+  for (const [identity, expected] of [
+    [{}, null],
+    [{ inventory_track_ref: null }, null],
+    [{ inventory_track_ref: 'inventory-track:7:11' }, 'inventory-track:7:11'],
+  ]) {
+    const payload = context.buildPlayerTrackPayload({ path: 'synthetic.flac', title: 'Synthetic', ...identity });
+    assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
+      src: '/track?path=synthetic.flac', path: 'synthetic.flac', inventory_track_ref: expected,
+      title: 'Synthetic', artist: '', albumArtist: '', album: '', coverPath: '', durationSeconds: 0,
+    });
+  }
 });
 
 test('track modal play button exposes numeric duration seconds', () => {
@@ -392,6 +428,7 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
     },
   });
 
+  context.window = context;
   context.openTagEditor(album, { tracksMode: 'all' });
 
   assert.equal(overlay.hidden, false);
@@ -516,6 +553,7 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
     },
   });
 
+  context.window = context;
   context.openTagEditor(album, { tracksMode: 'all' });
 
   assert.equal(
@@ -1483,6 +1521,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   });
   context.state.view.search_context = { selected_artist_source: 'auto_top_match', artist_name_match_artists: [] };
   context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+  context.window = context;
   context.openTagEditConfirmModal();
   galleryScroll.scrollTop = 9592;
   galleryScroll.scrollLeft = 37;
@@ -2750,6 +2789,8 @@ function createDeferred() {
 }
 
 function createTrackModalCoverContext(options = {}) {
+  const { createNativeHomeRuntime } = require('./native-home-harness.cjs');
+  const listDocument = createNativeHomeRuntime().document;
   const albums = options.albums || [{
     key: 'alpha',
     name: 'Album Alpha',
@@ -2764,7 +2805,7 @@ function createTrackModalCoverContext(options = {}) {
     cover,
     title: new TrackModalTestElement('h2'),
     subtitle: new TrackModalTestElement('div'),
-    list: new TrackModalTestElement('div'),
+    list: listDocument.createElement('div'),
     footer: new TrackModalTestElement('div'),
     tabs: new TrackModalTestElement('div'),
     missingWarning: new TrackModalTestElement('div'),
@@ -3529,6 +3570,9 @@ test('track modal shows the existing problem link from server-owned track state 
   context.state.utility = { problematicFiles: [] };
 
   context.renderTrackModalRelease(album);
+  const renderedRows = elements.list.querySelectorAll('.album-track-table__row');
+  assert.equal(renderedRows.length, 1);
+  assert.equal(renderedRows[0].getAttribute('data-track-row-path'), trackPath);
 
   assert.match(elements.list.innerHTML, /class="track-problem-link"/);
   assert.match(elements.list.innerHTML, /data-open-track-problematic="1"/);
@@ -3595,6 +3639,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     resolvePreview: async () => ({ displayUrl: 'blob:various-artists-cover', cached: true }),
   });
   context.renderTrackModalRelease(album);
+  const renderedRows = elements.list.querySelectorAll('.album-track-table__row');
+  assert.equal(renderedRows.length, 1);
+  assert.equal(renderedRows[0].getAttribute('data-track-row-path'), trackPath);
   context.setAlbumPlaybackQueue(album, trackPath);
 
   assert.match(elements.list.innerHTML, /data-track-artist="Solo Voice"/);
@@ -3660,6 +3707,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     {
       src: `/track?path=${encodeURIComponent(betaTrackPath)}`,
       path: betaTrackPath,
+      inventory_track_ref: null,
       title: 'Track Two',
       artist: 'Artist Alpha',
       albumArtist: 'Artist Alpha',
@@ -3813,7 +3861,8 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   const cover = { innerHTML: '' };
   const title = { textContent: '' };
   const subtitle = { textContent: '' };
-  const list = { innerHTML: '' };
+  const { createNativeHomeRuntime } = require('./native-home-harness.cjs');
+  const list = createNativeHomeRuntime().document.createElement('div');
   const footer = { hidden: true, textContent: '', innerHTML: '' };
   const tabs = { hidden: true, innerHTML: '' };
   const duplicateWarning = { hidden: true, innerHTML: '' };
@@ -3897,6 +3946,10 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.renderTrackModalRelease(album);
 
+  const renderedRows = list.querySelectorAll('[data-track-row-path]');
+  assert.equal(renderedRows.length, 1);
+  assert.equal(renderedRows[0].getAttribute('data-track-row-path'), album.tracks[0].path);
+
   assert.equal(folder.dataset.album, '');
   assert.equal(folder.dataset.albumKey, 'alpha');
   assert.equal(editTags.dataset.album, '');
@@ -3925,17 +3978,16 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       },
     ],
   };
+  const { createNativeHomeRuntime } = require('./native-home-harness.cjs');
+  const fixtureDocument = createNativeHomeRuntime().document;
+  const capabilityBootstrap = fixtureDocument.createElement('script');
+  capabilityBootstrap.id = 'capability-bootstrap';
+  capabilityBootstrap.textContent = JSON.stringify({ allowed_actions: { 'library.browse.read': false } });
+  fixtureDocument.body.appendChild(capabilityBootstrap);
   const context = {
     ButtonComponent,
     console,
-    document: {
-      getElementById() {
-        return null;
-      },
-      querySelectorAll() {
-        return [];
-      },
-    },
+    document: fixtureDocument,
     state: {
       player: {
         current: null,
@@ -3982,14 +4034,15 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     },
     refreshTrackModalPlaybackState() {},
   };
-  const duplicateWarning = { hidden: true, innerHTML: '' };
+  const duplicateWarning = fixtureDocument.createElement('div');
+  duplicateWarning.hidden = true;
   const duplicateTabs = { hidden: true, innerHTML: '' };
   const baseElements = {
     overlay: {},
     cover: { innerHTML: '' },
     title: { textContent: '' },
     subtitle: { textContent: '' },
-    list: { innerHTML: '' },
+    list: fixtureDocument.createElement('div'),
     footer: { hidden: true, textContent: '', innerHTML: '' },
     tabs: { hidden: true, innerHTML: '' },
     duplicateWarning,
@@ -4000,11 +4053,21 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   context.getTrackModalElements = () => baseElements;
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
+  for (const filename of ['../capability-ui.js', 'track-modal-lightbox-helpers.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), filename), 'utf8'), context, { filename });
+  }
+  assert.equal(context.AlbumHavenCapabilities.allows('library.browse.read'), false);
   album.total_duration_display = '1:20:01';
   for (const component of albumUiComponentSources) vm.runInContext(component.source, context, { filename: component.filename });
 
   context.renderTrackModalRelease(album);
 
+  const sampleControls = duplicateWarning.querySelectorAll('[data-create-sample-playlist]');
+  assert.equal(sampleControls.length, 2);
+  assert.equal(sampleControls.every(button => button.disabled), true);
+  const firstRows = baseElements.list.querySelectorAll('.album-track-table__row');
+  assert.equal(firstRows.length, 1);
+  assert.equal(firstRows[0].getAttribute('data-track-row-path'), album.duplicate_sources[0].tracks[0].path);
   assert.match(duplicateWarning.innerHTML, /data-album-key="alpha"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="0"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
@@ -4014,6 +4077,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
   context.state.modalDuplicateSourceIndices.alpha = 1;
   context.renderTrackModalRelease(album);
+  const secondRows = baseElements.list.querySelectorAll('.album-track-table__row');
+  assert.equal(secondRows.length, 1);
+  assert.equal(secondRows[0].getAttribute('data-track-row-path'), album.duplicate_sources[1].tracks[0].path);
   assert.match(baseElements.list.innerHTML, /Total Length: 40:01/);
   assert.doesNotMatch(baseElements.list.innerHTML, /Total Length: 1:20:01/);
 }
@@ -4093,7 +4159,8 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       },
     ],
   };
-  const list = { innerHTML: '' };
+  const { createNativeHomeRuntime } = require('./native-home-harness.cjs');
+  const list = createNativeHomeRuntime().document.createElement('div');
   const elements = {
     overlay: {},
     cover: { innerHTML: '' },
@@ -4196,6 +4263,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(list.innerHTML, /data-track-artist="Plain Performer"/);
   assert.match(list.innerHTML, /data-track-title="Track Four"/);
   assert.match(list.innerHTML, /data-track-artist="Artist Alpha feat\. Julien Jacob"/);
+
+  const renderedRows = list.querySelectorAll('[data-track-row-path]');
+  assert.deepEqual(renderedRows.map(row => row.getAttribute('data-track-row-path')), album.tracks.map(track => track.path));
 
   const queue = context.buildQueueTracksForAlbum(
     album,

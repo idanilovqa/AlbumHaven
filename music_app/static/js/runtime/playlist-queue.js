@@ -56,6 +56,9 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (!loopOwned && engine?.roles?.continuity && (typeof closeStreamingContinuityRole !== 'function'
     || closeStreamingContinuityRole('playlist-queue-mode') !== true)) throw new Error('Queue mode change was not accepted.');
   state.player.playbackQueue = next;
+  const selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.invalidateCompletedContext();
+  if (state.player.playbackQueue !== next || (typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return next;
   const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
   if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
   if (engine && !loopOwned && !explicitProgression) {
@@ -90,8 +93,8 @@ const TopPlaybackRuntime = (() => {
     entry.queue.currentIndex = snapshot.currentIndex;
     return snapshot;
   }
-  function bind(entry, receipt) {
-    const record = {entry, id: receipt.occurrenceId, receipt};
+  function bind(entry, receipt, restart = null) {
+    const record = {entry, id: receipt.occurrenceId, receipt, restart};
     tracks.set(receipt.payload, record);
     entry.values.set(record.id, receipt.payload);
     entry.prepared = receipt;
@@ -154,13 +157,103 @@ const TopPlaybackRuntime = (() => {
     if (!entry.source.isReceiptCurrent(receipt, receipt.payload)) throw unavailable();
     return bind(entry, receipt);
   }
+  const restarts = new WeakMap();
+  function isRestartCurrent(token) {
+    const restart = token && restarts.get(token);
+    if (!restart || restart.phase === 'invalid') return false;
+    const {entry, expected, phase} = restart;
+    const pure = () => !entry.retired && restart.expected === expected && restart.phase === phase
+      && entry.source.snapshot() === expected;
+    return pure() && current(entry) && pure();
+  }
+  function captureRestart(queue) {
+    const entry = entryFor(queue);
+    if (!current(entry)) return null;
+    const expected = entry.source.snapshot();
+    if (entry.source.candidate({direction: 1, automatic: true}) !== null
+      || !expected.currentAlbumId || entry.source.snapshot() !== expected || !current(entry)
+      || entry.source.snapshot() !== expected) return null;
+    const carrier = entry.values.get(expected.currentId);
+    if (recordFor(carrier)?.entry !== entry) return null;
+    const token = Object.freeze({});
+    restarts.set(token, {entry, expected, carrier, phase: 'captured'});
+    return token;
+  }
+  function restartCarrier(token) {
+    return isRestartCurrent(token) && restarts.get(token).phase === 'captured'
+      ? restarts.get(token).carrier : null;
+  }
+  function unavailableProgress(entry, before, after) {
+    const equal = (left, right) => left.length === right.length && left.every((value, index) => value === right[index]);
+    if (after.revision !== before.revision + 1
+      || ['currentId', 'currentIndex', 'currentAlbumId', 'visitedEnd', 'mode', 'stopAfterAlbum'].some(key => after[key] !== before[key])
+      || !equal(before.order, after.order) || after.unavailableIds.length !== before.unavailableIds.length + 1
+      || !before.unavailableIds.every((id, index) => after.unavailableIds[index] === id)) return false;
+    const added = after.unavailableIds[after.unavailableIds.length - 1];
+    return before.order.includes(added) && !before.unavailableIds.includes(added)
+      && entry.source.albumFor(added) === before.currentAlbumId;
+  }
+  async function prepareRestartStart(track, options) {
+    const token = options.restart, restart = token && restarts.get(token), entry = recordFor(track)?.entry;
+    if (!restart || restart.entry !== entry || restart.phase !== 'captured' || !isRestartCurrent(token)
+      || typeof options.restartOwnerCurrent !== 'function' || options.restartOwnerCurrent() !== true
+      || !isRestartCurrent(token)) throw unavailable();
+    const intent = {};
+    entry.starting = intent; entry.prepared = null; restart.phase = 'preparing';
+    const owned = () => !entry.retired && entry.starting === intent
+      && ['preparing', 'prepared'].includes(restart.phase) && !options.signal?.aborted;
+    const progressCurrent = () => {
+      if (!owned() || options.restartOwnerCurrent() !== true || !owned()) return false;
+      const next = entry.source.snapshot();
+      if (next !== restart.expected) {
+        if (restart.phase !== 'preparing' || !unavailableProgress(entry, restart.expected, next) || !owned()
+          || options.restartOwnerCurrent() !== true || !owned() || entry.source.snapshot() !== next) {
+          restart.phase = 'invalid'; return false;
+        }
+        restart.expected = next;
+      }
+      if (options.isCurrent?.() !== true || !owned() || entry.source.snapshot() !== restart.expected) {
+        restart.phase = 'invalid'; return false;
+      }
+      return true;
+    };
+    try {
+      const receipt = await entry.source.prepareRestart({expected: restart.expected, signal: options.signal, isCurrent: progressCurrent});
+      if (!owned() || !isRestartCurrent(token) || options.isCurrent?.() !== true || !owned()) throw unavailable();
+      if (!receipt) {restart.phase = 'captured'; entry.starting = null; sync(entry); return null;}
+      if (receipt.snapshot !== restart.expected || !entry.source.isReceiptCurrent(receipt, receipt.payload)
+        || !owned() || !isRestartCurrent(token)) throw unavailable();
+      restart.phase = 'prepared'; restart.ownerCurrent = options.restartOwnerCurrent;
+      return bind(entry, receipt, token);
+    } catch (error) {
+      if (entry.starting === intent) entry.starting = null;
+      if (restart.phase === 'preparing') restart.phase = entry.source.snapshot() === restart.expected
+        && !options.signal?.aborted ? 'captured' : 'invalid';
+      throw error;
+    }
+  }
   function commit(track) {
     const record = recordFor(track), entry = record?.entry;
     if (!current(entry) || entry.prepared !== record.receipt
       || !entry.source.commit(record.receipt, track)) return false;
+    if (record.restart) {
+      const restart = restarts.get(record.restart), accepted = entry.source.snapshot(), before = record.receipt.snapshot;
+      const index = before.order.indexOf(record.id);
+      const exact = () => restart?.phase === 'prepared' && entry.prepared === record.receipt
+        && entry.source.snapshot() === accepted && accepted.revision === before.revision + 1
+        && accepted.currentId === record.id && accepted.currentIndex === index && accepted.visitedEnd === index
+        && accepted.currentAlbumId === before.currentAlbumId && accepted.mode === before.mode
+        && accepted.stopAfterAlbum === before.stopAfterAlbum
+        && accepted.order.length === before.order.length && before.order.every((id, i) => accepted.order[i] === id)
+        && accepted.unavailableIds.length === before.unavailableIds.length
+        && before.unavailableIds.every((id, i) => accepted.unavailableIds[i] === id);
+      if (!exact() || restart.ownerCurrent?.() !== true || !exact()) return false;
+      restart.expected = accepted; restart.phase = 'committed'; restart.ownerCurrent = null;
+    }
     entry.prepared = null; entry.pending = false; entry.starting = null; sync(entry); return true;
   }
   return Object.freeze({
+    captureRestart, restartCarrier, isRestartCurrent,
     create({capture, createSource, isCurrent, onRetire}) {
       if (typeof createSource !== 'function' || typeof isCurrent !== 'function'
         || !Array.isArray(capture?.albums) || !capture.albums.length) throw new TypeError('Invalid Top queue.');
@@ -284,6 +377,9 @@ const TopPlaybackRuntime = (() => {
       if (!state.player.loopActive && engine.roles?.continuity && closeStreamingContinuityRole('top-queue-mode') !== true) return false;
       if (!entry.source.configure(options)) return false;
       entry.prepared = null; sync(entry);
+      const configured = entry.source.snapshot(), selectionEpoch = typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch;
+      if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.invalidateCompletedContext();
+      if (entry.retired || entry.source.snapshot() !== configured || (typeof topPlaybackStartEpoch === 'undefined' ? null : topPlaybackStartEpoch) !== selectionEpoch) return true;
       if (!state.player.loopActive) {engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;}
       if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) ExplicitQueueRuntime.modeChanged(queue, queue);
       else if (!state.player.loopActive) {
@@ -294,6 +390,7 @@ const TopPlaybackRuntime = (() => {
       return true;
     },
     async prepareStart(track, options) {
+      if (options.restart) return prepareRestartStart(track, options);
       const record = recordFor(track), entry = record?.entry;
       if (!current(entry)) throw unavailable();
       const value = entry.source.snapshot();

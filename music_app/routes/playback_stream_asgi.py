@@ -7,9 +7,12 @@ import anyio
 from contextlib import suppress
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 import logging
 import math
+import subprocess
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
@@ -19,11 +22,21 @@ from starlette.concurrency import run_in_threadpool
 
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.playback_encoded import (
+    INITIAL_ENCODED_CREDIT_BYTES,
+    EncodedStream,
+    fallback_sample_rate,
+    open_encoded_stream,
+    read_flac_layout,
+)
 from music_app.services.playback_pcm import (
     PcmDecoderProcess,
     PcmOpenCommand,
     PcmStreamMetadata,
+    SampleRateMismatch,
+    pack_encoded_frame,
     pack_pcm_frame,
+    read_native_sample_rate,
 )
 from music_app.services.waveform_peaks import (
     WAVEFORM_ANALYZER_VERSION,
@@ -35,14 +48,16 @@ from music_app.services.policy_asgi import require_action
 MAX_PLAYBACK_CONNECTIONS = 6
 MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
-MAX_CREDIT_FRAMES_PER_MESSAGE = 48_000
 MAX_CONTROL_MESSAGE_BYTES = 16_384
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
+MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
 MAX_TRACK_DURATION_SECONDS = 86_400
 MAX_TRACK_PATH_CHARACTERS = 32_768
 PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS = 0.001
 PCM_CLEANUP_JOIN_SECONDS = 5.0
+CAPTURE_ADMISSION_WAIT_SECONDS = 0.25
+PCM_SLOW_STEP_LOG_SECONDS = 1.0
 
 CLOSE_INVALID_CONTROL = 4400
 CLOSE_UNAUTHENTICATED = 4401
@@ -265,8 +280,14 @@ def _capture_source_event(metadata: PcmStreamMetadata) -> dict[str, object] | No
     }
 
 
-def _metadata_event(metadata: PcmStreamMetadata, *, role: str) -> dict[str, object]:
+def _metadata_event(
+    metadata: PcmStreamMetadata,
+    *,
+    role: str,
+    encoded: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
+        **(encoded or {}),
         "type": "metadata",
         "generation": metadata.generation,
         "streamId": metadata.stream_id,
@@ -281,9 +302,20 @@ def _metadata_event(metadata: PcmStreamMetadata, *, role: str) -> dict[str, obje
     }
 
 
+def _encoded_fields(decoder: object) -> dict[str, object] | None:
+    if not isinstance(decoder, EncodedStream):
+        return None
+    return {
+        "codec": decoder.codec,
+        "skipFrames": decoder.skip_frames,
+        "totalFrames": decoder.total_frames,
+        "initialCreditBytes": INITIAL_ENCODED_CREDIT_BYTES,
+    }
+
+
 @dataclass(slots=True, eq=False)
 class _PlaybackStream:
-    decoder: PcmDecoderProcess
+    decoder: PcmDecoderProcess | EncodedStream
     generation: int
     stream_id: int
     role: str
@@ -291,8 +323,30 @@ class _PlaybackStream:
     credit_task: asyncio.Task[None] | None = None
     release_task: asyncio.Task[None] | None = None
     capture_admission: tuple | None = None
+    coverage_mode: str = 'legacy'
+    rate_capture_authority: tuple | None = None
+    rate_capture_admission: object | None = None
+    rate_capture_owner: str | None = None
+    rate_capture_raw_path: str | None = None
+    rate_capture_opened_at: datetime | None = None
+    rate_capture_descriptor: dict | None = None
+    rate_capture_publication_started: bool = False
     absolute_admission_task: asyncio.Task[bool] | None = None
     absolute_settlement_task: asyncio.Task[None] | None = None
+
+
+def _log_slow_stream_step(step: str, stream: _PlaybackStream, started_at: float) -> None:
+    elapsed_seconds = time.monotonic() - started_at
+    if elapsed_seconds >= PCM_SLOW_STEP_LOG_SECONDS:
+        _LOGGER.warning(
+            "Playback %s took %.2fs generation=%s stream=%s role=%s sequence=%s",
+            step,
+            elapsed_seconds,
+            stream.generation,
+            stream.stream_id,
+            stream.role,
+            stream.sequence,
+        )
 
 
 class PlaybackPcmRegistry:
@@ -355,7 +409,7 @@ async def _settled_capture_call(function, *args, **kwargs):
     async def admitted_worker():
         # Cancels a waiter for the existing AnyIO thread limiter. Once running,
         # run_in_threadpool retains its synchronous worker until settlement.
-        with anyio.move_on_after(0.25):
+        with anyio.move_on_after(CAPTURE_ADMISSION_WAIT_SECONDS):
             return await run_in_threadpool(function, *args, **kwargs)
         return None
     task = asyncio.create_task(admitted_worker())
@@ -388,11 +442,146 @@ class _PlaybackPcmConnection:
         self._send_lock = asyncio.Lock()
         self._pending_opens: set[asyncio.Task[object]] = set()
         self._absolute_capture_owners: dict[int, _PlaybackStream] = {}
+        self._rate_capture_tasks: set[asyncio.Task[object]] = set()
         self._pending_credit_tasks: set[asyncio.Task[None]] = set()
         self._retire_tasks: set[asyncio.Task[None]] = set()
         self._transport_failed = asyncio.Event()
         self._closed = False
         self._finalized = False
+
+    def _rate_capture_authority(self):
+        """Capture the authorized open's actor, not a later active selection."""
+        try:
+            config = getattr(self._websocket.app.state, 'config', {})
+            if (not isinstance(config, Mapping) or config.get('ALBUM_HAVEN_POSITION_CAPTURE_ENABLED') is not True
+                    or config.get('ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED') is not True):
+                return None
+            from music_app.services.playback_capture import capture_scope
+            from music_app.services.policy import PolicyContext
+            from music_app.services.policy_asgi import _deployment_mode, _request_origin
+            from music_app.services.client_surfaces import client_surface_from_request
+            actor = self._websocket.state.current_actor
+            context = PolicyContext.build(actor=actor, action='library.media.read',
+                library_id=actor.current_library_id, deployment_mode=_deployment_mode(self._websocket),
+                request_origin=_request_origin(self._websocket),
+                client_surface_class=client_surface_from_request(self._websocket))
+            constraints = getattr(self._websocket.app.state, 'policy_constraint_resolver', None)
+            database_url = config.get('ALBUM_HAVEN_APP_DATABASE_URL')
+            if ((constraints is not None and not callable(constraints))
+                    or not isinstance(database_url, str) or not database_url.strip()):
+                return None
+            scope = capture_scope(context, getattr(self._websocket.app.state, 'auth_policy_config', {}))
+            return database_url, context, constraints, scope
+        except Exception:
+            return None
+
+    def _schedule_rate_capture(self, authority, admission, owner_uuid, raw_path,
+                               resolved_path, command, decoder, opened_at, descriptor=None):
+        # The bounded optional worker never holds up audio or creates a decoder.
+        if authority is None or len(self._rate_capture_tasks) >= MAX_DECODERS_PER_CONNECTION:
+            return None
+        try:
+            from music_app.services.playback_decoder_observation import DecoderAdmission
+            from music_app.services.playback_rate_observation import rate_capture_descriptor, publish_open_rate_map
+            if (type(admission) is not DecoderAdmission or admission.path != raw_path
+                    or admission.resolved_path != str(resolved_path)
+                    or admission.resolved_path != str(command.path)
+                    or admission.resolved_path != str(decoder.command.path)):
+                return None
+            descriptor = descriptor or rate_capture_descriptor(owner_uuid, command, decoder)
+            if descriptor is None:
+                return None
+            if ((getattr(decoder, 'rate_capture_requires_positions', False)
+                    or getattr(decoder, 'rate_capture_requires_origin', False))
+                    and not getattr(decoder, 'rate_capture_origin_confirmed', False)):
+                return descriptor
+            database_url, context, constraints, _scope = authority
+            facts = decoder.rate_capture_facts
+            def enabled():
+                config = getattr(self._websocket.app.state, 'config', {})
+                return (isinstance(config, Mapping) and config.get('ALBUM_HAVEN_POSITION_CAPTURE_ENABLED') is True
+                    and config.get('ALBUM_HAVEN_NATIVE_RATE_CAPTURE_ENABLED') is True)
+            task = asyncio.create_task(_settled_capture_call(publish_open_rate_map,
+                database_url, context, admission, facts, descriptor, opened_at,
+                constraints=constraints, enabled=enabled))
+            self._rate_capture_tasks.add(task)
+            task.add_done_callback(self._observe_rate_capture)
+            return descriptor
+        except Exception:
+            return None
+
+    def _observe_rate_capture(self, task):
+        self._rate_capture_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    def _rate_positions(self, stream, chunk):
+        descriptor = stream.rate_capture_descriptor
+        if (stream.coverage_mode == 'native' and descriptor is not None
+                and getattr(stream.decoder, 'rate_capture_requires_origin', False)):
+            # Encoded seeks carry a pending whole-window map. Publish only after
+            # the same decoder has observed its actual first source-sample PTS.
+            # Missing or mismatched proof does not delay or change audio bytes.
+            if (not stream.rate_capture_publication_started
+                    and stream.decoder.rate_capture_origin_confirmed):
+                scheduled = self._schedule_rate_capture(stream.rate_capture_authority,
+                    stream.rate_capture_admission, stream.rate_capture_owner, stream.rate_capture_raw_path,
+                    stream.decoder.command.path, stream.decoder.command, stream.decoder,
+                    stream.rate_capture_opened_at, descriptor=descriptor)
+                if scheduled is not None:
+                    stream.rate_capture_publication_started = True
+            return None
+        if (stream.coverage_mode != 'native' or descriptor is None
+                or descriptor.get('delivery_positions') != 'per-packet'):
+            return None
+        try:
+            ranges = stream.decoder.rate_capture_ranges(chunk)
+            if not ranges:
+                return None
+            if not stream.rate_capture_publication_started:
+                scheduled = self._schedule_rate_capture(stream.rate_capture_authority,
+                    stream.rate_capture_admission, stream.rate_capture_owner, stream.rate_capture_raw_path,
+                    stream.decoder.command.path, stream.decoder.command, stream.decoder,
+                    stream.rate_capture_opened_at, descriptor=descriptor)
+                if scheduled is not None:
+                    stream.rate_capture_publication_started = True
+            return dict(type='rate-positions', generation=stream.generation,
+                streamId=stream.stream_id, sequence=stream.sequence,
+                frameCount=chunk.frame_count, map_ref=descriptor['map_ref'],
+                ranges=[list(item) for item in ranges])
+        except Exception:
+            # Optional proof failure cannot alter the PCM packet or fail playback.
+            return None
+
+    async def _prepare_rate_capture_admission(self, authority, owner_uuid, raw_path, resolved_path):
+        if (authority is None or self._closed
+                or len(self._rate_capture_tasks) >= MAX_DECODERS_PER_CONNECTION):
+            return None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CAPTURE_ADMISSION_WAIT_SECONDS
+        try:
+            from music_app.services.playback_decoder_observation import DecoderAdmission, prepare_decoder_admission
+            from music_app.services.playback_rate_observation import valid_rate_owner_uuid
+            if not valid_rate_owner_uuid(owner_uuid) or loop.time() >= deadline:
+                return None
+            database_url, context, constraints, scope = authority
+            task = asyncio.create_task(_settled_capture_call(prepare_decoder_admission,
+                database_url, context, raw_path, resolved_path, scope, constraints=constraints))
+            self._rate_capture_tasks.add(task)
+            task.add_done_callback(self._observe_rate_capture)
+            # A timeout abandons this result, not the synchronous worker. Keep
+            # its optional slot and connection ownership until physical settlement.
+            completed, _pending = await asyncio.wait({task}, timeout=max(0, deadline - loop.time()))
+            if task not in completed or task.cancelled() or loop.time() > deadline or self._closed:
+                return None
+            admission = task.result()
+            if (type(admission) is not DecoderAdmission or admission.path != raw_path
+                    or admission.resolved_path != str(resolved_path)):
+                return None
+            return admission
+        except Exception:
+            # Unavailable evidence cannot deny the already-authorized audio open.
+            return None
 
     async def _prepare_capture_admission(self, raw_path, resolved_path, start_frame, sample_rate):
         config = getattr(self._websocket.app.state, 'config', {})
@@ -600,13 +789,14 @@ class _PlaybackPcmConnection:
             await self._send_json_unlocked(
                 {
                     "type": "eos",
+                    "coverageMode": stream.coverage_mode,
                     "generation": stream.generation,
                     "streamId": stream.stream_id,
                     "role": stream.role,
                     "emittedFrames": stream.decoder.emitted_frames,
                     "authoritativeTotalFrames": metadata.authoritative_total_frames,
                     **({"captureSource": _capture_source_event(metadata)}
-                       if metadata.capture_source_id is not None else {}),
+                       if stream.coverage_mode == 'legacy' and metadata.capture_source_id is not None else {}),
                 }
             )
             if not self._owns_stream(stream):
@@ -674,6 +864,8 @@ class _PlaybackPcmConnection:
 
     async def _handle_control(self, control: dict[str, Any]) -> bool:
         command_type = control.get("type")
+        if command_type == "probe":
+            return await self._probe(control)
         if command_type == "open":
             return await self._open(control)
         if command_type == "credit":
@@ -682,20 +874,75 @@ class _PlaybackPcmConnection:
             return await self._promote(control)
         if command_type == "close":
             return await self._close_stream(control)
+        if command_type == "stall-report":
+            return await self._log_client_stall(control)
+        if command_type == "decoder-fallback":
+            return await self._log_decoder_fallback(control)
+        if command_type == "output-report":
+            return await self._log_audio_output(control)
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
 
-    async def _open(self, control: dict[str, Any]) -> bool:
-        task = asyncio.create_task(self._open_tracked(control))
-        self._pending_opens.add(task)
-        try:
-            return await task
-        finally:
-            self._pending_opens.discard(task)
-
-    async def _open_tracked(self, control: dict[str, Any]) -> bool:
-        if self._closed:
+    async def _log_audio_output(self, control: dict[str, Any]) -> bool:
+        fields = {
+            name: _bounded_integer(
+                control.get(name), minimum=0, maximum=_MAX_PROTOCOL_INTEGER
+            )
+            for name in (
+                "sampleRate",
+                "baseLatencyMs",
+                "outputLatencyMs",
+                "underruns",
+                "underrunMs",
+            )
+        }
+        stats_available = control.get("statsAvailable")
+        if None in fields.values() or not isinstance(stats_available, bool):
+            await self.reject(CLOSE_INVALID_CONTROL)
             return False
+        _LOGGER.warning(
+            "Playback audio output rate=%s base_latency_ms=%s output_latency_ms=%s "
+            "underruns=%s underrun_ms=%s stats_available=%s",
+            fields["sampleRate"],
+            fields["baseLatencyMs"],
+            fields["outputLatencyMs"],
+            fields["underruns"],
+            fields["underrunMs"],
+            stats_available,
+        )
+        return True
+
+    async def _log_decoder_fallback(self, control: dict[str, Any]) -> bool:
+        reason = control.get("reason")
+        if not isinstance(reason, str) or not reason or len(reason) > 64:
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        _LOGGER.warning("Playback client fell back to server decoding: %r", reason)
+        return True
+
+    async def _log_client_stall(self, control: dict[str, Any]) -> bool:
+        fields = {
+            name: _bounded_integer(
+                control.get(name), minimum=0, maximum=_MAX_PROTOCOL_INTEGER
+            )
+            for name in ("generation", "streamId", "durationMs", "targetBufferFrames")
+        }
+        page_visible = control.get("pageVisible")
+        if None in fields.values() or not isinstance(page_visible, bool):
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        _LOGGER.warning(
+            "Playback client stall %.2fs generation=%s stream=%s "
+            "target_buffer_frames=%s page_visible=%s",
+            fields["durationMs"] / 1000,
+            fields["generation"],
+            fields["streamId"],
+            fields["targetBufferFrames"],
+            page_visible,
+        )
+        return True
+
+    async def _authorize_media_read(self) -> bool:
         try:
             await require_action(
                 "library.media.read",
@@ -707,6 +954,71 @@ class _PlaybackPcmConnection:
                 if exc.status_code == 401
                 else CLOSE_FORBIDDEN_ORIGIN
             )
+            return False
+        return True
+
+    async def _probe(self, control: dict[str, Any]) -> bool:
+        if not await self._authorize_media_read():
+            return False
+        request_id = _bounded_integer(
+            control.get("requestId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
+        )
+        raw_path = control.get("path")
+        if (
+            request_id is None
+            or not isinstance(raw_path, str)
+            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
+        ):
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        resolved_path = (
+            resolve_configured_media_path(self._websocket.app.state.config, raw_path)
+            if raw_path
+            else None
+        )
+        if resolved_path is None:
+            await self.reject(CLOSE_MEDIA_NOT_FOUND)
+            return False
+        size_bytes = 0
+        lossless_bits_per_second = 0.0
+        try:
+            sample_rate = await asyncio.to_thread(read_native_sample_rate, resolved_path)
+            size_bytes = await asyncio.to_thread(lambda: resolved_path.stat().st_size)
+            if resolved_path.suffix.lower() == ".flac":
+                layout = await asyncio.to_thread(read_flac_layout, resolved_path)
+                if layout is not None:
+                    header, first_audio_byte, end_byte, native_rate, total_samples = layout
+                    if end_byte > first_audio_byte >= 0 and native_rate > 0 and total_samples > 0:
+                        lossless_bits_per_second = (
+                            (len(header) + end_byte - first_audio_byte) * 8 * native_rate
+                            / total_samples
+                        )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            _LOGGER.warning("Playback sample rate probe failed: %s", type(error).__name__)
+            sample_rate = 0
+        await self._send_json(
+            {
+                "type": "probe-result",
+                "requestId": request_id,
+                "sampleRate": sample_rate,
+                "fallbackSampleRate": fallback_sample_rate(sample_rate),
+                "sizeBytes": size_bytes,
+                **({"losslessBitsPerSecond": lossless_bits_per_second}
+                   if lossless_bits_per_second > 0 else {}),
+            }
+        )
+        return True
+
+    async def _open(self, control: dict[str, Any]) -> bool:
+        task = asyncio.create_task(self._open_tracked(control))
+        self._pending_opens.add(task)
+        try:
+            return await task
+        finally:
+            self._pending_opens.discard(task)
+
+    async def _open_tracked(self, control: dict[str, Any]) -> bool:
+        if self._closed or not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
@@ -724,8 +1036,15 @@ class _PlaybackPcmConnection:
         )
         role = control.get("role")
         duration = control.get("durationSeconds")
+        raw_codecs = control.get("codecs", [])
+        codecs_valid = isinstance(raw_codecs, list) and all(
+            codec in ("mp3", "flac") for codec in raw_codecs
+        )
+        quality = control.get("quality", "original")
         if (
-            generation is None
+            not codecs_valid
+            or quality not in ("original", "320")
+            or generation is None
             or stream_id is None
             or start_frame is None
             or sample_rate is None
@@ -789,34 +1108,66 @@ class _PlaybackPcmConnection:
             provisional_duration_seconds=float(duration),
         )
         stream: _PlaybackStream | None = None
+        coverage_mode = 'native' if 'trackingOwnerUuid' in control else 'legacy'
+        rate_authority = self._rate_capture_authority() if coverage_mode == 'native' else None
+        rate_admission = None
 
-        def retain_start(decoder: PcmDecoderProcess) -> None:
+        def retain_start(decoder: PcmDecoderProcess | EncodedStream) -> None:
             nonlocal stream
             stream = _PlaybackStream(
                 decoder=decoder, generation=generation, stream_id=stream_id, role=role,
-                capture_admission=capture_admission)
+                capture_admission=capture_admission, coverage_mode=coverage_mode,
+                rate_capture_authority=rate_authority, rate_capture_admission=rate_admission,
+                rate_capture_owner=control.get('trackingOwnerUuid'),
+                rate_capture_raw_path=raw_path, rate_capture_opened_at=opened_at)
             self._streams_by_id[stream_id] = stream
             self._streams_by_role[role] = stream
 
         try:
-            # Existing decoder reservation bounds optional work as well as the
-            # subprocess. Invalid role/capacity requests never reach this lookup.
-            capture_admission = await self._prepare_capture_admission(raw_path, resolved_path, start_frame, sample_rate)
+            capture_admission = None
+            rate_admission = await self._prepare_rate_capture_admission(
+                rate_authority, control.get('trackingOwnerUuid'), raw_path, resolved_path)
             if self._closed:
                 await self._registry.release_decoder()
                 return False
-            # Existing admission enables local output counting, never an absolute seek offset.
-            if capture_admission is not None and start_frame > 0:
-                command = replace(command, capture_local_coordinates=True,
-                    capture_absolute_coordinates=self._absolute_capture_enabled())
-            decoder = await PcmDecoderProcess.start(command, on_start=retain_start)
-            # Persist actual decoder UUID/source before publishing its metadata.
-            # Failure leaves audio usable but no partial source qualification.
-            await self._record_capture_open(stream)
-            if decoder.metadata.capture_local_coordinates and stream.capture_admission is None:
-                # Do not advertise a local stream whose server-open admission failed.
-                decoder.metadata = replace(decoder.metadata, capture_source_base48=None,
-                    capture_local_coordinates=False)
+            opened_at = datetime.now(timezone.utc)
+            decoder = await open_encoded_stream(
+                command,
+                codecs=frozenset(raw_codecs),
+                quality=quality,
+            )
+            if decoder is not None:
+                retain_start(decoder)
+            else:
+                # Existing decoder reservation bounds optional work as well as the
+                # subprocess. Invalid role/capacity requests never reach this lookup.
+                capture_admission = (await self._prepare_capture_admission(raw_path, resolved_path, start_frame, sample_rate)
+                    if coverage_mode == 'legacy' else None)
+                if self._closed:
+                    await self._registry.release_decoder()
+                    return False
+                # Existing admission enables local output counting, never an absolute seek offset.
+                if capture_admission is not None and start_frame > 0:
+                    command = replace(command, capture_local_coordinates=True,
+                        capture_absolute_coordinates=self._absolute_capture_enabled())
+                if (coverage_mode == 'native' and rate_authority is not None
+                        and self._absolute_capture_enabled()
+                        and sample_rate in (44100, 48000)
+                        and resolved_path.suffix.lower() in {'.wav', '.wave'}):
+                    from music_app.services.playback_rate_observation import valid_rate_owner_uuid
+                    if valid_rate_owner_uuid(control.get('trackingOwnerUuid')):
+                        # Reuse Source's existing checksum-bound WAV observer;
+                        # these flags do not grant legacy publication authority.
+                        command = replace(command, capture_local_coordinates=True,
+                            capture_absolute_coordinates=True)
+                decoder = await PcmDecoderProcess.start(command, on_start=retain_start)
+                # Persist actual decoder UUID/source before publishing its metadata.
+                # Failure leaves audio usable but no partial source qualification.
+                await self._record_capture_open(stream)
+                if decoder.metadata.capture_local_coordinates and stream.capture_admission is None:
+                    # Do not advertise a local stream whose server-open admission failed.
+                    decoder.metadata = replace(decoder.metadata, capture_source_base48=None,
+                        capture_local_coordinates=False)
         except BaseException as error:
             if stream is None:
                 await self._registry.release_decoder()
@@ -826,6 +1177,17 @@ class _PlaybackPcmConnection:
                 raise
             if self._closed:
                 return False
+            if isinstance(error, SampleRateMismatch):
+                await self._send_json(
+                    {
+                        "type": "rate-mismatch",
+                        "generation": generation,
+                        "streamId": stream_id,
+                        "sampleRate": error.native_rate,
+                        "fallbackSampleRate": fallback_sample_rate(error.native_rate),
+                    }
+                )
+                return True
             await self._send_decoder_error(
                 generation=generation, stream_id=stream_id, role=role, error=error)
             return True
@@ -839,7 +1201,18 @@ class _PlaybackPcmConnection:
         if self._closed:
             self._retire_stream_unlocked(stream)
             return False
-        await self._send_json(_metadata_event(decoder.metadata, role=role))
+        metadata_event = _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
+        metadata_event['coverageMode'] = coverage_mode
+        if coverage_mode == 'native':
+            metadata_event.pop('captureSource', None)
+            metadata_event['rateCapture'] = self._schedule_rate_capture(
+                rate_authority, rate_admission, control.get('trackingOwnerUuid'), raw_path,
+                resolved_path, command, decoder, opened_at)
+            stream.rate_capture_descriptor = metadata_event['rateCapture']
+        await self._send_json(metadata_event)
+        if isinstance(decoder, EncodedStream):
+            decoder.grant_credit(INITIAL_ENCODED_CREDIT_BYTES)
+            self._start_credit_drain(stream)
         return True
 
     async def _reject_open(self, code: int) -> bool:
@@ -855,65 +1228,88 @@ class _PlaybackPcmConnection:
         stream_id = _bounded_integer(
             control.get("streamId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
         )
-        frames = _bounded_integer(
-            control.get("frames"), minimum=1, maximum=MAX_CREDIT_FRAMES_PER_MESSAGE
+        if (generation, stream_id) in self._completed_streams_by_role.values():
+            return True
+        stream = self._streams_by_id.get(stream_id) if stream_id is not None else None
+        credit_limit = (
+            EncodedStream.max_outstanding_credit
+            if stream is not None and isinstance(stream.decoder, EncodedStream)
+            else MAX_CREDIT_FRAMES_PER_MESSAGE
         )
+        frames = _bounded_integer(control.get("frames"), minimum=1, maximum=credit_limit)
         if generation is None or stream_id is None or frames is None:
             code = (
                 CLOSE_CREDIT_VIOLATION
                 if isinstance(control.get("frames"), int)
                 and not isinstance(control.get("frames"), bool)
-                and control.get("frames", 0) > MAX_CREDIT_FRAMES_PER_MESSAGE
+                and control.get("frames", 0) > credit_limit
                 else CLOSE_INVALID_CONTROL
             )
             await self.reject(code)
             return False
-        stream = self._streams_by_id.get(stream_id)
-        if stream is None:
-            if (generation, stream_id) in self._completed_streams_by_role.values():
-                return True
+        if stream is None or stream.generation != generation:
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
-        if stream.generation != generation:
-            await self.reject(CLOSE_INVALID_CONTROL)
-            return False
-        if stream.decoder.outstanding_credit_frames + frames > MAX_CREDIT_FRAMES_PER_MESSAGE:
+        if stream.decoder.outstanding_credit_frames + frames > credit_limit:
             await self.reject(CLOSE_CREDIT_VIOLATION)
             return False
 
         stream.decoder.grant_credit(frames)
+        self._start_credit_drain(stream)
+        return True
+
+    def _start_credit_drain(self, stream: _PlaybackStream) -> None:
         if stream.credit_task is None or stream.credit_task.done():
             task = asyncio.create_task(self._drain_stream_credit(stream))
             stream.credit_task = task
             self._pending_credit_tasks.add(task)
             task.add_done_callback(self._pending_credit_tasks.discard)
-        return True
 
     async def _drain_stream_credit(self, stream: _PlaybackStream) -> None:
         try:
             while stream.decoder.outstanding_credit_frames > 0:
                 if self._closed or self._streams_by_id.get(stream.stream_id) is not stream:
                     return
+                read_started_at = time.monotonic()
                 chunk = await stream.decoder.read_credited_frames(
                     max_frames=stream.decoder.outstanding_credit_frames,
                     delivery_role=stream.role,
                 )
+                _log_slow_stream_step("decoder read", stream, read_started_at)
                 if chunk.frame_count:
-                    payload = pack_pcm_frame(
-                        generation=stream.generation,
-                        stream_id=stream.stream_id,
-                        role=stream.role,
-                        sequence=stream.sequence,
-                        frame_count=chunk.frame_count,
-                        pcm=chunk.pcm,
+                    payload = (
+                        pack_encoded_frame(
+                            generation=stream.generation,
+                            stream_id=stream.stream_id,
+                            role=stream.role,
+                            sequence=stream.sequence,
+                            payload=chunk.pcm,
+                        )
+                        if isinstance(stream.decoder, EncodedStream)
+                        else pack_pcm_frame(
+                            generation=stream.generation,
+                            stream_id=stream.stream_id,
+                            role=stream.role,
+                            sequence=stream.sequence,
+                            frame_count=chunk.frame_count,
+                            pcm=chunk.pcm,
+                        )
                     )
-                    if not await self._send_stream_bytes(stream, payload, self._absolute_positions(stream, chunk)):
+                    send_started_at = time.monotonic()
+                    positions = (self._rate_positions(stream, chunk) if stream.coverage_mode == 'native'
+                        else self._absolute_positions(stream, chunk))
+                    if not await self._send_stream_bytes(stream, payload, positions):
                         return
+                    _log_slow_stream_step("socket send", stream, send_started_at)
                     stream.sequence += 1
                     await asyncio.sleep(PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS)
                     continue
 
                 metadata = await stream.decoder.finish()
+                if getattr(stream.decoder, 'rate_capture_requires_origin', False):
+                    # A final stderr observation may settle after the last byte
+                    # read. Publication is still optional and never awaited.
+                    self._rate_positions(stream, None)
                 try:
                     if not await self._send_stream_eos(stream, metadata):
                         return
@@ -1090,7 +1486,7 @@ class _PlaybackPcmConnection:
     def _start_release(self, stream: _PlaybackStream, *, cancel: bool, eof_metadata=None) -> asyncio.Task[None]:
         if stream.release_task is None:
             self._retiring_streams.add(stream)
-            if cancel:
+            if cancel and not isinstance(stream.decoder, EncodedStream):
                 stream.decoder.request_cancel()
             stream.release_task = asyncio.create_task(self._release_stream(
                 stream, cancel=cancel, caller=asyncio.current_task(), eof_metadata=eof_metadata))
@@ -1120,11 +1516,14 @@ class _PlaybackPcmConnection:
         if eof_metadata is not None:
             await self._record_capture_eof(stream, eof_metadata)
         if cancel:
-            try:
+            if isinstance(stream.decoder, EncodedStream):
                 await stream.decoder.cancel()
-            except RuntimeError:
-                _LOGGER.warning("Playback cleanup unresolved; retaining decoder capacity")
-            await stream.decoder.wait_closed()
+            else:
+                try:
+                    await stream.decoder.cancel()
+                except RuntimeError:
+                    _LOGGER.warning("Playback cleanup unresolved; retaining decoder capacity")
+                await stream.decoder.wait_closed()
         await self._registry.release_decoder()
         self._retiring_streams.discard(stream)
 
@@ -1190,6 +1589,7 @@ class _PlaybackPcmConnection:
                      if stream.absolute_settlement_task is not None and not stream.absolute_settlement_task.done()
                      else stream.absolute_admission_task)
                     for stream in self._absolute_capture_owners.values()]
+        optional.extend(self._rate_capture_tasks)
         if optional:
             await asyncio.gather(*(asyncio.shield(task) for task in optional), return_exceptions=True)
         await self._registry.release_connection(self)

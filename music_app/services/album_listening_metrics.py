@@ -1261,7 +1261,11 @@ class _CandidateGeometryFold:
     membership or completeness. Old Runs and new compact spans have separate
     adapters; neither is cast into the other's evidence type.
     """
-    def __init__(self, required, ordered_track_ids, *, span_limit=None, local_total_tolerance=False):
+    def __init__(self, required, ordered_track_ids, *, span_limit=None, local_total_tolerance=False,
+                 units_per_second=48000):
+        if (type(units_per_second) is not int
+                or not 1 <= units_per_second <= 2**127 - 1):
+            raise ValueError('invalid_geometry_timebase')
         self.required = required
         self.denominator, self.core_length, self.cores = 0, Fraction(0), {}
         for track in ordered_track_ids:
@@ -1271,8 +1275,8 @@ class _CandidateGeometryFold:
             self.denominator = _bounded(self.denominator + extent)
             # Preserve historical proposed-candidate defaults. The actual local
             # policy splits ONE total min(1s,0.5%) allowance equally at boundaries.
-            trim = (min(Fraction(24000), Fraction(extent, 400)) if local_total_tolerance
-                    else min(Fraction(48000), Fraction(extent, 200)))
+            trim = (min(Fraction(units_per_second, 2), Fraction(extent, 400)) if local_total_tolerance
+                    else min(Fraction(units_per_second), Fraction(extent, 200)))
             self.cores[track] = (trim, extent - trim, self.core_length)
             self.core_length = _add_fraction(self.core_length, extent - 2 * trim)
         self.layers = {track: {} for track in required}

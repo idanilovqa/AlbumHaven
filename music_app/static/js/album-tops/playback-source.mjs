@@ -51,9 +51,13 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
     try {if (isCurrent() !== true) dispose();} catch {dispose();} finally {checking = false;}
     return !retired;
   }
+  // Only private state: safe after guards, signals or alias traps reenter.
+  function requestOwned(request) {
+    return !retired && !request.cancelled && active === request && plan.snapshot() === request.expected;
+  }
   function requestCurrent(request) {
-    const owned = () => !retired && !request.cancelled && active === request
-      && !request.controller.signal.aborted && !request.signal?.aborted && plan.snapshot() === request.expected;
+    const owned = () => requestOwned(request)
+      && !request.controller.signal.aborted && !request.signal?.aborted && requestOwned(request);
     if (request.checking || !owned()) {stop(request); return false;}
     request.checking = true;
     try {
@@ -63,6 +67,7 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
   }
   function requireCurrent(request) {if (!requestCurrent(request)) throw abort();}
   function candidate(request) {
+    if (request.kind === 'restart') return plan.restartCandidate(request.expected);
     const snapshot = plan.snapshot();
     return request.direction === 0 && !snapshot.unavailableIds.includes(snapshot.currentId)
       ? snapshot.currentId : plan.candidate({direction: request.direction || 1, automatic: request.automatic});
@@ -80,10 +85,59 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
   }
   function isReceiptCurrent(receipt, payload = receipt?.payload) {
     const binding = receipts.get(receipt);
-    // A live guard may mutate a coverPath alias; finish with data-only validation.
+    // Guards may mutate an alias; alias descriptor traps may retire the request.
     return !!binding && bindings.get(payload) === binding && requestCurrent(binding.request)
       && matchesPayload(binding.payload, payload) && requestCurrent(binding.request)
-      && matchesPayload(binding.payload, payload);
+      && matchesPayload(binding.payload, payload) && requestOwned(binding.request);
+  }
+  async function prepareRequest(request, occurrenceId) {
+    request.controller = new AbortController();
+    request.checking = false;
+    request.cancelled = false;
+    request.onAbort = () => stop(request);
+    request.current = () => requestCurrent(request);
+    const previous = active; active = request; stop(previous);
+    if (!request.cancelled) request.signal?.addEventListener('abort', request.onAbort, {once: true});
+    try {
+      requireCurrent(request);
+      let id = candidate(request);
+      if (occurrenceId !== undefined && occurrenceId !== id) throw abort();
+      while (id !== null) {
+        requireCurrent(request);
+        const captured = sources.get(id);
+        let fresh;
+        try {
+          fresh = await providers.resolveNativePlayback({top_ref: topRef, source: captured.source},
+            {scopeKey, signal: request.controller.signal, isCurrent: request.current});
+        } catch (error) {
+          requireCurrent(request);
+          const unavailable = error?.status === 404 && error?.responseRejected === true && error?.code === 'item_unavailable';
+          requireCurrent(request);
+          if (!unavailable) throw error;
+          const rejected = request.kind === 'restart'
+            ? plan.rejectRestart(id, request.expected) : plan.reject(id, request.expected);
+          if (!rejected) throw abort();
+          request.expected = plan.snapshot();
+          requireCurrent(request);
+          id = request.kind === 'restart' ? plan.restartCandidate(request.expected)
+            : plan.candidate({direction: request.direction || 1, automatic: request.automatic});
+          continue;
+        }
+        requireCurrent(request);
+        if (fresh?.top_ref !== topRef || !sourceFields.every(key => fresh.source?.[key] === captured.source[key])) throw invalid();
+        const target = {...fresh.native_target};
+        const payload = Object.freeze({sourceKind: 'album-top', src: `/track?path=${encodeURIComponent(target.path)}`,
+          path: target.path, title: target.title, artist: target.artist, album: target.album_title,
+          durationSeconds: target.duration_seconds, inventory_track_ref: target.inventory_track_ref, albumRef: captured.albumRef,
+          ...(captured.listeningSelection ? {listeningSelection: captured.listeningSelection} : {})});
+        requireCurrent(request);
+        const receipt = Object.freeze({snapshot: request.expected, occurrenceId: id, payload});
+        const binding = Object.freeze({owner, request, payload, occurrenceId: id});
+        bindings.set(payload, binding); receipts.set(receipt, binding);
+        return receipt;
+      }
+      stop(request); return null;
+    } catch (error) {stop(request); throw error;}
   }
   return Object.freeze({
     snapshot: plan.snapshot,
@@ -110,55 +164,25 @@ export function createTopPlaybackSource({capture, providers, scopeKey, isCurrent
         || signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
         throw new TypeError('Invalid Top playback request.');
       }
-      const request = {direction, automatic, signal, isCurrent: intentCurrent, expected: plan.snapshot(),
-        controller: new AbortController(), checking: false, cancelled: false};
-      request.onAbort = () => stop(request);
-      request.current = () => requestCurrent(request);
-      const previous = active; active = request; stop(previous);
-      if (!request.cancelled) signal?.addEventListener('abort', request.onAbort, {once: true});
-      try {
-        requireCurrent(request);
-        let id = candidate(request);
-        if (occurrenceId !== undefined && occurrenceId !== id) throw abort();
-        while (id !== null) {
-          requireCurrent(request);
-          const captured = sources.get(id);
-          let fresh;
-          try {
-            fresh = await providers.resolveNativePlayback({top_ref: topRef, source: captured.source},
-              {scopeKey, signal: request.controller.signal, isCurrent: request.current});
-          } catch (error) {
-            requireCurrent(request);
-            const unavailable = error?.status === 404 && error?.responseRejected === true && error?.code === 'item_unavailable';
-            requireCurrent(request);
-            if (!unavailable) throw error;
-            if (!plan.reject(id, request.expected)) throw abort();
-            request.expected = plan.snapshot();
-            requireCurrent(request);
-            id = plan.candidate({direction: direction || 1, automatic});
-            continue;
-          }
-          requireCurrent(request);
-          if (fresh?.top_ref !== topRef || !sourceFields.every(key => fresh.source?.[key] === captured.source[key])) throw invalid();
-          const target = {...fresh.native_target};
-          const payload = Object.freeze({sourceKind: 'album-top', src: `/track?path=${encodeURIComponent(target.path)}`,
-            path: target.path, title: target.title, artist: target.artist, album: target.album_title,
-            durationSeconds: target.duration_seconds, inventory_track_ref: target.inventory_track_ref, albumRef: captured.albumRef,
-            ...(captured.listeningSelection ? {listeningSelection: captured.listeningSelection} : {})});
-          requireCurrent(request);
-          const receipt = Object.freeze({snapshot: request.expected, occurrenceId: id, payload});
-          const binding = Object.freeze({owner, request, payload, occurrenceId: id});
-          bindings.set(payload, binding); receipts.set(receipt, binding);
-          return receipt;
-        }
-        stop(request); return null;
-      } catch (error) {stop(request); throw error;}
+      return prepareRequest({kind: 'ordinary', direction, automatic, signal, isCurrent: intentCurrent,
+        expected: plan.snapshot()}, occurrenceId);
+    },
+    async prepareRestart({expected = plan.snapshot(), signal, isCurrent: intentCurrent = () => true} = {}) {
+      if (typeof intentCurrent !== 'function'
+        || signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
+        throw new TypeError('Invalid Top playback request.');
+      }
+      // A stale caller must not retire a legitimate active preparation.
+      if (expected !== plan.snapshot()) throw abort();
+      return prepareRequest({kind: 'restart', signal, isCurrent: intentCurrent, expected});
     },
     isReceiptCurrent,
     commit(receipt, acceptedPayload) {
       if (acceptedPayload === undefined || !isReceiptCurrent(receipt, acceptedPayload)) return false;
-      const accepted = plan.commit(receipt.occurrenceId, receipt.snapshot);
-      if (accepted) stop(receipts.get(receipt).request);
+      const request = receipts.get(receipt).request;
+      const accepted = request.kind === 'restart'
+        ? plan.commitRestart(receipt.occurrenceId, receipt.snapshot) : plan.commit(receipt.occurrenceId, receipt.snapshot);
+      if (accepted) stop(request);
       return accepted;
     },
     cancel() {stop(active);},

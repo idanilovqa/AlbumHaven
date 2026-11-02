@@ -167,6 +167,84 @@ def test_generic_minimal_migration_fixture_does_not_require_app_scope(inventory)
     assert connection.queries == []
 
 
+class _PrivilegeConnection:
+    def __init__(self, value):
+        self.value = value
+        self.events = []
+
+    def execute(self, sql, params=None):
+        query = " ".join(str(sql).split()).lower()
+        if query.startswith("select has_table_privilege"):
+            self.events.append(("probe", params))
+            return _Result([{"has_trigger": self.value}])
+        if query.startswith("grant trigger"):
+            self.events.append(("grant", params))
+            return _Result([])
+        if query.startswith("revoke trigger"):
+            self.events.append(("revoke", params))
+            return _Result([])
+        raise AssertionError(sql)
+
+
+def test_unrelated_migration_never_changes_privileges():
+    connection = _PrivilegeConnection(False)
+    with compatibility.migration_compatibility_context(connection, "0095_unrelated.sql"):
+        connection.events.append(("body", None))
+    assert connection.events == [("body", None)]
+
+
+def test_current_presence_temporarily_grants_and_revokes_trigger_privilege():
+    connection = _PrivilegeConnection(False)
+    with compatibility.migration_compatibility_context(
+        connection, compatibility.CURRENT_PLAYBACK_PRESENCE
+    ):
+        connection.events.extend((("body", None), ("ledger", None)))
+    assert connection.events == [
+        ("probe", (compatibility.FRIEND_CONNECTIONS,)),
+        ("grant", None),
+        ("body", None),
+        ("ledger", None),
+        ("revoke", None),
+    ]
+
+
+def test_current_presence_preserves_preexisting_trigger_privilege():
+    connection = _PrivilegeConnection(True)
+    with compatibility.migration_compatibility_context(
+        connection, compatibility.CURRENT_PLAYBACK_PRESENCE
+    ):
+        connection.events.append(("body", None))
+    assert connection.events == [
+        ("probe", (compatibility.FRIEND_CONNECTIONS,)),
+        ("body", None),
+    ]
+
+
+def test_current_presence_failure_preserves_primary_error_for_transaction_rollback():
+    connection = _PrivilegeConnection(False)
+    with pytest.raises(RuntimeError, match="primary migration failure"):
+        with compatibility.migration_compatibility_context(
+            connection, compatibility.CURRENT_PLAYBACK_PRESENCE
+        ):
+            connection.events.append(("body", None))
+            raise RuntimeError("primary migration failure")
+    assert connection.events == [
+        ("probe", (compatibility.FRIEND_CONNECTIONS,)),
+        ("grant", None),
+        ("body", None),
+    ]
+
+
+@pytest.mark.parametrize("value", [None, 1, "false"])
+def test_current_presence_privilege_probe_fails_closed(value):
+    connection = _PrivilegeConnection(value)
+    with pytest.raises(RuntimeError, match="verify friend-connection"):
+        with compatibility.migration_compatibility_context(
+            connection, compatibility.CURRENT_PLAYBACK_PRESENCE
+        ):
+            pytest.fail("malformed privilege state reached migration SQL")
+
+
 class _LedgerConnection:
     """Only allow ledger reads; any premature pending SQL fails the test."""
     def __init__(self, applied, *, tuple_rows=False):

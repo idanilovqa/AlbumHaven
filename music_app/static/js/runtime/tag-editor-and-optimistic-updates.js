@@ -2729,7 +2729,9 @@ function createAlbumListeningIntent(album) {
   let started = false, settled = false, descriptor = null;
   return Object.freeze({albumKey, start(isCurrent) {
     const valid = () => {try {return current() && isCurrent() === true;} catch {return false;}};
-    if (!valid() || started || typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || PLAYBACK_CAPTURE_ENABLED !== true) return;
+    const trackingEnabled = typeof nativeStreamingCaptureEnabled === 'function' && nativeStreamingCaptureEnabled()
+      || typeof PLAYBACK_CAPTURE_ENABLED !== 'undefined' && PLAYBACK_CAPTURE_ENABLED === true;
+    if (!valid() || started || !trackingEnabled) return;
     if (typeof document === 'undefined' || document.getElementById('app-shell')?.dataset.listeningSelectionsEnabled !== 'true') return;
     if (typeof canStartOrdinaryAlbumListening !== 'function' || !canStartOrdinaryAlbumListening()) return;
     if (typeof PrivateUITransport === 'undefined' || typeof PrivateUITransport.request !== 'function') return;
@@ -2750,7 +2752,7 @@ function createAlbumListeningIntent(album) {
           && value.selection_ref !== '00000000-0000-0000-0000-000000000000'
           && typeof value.membership_revision === 'string' && /^[0-9a-f]{64}$/.test(value.membership_revision)) descriptor = Object.freeze({...value});
     }).catch(() => {descriptor = null;}).finally(() => {clearTimeout(timer); settled = true;});
-  }, ready() {return settled && current() ? descriptor : null;}});
+  }, ready() {return settled && current() ? descriptor : null;}, pending() {return started && !settled;}});
 }
 
 function bindAlbumListeningIntent(track, intent) {
@@ -2961,9 +2963,14 @@ function refreshTrackModalPlaybackState() {
   const trackModal = typeof getTrackModalContentRoot === 'function' ? getTrackModalContentRoot() : document.getElementById('track-modal');
   if (!trackModal || (typeof isTrackModalContentVisible === 'function' ? !isTrackModalContentVisible() : trackModal.hidden)) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
@@ -2972,7 +2979,8 @@ function refreshTrackModalPlaybackState() {
   rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -3011,15 +3019,21 @@ function refreshNonAlbumModalPlaybackState() {
   const nonAlbumModal = document.getElementById('non-album-modal');
   if (!nonAlbumModal || nonAlbumModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   let durationGrew = false;
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);

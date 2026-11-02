@@ -2782,6 +2782,10 @@ for (const scenario of [
       resolveSelectedArtistFamilyDisplayMode: () => 'grouped',
       normalizeSearchFilters: value => value || {},
     });
+    context.structuredClone = structuredClone;
+    context.fetch = () => { throw new Error('Unexpected settings navigation request'); };
+    context.document.querySelector = () => null;
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '..', 'settings-navigation.js'), 'utf8'), context);
     for (const file of ['view-state-helpers.js', 'browser-navigation-helpers.js']) {
       vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), file), 'utf8'), context);
     }

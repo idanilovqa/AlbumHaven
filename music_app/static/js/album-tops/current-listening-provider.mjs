@@ -55,7 +55,7 @@ function project(value, options, context) {
     if (full.available) {
       if (!revision(full.state_revision) || typeof full.continuation !== 'boolean') throw failure();
       if (!['not_started', 'recalculating'].includes(full.status)) {
-        if (full.policy_version !== 'local-edition-overlap-total-margin-v1' || full.basis !== 'healthy-local-inventory-version-v1'
+        if (!['local-edition-overlap-total-margin-v1','rate-checkpoint-full-composition-v1','rate-checkpoint-full-composition-v2'].includes(full.policy_version) || full.basis !== 'healthy-local-inventory-version-v1'
           || full.history_complete !== false || !integer(full.full) || !integer(full.uninterrupted_full)
           || full.uninterrupted_full > full.full || full.partial !== null
           || !['processing', 'complete_at_cutoff', 'lower_bound_at_cutoff', 'blocked'].includes(full.status)) throw failure();

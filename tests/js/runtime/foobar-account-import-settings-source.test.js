@@ -60,7 +60,13 @@ test('I49 account page loads shared CSRF before native entry and Back restoratio
 });
 test('I50 production renderer has explicit disclosure and no client-side invented matching/history authority', () => {
   const source = F.read('music_app/static/js/foobar-import/index.mjs');
-  assert.match(source, /raw upload is temporary/); assert.match(source, /Play counts and dates remain source observations/);
+  assert.match(source, /raw upload(?: staging)? is temporary/i); assert.match(source, /Play counts and dates remain source observations/);
+  assert.match(source, /sensitive local paths and listening history/i);
+  assert.match(source, /Imported history, ratings and favourites (?:remain|are not deleted)/i);
+  assert.match(source, /no optional source copy is kept for reuse/i);
+  assert.match(source, /(?:once|when) import completes.*(?:source|upload).*unavailable/i);
+  assert.match(source, /cleanup.*(?:delay|wait)/i);
+  assert.match(source, /backups.*operator/i);
   assert.match(source, /Protected local values are not replaced/); assert.match(source, /blanket override/);
   assert.match(source, /role', 'status'/); assert.match(source, /aria-live', 'polite'/); assert.match(source, /role', 'alert'/);
   assert.doesNotMatch(source, /(?:localStorage|sessionStorage|indexedDB)\s*\.|\.arrayBuffer\(|\.text\(\)/);

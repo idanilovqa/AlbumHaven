@@ -255,6 +255,33 @@ def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path)
     assert generated == [(source, data_dir / "display-cover-cache")]
 
 
+def test_backfill_never_records_app_local_previews_for_relocation(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    published = []
+
+    class AlbumFolderStoragePolicy:
+        def write_cache_root(self, source_path):
+            return Path(source_path).parent / ".album-haven"
+
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "DATA_DIR": str(tmp_path / "app-data"),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": object(),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **kwargs: published.append(kwargs.get("on_published")),
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert published == [None]
+
+
 def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 

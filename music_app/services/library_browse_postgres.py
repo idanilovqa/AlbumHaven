@@ -7180,7 +7180,8 @@ def _queue_display_cover_variants_for_groups(
                 )
                 inventory_options = {}
                 recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                if recorder is not None:
+                # Only revisioned previews go to managed storage; app-local ones are never relocated.
+                if recorder is not None and cover_revision:
                     inventory_options["on_published"] = recorder
                 queue_cover_display_variant_generation(
                     source_path,

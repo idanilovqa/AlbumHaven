@@ -1430,7 +1430,8 @@ def _cover_response(
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 source_path = resolved
                 generation_options = {}
-                if inventory_recorder is not None:
+                # Unrevisioned previews stay app-local and must never enter relocation.
+                if inventory_recorder is not None and normalized_revision:
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,

@@ -1,0 +1,21 @@
+package org.albumhaven.shell.playback
+
+/**
+ * The one audible output. Production uses [AudioTrackPcmSink]; JVM tests record writes.
+ * Calls arrive on the engine's thread.
+ */
+interface PcmSink {
+    val sampleRate: Int
+
+    /** Writes up to [frames] interleaved stereo frames without blocking; returns frames accepted. */
+    fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int
+
+    fun play()
+
+    fun pause()
+
+    /** Discards written but unplayed PCM. Only hard stops and new generations flush. */
+    fun flush()
+
+    fun release()
+}

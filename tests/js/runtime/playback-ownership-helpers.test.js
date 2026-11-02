@@ -1028,3 +1028,21 @@ test('lease expiry silences output while a renewal request remains pending', asy
   );
   assert.equal(updateCalls, 1);
 }
+
+test('APK without native playback stays visibly blocked without claiming ownership', async () => {
+  const requests = [];
+  const toasts = [];
+  const { context } = loadHelper({
+    isAndroidPlaybackUnavailable: () => true,
+    showToast: message => toasts.push(message),
+    fetch: async (url, options) => {
+      requests.push(`${options?.method || 'GET'} ${url}`);
+      return { ok: true, status: 200, json: async () => ({ is_playing_elsewhere: false }) };
+    },
+  });
+  assert.equal(await vm.runInContext("claimPlaybackOwnership({ path: 'a', title: 'A' })", context), false);
+  assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
+  assert.equal(context.state.player.ownership.lockStatus, 'locked');
+  assert.equal(requests.some(request => request.startsWith('PUT') || request.startsWith('POST')), false);
+  assert.deepEqual(toasts, ['Playback is unavailable.']);
+});

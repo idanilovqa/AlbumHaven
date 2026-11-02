@@ -3840,7 +3840,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = normalizeAlertSeverity(variant);
+  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact
@@ -4222,13 +4222,16 @@ function escapeAlertHtml(value) {
 
 function normalizeAlertSeverity(value) {
   const severity = String(value || '').trim().toLowerCase();
-  return ['error', 'warning', 'info'].includes(severity) ? severity : 'info';
+  return ['error', 'warning', 'info', 'success'].includes(severity) ? severity : 'info';
 }
 
 function buildAlertIconHtml(severity) {
   const normalized = normalizeAlertSeverity(severity);
   if (normalized === 'info') {
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6"></path><path d="M12 7.5h.01"></path></svg>';
+  }
+  if (normalized === 'success') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m7 12 3 3 7-7"></path></svg>';
   }
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
 }
@@ -10862,6 +10865,86 @@ function buildDisplayGroups(groups) {
 
 // END js/runtime/gallery-display-preference-helpers.js
 
+// BEGIN js/runtime/android-bridge-client.js
+
+// Web side of Android bridge v1. `AlbumHavenBridge` exists only inside the APK,
+// injected by the shell for its exact allowed origins.
+const ANDROID_BRIDGE_PROTOCOL = 1;
+const ANDROID_BRIDGE_TIMEOUT_MS = 15000;
+
+const androidBridge = { info: null, pending: new Map(), connection: null };
+
+function isAndroidShell() {
+  return typeof window !== 'undefined' && Boolean(window.AlbumHavenBridge);
+}
+
+function hasAndroidCapability(capability) {
+  return Boolean(androidBridge.info?.capabilities?.includes(capability));
+}
+
+// Fails closed: until native audio is negotiated, the APK must stay silent
+// instead of starting a second audible engine in the WebView.
+function isAndroidPlaybackUnavailable() {
+  return isAndroidShell() && !hasAndroidCapability('playback.native.v1');
+}
+
+function createAndroidBridgeMessageId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  const hex = Array.from(window.crypto.getRandomValues(new Uint8Array(16)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+function handleAndroidBridgeMessage(event) {
+  let message;
+  try {
+    message = JSON.parse(event.data);
+  } catch (_error) {
+    return;
+  }
+  if (message?.type !== 'response') return;
+  const pending = androidBridge.pending.get(message.id);
+  if (!pending) return;
+  androidBridge.pending.delete(message.id);
+  clearTimeout(pending.timer);
+  if (message.payload?.ok) {
+    pending.resolve(message.payload);
+  } else {
+    pending.reject(Object.assign(new Error(message.payload?.error?.message || 'Android bridge request failed.'),
+      { code: message.payload?.error?.code || 'unknown' }));
+  }
+}
+
+function sendAndroidBridgeCommand(name, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const id = createAndroidBridgeMessageId();
+    const timer = setTimeout(() => {
+      androidBridge.pending.delete(id);
+      reject(Object.assign(new Error('Android bridge timed out.'), { code: 'timeout' }));
+    }, ANDROID_BRIDGE_TIMEOUT_MS);
+    androidBridge.pending.set(id, { resolve, reject, timer });
+    window.AlbumHavenBridge.postMessage(JSON.stringify({
+      protocol: ANDROID_BRIDGE_PROTOCOL, id, type: 'command', name, payload,
+    }));
+  });
+}
+
+function connectAndroidBridge() {
+  if (!isAndroidShell()) return Promise.resolve(null);
+  if (!androidBridge.connection) {
+    window.AlbumHavenBridge.onmessage = handleAndroidBridgeMessage;
+    androidBridge.connection = sendAndroidBridgeCommand('bridge.handshake', {
+      protocolMin: ANDROID_BRIDGE_PROTOCOL, protocolMax: ANDROID_BRIDGE_PROTOCOL,
+    }).then((info) => {
+      androidBridge.info = info;
+      return info;
+    }, () => null);
+  }
+  return androidBridge.connection;
+}
+
+// END js/runtime/android-bridge-client.js
+
 // BEGIN js/runtime/playback-ownership-helpers.js
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
@@ -10951,6 +11034,10 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
   } finally { clearTimeout(timeout); }
 }
 
+function isShellPlaybackUnavailable() {
+  return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
+}
+
 function clearBlockedPlaybackState() {
   const ownership = getPlaybackOwnershipState();
   ownership.lockStatus = 'unlocked';
@@ -10990,7 +11077,7 @@ function syncMirroredPlaybackState(snapshot) {
     ownership.lockStatus = 'locked';
     ownership.blockedReason = 'playing_in_another_tab';
     ownership.mirroredTrack = normalizePlaybackOwnershipTrack(snapshot.track);
-  } else if (!ownership.activeClaim) {
+  } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
@@ -11167,6 +11254,7 @@ async function claimPlaybackOwnership(track, options = {}) {
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
     try {
+      if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
       const result = handoff
@@ -23919,6 +24007,135 @@ function mountAlertsAppearanceEditor(detail) {
 
 // END js/runtime/problematic-files-virtual-list.js
 
+// BEGIN js/runtime/android-settings.js
+
+// Settings > Android app. Rendered in the existing Settings shell, only inside the APK.
+const ANDROID_SANDBOX_SWITCH_NOTICE = 'Changing sandbox stops playback, clears the current queue, and loads the selected server.';
+const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
+  value: String(index + 1), label: `sandbox${index + 1}`,
+}));
+
+const androidSettings = { status: null, switching: false };
+
+function buildAndroidSandboxHtml(info) {
+  const label = `sandbox${info.sandbox.slot}`;
+  const trigger = window.ButtonComponent.renderButton({
+    label, className: 'android-settings__selector', disabled: androidSettings.switching,
+    attributes: {
+      'data-android-sandbox-trigger': '', 'aria-labelledby': 'android-sandbox-label',
+      'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-describedby': 'android-sandbox-origin',
+    },
+  });
+  const status = androidSettings.status ? buildOnPageAlertHtml({ ...androidSettings.status, role: 'status' }) : '';
+  return `<section class="android-settings__sandbox" data-android-sandbox-section>
+    <div><h3 id="android-sandbox-label">Sandbox server</h3><p>Choose the server this Sandbox app connects to.</p></div>
+    ${trigger}
+    <p id="android-sandbox-origin">${escapeHtml(info.origin)}</p>
+    ${buildOnPageAlertHtml({ severity: 'warning', title: 'Before changing servers', message: ANDROID_SANDBOX_SWITCH_NOTICE, role: 'status' })}
+    ${status}
+  </section>`;
+}
+
+function buildAndroidSettingsHtml(info) {
+  if (!info) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
+      message: 'This app could not connect to the current site.', role: 'status' });
+  }
+  const sandbox = info.variant === 'sandbox';
+  const channel = sandbox ? 'Sandbox' : 'Stable';
+  return `<div class="android-settings">
+    <div class="android-settings__heading">
+      <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
+      <span class="android-settings__channel${sandbox ? ' is-sandbox' : ''}">${sandbox ? 'S · Sandbox' : 'Stable'}</span>
+    </div>
+    ${buildOnPageAlertHtml({ severity: 'info', title: 'Android app',
+    message: `${channel} · ${info.versionName} (${info.versionCode})`, role: 'status' })}
+    ${sandbox && info.sandbox ? buildAndroidSandboxHtml(info) : ''}
+  </div>`;
+}
+
+function renderUtilityAndroid() {
+  const els = getUtilityModalElements();
+  if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
+  const info = androidBridge.info;
+  const rows = [{ key: 'updates', label: 'App & updates' }];
+  if (info?.sandbox) rows.push({ key: 'sandbox', label: 'Sandbox server' });
+  els.count.textContent = String(rows.length);
+  if (els.search) {
+    els.search.value = '';
+    els.search.disabled = true;
+    els.search.placeholder = '';
+  }
+  if (els.problemFilterButton) {
+    els.problemFilterButton.disabled = true;
+    els.problemFilterButton.hidden = true;
+  }
+  if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
+  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
+  els.list.innerHTML = rows.map(row => window.NavigationTree.renderItem({
+    key: row.key, label: row.label, variant: 'panel', action: true, selected: row.key === 'updates',
+    attributes: { 'data-utility-android-key': row.key },
+  })).join('');
+  els.detail.innerHTML = buildAndroidSettingsHtml(info);
+  const trigger = els.detail.querySelector('[data-android-sandbox-trigger]');
+  trigger?.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>');
+}
+
+async function selectAndroidSandbox(slot) {
+  const current = androidBridge.info.sandbox.slot;
+  if (slot === current) return;
+  androidSettings.switching = true;
+  androidSettings.status = { severity: 'info', title: `Switching to sandbox${slot}…`,
+    message: 'Playback has stopped and the current queue is empty.' };
+  renderUtilityAndroid();
+  try {
+    // On success the shell loads the selected origin and this document goes away.
+    await sendAndroidBridgeCommand('sandbox.select', { slot });
+  } catch (_error) {
+    androidSettings.switching = false;
+    androidSettings.status = { severity: 'error', title: `Could not connect to sandbox${slot}.`,
+      message: `Still using sandbox${current}. Check your connection and try again.` };
+    renderUtilityAndroid();
+  }
+}
+
+function handleAndroidSettingsClick(event) {
+  const row = event.target.closest?.('[data-utility-android-key]');
+  if (row) {
+    const section = row.getAttribute('data-utility-android-key') === 'sandbox'
+      ? '[data-android-sandbox-section]' : '.android-settings__heading';
+    document.querySelector(section)?.scrollIntoView({ block: 'start' });
+    return;
+  }
+  const trigger = event.target.closest?.('[data-android-sandbox-trigger]');
+  if (!trigger || androidSettings.switching) return;
+  event.preventDefault();
+  openUtilityChoiceDropdown(trigger, {
+    formats: ANDROID_SANDBOX_CHOICES, matchTriggerWidth: true, label: 'Sandbox server',
+    selected: String(androidBridge.info.sandbox.slot),
+    onSelect: (value) => {
+      void selectAndroidSandbox(Number(value));
+      return false;
+    },
+  });
+}
+
+function initAndroidSettings() {
+  if (!isAndroidShell()) return;
+  document.addEventListener('click', handleAndroidSettingsClick);
+  void connectAndroidBridge().then((info) => {
+    const connectedSlot = info?.sandbox?.connectedSlot;
+    if (connectedSlot) {
+      androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
+        message: 'The selected server is ready.' };
+    }
+    if (state.utility.activeTab === 'android') renderUtilityAndroid();
+  });
+}
+
+// END js/runtime/android-settings.js
+
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 const problematicNavigationRowContent = new WeakMap();
@@ -24773,6 +24990,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityIntegrations();
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
+  } else if (activeTab === 'android') {
+    renderUtilityAndroid();
   } else {
     renderProblematicFiles(options);
   }
@@ -27203,7 +27422,7 @@ function loadActiveUtilityTab(force = false) {
     }
     return null;
   }
-  if (state.utility.activeTab === 'appearance') {
+  if (['appearance', 'android'].includes(state.utility.activeTab)) {
     renderUtilityModalContent();
     return null;
   }
@@ -41153,7 +41372,7 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
-    } else if (state.utility.activeTab !== 'appearance') {
+    } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
       try {
@@ -45762,19 +45981,22 @@ const MOBILE_UTILITY_SECTIONS = Object.freeze({
   'log-history': { label: 'Log History', action: 'library.logs.read' },
   integrations: { label: 'Integrations', action: 'integration.settings.read' },
   appearance: { label: 'Appearance', action: null },
+  android: { label: 'Android app', action: null },
 });
 function mobileUtilityTabAllowed(tab, actions = window.__ALBUM_HAVEN_UTILITY_ALLOWED_ACTIONS__ || {}) {
+  if (tab === 'android' && !(typeof isAndroidShell === 'function' && isAndroidShell())) return false;
   const section = Object.hasOwn(MOBILE_UTILITY_SECTIONS, tab) ? MOBILE_UTILITY_SECTIONS[tab] : null;
   return Boolean(section && (!section.action || actions[section.action] === true));
 }
 function mobileUtilitySubsectionAttribute(tab = state.utility.activeTab) {
-  return ({ appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
+  return ({ android: 'data-utility-android-key', appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
 }
 function mobileUtilitySubsections() {
   const list = getUtilityModalElements().list;
   const attribute = mobileUtilitySubsectionAttribute();
   if (!attribute) return [];
-  const selected = state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
+  const selected = state.utility.activeTab === 'android' ? 'updates'
+    : state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
     : state.utility.activeTab === 'rules' ? state.utility.selectedRuleKey : state.utility.selectedIntegrationKey;
   return [...(list?.querySelectorAll(`[${attribute}]`) || [])].map(node => ({
     key: node.getAttribute(attribute),
@@ -46292,6 +46514,7 @@ attachPlayerEvents();
 if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
+  if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'

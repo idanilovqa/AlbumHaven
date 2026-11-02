@@ -1148,7 +1148,7 @@ function loadActiveUtilityTab(force = false) {
     }
     return null;
   }
-  if (state.utility.activeTab === 'appearance') {
+  if (['appearance', 'android'].includes(state.utility.activeTab)) {
     renderUtilityModalContent();
     return null;
   }

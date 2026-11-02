@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="recovery_logo_description">Album Haven</string>
+    <string name="recovery_loading_title">Loading Album Haven…</string>
+    <string name="recovery_loading_detail">Connecting to %1$s</string>
+    <string name="recovery_loading_progress">Connecting to Album Haven</string>
+    <string name="recovery_error_title">Album Haven couldn’t load.</string>
+    <string name="recovery_error_message">Check your connection and try again.</string>
+    <string name="recovery_update_title">Update required</string>
+    <string name="recovery_update_message">This version of Album Haven can’t open the current site. Install the latest app to continue.</string>
+    <string name="recovery_retry">Retry</string>
+</resources>

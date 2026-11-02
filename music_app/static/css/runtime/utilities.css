@@ -2084,3 +2084,19 @@
     inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
     0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
 }
+
+/* Android app settings render only inside the APK's WebView. */
+#utility-modal[data-active-tab="android"] .utility-sidebar-search { display: none; }
+#utility-modal.is-mobile-page[data-active-tab="android"] .utility-sidebar { display: none; }
+.android-settings { display: grid; gap: 16px; padding: 16px; }
+.android-settings__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.android-settings__heading h2,
+.android-settings__sandbox h3 { margin: 0; }
+.android-settings__heading p,
+.android-settings__sandbox p { margin: 4px 0 0; color: var(--muted); }
+.android-settings .android-settings__channel { flex: none; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); }
+.android-settings .android-settings__channel.is-sandbox { border-color: var(--appearance-warning, #e0aa50); color: var(--appearance-warning, #e0aa50); }
+.android-settings__sandbox { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.android-settings .android-settings__selector { width: 100%; min-height: 48px; justify-content: space-between; padding-inline: 12px; }
+.android-settings__selector .ui-button__content { flex: 1; justify-content: flex-start; }
+.android-settings__selector svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }

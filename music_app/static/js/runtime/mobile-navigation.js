@@ -759,19 +759,22 @@ const MOBILE_UTILITY_SECTIONS = Object.freeze({
   'log-history': { label: 'Log History', action: 'library.logs.read' },
   integrations: { label: 'Integrations', action: 'integration.settings.read' },
   appearance: { label: 'Appearance', action: null },
+  android: { label: 'Android app', action: null },
 });
 function mobileUtilityTabAllowed(tab, actions = window.__ALBUM_HAVEN_UTILITY_ALLOWED_ACTIONS__ || {}) {
+  if (tab === 'android' && !(typeof isAndroidShell === 'function' && isAndroidShell())) return false;
   const section = Object.hasOwn(MOBILE_UTILITY_SECTIONS, tab) ? MOBILE_UTILITY_SECTIONS[tab] : null;
   return Boolean(section && (!section.action || actions[section.action] === true));
 }
 function mobileUtilitySubsectionAttribute(tab = state.utility.activeTab) {
-  return ({ appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
+  return ({ android: 'data-utility-android-key', appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
 }
 function mobileUtilitySubsections() {
   const list = getUtilityModalElements().list;
   const attribute = mobileUtilitySubsectionAttribute();
   if (!attribute) return [];
-  const selected = state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
+  const selected = state.utility.activeTab === 'android' ? 'updates'
+    : state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
     : state.utility.activeTab === 'rules' ? state.utility.selectedRuleKey : state.utility.selectedIntegrationKey;
   return [...(list?.querySelectorAll(`[${attribute}]`) || [])].map(node => ({
     key: node.getAttribute(attribute),

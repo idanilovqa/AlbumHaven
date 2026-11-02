@@ -42,6 +42,9 @@
 .small-alert--info,
 .alert-label--info,
 .on-page-alert--info { --alert-edge: var(--appearance-player-accent, #55c7ff); }
+.small-alert--success,
+.alert-label--success,
+.on-page-alert--success { --alert-edge: var(--appearance-success, var(--success, #2eba70)); }
 
 /* Content alerts follow the light surface; dark alert families keep their palette. */
 :root[data-appearance-mode='light'] .on-page-alert {

@@ -175,3 +175,11 @@ test('alert browser exports tolerate standalone and bundled loading in the same 
   assert.equal(context.window.AlertComponent.buildOnPageAlertHtml, context.buildOnPageAlertHtml);
   assert.match(context.window.AlertComponent.buildSmallAlertHtml({ message: '<missing>' }), /&lt;missing&gt;/);
 });
+
+test('OnPageAlert supports the approved success severity with its own icon', () => {
+  const context = loadAlertComponents();
+  const html = context.buildOnPageAlertHtml({ severity: 'success', title: 'Connected', message: 'Ready' });
+  assert.match(html, /on-page-alert--success/);
+  assert.match(html, /data-on-page-alert="success"/);
+  assert.match(html, /m7 12 3 3 7-7/);
+});

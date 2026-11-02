@@ -19,6 +19,7 @@ attachPlayerEvents();
 if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
+  if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'

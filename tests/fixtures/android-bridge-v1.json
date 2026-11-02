@@ -1,0 +1,47 @@
+{
+  "protocol": 1,
+  "maxMessageBytes": 65536,
+  "capabilities": {
+    "stable": [],
+    "sandbox": ["sandbox.select.v1"]
+  },
+  "handshakeRequest": {
+    "protocol": 1,
+    "id": "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10",
+    "type": "command",
+    "name": "bridge.handshake",
+    "payload": {"protocolMin": 1, "protocolMax": 1}
+  },
+  "handshakeResponse": {
+    "protocol": 1,
+    "id": "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10",
+    "type": "response",
+    "name": "bridge.handshake",
+    "payload": {
+      "ok": true,
+      "applicationId": "org.albumhaven.app.sandbox",
+      "variant": "sandbox",
+      "versionName": "0.9.50",
+      "versionCode": 1,
+      "bridgeProtocol": 1,
+      "bridgeProtocolMin": 1,
+      "bridgeProtocolMax": 1,
+      "capabilities": ["sandbox.select.v1"],
+      "origin": "https://sandbox2.albumhaven.org",
+      "playback": {"state": "unavailable"},
+      "sandbox": {"slot": 2, "connectedSlot": null}
+    }
+  },
+  "rejectedEnvelopes": [
+    "not json",
+    "[]",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\"}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{},\"extra\":1}",
+    "{\"protocol\":0,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":\"1\",\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"not-a-uuid\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"other\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"Bad Name\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":[]}"
+  ]
+}

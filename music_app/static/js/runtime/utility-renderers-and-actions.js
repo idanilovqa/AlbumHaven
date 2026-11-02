@@ -850,6 +850,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityIntegrations();
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
+  } else if (activeTab === 'android') {
+    renderUtilityAndroid();
   } else {
     renderProblematicFiles(options);
   }

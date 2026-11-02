@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="canvas">#000000</color>
+    <color name="panel">#080808</color>
+    <color name="control">#181818</color>
+    <color name="text">#FFFFFF</color>
+    <color name="muted">#B8B8B8</color>
+    <color name="border">#666666</color>
+    <color name="warning">#E0AA50</color>
+    <color name="success">#2EBA70</color>
+    <color name="error">#E06F78</color>
+</resources>

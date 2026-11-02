@@ -24,7 +24,10 @@
   function install(document) {
     const policy = readPolicy(document);
     const allows = (action) => Boolean(policy && policy.actions[action] === true);
-    const allowsUtilityTab = (tab) => Boolean(policy && policy.availableTabs.includes(tab));
+    // The Android tab is client-owned: only the APK's bridge object can reveal it.
+    const allowsUtilityTab = (tab) => tab === 'android'
+      ? Boolean(root.AlbumHavenBridge)
+      : Boolean(policy && policy.availableTabs.includes(tab));
     const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'

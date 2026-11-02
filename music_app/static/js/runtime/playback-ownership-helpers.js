@@ -85,6 +85,10 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
   } finally { clearTimeout(timeout); }
 }
 
+function isShellPlaybackUnavailable() {
+  return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
+}
+
 function clearBlockedPlaybackState() {
   const ownership = getPlaybackOwnershipState();
   ownership.lockStatus = 'unlocked';
@@ -124,7 +128,7 @@ function syncMirroredPlaybackState(snapshot) {
     ownership.lockStatus = 'locked';
     ownership.blockedReason = 'playing_in_another_tab';
     ownership.mirroredTrack = normalizePlaybackOwnershipTrack(snapshot.track);
-  } else if (!ownership.activeClaim) {
+  } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
@@ -301,6 +305,7 @@ async function claimPlaybackOwnership(track, options = {}) {
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
     try {
+      if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
       const result = handoff

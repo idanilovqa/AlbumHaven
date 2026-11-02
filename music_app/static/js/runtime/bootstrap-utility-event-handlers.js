@@ -99,7 +99,7 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
-    } else if (state.utility.activeTab !== 'appearance') {
+    } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
       try {

@@ -196,6 +196,69 @@ test('Artist Family controls follow selected artist and close without focusing a
   assert.equal(focusCount, 0);
 });
 
+test('an open Album Types menu hydrates deferred loose tracks after navigation changes the view', async () => {
+  let hydrationCount = 0;
+  const view = {};
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => id === 'gallery-album-types-menu' ? surface : null,
+      body: { appendChild() {} },
+    },
+  });
+  context.ensureGalleryMainState = () => ({ albumTypes: [], sources: {} });
+  context.focusGalleryMainSurface = () => {};
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+  context.openGalleryMainSurface('album-types', anchor, surface);
+
+  view.non_album_tracks_deferred = true;
+  vm.runInContext('galleryMainSurfaceController = createAnchoredSurfaceController()', context);
+  context.updateGalleryMainControls();
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
+});
+
+test('opening Sources hydrates deferred loose tracks', async () => {
+  let hydrationCount = 0;
+  const view = { non_album_tracks_deferred: true };
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: () => null,
+      body: { appendChild() {} },
+    },
+  });
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+
+  context.openGalleryMainSurface('sources', anchor, surface);
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
+});
+
 test('initial Artist Family markup is hidden only when no effective artist is selected', () => {
   const button = indexTemplateSource.match(/<button[^>]*data-gallery-bar-action="artist-family"[^>]*>/)?.[0];
   assert.match(button, /\{% if not effective_selected_artist %\} hidden\{% endif %\}/);
@@ -421,7 +484,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracks\(\{ libraryWide: true \}\)/,
+    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracksForAlbumTypes\(\)/,
   );
   assert.match(
     galleryMainCssSource,
@@ -535,6 +598,7 @@ test('client Gallery state defaults to all sources, Studio plus EP and Compilati
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
+    showSplitAlbums: true,
     view: 'cards',
     familyArtists: [],
   });
@@ -565,6 +629,7 @@ test('new primary artist navigation resets filters while preserving the display 
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
+    showSplitAlbums: true,
     view: 'covers',
     familyArtists: [],
   });
@@ -584,6 +649,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
+    showSplitAlbums: true,
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -622,11 +688,16 @@ test('Featured On is a relationship facet conjunctive with source and release fi
   });
 });
 
-test('Featured On control synchronizes and dispatches without enabling release-type controls', () => {
-  const attributes = new Map();
+test('relationship controls synchronize and dispatch without enabling release-type controls', () => {
+  const featuredAttributes = new Map();
   const featured = {
     dataset: { galleryFeaturedOn: '1' },
-    setAttribute(name, value) { attributes.set(name, value); },
+    setAttribute(name, value) { featuredAttributes.set(name, value); },
+  };
+  const splitAttributes = new Map();
+  const split = {
+    dataset: { gallerySplitAlbums: '1' },
+    setAttribute(name, value) { splitAttributes.set(name, value); },
   };
   const releaseType = {
     dataset: { galleryAlbumType: 'studio' },
@@ -637,6 +708,7 @@ test('Featured On control synchronizes and dispatches without enabling release-t
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     showFeaturedOn: false,
+    showSplitAlbums: true,
     view: 'cards',
     familyArtists: [],
   } }, view: {} };
@@ -648,12 +720,14 @@ test('Featured On control synchronizes and dispatches without enabling release-t
       querySelector: () => null,
       querySelectorAll: selector => ({
         '[data-gallery-featured-on]': [featured],
+        '[data-gallery-split-albums]': [split],
         '[data-gallery-album-type]': [releaseType],
       })[selector] || [],
     },
   });
   context.updateGalleryMainControls();
-  assert.equal(attributes.get('aria-pressed'), 'false');
+  assert.equal(featuredAttributes.get('aria-pressed'), 'false');
+  assert.equal(splitAttributes.get('aria-pressed'), 'true');
   assert.equal(featured.disabled, false);
   assert.equal(releaseType.disabled, true);
 
@@ -665,6 +739,16 @@ test('Featured On control synchronizes and dispatches without enabling release-t
   });
   assert.deepEqual(plain(actions), [{ type: 'toggle-featured-on' }]);
   assert.equal(prevented.length, 1);
+
+  context.handleGalleryMainClick({
+    preventDefault: () => prevented.push(true),
+    target: { closest: selector => selector === '[data-gallery-split-albums]' ? split : null },
+  });
+  assert.deepEqual(plain(actions), [
+    { type: 'toggle-featured-on' },
+    { type: 'toggle-split-albums' },
+  ]);
+  assert.equal(prevented.length, 2);
 });
 
 test('the first Artist Family click deselects that artist from the default all-selected state', () => {
@@ -1047,6 +1131,11 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
   assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
+  assert.equal(createGalleryMainState().showSplitAlbums, true);
+  assert.equal(
+    reduceGalleryMainState(createGalleryMainState(), { type: 'toggle-split-albums' }).showSplitAlbums,
+    false,
+  );
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1078,6 +1167,18 @@ test('all unavailable release types remain inert while catalog-backed facts are 
     { key: 'family', albums: ['single'] },
   ]);
   assert.deepEqual(filtered.totals, { artistCount: 2, albumCount: 4 });
+
+  const withoutSplits = plain(filterGalleryModel({
+    groups: [{
+      artist: 'Jordsjø',
+      albums: [
+        { key: 'split', release_type: 'Split', source: 'main_library' },
+        { key: 'studio', release_type: 'Album', source: 'main_library' },
+      ],
+    }],
+    filterState: { ...createGalleryMainState(), showSplitAlbums: false },
+  }));
+  assert.deepEqual(withoutSplits.groups[0].albums.map((album) => album.key), ['studio']);
 });
 
 test('art-only Gallery hover frame covers the complete card edge', () => {

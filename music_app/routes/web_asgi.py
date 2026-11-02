@@ -1317,12 +1317,11 @@ def _cached_cover_variant_response(
     *,
     max_size: int,
     max_age: int,
-    storage_policy,
     revision: str = "",
 ) -> Response | None:
     for _attempt in range(2):
         retry = False
-        for index, cache_root in enumerate(cache_roots):
+        for cache_root in cache_roots:
             cached_variant = find_existing_cover_display_variant(
                 source_path,
                 cache_root=cache_root,
@@ -1331,12 +1330,6 @@ def _cached_cover_variant_response(
             )
             if cached_variant is None:
                 continue
-            relocating_fallback = bool(
-                index
-                and getattr(getattr(storage_policy, "snapshot", None), "requested_mode", None)
-            )
-            if not relocating_fallback:
-                return _conditional_file_response(request, cached_variant, max_age=max_age)
             try:
                 with cached_variant.open("rb") as handle:
                     stat_result = os.fstat(handle.fileno())
@@ -1395,7 +1388,6 @@ def _cover_response(
             cache_roots,
             max_size=requested_size,
             max_age=31536000,
-            storage_policy=storage_policy,
             revision=normalized_revision,
         )
         if cached_response is not None:
@@ -1410,10 +1402,15 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if not cache_roots:
-            cache_roots = display_cover_variant_cache_roots(
+            # Unrevisioned lookup candidates stay app-local; configured storage is a read fallback.
+            app_cache_roots = display_cover_variant_cache_roots(
                 resolved,
-                storage_policy=storage_policy,
+                data_dir=config.get("DATA_DIR"),
             )
+            cache_roots = tuple(dict.fromkeys((
+                *app_cache_roots,
+                *display_cover_variant_cache_roots(resolved, storage_policy=storage_policy),
+            )))
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
@@ -1427,12 +1424,12 @@ def _cover_response(
                 cache_roots,
                 max_size=requested_size,
                 max_age=31536000 if normalized_revision else 300,
-                storage_policy=storage_policy,
                 revision=normalized_revision,
             )
             if cached_response is not None:
                 return cached_response
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+                source_path = resolved
                 generation_options = {}
                 if inventory_recorder is not None:
                     generation_options["on_published"] = inventory_recorder
@@ -1444,6 +1441,21 @@ def _cover_response(
                     **revision_options,
                     **generation_options,
                 )
+                if resolved != source_path:
+                    try:
+                        with resolved.open("rb") as handle:
+                            stat_result = os.fstat(handle.fileno())
+                            content = handle.read()
+                    except FileNotFoundError:
+                        resolved = source_path
+                    else:
+                        return _conditional_file_response(
+                            request,
+                            resolved,
+                            max_age=31536000 if normalized_revision else 300,
+                            stat_result=stat_result,
+                            content=content,
+                        )
         except Exception:
             _app_logger(request).exception(
                 "cover: failed to prepare display variant for %s", resolved

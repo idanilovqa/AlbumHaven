@@ -80,7 +80,11 @@ class CoverPreviewBackfill:
     def _load_cover_paths(self) -> list[tuple[Path, str | None]]:
         if not self._database_url:
             return []
-        with self._connect(self._database_url, workload="browse") as connection:
+        with self._connect(
+            self._database_url,
+            workload="background",
+            checkout_timeout_seconds=1.0,
+        ) as connection:
             rows = connection.execute(_COVER_PATHS_SQL).fetchall()
         return [
             (
@@ -104,9 +108,11 @@ class CoverPreviewBackfill:
                 source_path,
                 cache_root=display_cover_variant_cache_root(
                     source_path,
-                    data_dir=self._data_dir if cover_revision else None,
-                    storage_policy=self._config.get(
-                        "_GENERATED_PREVIEW_STORAGE_POLICY"
+                    data_dir=self._data_dir,
+                    storage_policy=(
+                        self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
+                        if cover_revision or not self._data_dir
+                        else None
                     ),
                 ),
                 max_size=_DISPLAY_COVER_SIZE,

@@ -260,8 +260,15 @@ function Invoke-PostgresBootstrap(
         '-Port', '5432',
         '-SkipFixtureLoad'
     )
-    & $bootstrapPowerShell @bootstrapArguments | Where-Object { $_ -notmatch '^::add-mask::' }
-    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL $($Mode.ToLowerInvariant()) failed." }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $bootstrapPowerShell @bootstrapArguments 2>&1 | Where-Object { $_ -notmatch '^::add-mask::' }
+        $bootstrapExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($bootstrapExitCode -ne 0) { throw "PostgreSQL $($Mode.ToLowerInvariant()) failed." }
 }
 
 $environmentKeys = @(

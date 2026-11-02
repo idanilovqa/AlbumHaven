@@ -3445,7 +3445,8 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     assert missing_status == 404
     assert _decode_json(missing_body) == {"ok": False, "error": "Album not found"}
     assert postgres_calls == [("3::to the power of three", "tv"), ("missing::album", "private_web")]
-    assert len(worker_calls) == 3
+    assert len(worker_calls) == 4
+    assert worker_calls[-1].__self__.__class__.__name__ == "AlbumIdentityLineageRepository"
     assert worker_calls[1] is asgi_read_routes._repair_album_detail_cover_identity
 
 
@@ -3506,6 +3507,395 @@ def test_asgi_album_details_unknown_query_parameter_never_falls_back_to_full_hyd
         assert postgres_calls == ["artist::album"]
     else:
         assert postgres_calls == []
+
+
+def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
+    asgi_app,
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    lineage_calls = []
+    detail_calls = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    class FakeLineageRepository:
+        def __init__(self, config):
+            assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
+
+        def resolve(self, **identity):
+            lineage_calls.append(identity)
+            return {
+                "status": "resolved",
+                "album": {
+                    "album_id": 92,
+                    "album_key": "artist::current",
+                    "name": "Current Album",
+                    "album_artist": "Artist",
+                    "year": 2026,
+                },
+                "choices": [],
+            }
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            detail_calls.append((album_id, client_surface_class))
+            return {"album_id": album_id, "key": "artist::current"}
+
+        def build_album_detail_payload(self, _album_key, *, client_surface_class=None):
+            return None
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_repair_album_detail_cover_identity",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::old", "album_id": "17"},
+    )
+
+    assert status == 200
+    assert _decode_json(body)["album"] == {
+        "album_id": 92,
+        "key": "artist::current",
+    }
+    assert lineage_calls == [{"album_id": 17, "album_key": "artist::old"}]
+    assert detail_calls == [(17, "private_web"), (92, "private_web")]
+
+
+def test_asgi_album_details_accepts_matching_current_id_and_key_before_lineage(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert (album_id, client_surface_class) == (17, "private_web")
+            return {"album_id": 17, "key": "artist::current"}
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **_identity):
+            raise AssertionError("An exact live album id/key pair must bypass lineage")
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_repair_album_detail_cover_identity",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::current", "album_id": "17"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True,
+        "album": {"album_id": 17, "key": "artist::current"},
+    }
+
+
+def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_identity(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    choices = [
+        {
+            "album_id": 92,
+            "album_key": "artist::left",
+            "name": "Left Album",
+            "album_artist": "Artist",
+            "year": 2026,
+        },
+        {
+            "album_id": 93,
+            "album_key": "artist::right",
+            "name": "Right Album",
+            "album_artist": "Artist",
+            "year": 2026,
+        },
+    ]
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            raise AssertionError(
+                f"Known stale identity {album_id} must resolve lineage before current lookup"
+            )
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **identity):
+            assert identity == {"album_id": 17, "album_key": "artist::current"}
+            return {"status": "split", "album": None, "choices": choices}
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={
+            "album_key": "artist::current",
+            "album_id": "17",
+            "resolve_lineage": "1",
+        },
+    )
+
+    assert status == 409
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "This album was split—choose the current release",
+        "resolution_kind": "album_split",
+        "current_releases": choices,
+    }
+
+
+def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
+    asgi_app,
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    detail_calls = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            detail_calls.append(("id", album_id, client_surface_class))
+            return {"album_id": album_id, "key": "other::album"}
+
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+            detail_calls.append(("key", album_key, client_surface_class))
+            return {"album_id": 402, "key": album_key}
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **_identity):
+            raise AssertionError("A valid current album key must bypass stale-id lineage")
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_repair_album_detail_cover_identity",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::current", "album_id": "401"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True,
+        "album": {"album_id": 402, "key": "artist::current"},
+    }
+    assert detail_calls == [
+        ("id", 401, "private_web"),
+        ("key", "artist::current", "private_web"),
+    ]
+
+
+def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    choices = [
+        {
+            "album_id": 92,
+            "album_key": "artist::left",
+            "name": "Left Album",
+            "album_artist": "Artist",
+            "year": 2026,
+        },
+        {
+            "album_id": 93,
+            "album_key": "artist::right",
+            "name": "Right Album",
+            "album_artist": "Artist",
+            "year": 2026,
+        },
+    ]
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **_identity):
+            return {"status": "split", "album": None, "choices": choices}
+
+    class FakeBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert (album_id, client_surface_class) == (17, "private_web")
+            return None
+
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+            assert (album_key, client_surface_class) == ("artist::old", "private_web")
+            return None
+
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "AlbumIdentityLineageRepository",
+        FakeLineageRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakeBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::old", "album_id": "17"},
+    )
+
+    assert status == 409
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "This album was split—choose the current release",
+        "resolution_kind": "album_split",
+        "current_releases": choices,
+    }
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(

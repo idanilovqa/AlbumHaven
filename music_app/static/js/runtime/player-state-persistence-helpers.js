@@ -123,10 +123,16 @@ function restoredPlaybackQueueHasValidAlbumSnapshot(currentTrackPath) {
   if (!queue || !targetPath || !albumSnapshot || typeof albumSnapshot !== 'object') return false;
 
   const queueAlbumRef = String(queue.albumRef || '').trim();
-  const snapshotAlbumRef = typeof getAlbumIdentity === 'function'
+  const snapshotRequestKey = typeof getAlbumRequestKey === 'function'
+    ? String(getAlbumRequestKey(albumSnapshot) || '').trim()
+    : '';
+  const snapshotLegacyIdentity = typeof getAlbumIdentity === 'function'
     ? String(getAlbumIdentity(albumSnapshot) || '').trim()
     : '';
-  if (!queueAlbumRef || snapshotAlbumRef !== queueAlbumRef) return false;
+  if (
+    !queueAlbumRef
+    || (queueAlbumRef !== snapshotRequestKey && queueAlbumRef !== snapshotLegacyIdentity)
+  ) return false;
 
   const queueHasTrack = Array.isArray(queue.tracks)
     && queue.tracks.some((track) => String(track?.path || '') === targetPath);
@@ -138,15 +144,19 @@ function restoredPlaybackQueueHasValidAlbumSnapshot(currentTrackPath) {
       ? albumSnapshot.track_paths.map((path) => String(path || ''))
       : []),
   ].filter(Boolean));
-  return queueHasTrack && snapshotTrackPaths.has(targetPath);
+  if (!queueHasTrack || !snapshotTrackPaths.has(targetPath)) return false;
+  if (snapshotRequestKey) queue.albumRef = snapshotRequestKey;
+  return true;
 }
 
 function attachAlbumSnapshotToRestoredPlaybackQueue(album, currentTrack) {
   const queue = state.player.playbackQueue;
   const currentTrackPath = String(currentTrack?.path || '');
-  const albumRef = typeof getAlbumIdentity === 'function'
-    ? String(getAlbumIdentity(album) || '').trim()
-    : '';
+  const albumRef = typeof getAlbumRequestKey === 'function'
+    ? String(getAlbumRequestKey(album) || '').trim()
+    : (typeof getAlbumIdentity === 'function'
+      ? String(getAlbumIdentity(album) || '').trim()
+      : '');
   const albumTracks = Array.isArray(album?.tracks) ? album.tracks : [];
   const albumTrackPaths = new Set(albumTracks.map((track) => String(track?.path || '')).filter(Boolean));
   const albumHasCurrentTrack = albumTrackPaths.has(currentTrackPath);

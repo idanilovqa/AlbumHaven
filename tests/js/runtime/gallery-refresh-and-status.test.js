@@ -94,6 +94,11 @@ test('same-query preserve-scroll response retains mounted children for scroll de
   assert.equal(calls.renderView[0].preserveMountedGallery, undefined);
   assert.equal(calls.renderView[0].preserveMountedGalleryChildren, true);
   assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 13);
+  assert.equal(
+    context.state.view.artist_groups[0].albums[0].identity_revision,
+    13,
+    'rendered cards retain the inventory revision that produced their identity',
+  );
 });
 
 test('foreground view consumes a deferred inventory refresh at the revision it applies', async () => {
@@ -455,6 +460,7 @@ function createContext() {
       },
     },
     AbortController,
+    URL,
     HTMLFormElement: function HTMLFormElement() {},
     HTMLImageElement: function HTMLImageElement() {},
     Promise,
@@ -6704,13 +6710,20 @@ for (const failure of [
   { status: 200, ok: false, error: 'Unavailable' },
 ]) {
 test(`pollStatus preserves valid status and gallery on error ${failure.status}/${failure.ok}`, async () => {
-  const { context, calls, pendingRequests } = createContext();
+ const { context, calls, pendingRequests, artistGroups } = createContext();
   context.state.status = { total_albums: 42, allowed_actions: { 'library.loops.create': true } };
+ context.state.view = {
+ ...context.state.view,
+ selected_artist: 'Broadcast',
+ artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast::tender-buttons', name: 'Tender Buttons' }] }],
+ };
+ artistGroups.innerHTML = '<article class="album-card" data-album-key="broadcast::tender-buttons">Tender Buttons</article>';
   const navigations = [];
   context.window = { location: { assign: url => navigations.push(url) } };
   context.scheduleBrowserTimeout = () => {};
   const previousStatus = context.state.status;
   const previousView = context.state.view;
+ const previousCards = artistGroups.innerHTML;
   const pending = context.pollStatus();
   pendingRequests[0].resolveWith(failure);
   await pending;
@@ -6718,11 +6731,43 @@ test(`pollStatus preserves valid status and gallery on error ${failure.status}/$
     assert.equal(context.state.status.allowed_actions, previousStatus.allowed_actions);
     assert.equal(context.state.status.status_connection_lost, true);
   assert.equal(context.state.view, previousView);
+ assert.equal(context.state.view.selected_artist, 'Broadcast');
+ assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Tender Buttons');
+ assert.equal(artistGroups.innerHTML, previousCards);
   assert.equal(calls.updateStatusIndicator.length, 0);
     assert.equal(calls.renderLibraryLoader.length, 1);
+ assert.equal(calls.renderArtistGroups, 0);
   assert.deepEqual(navigations, failure.status === 401 ? ['/login'] : []);
 });
 }
+
+test('pollStatus reconnect preserves the selected artist and mounted album cards', async () => {
+ const { context, calls, pendingRequests, artistGroups } = createContext();
+ context.scheduleBrowserTimeout = () => {};
+ context.state.status = { total_albums: 42 };
+ context.state.view = {
+ ...context.state.view,
+ selected_artist: 'Broadcast',
+ artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast::tender-buttons', name: 'Tender Buttons' }] }],
+ };
+ artistGroups.innerHTML = '<article class="album-card" data-album-key="broadcast::tender-buttons">Tender Buttons</article>';
+ const previousView = context.state.view;
+ const previousCards = artistGroups.innerHTML;
+
+ const failedPoll = context.pollStatus();
+ pendingRequests[0].resolveWith({ status: 503, responseOk: false, error: 'Unavailable' });
+ await failedPoll;
+ const recoveredPoll = context.pollStatus();
+ pendingRequests[1].resolveWith({ total_albums: 43 });
+ await recoveredPoll;
+
+ assert.equal(context.state.status.total_albums, 43);
+ assert.equal(context.state.view, previousView);
+ assert.equal(context.state.view.selected_artist, 'Broadcast');
+ assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Tender Buttons');
+ assert.equal(artistGroups.innerHTML, previousCards);
+ assert.equal(calls.renderArtistGroups, 0);
+});
 
 test('startup hydration redirects an expired session without applying an error as gallery data', async () => {
   const { context, calls, pendingRequests, artistGroups } = createContext();
@@ -6848,6 +6893,77 @@ test('explicit search retires a resumed utility startup refresh instead of repla
   assert.equal(context.state.view.query, 'Sixteen Horizons');
   assert.equal(context.state.view.selected_artist, 'Northlight');
   assert.equal(context.state.ui.pendingViewRequest, null);
+});
+
+test('resumed Settings hydration preserves a compilation search owner over a track contributor', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'),
+    context,
+  );
+  context.state.view = {
+    ...context.state.view,
+    query: 'Various Artists',
+    selected_artist: 'Various Artists',
+    search_context: {
+      selected_artist: 'Various Artists',
+      selected_artist_source: 'auto_top_match',
+    },
+    artist_groups: [{
+      artist: 'Various Artists',
+      albums: [{
+        key: 'featured-signal-collection',
+        name: 'Featured Signal Collection',
+        album_artist: 'Various Artists',
+        display_artist: 'Various Artists',
+      }],
+    }],
+  };
+  const initialHydration = context.fetchAndRender(
+    '/view-data?surface=albums&q=Various+Artists&payload_tier=full',
+    true,
+    {
+      startupRefresh: true,
+      startupHydrationTier: 'full',
+      preserveScroll: true,
+    },
+  );
+
+  context.deferActiveStartupViewForUtilityModal();
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(await initialHydration, false);
+  assert.equal(context.resumeDeferredUtilityViewRequest(), true);
+  assert.match(pendingRequests[1].url, /(?:^|[?&])artist=Various\+Artists(?:&|$)/);
+
+  pendingRequests[1].resolveWith({
+    payload_tier: 'full',
+    query: 'Various Artists',
+    selected_artist: 'Various Artists',
+    search_context: {
+      selected_artist: 'Various Artists',
+      selected_artist_source: 'requested_artist',
+    },
+    artist_groups: [{
+      artist: 'Various Artists',
+      albums: [{
+        key: 'featured-signal-collection',
+        name: 'Featured Signal Collection',
+        album_artist: 'Various Artists',
+        display_artist: 'Various Artists',
+        tracks: [{ title: 'Man and Machine', artist: 'U.D.O.' }],
+      }],
+    }],
+  });
+  for (let attempt = 0; attempt < 5 && calls.applyViewPayload.length === 0; attempt += 1) {
+    await flushMicrotasks();
+  }
+
+  assert.equal(context.state.view.query, 'Various Artists');
+  assert.equal(context.state.view.selected_artist, 'Various Artists');
+  assert.equal(context.state.view.search_context.selected_artist, 'Various Artists');
+  assert.equal(context.state.view.artist_groups[0].artist, 'Various Artists');
+  assert.equal(context.state.view.artist_groups[0].albums[0].album_artist, 'Various Artists');
+  assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Various Artists');
 });
 
 

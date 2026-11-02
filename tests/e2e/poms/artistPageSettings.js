@@ -83,6 +83,13 @@ export class ArtistPageSettings extends BasePage {
     return this.countSelector;
   }
 
+  async waitForNonAlbumTracksHydrated(options = {}) {
+    await this.waitForPageCondition(() => (
+      Boolean(globalThis.state?.view)
+      && globalThis.state.view.non_album_tracks_deferred === false
+    ), { timeout: options.timeout || 10000 });
+  }
+
   nonAlbumTrackRowByTitle(trackTitle) {
     return this.nonAlbumTrackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({

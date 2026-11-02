@@ -261,6 +261,7 @@ export class GalleryPage extends BasePage {
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
+    this.gallerySurface = page.locator('.shell-main-surface:has(> [data-gallery-bar-instance="gallery"])');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
@@ -381,6 +382,24 @@ export class GalleryPage extends BasePage {
   albumRowsByArtistName(artistName) {
     return this.sectionByArtistHeading(artistName)
       .locator(this.albumRowWithinSectionSelector);
+  }
+
+  albumRowsByArtistAndAlbumName(artistName, albumName) {
+    return this.albumRowsByArtistName(artistName).filter({
+      has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({
+        hasText: exactNormalizedText(albumName),
+      }),
+    });
+  }
+
+  async readAlbumSubsectionTitle(artistName, albumName) {
+    const row = this.albumRowsByArtistAndAlbumName(artistName, albumName).first();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read the production subsection preceding one owned album row
+    return row.evaluate((element) => {
+      let sibling = element.previousElementSibling;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
   }
 
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {

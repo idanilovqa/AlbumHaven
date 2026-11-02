@@ -200,6 +200,16 @@ test('Edit Tags performance target receives only a private writable DDT media co
     /Join-Path\s+\(Join-Path\s+\$env:ALBUM_HAVEN_MEDIA_ROOT\s+['"]writable['"]\)\s+\$ddtArtist/i,
   );
   assert.doesNotMatch(source, /ДДТ/);
+  assert.match(
+    source,
+    /\$writableMediaRoot\s*=\s*Join-Path\s+\$profileSessionRoot\s+['"]edit-tags-writable-media['"]/i,
+    'the writable root must be a sibling of the prepared fixture media tree',
+  );
+  assert.doesNotMatch(
+    source,
+    /\$writableMediaRoot\s*=\s*Join-Path\s+\$profileSessionRoot\s+['"]media[\\/]writable['"]/i,
+    'the writable root must not overlap the persisted main media root',
+  );
   assert.match(source, /Copy-Item\s+-LiteralPath\s+\$sourceArtistRoot[\s\S]*ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT/i);
   assert.match(
     source,

@@ -1417,7 +1417,7 @@ def test_claim_migration_is_additive_to_existing_account_and_media_rows(playback
     fixture = playback_inventory
     tables = ("app.accounts", "library.libraries", "library.library_memberships",
               "library.library_roots", "library.local_tracks", "library.local_track_files")
-    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0099_create_playback_claims.sql"
+    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0104_create_playback_claims.sql"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         before = {table: connection.execute(f"select to_jsonb(r) as row from {table} r order by id").fetchall()
                   for table in tables}
@@ -1440,7 +1440,7 @@ def test_handoff_migration_preserves_rows_enforces_shape_and_retains_runtime_acc
     fixture = playback_inventory
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     service, track, client_id, claim = active_private_web_claim(fixture, now)
-    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0100_add_playback_claim_handoffs.sql"
+    migration = Path(__file__).parents[2] / "migrations" / "postgres" / "0105_add_playback_claim_handoffs.sql"
     preserved_tables = (
         "app.accounts",
         "library.libraries",

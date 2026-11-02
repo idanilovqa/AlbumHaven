@@ -285,19 +285,19 @@ Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated 
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
 
-Migration `0099_create_playback_claims.sql` adds the durable, account-and-library-
+Migration `0104_create_playback_claims.sql` adds the durable, account-and-library-
 scoped playback ownership lease used by web and mobile clients. PostgreSQL stores
 only the 32-byte digest of each renewable claim token; the raw credential is not
 persisted. The table is additive, and older application versions leave it unused.
 
-Migration `0100_add_playback_claim_handoffs.sql` extends each claim with four
+Migration `0105_add_playback_claim_handoffs.sql` extends each claim with four
 nullable fields: the one-time handoff ID, 32-byte handoff-token digest, 32-byte
 completion fingerprint, and handoff expiry. Its constraint requires all four
 fields to be null or present together and validates both digests. These fields
 hold short-lived ownership-transfer state only; they do not add credentials or
 metadata markers to listen history.
 
-Apply `0099` and then `0100`, with their checksums recorded, before starting an
+Apply `0104` and then `0105`, with their checksums recorded, before starting an
 application version that reads or writes playback claims or reload handoffs.
 Existing application versions remain compatible with both additive migrations.
 For rollback, stop or roll back the claim-aware application before changing this
@@ -306,3 +306,7 @@ handoff rows are harmless, while rewriting or removing an applied migration
 would invalidate ledger history. Dropping the table discards only transient
 ownership leases, not listen-history rows, but must not occur while any running
 application depends on durable ownership.
+
+Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
+
+Migration `0101_create_local_album_identity_transitions.sql` adds append-only album identity lineage for scan, watcher, and structural-edit moves. Migration `0102_narrow_synthetic_unknown_album_identity_guard.sql` keeps valid VA and known-artist loose-track successors while excluding the synthetic `Unknown Artist / Unknown Album` catch-all. Migration `0103_repair_synthetic_unknown_cover_task_identities.sql` repairs only legacy cover tasks with complete active paths and one exact artist/title/year target; ambiguous rows remain unchanged.

@@ -15,21 +15,20 @@ def _album(*, album_artist: str):
     )
 
 
-def test_build_artist_alias_views_merges_possessive_project_name_into_base_artist():
+def test_build_artist_alias_views_keeps_possessive_project_name_separate_without_identity_evidence():
     alias_views = build_artist_alias_views(
         [
-            _album(album_artist="Gungfly"),
-            _album(album_artist="Rikard Sj\u00f6blom's Gungfly"),
+            _album(album_artist="Rhapsody"),
+            _album(album_artist="Luca Turilli's Rhapsody"),
         ],
         Path("C:/Music"),
     )
 
-    assert alias_views["alias_to_canonical"]["Gungfly"] == "Gungfly"
-    assert alias_views["alias_to_canonical"]["Rikard Sj\u00f6blom's Gungfly"] == "Gungfly"
-    assert alias_views["canonical_to_aliases"]["Gungfly"] == [
-        "Gungfly",
-        "Rikard Sj\u00f6blom's Gungfly",
-    ]
+    assert alias_views["alias_to_canonical"]["Rhapsody"] == "Rhapsody"
+    assert (
+        alias_views["alias_to_canonical"]["Luca Turilli's Rhapsody"]
+        == "Luca Turilli's Rhapsody"
+    )
 
 
 def test_build_artist_alias_views_merges_case_only_artist_variants():

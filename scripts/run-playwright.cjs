@@ -1499,7 +1499,7 @@ function writeJsonAtomically(targetPath, value) {
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
   const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
   const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
-  if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+  if (!['watcher-reconciliation', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
     throw new Error('Watcher cleanup requires a runner-owned directory identity.');
   }
   const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
@@ -1655,7 +1655,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
       ? String(request.ownedDirectoryName || 'watcher-reconciliation').trim()
       : null;
     if (operation === 'watcher-cleanup'
-        && !['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+        && !['watcher-reconciliation', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
       throw new Error('Watcher cleanup requires a runner-owned directory identity.');
     }
     return { nonce, operation, ownedDirectoryName };

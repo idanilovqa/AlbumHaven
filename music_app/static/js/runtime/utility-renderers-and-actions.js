@@ -98,6 +98,16 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  if (!items.length && state.utility.problematicLoadError) {
+    replaceListContents('<div class="utility-empty-state compact">Unable to load problematic albums.</div>');
+    els.detail.innerHTML = buildOnPageAlertHtml({
+      severity: 'error',
+      title: 'Problematic Files unavailable',
+      message: 'Unable to load problematic albums. Try again.',
+    });
+    return;
+  }
+
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';

@@ -246,7 +246,6 @@ function scheduleTagEditorRenderAfterPaint(tagEditor, els) {
 }
 
 function openTagEditor(album, options = {}) {
-  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -924,7 +923,7 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
-    const completedResponseNeedsCanonicalRefresh = saveTaskCompleted
+    const terminalResponseNeedsCanonicalRefresh = responseIsTerminal
       && Boolean(data.requires_view_refresh);
     const committedValues = data.committed_values
       && typeof data.committed_values === 'object'
@@ -941,7 +940,7 @@ async function confirmManualTagEdit() {
       responseIsTerminal
       && updatedAlbums.length
       && responseOwnsVisibleResources
-      && !completedResponseNeedsCanonicalRefresh
+      && !terminalResponseNeedsCanonicalRefresh
     ) {
       const reconciledUpdatedAlbums = applyUpdatedAlbumsToCurrentView(
         updatedAlbums,
@@ -980,9 +979,9 @@ async function confirmManualTagEdit() {
     ) {
       provisionalProblematicMutation.taskId = String(data.save_task_id);
     }
-    if (completedResponseNeedsCanonicalRefresh) {
+    if (terminalResponseNeedsCanonicalRefresh) {
       pendingProblematicEntry.accept();
-      await watchSaveTask(data.save_task_id, {
+      await watchSaveTask(data.save_task_id || pendingProblematicEntry.key, {
         ...saveTaskWatchOptions,
         terminalPayload: data,
       });
@@ -995,7 +994,7 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+    if (responseIsTerminal && !terminalResponseNeedsCanonicalRefresh) {
       const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
         .map((warning) => String(warning || '').trim())
         .filter(Boolean);
@@ -1014,7 +1013,7 @@ async function confirmManualTagEdit() {
       pendingProblematicEntry.settle();
       if (
         provisionalProblematicMutation
-        && !completedResponseNeedsCanonicalRefresh
+        && !terminalResponseNeedsCanonicalRefresh
         && typeof settleProblematicSaveTaskMutation === 'function'
       ) {
         await settleProblematicSaveTaskMutation(
@@ -1022,7 +1021,7 @@ async function confirmManualTagEdit() {
           { reconcileSelection: true },
         );
       }
-      if (!completedResponseNeedsCanonicalRefresh) {
+      if (!terminalResponseNeedsCanonicalRefresh) {
         settleTagEditViewMutation(tagEditMutationClaim);
       }
     }
@@ -1907,6 +1906,7 @@ function renderTrackModalRelease(album) {
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
+  const hasVersionTabs = Array.isArray(state.modalReleases) && state.modalReleases.length > 1;
   const candidateSnapshot = album?.cover_candidate_snapshot && typeof album.cover_candidate_snapshot === 'object'
     ? album.cover_candidate_snapshot
     : null;
@@ -1954,10 +1954,10 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: album.album_artist || '',
-      album: album.name || 'Album',
-      year: album.year || '',
+      album: album.display_name || album.name || 'Album',
+      year: album.display_year || album.year || '',
       releaseType: album.release_type || 'ALBUM',
-      tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
@@ -2186,7 +2186,10 @@ function getTrackDiscLabel(track) {
 }
 
 function isBonusDiscTrack(track) {
-  const rawDisc = String((track && track.disc_number_raw) || '').trim();
+  const rawDisc = [track?.disc_number_raw, track?.disc_subtitle]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
   if (!rawDisc) return false;
   return /\b(bonus|extra|extras|instrumental|instrumentals|demo|demos|outtake|outtakes|rarity|rarities|interview|alternate version|alternate take)\b/i.test(rawDisc);
 }
@@ -2229,11 +2232,13 @@ function groupAlbumTracks(tracks) {
         key,
         discNumber: effectiveDisc,
         discLabel: key === 'single' ? '' : key,
+        discSubtitle: '',
         isBonus: false,
         tracks: [],
       });
     }
     const group = groups.get(key);
+    group.discSubtitle ||= String(track?.disc_subtitle || '').trim();
     group.isBonus = group.isBonus || isBonusDiscTrack(track);
     group.tracks.push(track);
   });
@@ -2259,6 +2264,7 @@ function groupAlbumTracks(tracks) {
     groups: orderedKeys.map((key) => ({
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
+      discSubtitle: groups.get(key).discSubtitle,
       isBonus: Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
@@ -2287,10 +2293,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discLabel = `CD ${group.discNumber}`;
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
-    if (group.isBonus) {
-      discLabel = group.discSubtitle || (discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD');
-    } else if (group.discSubtitle) {
-      discLabel = `${discLabel} • ${group.discSubtitle}`;
+    if (group.discSubtitle) {
+      discLabel = discLabel ? `${discLabel} • ${group.discSubtitle}` : group.discSubtitle;
+    } else if (group.isBonus) {
+      discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
     const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;
@@ -2337,7 +2343,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
-  const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
+    && componentGroups.some((group) => !group.isBonus);
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2348,8 +2355,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
-    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
-    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
+    mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
@@ -2369,10 +2376,10 @@ function buildPlayerTrackPayload(track, album = null) {
 }
 
 function getAlbumPlaybackQueueRef(album) {
-  if (typeof getAlbumIdentity === 'function') {
-    return String(getAlbumIdentity(album) || album?.key || '').trim();
+  if (typeof getAlbumRequestKey === 'function') {
+    return String(getAlbumRequestKey(album) || album?.key || '').trim();
   }
-  return String(album?.key || '').trim();
+  return String(album?.album_ref || album?.key || '').trim();
 }
 
 function getAlbumPlaybackContext(album) {

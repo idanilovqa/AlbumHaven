@@ -410,6 +410,18 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
         + b'"'
         in body
     )
+    assert (
+        b'<link rel="preload" href="/static/app.js?v='
+        + encoded_runtime_asset_version
+        + b'" as="script" fetchpriority="high">'
+        in body
+    )
+    assert (
+        b'<link rel="preload" href="/static/js/runtime-bundle.js?v='
+        + encoded_runtime_asset_version
+        + b'" as="script" fetchpriority="high">'
+        in body
+    )
     assert b'<script src="/static/app.js?v=' + encoded_runtime_asset_version + b'"' in body
     assert (
         b'<script src="/static/js/runtime-bundle.js?v='
@@ -1069,6 +1081,24 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert "16 tracks" in markup
 
 
+def test_build_initial_view_preview_preserves_featured_artist_relationship():
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [{
+                "artist": "10cc",
+                "albums": [{
+                    "key": "various::guardians",
+                    "name": "Guardians of the Galaxy: Awesome Mix Vol.1",
+                    "album_artist": "Various Artists",
+                    "artist_relationship": "featured",
+                }],
+            }],
+        }
+    )
+
+    assert preview["artist_groups"][0]["albums"][0]["artist_relationship"] == "featured"
+
+
 def test_build_initial_view_preview_omits_album_detail_resource_contracts():
     preview = startup_bootstrap.build_initial_view_preview(
         {
@@ -1468,6 +1498,26 @@ def test_initial_view_preview_can_strip_private_album_preference_overlays_for_pu
     }
     assert preview_album["track_count_preview"] == 2
     assert preview_album["tracks"] == []
+
+
+def test_asgi_unrevisioned_cover_preview_stays_in_app_data(app, asgi_app):
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "Art" / "Front.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), color=(32, 96, 160)).save(
+        cover_path, format="JPEG", quality=92
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert body != cover_path.read_bytes()
+    assert (app.config["DATA_DIR"] / "display-cover-cache").is_dir()
+    assert not (cover_path.parent / ".album-haven").exists()
 
 
 def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_app, monkeypatch):

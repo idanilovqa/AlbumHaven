@@ -27,7 +27,7 @@
 .player-track-meta { display: contents; }
 .player-empty-message { display: none; }
 .mobile-page-header h1, .mobile-page-header p { margin: 0; }
-.mobile-page-cover { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; object-fit: cover; }
+.mobile-page-cover { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; object-fit: var(--album-art-fit); }
 .mobile-page-outlet { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 .shell-main-surface.has-mobile-page > :not(.mobile-page-header):not(.mobile-page-outlet) { display: none !important; }
 .mobile-page-outlet > .is-mobile-page {
@@ -57,6 +57,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     --app-bar-height: calc(56px + env(safe-area-inset-top, 0px));
     --mobile-navigation-height: 0px;
     --player-height: calc(104px + env(safe-area-inset-bottom, 0px));
+    --app-page-header-top: 8px;
+    --app-page-inline: 12px;
   }
   html, body { width: 100%; overflow-x: hidden; }
   .shell-layout { --app-bar-height: calc(56px + env(safe-area-inset-top, 0px)); grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--app-bar-height) var(--mobile-navigation-height) minmax(0, 1fr); }
@@ -90,7 +92,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .app-bar--library .search-field-button { width: 40px; min-width: 40px; }
   .app-bar--library:not(.is-search-open) .search-field-control > input { visibility: hidden; padding: 0; }
   .app-bar--library:not(.is-search-open) [data-search-clear] { display: none; }
-  .shell-layout .shell-main-surface { grid-row: 3; grid-column: 1; width: auto; min-width: 0; padding: 14px 12px 0; margin: 0; border-radius: 16px 16px 0 0; overflow: hidden; }
+  .shell-layout .shell-main-surface { grid-row: 3; grid-column: 1; width: auto; min-width: 0; padding: var(--app-page-header-top) var(--app-page-inline) 0; margin: 0; border-radius: 16px 16px 0 0; overflow: hidden; }
   .shell-main-surface > .gallery-top-row { display: none; }
   .gallery-bar { align-items: flex-start; gap: 8px; padding: 0 0 10px; min-height: 40px; margin-bottom: 0; min-width: 0; flex-shrink: 0; }
   .gallery-bar__context { min-width: 0; flex: 1; }
@@ -180,7 +182,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .track-modal-cover { width: 100%; max-width: none; margin: 0; flex: none; }
   .is-mobile-page .track-modal-tabs { margin-bottom: 8px; padding: 0; }
   .is-mobile-page .track-modal-tabs .in-page-tabs > [role="tab"] { min-height: 44px; }
-  .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
+  .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; }
   .is-mobile-page .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
   .is-mobile-page :is(.track-modal-list, .track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow: visible; }
   .is-mobile-page .track-modal-list { padding: 0; scrollbar-gutter: auto; }
@@ -227,8 +229,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .cover-lookup-modal-header { display: none; }
   .is-mobile-page .cover-lookup-modal-body { display: block; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 16px; }
   .is-mobile-page .cover-lookup-modal-body > * { min-width: 0; max-width: 100%; }
+  .is-mobile-page :is(.cover-lookup-manual-row, .cover-lookup-manual-actions) { display: none; }
   .is-mobile-page .cover-lookup-modal-actions { flex: 0 0 auto; padding: 12px 0; background: var(--appearance-main-surface, var(--bg)); }
-  .is-mobile-page #cover-lookup-search-hint, .is-mobile-page .cover-lookup-manual-add, .is-mobile-page .cover-lookup-results[data-search-started="false"] { display: none; }
   .is-mobile-page .cover-lookup-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .is-mobile-page :is(.cover-lookup-art-card, .cover-lookup-art-card-shell) { min-width: 0; width: 100%; max-width: none; }
   /* One persistent transport: presentation changes only, no new audio element. */
@@ -303,7 +305,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-album-identity :is(.album-details-header__identity, .album-details-header__copy) { display: block; width: 100%; min-width: 0; }
   .mobile-album-identity .album-details-header__eyebrow { font-size: 12px; color: var(--muted, currentColor); margin-bottom: 6px; }
   .mobile-album-identity .album-details-header__primary { font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; white-space: normal; text-align: inherit; }
-  .mobile-album-identity .album-details-header__secondary { display: block; font-size: 12px; line-height: 1.5; margin-top: 7px; overflow-wrap: anywhere; text-align: inherit; }
+  .mobile-album-identity .album-details-header__secondary { display: block; font-size: 12px; line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; text-align: inherit; }
   /* Approved A and B have different action placement; the table is untouched. */
   .shell-main-surface.has-mobile-page { position: relative; }
   .mobile-page-header[data-inline-album-layout="true"] { position: absolute; inset: 0 12px auto; z-index: 3; padding: 14px 0; background: var(--appearance-main-surface, var(--bg)); }
@@ -490,6 +492,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card .gallery-card-info { min-width: 0; container-type: inline-size; }
   .album-card :is(.album-title-button, .album-subtitle) { display: block; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .album-card [data-gallery-metadata-text] { display: inline-block; white-space: nowrap; vertical-align: top; }
+  .album-card[data-gallery-display="cards"] .album-title-button { white-space: normal; }
+  .album-card[data-gallery-display="cards"] .album-title-button [data-gallery-metadata-text] { display: inline; white-space: normal; animation: none; }
   .album-card .is-card-text-overflowing > [data-gallery-metadata-text] { animation: gallery-card-text-pan var(--card-text-duration) linear infinite alternate; }
   .album-card :focus-visible > [data-gallery-metadata-text] { animation-play-state: paused; }
   .album-card .rating-row[data-rating-value="0"] { display: none; }
@@ -726,7 +730,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     grid-template-rows: auto; flex-wrap: nowrap; box-shadow: none;
   }
   /* Save/error announcements stay in the accessibility tree, not a second footer row. */
-  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"])), #cover-lookup-search-hint) {
+  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"], .cover-lookup-inline-notice))) {
     position: absolute; width: 1px; height: 1px; min-height: 0;
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
@@ -759,12 +763,12 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #mobile-page-header .gallery-bar__summary { margin: 2px 0 0; }
   /* The pinned album identity is two compact lines beside the 40px artwork.
      Do not reserve the generic toolbar title's 40px minimum above its metadata. */
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-title {
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) #mobile-page-title {
     display: block; min-height: 0; line-height: 22px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-summary {
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) #mobile-page-summary {
     line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
@@ -809,7 +813,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 @media (max-width: 900px) {
   /* Failures remain visible above the compact button row, never silently clipped. */
-  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"]) {
+  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"], .cover-lookup-inline-notice) {
     position: absolute; inset: auto 0 100%; max-height: 180px; overflow-y: auto;
     background: var(--appearance-main-surface, var(--panel)); z-index: 1;
   }

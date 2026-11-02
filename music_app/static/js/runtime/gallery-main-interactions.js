@@ -396,6 +396,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     closeGalleryMainSurface(true);
     return false;
   }
+  if (key === 'sources') hydrateDeferredNonAlbumTracksForAlbumTypes();
   if (previous) closeGalleryMainSurface(false, { immediate: true });
   galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
@@ -434,6 +435,10 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
+  if (galleryMainSurfaceController?.current?.()?.key === 'album-types'
+      || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
+    hydrateDeferredNonAlbumTracksForAlbumTypes();
+  }
   document.querySelectorAll('[data-gallery-source]').forEach((button) => {
     button.setAttribute('aria-checked', mainState.sources[button.dataset.gallerySource] === false ? 'false' : 'true');
   });
@@ -445,6 +450,9 @@ function updateGalleryMainControls() {
   document.querySelectorAll('[data-gallery-featured-on]').forEach((button) => {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
+  });
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -487,6 +495,13 @@ function updateGalleryMainControls() {
       onSelect: view => transitionGalleryMain({ type: 'set-view', view }),
     }).select(mainState.view);
   }
+}
+
+function hydrateDeferredNonAlbumTracksForAlbumTypes() {
+  if (!state.view?.non_album_tracks_deferred || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
+  void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
+    console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  });
 }
 
 function buildGalleryFamilyPanelBody() {
@@ -717,6 +732,8 @@ function handleGalleryMainClick(event) {
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
+  const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
+  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -739,11 +756,7 @@ function handleGalleryMainClick(event) {
   if (typeAnchor) {
     event.preventDefault();
     openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
-    if (state.view?.non_album_tracks_deferred && typeof hydrateDeferredNonAlbumTracks === 'function') {
-      void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
-        console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-      });
-    }
+    hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');

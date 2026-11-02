@@ -2,6 +2,47 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
+test('TrackModalActions exposes the current-release split choice journey', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+
+  assert.equal(typeof TrackModalActions.prototype.waitForIdentitySplitChoices, 'function');
+  assert.equal(typeof TrackModalActions.prototype.chooseCurrentRelease, 'function');
+});
+
+test('TrackModalActions waits for one atomic exact album-details render', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  let snapshotReads = 0;
+  const actions = new TrackModalActions({
+    async readExactAlbumDetailsSnapshot() {
+      snapshotReads += 1;
+      if (snapshotReads === 1) {
+        return {
+          title: 'Artist • Destination • 2026',
+          trackRowCount: 0,
+          trackTitles: [],
+          displayedTrackNumbers: [],
+        };
+      }
+      return {
+        title: 'Artist • Destination • 2026',
+        trackRowCount: 2,
+        trackTitles: ['First', 'Second'],
+        displayedTrackNumbers: [1, 2],
+      };
+    },
+  });
+  actions.readSummary = async () => ({ trackRows: 2 });
+
+  const summary = await actions.waitForExactAlbumDetails({
+    title: 'Artist • Destination • 2026',
+    trackTitles: ['First', 'Second'],
+    displayedTrackNumbers: [1, 2],
+  }, { timeout: 2000 });
+
+  assert.deepEqual(summary, { trackRows: 2 });
+  assert.equal(snapshotReads, 2);
+});
+
 function createLocator({ text = '', visible = true, count = 0, evaluateAll = null, attributes = {} } = {}) {
   return {
     async textContent() {
@@ -72,6 +113,18 @@ test('TrackModalActions recognizes a visible empty shared Artbox without placeho
   assert.equal(summary.coverLoaded, false);
   assert.equal(summary.coverPlaceholderVisible, true);
   assert.equal(summary.coverReady, true);
+});
+
+test('TrackModalActions reads the visible mobile album summary', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  const { trackModal } = createTrackModalStub({ coverLoaded: true });
+  trackModal.mobilePage = createLocator({ visible: true });
+  trackModal.mobileSummary = createLocator({ text: 'Mastodon · 2009' });
+  trackModal.subtitle = createLocator({ text: '' });
+
+  const summary = await new TrackModalActions(trackModal).readSummary();
+
+  assert.equal(summary.subtitle, 'Mastodon · 2009');
 });
 
 test('TrackModalActions.waitForLoadedSummary accepts a modal with loaded cover art', async () => {

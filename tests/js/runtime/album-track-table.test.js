@@ -192,6 +192,17 @@ test('playing spectra share the exact row outline path at opposite offsets and f
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
 
+test('collapsing any loose-track section also collapses the aggregate length', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  assert.match(
+    css,
+    /\.album-track-table:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\) \.album-track-table__total\s*\{[^}]*display:\s*none/s,
+  );
+});
+
 test('the final table right outline fades into the footer without a corner glow layer', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),

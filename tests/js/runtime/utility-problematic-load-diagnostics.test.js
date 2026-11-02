@@ -1050,6 +1050,10 @@ test('loadProblematicFiles rejects a JSON HTTP error without committing empty su
 
   assert.equal(context.state.utility.problematicFiles.length, 0);
   assert.equal(context.state.utility.loaded, false);
+  assert.equal(
+    context.state.utility.problematicLoadError,
+    'Problematic-file projection is temporarily unavailable.',
+  );
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(calls.consoleErrors.length, 1);
@@ -1174,6 +1178,7 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 0);
+  assert.match(context.state.utility.problematicLoadError, /Unexpected end (?:of )?JSON input/);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, false);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.match(context.state.utility.problematicDiagnostics.summaryLoad.error, /Unexpected end of JSON input/);
@@ -1188,6 +1193,7 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].key, 'album-1');
+  assert.equal(context.state.utility.problematicLoadError, '');
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, true);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.error, null);

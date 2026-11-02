@@ -20,6 +20,269 @@ _NON_ALBUM_ROOT_IO_BLOCK_CEILING = 40_000
 
 
 @pytest.fixture
+def album_identity_lineage_inventory(monkeypatch):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    try:
+        with isolatedPostgres._connect(setup_url) as connection:
+            library_id = int(
+                connection.execute(
+                    """
+                    select libraries.id
+                    from app.bootstrap_owners as owners
+                    join library.libraries as libraries
+                      on libraries.owner_account_id = owners.account_id
+                    where owners.owner_key = 'local-bootstrap-owner'
+                      and libraries.name = 'Local Library'
+                    """
+                ).fetchone()["id"]
+            )
+            artist_id = int(
+                connection.execute(
+                    """
+                    insert into library.local_artists (
+                      library_id, artist_key, name, sort_name
+                    ) values (%s, 'lineage artist', 'Lineage Artist', 'Lineage Artist')
+                    returning id
+                    """,
+                    (library_id,),
+                ).fetchone()["id"]
+            )
+
+            def add_album(key, title):
+                return int(
+                    connection.execute(
+                        """
+                        insert into library.local_albums (
+                          library_id, artist_id, album_key, title
+                        ) values (%s, %s, %s, %s)
+                        returning id
+                        """,
+                        (library_id, artist_id, key, title),
+                    ).fetchone()["id"]
+                )
+
+            album_ids = {
+                "old": add_album("lineage::old", "Old Album"),
+                "left": add_album("lineage::left", "Left Album"),
+                "right": add_album("lineage::right", "Right Album"),
+                "merged": add_album("lineage::merged", "Merged Album"),
+            }
+            paths = {}
+            for index in range(1, 4):
+                track_id = int(
+                    connection.execute(
+                        """
+                        insert into library.local_tracks (
+                          library_id, album_id, artist_id, track_key, title
+                        ) values (%s, %s, %s, %s, %s)
+                        returning id
+                        """,
+                        (
+                            library_id,
+                            album_ids["old"],
+                            artist_id,
+                            f"lineage-track-{index}",
+                            f"Track {index}",
+                        ),
+                    ).fetchone()["id"]
+                )
+                path = f"C:\\Music\\Lineage\\{index:02d}.flac"
+                connection.execute(
+                    """
+                    insert into library.local_track_files (track_id, private_path)
+                    values (%s, %s)
+                    """,
+                    (track_id, path),
+                )
+                paths[index] = path
+            connection.commit()
+        yield SimpleNamespace(
+            setup_url=setup_url,
+            runtime_url=runtime_url,
+            library_id=library_id,
+            album_ids=album_ids,
+            paths=paths,
+        )
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_album_identity_lineage_survives_rename_split_merge_and_restart(
+    album_identity_lineage_inventory,
+):
+    from music_app.services.album_identity_lineage_postgres import (
+        AlbumIdentityLineageRepository,
+    )
+
+    fixture = album_identity_lineage_inventory
+    repository = AlbumIdentityLineageRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": fixture.runtime_url},
+        connect=isolatedPostgres._connect,
+    )
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_albums set album_key = 'lineage::renamed' where id = %s",
+            (fixture.album_ids["old"],),
+        )
+        connection.commit()
+
+    renamed = repository.resolve(
+        album_id=fixture.album_ids["old"], album_key="lineage::old"
+    )
+    assert renamed["status"] == "resolved"
+    assert renamed["album"]["album_key"] == "lineage::renamed"
+
+    stale_id_with_current_key = repository.resolve(
+        album_id=999_999_999,
+        album_key="lineage::renamed",
+    )
+    assert stale_id_with_current_key["status"] == "current"
+    assert stale_id_with_current_key["album"]["album_id"] == fixture.album_ids["old"]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        tracks = connection.execute(
+            "select id from library.local_tracks order by track_key"
+        ).fetchall()
+        connection.execute(
+            "update library.local_tracks set album_id = %s where id in (%s, %s)",
+            (fixture.album_ids["left"], tracks[0]["id"], tracks[1]["id"]),
+        )
+        connection.execute(
+            "update library.local_tracks set album_id = %s where id = %s",
+            (fixture.album_ids["right"], tracks[2]["id"]),
+        )
+        connection.commit()
+
+    split = repository.resolve(
+        album_id=fixture.album_ids["old"], album_key="lineage::old"
+    )
+    assert split["status"] == "split"
+    assert {choice["album_id"] for choice in split["choices"]} == {
+        fixture.album_ids["left"],
+        fixture.album_ids["right"],
+    }
+    agreed_child = repository.resolve(
+        album_id=fixture.album_ids["left"],
+        album_key="lineage::old",
+    )
+    assert agreed_child["status"] == "resolved"
+    assert agreed_child["album"]["album_id"] == fixture.album_ids["left"]
+    assert repository.resolve(
+        album_id=fixture.album_ids["left"],
+        album_key="lineage::right",
+    )["status"] == "unresolved"
+    chosen = repository.resolve(
+        album_id=fixture.album_ids["old"],
+        album_key="lineage::old",
+        track_paths={fixture.paths[1], fixture.paths[2]},
+    )
+    assert chosen["status"] == "resolved"
+    assert chosen["album"]["album_id"] == fixture.album_ids["left"]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_tracks set album_id = %s where album_id in (%s, %s)",
+            (
+                fixture.album_ids["merged"],
+                fixture.album_ids["left"],
+                fixture.album_ids["right"],
+            ),
+        )
+        connection.commit()
+
+    restarted_repository = AlbumIdentityLineageRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": fixture.runtime_url},
+        connect=isolatedPostgres._connect,
+    )
+    merged = restarted_repository.resolve(
+        album_id=fixture.album_ids["old"], album_key="lineage::old"
+    )
+    assert merged["status"] == "resolved"
+    assert merged["album"]["album_id"] == fixture.album_ids["merged"]
+
+
+def test_live_album_identity_lineage_rejects_cycles_and_cross_library_moves(
+    album_identity_lineage_inventory,
+):
+    from music_app.services.album_identity_lineage_postgres import (
+        AlbumIdentityLineageRepository,
+    )
+
+    fixture = album_identity_lineage_inventory
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        account_id = int(
+            connection.execute(
+                "select account_id from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'"
+            ).fetchone()["account_id"]
+        )
+        other_library_id = int(
+            connection.execute(
+                """
+                insert into library.libraries (
+                  owner_account_id, name, library_kind
+                ) values (%s, 'Other Library', 'local')
+                returning id
+                """,
+                (account_id,),
+            ).fetchone()["id"]
+        )
+        other_album_id = int(
+            connection.execute(
+                """
+                insert into library.local_albums (library_id, album_key, title)
+                values (%s, 'other::album', 'Other Album')
+                returning id
+                """,
+                (other_library_id,),
+            ).fetchone()["id"]
+        )
+        connection.commit()
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        track_id = connection.execute(
+            "select id from library.local_tracks order by track_key limit 1"
+        ).fetchone()["id"]
+        with pytest.raises(Exception, match="cannot cross libraries"):
+            connection.execute(
+                "update library.local_tracks set album_id = %s where id = %s",
+                (other_album_id, track_id),
+            )
+        connection.rollback()
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """
+            insert into library.local_album_identity_transitions (
+              library_id, predecessor_album_id, predecessor_album_key,
+              successor_album_id, successor_album_key
+            ) values
+              (%s, %s, 'lineage::old', %s, 'lineage::left'),
+              (%s, %s, 'lineage::left', %s, 'lineage::old')
+            """,
+            (
+                fixture.library_id,
+                fixture.album_ids["old"],
+                fixture.album_ids["left"],
+                fixture.library_id,
+                fixture.album_ids["left"],
+                fixture.album_ids["old"],
+            ),
+        )
+        connection.commit()
+
+    repository = AlbumIdentityLineageRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": fixture.runtime_url},
+        connect=isolatedPostgres._connect,
+    )
+    assert repository.resolve(
+        album_id=fixture.album_ids["old"], album_key="lineage::old"
+    )["status"] == "invalid"
+
+
+@pytest.fixture
 def watcher_repair_inventory(monkeypatch, tmp_path):
     """Real migrated inventory used only by the bounded watcher repair cases."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
@@ -55,6 +318,148 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:
         isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_targeted_invalidation_publishes_new_album_to_gallery(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from music_app.services import state
+    from music_app.services.gallery_projection_postgres import (
+        ensure_gallery_projection_ready,
+    )
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Existing/Existing Album/01.flac"))
+    ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+
+    added = fixture.entry(
+        "I'm with Her/Watcher Album/01.flac",
+        artist="I'm with Her",
+        album="Watcher Album",
+    )
+    result = TargetedLibraryReconciler(
+        fixture.config,
+        repository=fixture.adapter,
+        root_definitions=fixture.roots,
+        metadata_reader=lambda path: {**added, "path": str(path)},
+        wait=lambda _seconds: None,
+    ).reconcile(
+        SimpleNamespace(
+            root_id="repair-main",
+            paths=(Path(added["path"]),),
+            deleted_paths=(),
+            deleted_subtrees=(),
+            moves=(),
+        )
+    )
+
+    scheduled = []
+    original_schedule = state.schedule_gallery_projection_refresh
+    monkeypatch.setattr(
+        state,
+        "schedule_gallery_projection_refresh",
+        lambda config: scheduled.append(
+            original_schedule(config, connect=isolatedPostgres._connect)
+        ),
+    )
+    state.invalidate_targeted_library_projections(
+        {},
+        fixture.config,
+        revision=result.revision,
+        affected_album_keys=result.affected_album_keys,
+    )
+    scheduled[0].result(timeout=30)
+
+    sidebar = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    ).build_root_sidebar_payload()
+    assert any(item["artist"] == "I'm with Her" for item in sidebar["artists_sidebar"])
+
+
+def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from scripts import rebuild_local_album_featured_artists as rebuild
+
+    fixture = watcher_repair_inventory
+    owner = fixture.entry(
+        "Owner/Rebuild Album/01.flac",
+        artist="Owner",
+        album="Rebuild Album",
+    )
+    guest = fixture.entry(
+        "Owner/Rebuild Album/02.flac",
+        artist="Guest Artist",
+        album="Rebuild Album",
+    )
+    fixture.seed(owner, guest)
+    monkeypatch.setenv("ALBUM_HAVEN_DATABASE_URL", fixture.setup_url)
+    monkeypatch.setattr(rebuild, "_connect", isolatedPostgres._connect)
+
+    rebuild.rebuild_featured_artist_rows(apply=True)
+
+    alias = fixture.entry(
+        "Owner/Rebuild Album/03.flac",
+        artist="OWNER.",
+        album="Rebuild Album",
+    )
+    fixture.seed(owner, guest, alias)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """
+            insert into library.local_album_featured_artists (
+              library_id,
+              album_id,
+              artist_id,
+              featured_kind,
+              metadata
+            )
+            select
+              album.library_id,
+              album.id,
+              artist.id,
+              'featured_track_artist',
+              '{"source":"test_owner_variant"}'::jsonb
+            from library.local_albums as album
+            join library.local_artists as artist
+              on artist.library_id = album.library_id
+             and artist.name = 'OWNER.'
+            where album.title = 'Rebuild Album'
+            on conflict do nothing
+            """
+        )
+        connection.commit()
+
+    rebuild.rebuild_featured_artist_rows(apply=True)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            """
+            select artist.name, featured.featured_kind
+            from library.local_album_featured_artists as featured
+            join library.local_albums as album
+              on album.id = featured.album_id
+            join library.local_artists as artist
+              on artist.id = featured.artist_id
+            where album.title = 'Rebuild Album'
+            order by artist.name, featured.featured_kind
+            """
+        ).fetchall()
+
+    assert ("OWNER.", "featured_track_artist") not in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
+    assert ("Owner", "owner") in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
+    assert ("Guest Artist", "featured_track_artist") in {
+        (row["name"], row["featured_kind"]) for row in rows
+    }, rows
 
 
 @pytest.mark.parametrize("missing_cover", [False, True])
@@ -270,7 +675,7 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
             join library.local_albums album on album.id = f.album_id
             where album.album_key = 'owner::repair album' and f.featured_kind = 'featured_track_artist'
         """).fetchall()
-    assert {row["name"] for row in rows} == ({"Owner", "New Guest", "Retained Guest"} if operation == "update" else {"Owner", "Retained Guest"})
+    assert {row["name"] for row in rows} == ({"New Guest", "Retained Guest"} if operation == "update" else {"Retained Guest"})
     if operation == "delete":
         Path(untouched["path"]).unlink()
         fixture.adapter.persist_targeted_inventory_mutation(
@@ -284,7 +689,7 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
                 where album.album_key = 'owner::repair album' and f.featured_kind = 'featured_track_artist'
             """).fetchall()
             assert connection.execute("select bool_and(scan_cache_stale) as all_stale from library.local_track_files").fetchone()["all_stale"]
-        assert {row["name"] for row in retained} == {"Owner", "Retained Guest"}
+        assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])

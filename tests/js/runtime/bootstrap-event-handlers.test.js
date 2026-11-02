@@ -13,12 +13,16 @@ function createContext({
   drawerHandled = false,
   searchMouseDownHandled = false,
   longPressClickConsumed = false,
+  albumLongPressClickConsumed = false,
 } = {}) {
   const listeners = {};
   const calls = [];
   const context = {
     consumeArtistTreeLongPressClick() {
       return longPressClickConsumed;
+    },
+    consumeAlbumCardLongPressClick() {
+      return albumLongPressClickConsumed;
     },
     document: {
       addEventListener(name, callback) {
@@ -57,6 +61,9 @@ function createContext({
     handleGalleryBootstrapClick() {
       calls.push('gallery');
     },
+    handleGalleryBootstrapDoubleClick(event) {
+      calls.push(['lightbox-double-click', event]);
+    },
     handleGalleryBootstrapSearchMouseDown() {
       calls.push('search-mousedown');
       return searchMouseDownHandled;
@@ -72,6 +79,14 @@ function createContext({
 
 test('document click stops after consuming artist tree long-press synthetic click', () => {
   const { calls, listeners } = createContext({ longPressClickConsumed: true });
+
+  listeners.click({ defaultPrevented: false, target: {} });
+
+  assert.deepEqual(calls, []);
+});
+
+test('document click stops after consuming album card long-press synthetic click', () => {
+  const { calls, listeners } = createContext({ albumLongPressClickConsumed: true });
 
   listeners.click({ defaultPrevented: false, target: {} });
 
@@ -144,4 +159,13 @@ test('document mousedown reaches the utility handler after an unhandled search i
   listeners.mousedown({ target: {} });
 
   assert.deepEqual(calls, ['search-mousedown', 'utility-mousedown']);
+});
+
+test('document double click delegates to the shared lightbox zoom handler', () => {
+  const { calls, listeners } = createContext();
+  const event = { target: {} };
+
+  listeners.dblclick(event);
+
+  assert.deepEqual(calls, [['lightbox-double-click', event]]);
 });

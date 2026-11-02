@@ -48,6 +48,58 @@ def _adapter(connection):
     )
 
 
+def test_notification_rows_keep_the_authoritative_album_key():
+    row = cover_lookup_tasks_postgres._task_row(
+        {
+            "id": "lookup-task",
+            "artist": "Artist",
+            "album": "Album",
+            "year": 2026,
+            "save_generation": "save-generation-1",
+            "album_payload": {"key": "artist::album::year::2026"},
+        },
+        source_index=0,
+    )
+
+    assert row["album_key"] == "artist::album::year::2026"
+    assert row["provider_payload"]["save_generation"] == "save-generation-1"
+
+
+def test_load_notification_reads_one_full_persisted_task_by_id():
+    connection = _Connection(
+        page_rows=[
+            {
+                "task_key": "persisted-task",
+                "status": "completed",
+                "requested_at": datetime.fromisoformat("2026-10-25T12:00:00+00:00"),
+                "completed_at": datetime.fromisoformat("2026-10-25T12:01:00+00:00"),
+                "album_key": "artist|album|2026",
+                "selected_cover_private_path": None,
+                "provider_payload": {},
+                "error_message": None,
+                "metadata": {
+                    "source_family": "runtime_cover_lookup_notifications_adapter",
+                    "source_payload": {
+                        "id": "persisted-task",
+                        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+                        "possible_matches": [{"id": "candidate-1"}],
+                    },
+                },
+            }
+        ]
+    )
+
+    task = _adapter(connection).load_notification("persisted-task")
+
+    assert task["id"] == "persisted-task"
+    assert task["track_paths"] == ["C:/Music/Artist/Album/01.flac"]
+    assert task["possible_matches"] == [{"id": "candidate-1"}]
+    sql, params = connection.operations[-1]
+    assert "ops.cover_lookup_tasks.task_key = %s" in sql
+    assert "limit 1" in sql
+    assert params == ("persisted-task",)
+
+
 def test_adapter_uses_prewarmed_default_pool_when_connector_not_injected(monkeypatch):
     database_url = "postgresql://example/test"
     connection = _Connection(
@@ -94,12 +146,22 @@ def _row(task_id: str, timestamp: str, *, status: str = "completed"):
 
 def test_count_notifications_uses_one_filtered_aggregate_query():
     connection = _Connection(
-        count_rows=[{"total_count": 528, "active_count": 3, "finished_count": 525}]
+        count_rows=[{
+            "total_count": 528,
+            "active_count": 3,
+            "finished_count": 525,
+            "membership_revision": "membership-v2",
+        }]
     )
 
     counts = _adapter(connection).count_notifications()
 
-    assert counts == {"total_count": 528, "active_count": 3, "finished_count": 525}
+    assert counts == {
+        "total_count": 528,
+        "active_count": 3,
+        "finished_count": 525,
+        "membership_revision": "membership-v2",
+    }
     count_operations = [
         item for item in connection.operations if "as active_count" in item[0]
     ]
@@ -107,9 +169,14 @@ def test_count_notifications_uses_one_filtered_aggregate_query():
     sql, params = count_operations[0]
     assert "count(*) filter ( where" in sql
     assert "source_family" in sql
+    assert "job_kind" in sql
+    assert "save_remote_selection" in sql
+    assert "md5(string_agg(" in sql
+    assert "ops.cover_lookup_tasks.task_key" in sql
     assert params == (
         ["pending", "running"],
         ["completed", "failed", "canceled"],
+        ["pending", "running"],
         ["cover_lookup_notifications", "runtime_cover_lookup_notifications_adapter"],
     )
 
@@ -161,9 +228,11 @@ def test_load_notification_summary_page_returns_newest_first_page_and_counts():
         "total_count": 3,
         "active_count": 0,
         "finished_count": 3,
+        "membership_revision": "",
     }
     page_sql, page_params = connection.operations[-1]
     assert "offset" not in page_sql
+    assert "job_kind" in page_sql
     assert "order by coalesce(" in page_sql
     assert "ops.cover_lookup_tasks.task_key desc" in page_sql
     assert page_params[-1] == 3
@@ -221,6 +290,32 @@ def test_active_only_page_filters_pending_and_running_and_caps_limit_at_50():
     assert page_params[-1] == 51
 
 
+def test_active_page_also_returns_requested_mounted_terminal_tasks():
+    connection = _Connection(
+        count_rows=[{"total_count": 3, "active_count": 1, "finished_count": 2}],
+        page_rows=[
+            _row("running", "2026-10-17T18:00:02+00:00", status="running"),
+            _row("mounted-terminal", "2026-10-17T18:00:01+00:00"),
+        ],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50,
+        cursor=None,
+        active_only=True,
+        task_ids=("mounted-terminal",),
+    )
+
+    assert [item["id"] for item in page["items"]] == ["running", "mounted-terminal"]
+    page_sql, page_params = connection.operations[-1]
+    assert "ops.cover_lookup_tasks.status = any(%s::text[])" in page_sql
+    assert "ops.cover_lookup_tasks.task_key = any(%s::text[])" in page_sql
+    assert " or " in page_sql
+    assert page_params[-3] == ["pending", "running"]
+    assert page_params[-2] == ["mounted-terminal"]
+    assert page_params[-1] == 52
+
+
 @pytest.mark.parametrize(
     "cursor",
     [
@@ -248,6 +343,7 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
                 "album_id": 41,
                 "name": "Album",
                 "cover_path": "C:/Music/Artist/Album/cover.jpg",
+                "cover_revision": "cover-revision-41",
                 "tracks": [{"path": "C:/Music/Artist/Album/01.flac"}],
             },
         }
@@ -267,9 +363,124 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
     assert "cover_path" not in item.get("album_payload", {})
     assert "tracks" not in item.get("album_payload", {})
     assert item["album_payload"]["album_id"] == 41
+    assert item["album_payload"]["cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Artist/Album/cover.jpg&size=480&v=cover-revision-41"
+    )
     page_sql = connection.operations[-1][0]
     assert "'tracks'" not in page_sql
-    assert "'cover_path'" not in page_sql
+    assert "album_payload' -> 'cover_path'" in page_sql
     assert "'album_id', coalesce(" in page_sql
     assert "album_payload' -> 'id'" in page_sql
     assert "album_payload' -> 'album_id'" in page_sql
+
+
+def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_candidate_preview():
+    row = _row("angels", "2026-10-17T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_user_cover_path": "C:/Music/Black Obelisk/Angels/selected.jpg",
+            "current_user_cover_revision": "current-user-revision",
+            "best_candidate_preview_url": "https://images.example/angels-best.jpg",
+        }
+    )
+    connection = _Connection(
+        count_rows=[{"total_count": 1, "active_count": 0, "finished_count": 1}],
+        page_rows=[row],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50, cursor=None, active_only=False
+    )
+
+    item = page["items"][0]
+    assert "current_user_cover_path" not in item
+    assert "current_user_cover_revision" not in item
+    assert item["current_user_cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Black%20Obelisk/Angels/selected.jpg"
+        "&size=480&v=current-user-revision"
+    )
+    assert item["best_candidate_preview_url"] == (
+        "https://images.example/angels-best.jpg"
+    )
+    page_sql = connection.operations[-1][0]
+    assert "left join library.local_albums as current_album_by_id" in page_sql
+    assert "current_album_by_id.id = identity.album_id" in page_sql
+    assert "identity.album_key is null or current_album_by_id.album_key = identity.album_key" in page_sql
+    assert "left join library.local_albums as current_album_by_key" in page_sql
+    assert "current_album_by_key.album_key = identity.album_key" in page_sql
+    assert "current_album_by_id.id is null" in page_sql
+    assert "current_album.metadata ->> 'cover_selection_origin' = 'user'" in page_sql
+    assert "as identity(album_id, album_key)" in page_sql
+    assert "album_payload' ->> 'key'" in page_sql
+    assert "from library.local_albums as album" not in page_sql
+    assert "with ordinality as candidates(candidate, ordinal)" in page_sql
+    assert page_sql.count(
+        "coalesce(candidate ->> 'art_kind', 'cover') = 'cover'"
+    ) == 1
+
+
+def test_notification_summary_page_keeps_current_album_cover_as_last_preview_fallback():
+    row = _row("kuryokhin", "2026-10-18T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_cover_path": "C:/Music/Aquarium/Kuryokhin/cover.jpg",
+            "current_cover_revision": "current-cover-revision",
+        }
+    )
+    connection = _Connection(
+        count_rows=[{"total_count": 1, "active_count": 0, "finished_count": 1}],
+        page_rows=[row],
+    )
+
+    page = _adapter(connection).load_notification_summary_page(
+        limit=50, cursor=None, active_only=False
+    )
+
+    item = page["items"][0]
+    assert "current_cover_path" not in item
+    assert "current_cover_revision" not in item
+    assert item["current_cover_preview_url"] == (
+        "/cover?path=C%3A/Music/Aquarium/Kuryokhin/cover.jpg"
+        "&size=480&v=current-cover-revision"
+    )
+    page_sql = connection.operations[-1][0]
+    assert "'current_cover_path', current_album.cover_path" in page_sql
+    assert "'current_cover_revision', current_album.metadata ->> 'cover_revision'" in page_sql
+
+
+def test_unpaged_notification_summaries_do_not_expose_current_user_cover_paths():
+    row = _row("revelations", "2026-10-17T18:00:00+00:00")
+    row["task_summary"].update(
+        {
+            "current_user_cover_path": "C:/Music/Susanne/Revelations/selected.jpg",
+            "current_user_cover_revision": "revelations-user-revision",
+        }
+    )
+    connection = _Connection(page_rows=[row])
+
+    items = _adapter(connection).load_notification_summaries()
+
+    assert "current_user_cover_path" not in items[0]
+    assert "current_user_cover_revision" not in items[0]
+    assert items[0]["current_user_cover_preview_url"].endswith(
+        "&v=revelations-user-revision"
+    )
+def test_terminal_notification_queries_exclude_albums_without_current_files():
+    from music_app.services import cover_lookup_tasks_postgres as repository
+
+    joins = repository._current_notification_album_joins_sql()
+    queries = (
+        repository._load_notification_summaries_sql(),
+        repository._count_notifications_sql(),
+        repository._load_notification_summary_page_sql(
+            has_cursor=False,
+            active_only=False,
+        ),
+    )
+
+    assert "scan_cache_stale is false" in joins
+    assert "has_active_tracks" in joins
+    for query in queries:
+        assert "current_album.has_active_tracks" in query
+        assert "status in ('pending', 'running')" in query
+

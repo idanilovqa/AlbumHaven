@@ -12,7 +12,7 @@ export async function acknowledgeSavedNotification(tagEditor, expectedMessage, {
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
-export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, beforeNavigation }) {
+export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
   const appBar = new AppBarActions(new AppBar(tagEditor.page));
   const scan = new ScanPageActions(new ScanPage(tagEditor.page));
   await expect(tagEditor.overlay).toBeHidden({ timeout });
@@ -23,7 +23,10 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   let deliveryError;
   try {
     await scan.openStatusPageFromMenu();
-    await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
+    // A completed save shows a timed toast, which may end before the status page opens.
+    if (!autoDismisses || await tagEditor.repairAlert.isVisible()) {
+      await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
+    }
   } catch (error) {
     deliveryError = error;
   }

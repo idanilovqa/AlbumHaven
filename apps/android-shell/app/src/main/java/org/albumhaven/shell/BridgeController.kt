@@ -1,7 +1,9 @@
 package org.albumhaven.shell
 
+import org.albumhaven.shell.playback.NativePlaybackEvent
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 /** The stable identity reported in the handshake. */
 class ShellIdentity(
@@ -21,12 +23,37 @@ interface BridgeHost {
 }
 
 /** Validates and answers web messages for one document; call [reset] when a page starts. */
-class BridgeController(private val identity: ShellIdentity, private val host: BridgeHost) {
+class BridgeController(
+    private val identity: ShellIdentity,
+    private val host: BridgeHost,
+    private val playback: NativePlaybackPort,
+) {
 
+    private val playbackBridge = PlaybackBridge(playback)
     private var negotiatedProtocol: Int? = null
+
+    /** Posts to the document that negotiated the bridge; events go nowhere before a handshake. */
+    private var eventSink: ((String) -> Unit)? = null
 
     fun reset() {
         negotiatedProtocol = null
+        eventSink = null
+    }
+
+    /** Sends a native playback event to the negotiated document. Call on the main thread. */
+    fun emit(event: NativePlaybackEvent) {
+        val sink = eventSink ?: return
+        val protocol = negotiatedProtocol ?: return
+        val (name, payload) = PlaybackBridge.encode(event)
+        sink(
+            JSONObject()
+                .put("protocol", protocol)
+                .put("id", UUID.randomUUID().toString())
+                .put("type", "event")
+                .put("name", name)
+                .put("payload", payload)
+                .toString(),
+        )
     }
 
     fun handle(raw: String, sourceOrigin: String, isMainFrame: Boolean, reply: (String) -> Unit) {
@@ -49,8 +76,12 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
                 reply(BridgeCodec.failure(message, protocol, "incompatible_bridge", "Wrong protocol"))
             message.name == SANDBOX_SELECT && SANDBOX_CAPABILITY in capabilities() ->
                 selectSandbox(message, protocol, reply)
-            else ->
-                reply(BridgeCodec.failure(message, protocol, "unsupported_command", "Unsupported command"))
+            else -> when (val result = playbackBridge.handle(message.name, message.payload)) {
+                is PlaybackBridge.Result.Ok -> reply(BridgeCodec.success(message, protocol, result.payload))
+                is PlaybackBridge.Result.Failed ->
+                    reply(BridgeCodec.failure(message, protocol, result.code, result.message))
+                null -> reply(BridgeCodec.failure(message, protocol, "unsupported_command", "Unsupported command"))
+            }
         }
     }
 
@@ -68,6 +99,7 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
             return
         }
         negotiatedProtocol = selected
+        eventSink = reply
         reply(BridgeCodec.success(message, selected, handshakePayload(selected)))
     }
 
@@ -82,7 +114,7 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
             .put("bridgeProtocolMax", PROTOCOL_MAX)
             .put("capabilities", JSONArray(capabilities()))
             .put("origin", host.selectedOrigin())
-            .put("playback", JSONObject().put("state", "webview"))
+            .put("playback", PlaybackBridge.snapshotJson(playback.snapshot))
         if (identity.channel == ShellChannel.SANDBOX) {
             payload.put(
                 "sandbox",
@@ -94,11 +126,12 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
         return payload
     }
 
+    // Native output replaces the interim WebView player; the two never run together.
     private fun capabilities(): List<String> =
         if (identity.channel == ShellChannel.SANDBOX) {
-            listOf(SANDBOX_CAPABILITY, WEBVIEW_PLAYBACK_CAPABILITY)
+            listOf(SANDBOX_CAPABILITY) + PlaybackBridge.CAPABILITIES
         } else {
-            listOf(WEBVIEW_PLAYBACK_CAPABILITY)
+            PlaybackBridge.CAPABILITIES
         }
 
     private fun selectSandbox(message: BridgeMessage, protocol: Int, reply: (String) -> Unit) {
@@ -122,10 +155,6 @@ class BridgeController(private val identity: ShellIdentity, private val host: Br
         const val PROTOCOL_MIN = 1
         const val PROTOCOL_MAX = 1
         const val SANDBOX_CAPABILITY = "sandbox.select.v1"
-
-        // Interim, owner-approved: the web player runs inside the WebView until
-        // native playback replaces it. It stops when the app is backgrounded.
-        const val WEBVIEW_PLAYBACK_CAPABILITY = "playback.webview.v1"
         private const val HANDSHAKE = "bridge.handshake"
         private const val SANDBOX_SELECT = "sandbox.select"
     }

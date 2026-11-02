@@ -1,5 +1,10 @@
 package org.albumhaven.shell
 
+import org.albumhaven.shell.playback.ControllerHarness
+import org.albumhaven.shell.playback.CurrentItemReason
+import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.playback.NativePlaybackSnapshot
+import org.albumhaven.shell.playback.NativePlaybackState
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -36,10 +41,11 @@ class BridgeControllerTest {
     }
 
     private val host = FakeHost()
+    private val playback = ControllerHarness()
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
     private fun controller(channel: ShellChannel, id: String) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host)
+        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort(playback.controller))
 
     private fun send(
         controller: BridgeController,
@@ -61,6 +67,7 @@ class BridgeControllerTest {
     private fun canonical(value: Any?): Any? = when (value) {
         is JSONObject -> value.keys().asSequence().associateWith { canonical(value.get(it)) }
         is JSONArray -> (0 until value.length()).map { canonical(value.get(it)) }
+        is Int -> value.toLong()
         else -> value
     }
 
@@ -179,10 +186,134 @@ class BridgeControllerTest {
     }
 
     @Test
-    fun playbackCommandsAreUnsupportedBeforeNativePlayback() {
-        send(sandbox, handshake())
-        assertEquals("unsupported_command", errorCode(send(sandbox, command("playback.play"))))
+    fun nativePlaybackReplacesTheInterimWebViewCapability() {
+        for (channel in listOf("stable", "sandbox")) {
+            val advertised = fixture.getJSONObject("capabilities").getJSONArray(channel)
+            val names = (0 until advertised.length()).map(advertised::getString)
+            assertTrue(names.containsAll(PlaybackBridge.CAPABILITIES))
+            assertFalse(names.contains("playback.webview.v1"))
+        }
     }
+
+    @Test
+    fun loadQueueFixtureIsAcceptedAndEchoesItsRevision() {
+        send(sandbox, handshake())
+        val reply = send(sandbox, fixture.getJSONObject("loadQueueRequest").toString())!!
+        assertEquals("playback.loadQueue", reply.getString("name"))
+        assertTrue(reply.getJSONObject("payload").getBoolean("ok"))
+        assertEquals(1, reply.getJSONObject("payload").getInt("queueRevision"))
+    }
+
+    @Test
+    fun queueRevisionsMustIncreaseAndTransportCommandsNameTheAppliedOne() {
+        send(sandbox, handshake())
+        assertEquals("no_queue", errorCode(send(sandbox, command("playback.play", """{"queueRevision":1}"""))))
+        assertTrue(ok(send(sandbox, load(revision = 2))))
+        assertEquals("stale_revision", errorCode(send(sandbox, load(revision = 2))))
+        assertEquals("stale_revision", errorCode(send(sandbox, load(revision = 1))))
+        assertEquals(
+            "stale_revision",
+            errorCode(send(sandbox, command("playback.seek", """{"queueRevision":1,"positionMs":0}"""))),
+        )
+        assertTrue(ok(send(sandbox, command("playback.seek", """{"queueRevision":2,"positionMs":1000}"""))))
+        assertTrue(ok(send(sandbox, command("playback.next", """{"queueRevision":2}"""))))
+        assertTrue(ok(send(sandbox, command("playback.previous", """{"queueRevision":2}"""))))
+        assertTrue(
+            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":48000}"""))),
+        )
+        assertTrue(ok(send(sandbox, command("playback.clearLoop", """{"queueRevision":2}"""))))
+        assertTrue(ok(send(sandbox, command("playback.pause"))))
+        assertTrue(ok(send(sandbox, command("playback.stop"))))
+        assertTrue(ok(send(sandbox, load(revision = 3))))
+        assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
+    }
+
+    @Test
+    fun invalidPlaybackPayloadsAreRejected() {
+        send(sandbox, handshake())
+        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000}"""
+        val cases = listOf(
+            load(items = "[]"),
+            load(items = "[" + item.replace("\"durationMs\":1000", "\"durationMs\":1000,\"path\":\"/music/a.flac\"") + "]"),
+            load(items = "[" + item.replace("opaque-ref", "has space") + "]"),
+            load(items = "[" + item.replace("\"T\"", "\"T\\u0001\"") + "]"),
+            load(items = "[" + item.replace("null", "\"/cover?path=x\"") + "]"),
+            load(items = "[" + item.replace("null", "\"https://elsewhere.example/a.jpg\"") + "]"),
+            load(items = "[" + item.replace("1000", "1000.5") + "]"),
+            load(items = "[" + List(PlaybackBridge.MAX_QUEUE_ITEMS + 1) { item }.joinToString(",") + "]"),
+            load(currentIndex = 1),
+            load(positionMs = "-1"),
+            load(loop = """{"startFrame":10,"endFrame":10}"""),
+            load(autoplay = "\"yes\""),
+            load(revision = 0),
+            command("playback.loadQueue", """{"queueRevision":1}"""),
+            command("playback.seek", """{"queueRevision":1}"""),
+            command("playback.pause", """{"now":true}"""),
+            command("playback.snapshot", """{"x":1}"""),
+        )
+        cases.forEach { assertEquals(it, "invalid_payload", errorCode(send(sandbox, it))) }
+        assertEquals(NativePlaybackState.IDLE, playback.controller.snapshot.state)
+    }
+
+    @Test
+    fun snapshotIsPathFreeAndNamesTheNativeClient() {
+        send(sandbox, handshake())
+        val payload = send(sandbox, command("playback.snapshot"))!!.getJSONObject("payload")
+        assertEquals("idle", payload.getString("state"))
+        val expected = fixture.getJSONObject("handshakeResponse").getJSONObject("payload").getJSONObject("playback")
+        assertEquals(expected.getString("clientId"), payload.getString("clientId"))
+    }
+
+    @Test
+    fun eventsReachOnlyTheNegotiatedDocument() {
+        val sent = mutableListOf<String>()
+        val event = NativePlaybackEvent.CurrentItem(
+            NativePlaybackSnapshot(playback.controller.clientId, NativePlaybackState.PLAYING, 4, 1, 250, 180_000),
+            CurrentItemReason.ADVANCE,
+        )
+        sandbox.emit(event)
+        sandbox.handle(handshake(), ORIGIN, true) { sent += it }
+        sandbox.emit(event)
+        sandbox.reset()
+        sandbox.emit(event)
+
+        assertEquals(2, sent.size)
+        val message = BridgeCodec.parse(sent[1])
+        assertEquals("event", message.type)
+        assertEquals("playback.currentItem", message.name)
+        assertEquals(4, message.payload.getInt("queueRevision"))
+        assertEquals(1, message.payload.getInt("currentIndex"))
+        assertEquals("advance", message.payload.getString("reason"))
+        assertFalse(sent[1].contains("path"))
+    }
+
+    @Test
+    fun stateEventMatchesTheSharedFixture() {
+        val expected = fixture.getJSONObject("stateEvent")
+        val payload = expected.getJSONObject("payload")
+        val (name, encoded) = PlaybackBridge.encode(
+            NativePlaybackEvent.State(
+                NativePlaybackSnapshot(payload.getString("clientId"), NativePlaybackState.PLAYING, 1, 0, 1_250, 180_000),
+            ),
+        )
+        assertEquals(expected.getString("name"), name)
+        assertSameJson(payload, encoded)
+    }
+
+    private fun load(
+        revision: Int = 1,
+        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000}]""",
+        currentIndex: Int = 0,
+        positionMs: String = "0",
+        loop: String = "null",
+        autoplay: String = "false",
+    ) = command(
+        "playback.loadQueue",
+        """{"queueRevision":$revision,"items":$items,"currentIndex":$currentIndex,""" +
+            """"positionMs":$positionMs,"loop":$loop,"autoplay":$autoplay}""",
+    )
+
+    private fun ok(reply: JSONObject?): Boolean = reply!!.getJSONObject("payload").getBoolean("ok")
 
     private fun errorCode(reply: JSONObject?): String =
         reply!!.getJSONObject("payload").getJSONObject("error").getString("code")

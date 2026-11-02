@@ -2,15 +2,27 @@
   "protocol": 1,
   "maxMessageBytes": 65536,
   "capabilities": {
-    "stable": ["playback.webview.v1"],
-    "sandbox": ["sandbox.select.v1", "playback.webview.v1"]
+    "stable": [
+      "playback.native.v1",
+      "playback.queue.v1",
+      "playback.loops.v1"
+    ],
+    "sandbox": [
+      "sandbox.select.v1",
+      "playback.native.v1",
+      "playback.queue.v1",
+      "playback.loops.v1"
+    ]
   },
   "handshakeRequest": {
     "protocol": 1,
     "id": "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10",
     "type": "command",
     "name": "bridge.handshake",
-    "payload": {"protocolMin": 1, "protocolMax": 1}
+    "payload": {
+      "protocolMin": 1,
+      "protocolMax": 1
+    }
   },
   "handshakeResponse": {
     "protocol": 1,
@@ -26,10 +38,70 @@
       "bridgeProtocol": 1,
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,
-      "capabilities": ["sandbox.select.v1", "playback.webview.v1"],
+      "capabilities": [
+        "sandbox.select.v1",
+        "playback.native.v1",
+        "playback.queue.v1",
+        "playback.loops.v1"
+      ],
       "origin": "https://sandbox2.albumhaven.org",
-      "playback": {"state": "webview"},
-      "sandbox": {"slot": 2, "connectedSlot": null}
+      "playback": {
+        "state": "idle",
+        "clientId": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70",
+        "queueRevision": 0,
+        "currentIndex": null,
+        "positionMs": 0,
+        "durationMs": 0
+      },
+      "sandbox": {
+        "slot": 2,
+        "connectedSlot": null
+      }
+    }
+  },
+  "loadQueueRequest": {
+    "protocol": 1,
+    "id": "7a1d3c2e-5b4f-4e6a-8c9d-0e1f2a3b4c5d",
+    "type": "command",
+    "name": "playback.loadQueue",
+    "payload": {
+      "queueRevision": 1,
+      "items": [
+        {
+          "playbackRef": "opaque-ref-a",
+          "title": "Signal A",
+          "artist": "Android Acceptance",
+          "album": "Playback Ownership",
+          "artworkUrl": null,
+          "durationMs": 180000
+        },
+        {
+          "playbackRef": "opaque-ref-b",
+          "title": "Signal B",
+          "artist": "Android Acceptance",
+          "album": "Playback Ownership",
+          "artworkUrl": null,
+          "durationMs": 180000
+        }
+      ],
+      "currentIndex": 0,
+      "positionMs": 0,
+      "loop": null,
+      "autoplay": true
+    }
+  },
+  "stateEvent": {
+    "protocol": 1,
+    "id": "9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e",
+    "type": "event",
+    "name": "playback.state",
+    "payload": {
+      "state": "playing",
+      "clientId": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70",
+      "queueRevision": 1,
+      "currentIndex": 0,
+      "positionMs": 1250,
+      "durationMs": 180000
     }
   },
   "rejectedEnvelopes": [

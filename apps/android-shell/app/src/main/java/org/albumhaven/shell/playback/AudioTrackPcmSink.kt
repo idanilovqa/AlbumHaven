@@ -18,6 +18,8 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
             AudioFormat.ENCODING_PCM_FLOAT,
         )
         check(minimumBytes > 0) { "AudioTrack does not support $sampleRate Hz float stereo" }
+        // The render thread wakes every few milliseconds; a quarter second absorbs its jitter.
+        val cushionBytes = sampleRate / 4 * BYTES_PER_FRAME
         AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -27,9 +29,12 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
             )
             .setAudioFormat(format)
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(minimumBytes)
+            .setBufferSizeInBytes(maxOf(minimumBytes, cushionBytes))
             .build()
     }
+
+    /** Frames written since the last flush; the playback head counts from the same point. */
+    private var writtenFrames = 0L
 
     override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
         val written = track.write(
@@ -40,14 +45,27 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
         )
         check(written >= 0) { "AudioTrack write failed: $written" }
         check(written % PcmRing.CHANNELS == 0) { "AudioTrack accepted a partial stereo frame" }
+        writtenFrames += written / PcmRing.CHANNELS
         return written / PcmRing.CHANNELS
+    }
+
+    override fun pendingFrames(): Int {
+        val played = track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL
+        return (writtenFrames - played).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
     }
 
     override fun play() = track.play()
 
     override fun pause() = track.pause()
 
-    override fun flush() = track.flush()
+    override fun flush() {
+        track.flush()
+        writtenFrames = 0
+    }
 
     override fun release() = track.release()
+
+    private companion object {
+        const val BYTES_PER_FRAME = PcmRing.CHANNELS * 4
+    }
 }

@@ -284,6 +284,22 @@ class NativePcmEngineTest {
     }
 
     @Test
+    fun aStartedTrackAtAnotherRateAsksForARestartWithoutClosingAnything() {
+        val other = SyntheticTrack(tag = 4, frames = RATE.toLong(), sampleRate = 44_100)
+        val harness = PcmHarness(other)
+        harness.engine.start(other.pcm, startFrame = 960)
+        harness.deliver()
+
+        assertEquals(
+            listOf(PcmEngineEvent.StartRateRequired(other.pcm, 960, 44_100)),
+            harness.emitted<PcmEngineEvent.StartRateRequired>(),
+        )
+        assertNull(harness.failure())
+        assertNull(harness.engine.currentStreamId)
+        assertEquals(emptyList<PcmClientControl.Close>(), harness.sent<PcmClientControl.Close>())
+    }
+
+    @Test
     fun aSuccessorAtAnotherRateEndsCurrentAndAsksForANewEngine() {
         val other = SyntheticTrack(tag = 4, frames = RATE.toLong(), sampleRate = 44_100)
         val harness = PcmHarness(first, other)

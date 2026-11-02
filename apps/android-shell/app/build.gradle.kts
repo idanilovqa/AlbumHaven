@@ -60,9 +60,11 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.core)
     implementation(libs.androidx.webkit)
+    implementation(libs.okhttp)
 
     testImplementation(libs.junit)
     testImplementation(libs.json)
+    testImplementation(libs.okhttp.mockwebserver)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.ext)

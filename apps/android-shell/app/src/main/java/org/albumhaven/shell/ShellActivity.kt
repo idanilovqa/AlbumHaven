@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
@@ -34,6 +35,12 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import okhttp3.OkHttpClient
+import org.albumhaven.shell.playback.AudioTrackPcmSink
+import org.albumhaven.shell.playback.HttpPlaybackClaimApi
+import org.albumhaven.shell.playback.NativePlaybackController
+import org.albumhaven.shell.playback.OkHttpPcmTransportFactory
+import org.albumhaven.shell.playback.ShellSession
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ExecutorService
@@ -44,10 +51,14 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private val channel = ShellChannel.fromWireName(BuildConfig.CHANNEL)
     private val originPolicy = OriginPolicy(channel, BuildConfig.DEV_ORIGIN)
     private val probeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val playbackIo: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var preferences: ShellPreferences
-    private lateinit var selectedOrigin: String
+
+    // Read by the playback network threads when a request starts.
+    @Volatile private lateinit var selectedOrigin: String
+    private lateinit var playback: NativePlaybackController
     private lateinit var bridge: BridgeController
     private lateinit var webView: WebView
     private lateinit var recovery: RecoveryPanel
@@ -72,9 +83,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         preferences = ShellPreferences(this)
         selectedOrigin = originPolicy.initialOrigin(preferences.selectedSandboxSlot)
+        playback = createPlayback()
         bridge = BridgeController(
             ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
             this,
+            ControllerPlaybackPort(playback),
         )
         recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
         webView = findViewById(R.id.shell_web_view)
@@ -109,6 +122,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     override fun onDestroy() {
+        // Foreground only for now: playback stops and its claim is released with the Activity.
+        playback.shutdown()
+        playbackIo.shutdown()
         probeExecutor.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
         fileChooserCallback?.onReceiveValue(null)
@@ -148,6 +164,19 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 }
             }
         }
+    }
+
+    private fun createPlayback(): NativePlaybackController {
+        val session = ShellSession({ selectedOrigin }) { url -> CookieManager.getInstance().getCookie(url) }
+        val client = OkHttpClient()
+        return NativePlaybackController(
+            transports = OkHttpPcmTransportFactory(client, session),
+            claimApi = HttpPlaybackClaimApi(client, session),
+            sinks = ::AudioTrackPcmSink,
+            io = playbackIo,
+            clock = SystemClock::elapsedRealtime,
+            events = { event -> mainHandler.post { if (!isDestroyed) bridge.emit(event) } },
+        ).also { it.start() }
     }
 
     private fun isReachable(origin: String): Boolean = try {
@@ -264,6 +293,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.reset()
+            // Playback state never crosses documents or origins.
+            playback.stop()
             incompatibleWeb = false
         }
 

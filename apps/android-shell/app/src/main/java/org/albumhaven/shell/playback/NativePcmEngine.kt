@@ -54,6 +54,8 @@ sealed interface PcmEngineEvent {
     data class Ended(val streamId: Long, val timelineFrame: Long) : PcmEngineEvent
     /** The queued track has another native rate; it starts on a new engine after [Ended]. */
     data class RateChangeRequired(val track: PcmTrack, val sampleRate: Int) : PcmEngineEvent
+    /** The started track has another native rate; nothing played, so it restarts on a new engine now. */
+    data class StartRateRequired(val track: PcmTrack, val startFrame: Long, val sampleRate: Int) : PcmEngineEvent
     data class Failed(val code: String, val message: String) : PcmEngineEvent
 }
 
@@ -67,6 +69,8 @@ class NativePcmEngine(
     private val config: PcmEngineConfig,
     private val sink: PcmSink,
     private val controls: PcmControlSender,
+    /** Generations stay unique on a shared socket when a rate change replaces the engine. */
+    lastGeneration: Long = 0,
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -107,7 +111,9 @@ class NativePcmEngine(
 
     private var currentRing = PcmRing(config.currentCapacityFrames)
     private var continuityRing = PcmRing(config.continuityCapacityFrames)
-    private var generation = 0L
+    /** The newest generation this engine opened; the server drops every older one on its open. */
+    var generation = lastGeneration
+        private set
     private var nextStreamId = 1L
     private var current: Stream? = null
     private var continuity: Stream? = null
@@ -465,6 +471,12 @@ class NativePcmEngine(
 
     private fun acceptRateMismatch(stream: Stream, event: PcmServerEvent.RateMismatch) {
         val rate = event.sampleRate
+        if (stream === current && stream.kind == StreamKind.START && !stream.metadataAccepted && rate != null) {
+            // The server registered no stream and nothing was rendered.
+            resetPlayback()
+            events(PcmEngineEvent.StartRateRequired(stream.track, stream.startFrame, rate.toInt()))
+            return
+        }
         if (stream !== continuity || stream.kind != StreamKind.QUEUED_NEXT || rate == null) {
             return fail("rate-mismatch", "The track sample rate changed")
         }

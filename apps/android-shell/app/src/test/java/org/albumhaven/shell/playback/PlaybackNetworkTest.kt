@@ -1,0 +1,165 @@
+package org.albumhaven.shell.playback
+
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import okhttp3.OkHttpClient
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import org.json.JSONObject
+import org.junit.After
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+
+class PlaybackNetworkTest {
+    private val server = MockWebServer()
+    private val client = OkHttpClient()
+    private lateinit var origin: String
+    private val cookieHeader = "__Host-album_haven_session=session-value; __Host-album_haven_csrf=csrf%2Bvalue"
+    private val track = ClaimTrack("opaque-ref", "Signal A", "Android Acceptance", "Playback Ownership", null)
+
+    @Before
+    fun startServer() {
+        server.start()
+        origin = server.url("/").toString().removeSuffix("/")
+    }
+
+    @After
+    fun stopServer() {
+        server.close()
+    }
+
+    private fun session() = ShellSession({ origin }) { url -> cookieHeader.takeIf { url == origin } }
+
+    @Test
+    fun csrfTokenIsReadFromTheSessionCookieLikeTheWebFetchWrapper() {
+        assertEquals("csrf+value", ShellSession.csrfToken(cookieHeader))
+        assertNull(ShellSession.csrfToken("__Host-album_haven_session=session-value"))
+    }
+
+    @Test
+    fun acquireClaimsAsTheMobileSurfaceWithTheWebViewSession() {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1,"claimToken":"claim-token"}""").build())
+        val response = HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, null, track)
+
+        assertEquals(ClaimResponse.Granted("claim-token"), response)
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("PUT", request.method)
+        assertEquals("/playback/state", request.url.encodedPath)
+        assertEquals(origin, request.headers["Origin"])
+        assertEquals(cookieHeader, request.headers["Cookie"])
+        assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
+        val body = JSONObject(request.body!!.utf8())
+        assertEquals(setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track"), body.keys().asSequence().toSet())
+        assertEquals("mobile", body.getString("clientSurface"))
+        assertTrue(body.isNull("claimToken"))
+        assertEquals("playing", body.getString("state"))
+        assertEquals(
+            setOf("playbackRef", "title", "artist", "album", "artworkUrl"),
+            body.getJSONObject("track").keys().asSequence().toSet(),
+        )
+        assertFalse(request.body!!.utf8().contains("path"))
+    }
+
+    @Test
+    fun heartbeatSendsTheHeldTokenAndMapsRefusals() {
+        val api = HttpPlaybackClaimApi(client, session())
+        server.enqueue(MockResponse.Builder().code(409).body("{}").build())
+        server.enqueue(MockResponse.Builder().code(403).body("{}").build())
+
+        assertEquals(ClaimResponse.Conflict, api.acquire(TEST_CLIENT_ID, "held", track))
+        assertEquals(ClaimResponse.Rejected(403), api.acquire(TEST_CLIENT_ID, "held", track))
+        assertEquals("held", JSONObject(server.takeRequest(5, TimeUnit.SECONDS)!!.body!!.utf8()).getString("claimToken"))
+    }
+
+    @Test
+    fun releaseDeletesOnlyTheCallersClaim() {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1}""").build())
+        HttpPlaybackClaimApi(client, session()).release(TEST_CLIENT_ID, "held")
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("DELETE", request.method)
+        assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
+        val body = JSONObject(request.body!!.utf8())
+        assertEquals(TEST_CLIENT_ID, body.getString("clientId"))
+        assertEquals("held", body.getString("claimToken"))
+        assertEquals(1, body.getInt("protocol"))
+    }
+
+    @Test
+    fun anUnreachableServerIsNotARefusal() {
+        server.close()
+        assertEquals(ClaimResponse.Unreachable, HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, null, track))
+    }
+
+    private class RecordingListener : PcmTransportListener {
+        val received = LinkedBlockingQueue<Any>()
+        override fun onOpen() {
+            received += "open"
+        }
+        override fun onText(text: String) {
+            received += text
+        }
+        override fun onBinary(bytes: ByteArray) {
+            received += bytes
+        }
+        override fun onClosed(code: Int) {
+            received += code
+        }
+
+        fun next(): Any = received.poll(5, TimeUnit.SECONDS) ?: error("no socket callback")
+    }
+
+    @Test
+    fun socketCarriesTheSessionAndRelaysTextBinaryAndCloseCode() {
+        val fromClient = LinkedBlockingQueue<String>()
+        server.enqueue(
+            MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    webSocket.send("""{"type":"metadata"}""")
+                    webSocket.send(byteArrayOf(65, 72, 80, 67).toByteString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    fromClient += text
+                    webSocket.close(PcmCloseCodes.MEDIA_NOT_FOUND, null)
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) = Unit
+            }).build(),
+        )
+        val listener = RecordingListener()
+        val transport = OkHttpPcmTransportFactory(client, session()).connect(listener)
+
+        assertEquals("open", listener.next())
+        assertEquals("""{"type":"metadata"}""", listener.next())
+        assertArrayEquals(byteArrayOf(65, 72, 80, 67), listener.next() as ByteArray)
+        assertTrue(transport.send("""{"type":"open","playbackRef":"opaque-ref"}"""))
+        assertEquals("""{"type":"open","playbackRef":"opaque-ref"}""", fromClient.poll(5, TimeUnit.SECONDS))
+        assertEquals(PcmCloseCodes.MEDIA_NOT_FOUND, listener.next())
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/playback/pcm", request.url.encodedPath)
+        assertEquals(origin, request.headers["Origin"])
+        assertEquals(cookieHeader, request.headers["Cookie"])
+        assertNull(request.headers[ShellSession.CSRF_HEADER])
+    }
+
+    @Test
+    fun aRefusedUpgradeReportsTheRefusal() {
+        server.enqueue(MockResponse.Builder().code(403).body("{}").build())
+        val listener = RecordingListener()
+        OkHttpPcmTransportFactory(client, session()).connect(listener)
+
+        assertEquals(PcmCloseCodes.FORBIDDEN, listener.next())
+    }
+}

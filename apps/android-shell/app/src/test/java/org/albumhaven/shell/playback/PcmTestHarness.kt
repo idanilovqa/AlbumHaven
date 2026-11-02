@@ -64,6 +64,16 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
         return true
     }
 
+    /** The same controls as JSON text, as a WebSocket client sends them. */
+    fun receive(text: String): Boolean {
+        if (!accepting) return false
+        texts += text
+        dispatch(JSONObject(text))
+        return true
+    }
+
+    val texts = mutableListOf<String>()
+
     fun releasePromotes() {
         holdingPromotes = false
         heldPromotes.toList().also { heldPromotes.clear() }.forEach(::dispatch)

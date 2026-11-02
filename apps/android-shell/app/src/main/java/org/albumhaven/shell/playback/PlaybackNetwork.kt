@@ -1,0 +1,165 @@
+package org.albumhaven.shell.playback
+
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import org.json.JSONException
+import org.json.JSONObject
+import java.io.IOException
+import java.net.URLDecoder
+
+/**
+ * The WebView session as request headers for one origin. Cookies are read when a request
+ * starts and never stored by the native player.
+ */
+class ShellSession(private val origin: () -> String, private val cookies: (url: String) -> String?) {
+    fun origin(): String = origin.invoke()
+
+    /** Applies the session cookie, its CSRF header and the page origin the server checks. */
+    fun authorize(builder: Request.Builder, withCsrf: Boolean): Request.Builder {
+        val selected = origin()
+        val cookieHeader = cookies(selected).orEmpty()
+        builder.header("Origin", selected)
+        if (cookieHeader.isNotEmpty()) builder.header("Cookie", cookieHeader)
+        if (withCsrf) csrfToken(cookieHeader)?.let { builder.header(CSRF_HEADER, it) }
+        return builder
+    }
+
+    companion object {
+        const val CSRF_HEADER = "X-Album-Haven-CSRF"
+        private const val CSRF_COOKIE = "__Host-album_haven_csrf"
+
+        /** Mirrors `readSessionCsrfCookie` in music_app/static/js/runtime/session-csrf-fetch.js. */
+        fun csrfToken(cookieHeader: String): String? = cookieHeader.split(';').firstNotNullOfOrNull { part ->
+            val separator = part.indexOf('=')
+            if (separator < 0 || part.substring(0, separator).trim() != CSRF_COOKIE) {
+                null
+            } else {
+                try {
+                    URLDecoder.decode(part.substring(separator + 1), Charsets.UTF_8.name())
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            }
+        }
+    }
+}
+
+/** `PUT`/`DELETE /playback/state` as the `mobile` client surface. */
+class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session: ShellSession) : PlaybackClaimApi {
+    override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
+        val body = JSONObject()
+            .put("protocol", 1)
+            .put("clientId", clientId)
+            .put("clientSurface", "mobile")
+            .put("claimToken", claimToken ?: JSONObject.NULL)
+            .put("state", "playing")
+            .put(
+                "track",
+                JSONObject()
+                    .put("playbackRef", track.playbackRef)
+                    .put("title", track.title)
+                    .put("artist", track.artist)
+                    .put("album", track.album)
+                    .put("artworkUrl", track.artworkUrl ?: JSONObject.NULL),
+            )
+        return try {
+            execute("PUT", body).use { response ->
+                when {
+                    response.code == 409 -> ClaimResponse.Conflict
+                    !response.isSuccessful -> ClaimResponse.Rejected(response.code)
+                    else -> {
+                        val token = JSONObject(response.body.string()).optString("claimToken")
+                        if (token.isEmpty()) ClaimResponse.Rejected(response.code) else ClaimResponse.Granted(token)
+                    }
+                }
+            }
+        } catch (_: IOException) {
+            ClaimResponse.Unreachable
+        } catch (_: JSONException) {
+            ClaimResponse.Unreachable
+        }
+    }
+
+    override fun release(clientId: String, claimToken: String) {
+        val body = JSONObject().put("protocol", 1).put("clientId", clientId).put("claimToken", claimToken)
+        try {
+            execute("DELETE", body).close()
+        } catch (_: IOException) {
+            // The server lease expires on its own.
+        }
+    }
+
+    private fun execute(method: String, body: JSONObject): Response {
+        val request = session.authorize(Request.Builder(), withCsrf = true)
+            .url("${session.origin()}/playback/state")
+            .header("Cache-Control", "no-store")
+            .method(method, body.toString().toRequestBody(JSON))
+            .build()
+        return client.newCall(request).execute()
+    }
+
+    private companion object {
+        val JSON = "application/json".toMediaType()
+    }
+}
+
+/** `/playback/pcm` over OkHttp, authenticated like the page that selected the origin. */
+class OkHttpPcmTransportFactory(private val client: OkHttpClient, private val session: ShellSession) :
+    PcmTransportFactory {
+    override fun connect(listener: PcmTransportListener): PcmTransport {
+        val socketUrl = session.origin().replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        val request = session.authorize(Request.Builder(), withCsrf = false)
+            .url("$socketUrl/playback/pcm")
+            .build()
+        val socket = client.newWebSocket(request, Adapter(listener))
+        return object : PcmTransport {
+            override fun send(text: String): Boolean = socket.send(text)
+            override fun close() {
+                if (!socket.close(NORMAL_CLOSURE, null)) socket.cancel()
+            }
+        }
+    }
+
+    private class Adapter(private val listener: PcmTransportListener) : WebSocketListener() {
+        private var closed = false
+
+        override fun onOpen(webSocket: WebSocket, response: Response) = listener.onOpen()
+
+        override fun onMessage(webSocket: WebSocket, text: String) = listener.onText(text)
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) = listener.onBinary(bytes.toByteArray())
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            webSocket.close(NORMAL_CLOSURE, null)
+            closeOnce(code)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = closeOnce(code)
+
+        // The server refuses an unauthenticated or cross-origin upgrade before accepting it.
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = closeOnce(
+            when (response?.code) {
+                401 -> PcmCloseCodes.UNAUTHENTICATED
+                403 -> PcmCloseCodes.FORBIDDEN
+                else -> PcmTransportListener.ABNORMAL_CLOSURE
+            },
+        )
+
+        @Synchronized
+        private fun closeOnce(code: Int) {
+            if (closed) return
+            closed = true
+            listener.onClosed(code)
+        }
+    }
+
+    private companion object {
+        const val NORMAL_CLOSURE = 1000
+    }
+}

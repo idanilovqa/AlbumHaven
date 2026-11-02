@@ -10,6 +10,9 @@ interface PcmSink {
     /** Writes up to [frames] interleaved stereo frames without blocking; returns frames accepted. */
     fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int
 
+    /** Frames written but not yet heard, so a position can name the audible frame. */
+    fun pendingFrames(): Int = 0
+
     fun play()
 
     fun pause()

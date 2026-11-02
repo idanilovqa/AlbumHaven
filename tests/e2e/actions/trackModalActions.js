@@ -446,6 +446,8 @@ export class TrackModalActions {
       timeout: options.timeout || 30000,
       intervals: [100, 250, 500],
     }).toEqual(expectedSnapshot);
+    // An inventory refresh can redraw the loading state just after the match.
+    await this.waitForReady(options);
     return this.readSummary();
   }
 

@@ -6,6 +6,8 @@ import hashlib
 import time
 from pathlib import Path
 
+import pytest
+
 from music_app.services import generated_preview_relocation as relocation
 from music_app.services.generated_preview_relocation import (
     GeneratedPreviewRelocationWorker,
@@ -31,6 +33,7 @@ class FakeRepository:
         self.operation_id = "10e2fc89-439a-4f74-a508-97596cf20771"
         self.operation_state = operation_state
         self.mode = "album_folders"
+        self.active_root = None
         self.completed = []
         self.finished = []
         self.recovered = []
@@ -41,6 +44,7 @@ class FakeRepository:
     def load(self):
         return {
             "mode": self.mode,
+            "active_root": self.active_root,
             "operation_id": self.operation_id,
             "operation_state": self.operation_state,
             "cancel_requested": self.operation_state == "cancel_requested",
@@ -87,6 +91,39 @@ def run_worker(repository):
         time.sleep(0.01)
     asyncio.run(worker.stop(timeout_seconds=2))
     assert repository.finished == [repository.operation_id]
+
+
+@pytest.mark.parametrize(
+    ("final_state", "cache_removed"),
+    [("completed", True), ("completed_with_failures", False)],
+)
+def test_finished_move_off_a_custom_root_clears_only_its_preview_cache(
+    tmp_path, final_state, cache_removed,
+):
+    root = tmp_path / "custom"
+    late_copy = root / "v1/cover_variants/ab/late.webp"
+    late_copy.parent.mkdir(parents=True)
+    late_copy.write_bytes(b"late")
+    unrelated = root / "keep.txt"
+    unrelated.write_bytes(b"keep")
+    repository = FakeRepository([])
+    repository.mode = "custom"
+    repository.active_root = str(root)
+    finish_operation = repository.finish_operation
+
+    def finish_with_new_root(operation_id):
+        repository.mode = "album_folders"
+        repository.active_root = None
+        finish_operation(operation_id)
+        repository.operation_state = final_state
+        return repository.load()
+
+    repository.finish_operation = finish_with_new_root
+
+    run_worker(repository)
+
+    assert late_copy.exists() is not cache_removed
+    assert unrelated.exists()
 
 
 def test_same_volume_move_is_atomic_and_checkpointed(tmp_path):

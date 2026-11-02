@@ -118,26 +118,38 @@ const GROUPED_FEATURE_TARGET = Object.freeze({
   trackTitle: 'Grouped Feature Signal',
   trackArtist: 'Feature Credit Owner / Guest One / Guest Two / Guest One',
 });
+// A Various Artists tag names up to three real artists, so these need a fourth to stay a compilation.
+const COMPILATION_PERFORMERS = Object.freeze([
+  'Watcher Compilation Performer',
+  'Watcher Compilation Second Performer',
+  'Watcher Compilation Third Performer',
+]);
+const COMPILATION_TRACK_TITLES = Object.freeze([
+  'Featured Signal', 'Owner Signal', 'Third Signal', 'Fourth Signal',
+]);
 const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
   Object.freeze({
     artist: 'Belle Stars',
     album: 'Rain Man',
     albumArtist: 'Various Artists',
-    trackArtists: ['Belle Stars', 'Watcher Compilation Performer'],
+    trackArtists: ['Belle Stars', ...COMPILATION_PERFORMERS],
+    trackTitles: COMPILATION_TRACK_TITLES,
     year: 1988,
   }),
   Object.freeze({
     artist: 'Ben Del Maestro',
     album: 'The Lord Of The Rings: The Return Of The King',
     albumArtist: 'Various Artists',
-    trackArtists: ['Ben Del Maestro', 'Watcher Compilation Performer'],
+    trackArtists: ['Ben Del Maestro', ...COMPILATION_PERFORMERS],
+    trackTitles: COMPILATION_TRACK_TITLES,
     year: 2003,
   }),
   Object.freeze({
     artist: 'Beny Moré',
     album: 'Dexter: Music From The Showtime Original Series',
     albumArtist: 'Various Artists',
-    trackArtists: ['Beny Moré', 'Watcher Compilation Performer'],
+    trackArtists: ['Beny Moré', ...COMPILATION_PERFORMERS],
+    trackTitles: COMPILATION_TRACK_TITLES,
     year: 2007,
   }),
   Object.freeze({
@@ -145,6 +157,7 @@ const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
     album: 'Hilda: Season 2 (Original Series Soundtrack)',
     albumArtist: 'Ryan Carlson',
     trackArtists: ['Bella Ramsey', 'RYAN CARLSON.'],
+    trackTitles: ['Featured Signal', 'Owner Signal'],
     year: 2020,
   }),
 ]);
@@ -951,7 +964,7 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         albumArtist: initial.albumArtist,
         album: initial.album,
         year: initial.year,
-        trackTitles: ['Featured Signal', 'Owner Signal'],
+        trackTitles: initial.trackTitles,
         trackArtists: initial.trackArtists,
         fixtureDirectory: 'watcher-featured-ownership',
         context,
@@ -962,7 +975,7 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
           album: target.album,
           folderName: target.album.replaceAll(':', ' -'),
           year: target.year,
-          trackTitles: ['Featured Signal', 'Owner Signal'],
+          trackTitles: target.trackTitles,
           trackArtists: target.trackArtists,
           albumArtist: target.albumArtist,
         });
@@ -971,7 +984,10 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         status.inventory_mutation_revision,
       );
       await appBarActions.waitForScanAndCoverRefreshIdle();
-      for (const target of FEATURED_OWNERSHIP_TARGETS) {
+      // A compilation has no owning artist row, so only the owned release can be looked up here.
+      for (const target of FEATURED_OWNERSHIP_TARGETS.filter(
+        ({ albumArtist }) => albumArtist !== 'Various Artists',
+      )) {
         await expect.poll(async () => {
           const identity = await queryPersistedAlbumIdentity({
             artist: target.albumArtist,
@@ -979,12 +995,15 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
             year: target.year,
           });
           return identity.track_counts;
-        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([2]);
+        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([target.trackTitles.length]);
       }
     });
 
     await stepLogger.step('Show every track performer only under Featured On with owner credit intact', async () => {
       for (const target of FEATURED_OWNERSHIP_TARGETS) {
+        // An artist view keeps its tree until the next navigation, so return to the library first.
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
         await expectFeaturedAlbumOccurrence({
           page,
           galleryActions,
@@ -1013,14 +1032,11 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         navigationPanelActions,
         ...target,
       });
-      const observation = await galleryActions.readProductionVisibleAlbumObservation(
+      await galleryActions.readCurrentProductionVisibleAlbumObservation(
         target.artist,
-        [target.album],
+        [{ album: target.album, year: target.year }],
+        { expectedAlbumCount: 1 },
       );
-      expect(observation.albumCount).toBe(1);
-      expect(observation.renderedIdentities).toEqual([
-        { album: target.album, year: String(target.year) },
-      ]);
     });
 
     await stepLogger.step('Keep soundtrack ownership stable after application restart', async () => {

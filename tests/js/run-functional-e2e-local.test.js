@@ -213,7 +213,7 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.equal(fs.existsSync(guidePath), true, 'Missing docs/local-functional-e2e.md');
   const guide = fs.readFileSync(guidePath, 'utf8');
   assert.match(guide, /npm run test:e2e:functional:local:list/);
-  assert.match(guide, /npm run test:e2e:functional:local -- -Shard gallery-search-visual/);
+  assert.match(guide, /npm run test:e2e:functional:local -- -Shard gallery-search-visual-1/);
   assert.match(guide, /npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007/);
   assert.match(guide, /npm run test:e2e:functional:local -- -All/);
   assert.match(guide, /localhost/);

@@ -901,7 +901,11 @@ export class TagEditorActions {
       if (options.savedNotificationDelivery === 'status-page') {
         await deliverSavedNotificationThroughStatus(this.tagEditor,
           deliveredCompletionMessage,
-          { timeout, beforeNavigation: options.beforeSavedNotification });
+          {
+            timeout,
+            autoDismisses: responseTaskCompleted,
+            beforeNavigation: options.beforeSavedNotification,
+          });
       } else if (options.savedNotificationDelivery === 'current-view') {
         await acknowledgeSavedNotification(this.tagEditor,
           deliveredCompletionMessage, { timeout });

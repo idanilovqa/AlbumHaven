@@ -3964,6 +3964,23 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
+test('a library view without the artist tree does not count as applying an inventory revision', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.ui.appliedViewInventoryMutationRevision = 12;
+
+  const refresh = context.fetchAndRender('/view-data?surface=albums&omit_sidebar=1', false, {
+    preserveScroll: true,
+  });
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben::album', name: 'Album' }] }],
+    payload_tier: 'full',
+    inventory_mutation_revision: 13,
+  });
+  await refresh;
+
+  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 12);
+});
+
 test('pollStatus does not reload a foreground view already read at the advanced inventory revision', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

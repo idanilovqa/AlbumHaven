@@ -85,11 +85,11 @@ def _decode(path: Path, *, sample_rate: int, start_frame: int):
     return asyncio.run(run())
 
 
-@pytest.mark.parametrize("sample_rate", [44100, 48000])
 @pytest.mark.parametrize("position", [0, 1.25, 2.9])
 def test_mixed_case_gapless_tag_matches_native_decoder_without_removing_intentional_silence(
-    encoded_gapless_pair, sample_rate, position,
+    encoded_gapless_pair, position,
 ):
+    sample_rate = 44100
     start_frame = round(position * sample_rate)
     expected, reference_metadata = _decode(encoded_gapless_pair["recognized"],
                                          sample_rate=sample_rate, start_frame=start_frame)
@@ -127,8 +127,8 @@ def test_padding_and_crc_follow_native_decoder_semantics(encoded_gapless_pair, t
     data[tag:tag + 4] = b"LAME"
     recognized = tmp_path / "recognized.mp3"
     recognized.write_bytes(data)
-    actual, metadata = _decode(mixed, sample_rate=48000, start_frame=0)
-    expected, reference = _decode(recognized, sample_rate=48000, start_frame=0)
+    actual, metadata = _decode(mixed, sample_rate=44100, start_frame=0)
+    expected, reference = _decode(recognized, sample_rate=44100, start_frame=0)
     assert len(actual) == len(expected)
     assert metadata.authoritative_total_frames == reference.authoritative_total_frames
     assert max(abs(left - right) for left, right in zip(actual, expected)) < .00001

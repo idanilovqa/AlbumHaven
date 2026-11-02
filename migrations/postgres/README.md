@@ -164,8 +164,8 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0096_create_generated_preview_storage.sql
 0097_repair_generated_preview_inventory_path_constraint.sql
 0098_track_generated_preview_current_path.sql
-0099_create_playback_claims.sql
-0100_add_playback_claim_handoffs.sql
+0104_create_playback_claims.sql
+0105_add_playback_claim_handoffs.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -242,7 +242,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091`, plus `0099` and `0100`, are unreleased branch migrations.
+`0081` through `0091`, plus `0104` and `0105`, are unreleased branch migrations.
 Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order

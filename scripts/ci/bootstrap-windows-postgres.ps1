@@ -296,7 +296,16 @@ function Assert-ProvisionPreflight([object]$Contract) {
     }
     $serviceDataDirectory = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
     $expectedExecutable = [IO.Path]::GetFullPath((Join-Path $Pgbin 'postgres.exe'))
-    $actualExecutable = [IO.Path]::GetFullPath($serverProcess.ExecutablePath)
+    # Windows hides another account's executable path from non-elevated shells.
+    $serverBinDirectory = if ($serverProcess.ExecutablePath) {
+        Split-Path -Parent $serverProcess.ExecutablePath
+    } else {
+        (& $psql -X -w -h $HostName -p $Port -U $AdminRole -d postgres -tAc "select setting from pg_config where name = 'BINDIR'" 2>&1 | Out-String).Trim()
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($serverBinDirectory)) {
+        throw 'PostgreSQL server executable could not be verified.'
+    }
+    $actualExecutable = [IO.Path]::GetFullPath((Join-Path $serverBinDirectory 'postgres.exe'))
     $expectedDataDirectory = [IO.Path]::GetFullPath($serviceDataDirectory)
     $actualDataDirectory = [IO.Path]::GetFullPath($identityParts[1])
     if (-not $actualExecutable.Equals($expectedExecutable, [StringComparison]::OrdinalIgnoreCase) -or

@@ -950,7 +950,8 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
             return True
         if candidate.startswith("#"):
             return True
-        if ":" in candidate:
+        field, _, value = candidate.partition(":")
+        if field and value:
             return True
     return False
 

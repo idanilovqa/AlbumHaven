@@ -29,7 +29,11 @@ from music_app.services import (
 )
 from music_app.services.cover_provider_matching import album_name_in_alt
 from music_app.services.library import build_albums_from_file_cache
-from music_app.services.playback_pcm import PcmDecoderProcess, PcmOpenCommand
+from music_app.services.playback_pcm import (
+    PcmDecoderProcess,
+    PcmOpenCommand,
+    read_native_sample_rate,
+)
 
 
 LAUNCHER_PATH = Path("tests/e2e/support/isolatedLibraryApp.py")
@@ -485,7 +489,7 @@ def decode_sample_probe(path: Path, *, frame_count: int = 256) -> dict[str, obje
                 role="current",
                 path=path,
                 start_frame=0,
-                sample_rate=48_000,
+                sample_rate=read_native_sample_rate(path),
                 provisional_duration_seconds=60.0,
             )
         )

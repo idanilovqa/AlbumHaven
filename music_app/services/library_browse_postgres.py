@@ -2239,22 +2239,14 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
-                matching_sidebar_artists = [
-                    str(group.get("artist") or "").strip()
-                    for group in sidebar_artist_groups
-                    if _artist_name_matches_search_query(
-                        query,
-                        str(group.get("artist") or "").strip(),
-                        canonical_to_aliases.get(
-                            str(group.get("artist") or "").strip(),
-                            [],
-                        ),
-                    )
-                ]
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
-                    sidebar_artist_groups,
-                    artists=[exact_artist_match, *matching_sidebar_artists],
+                    _without_release_coartists(
+                        sidebar_artist_groups,
+                        exact_artist_match,
+                        query=query,
+                        canonical_to_aliases=canonical_to_aliases,
+                    ),
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups
@@ -8137,26 +8129,50 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
     ]
 
 
+def _without_release_coartists(
+    groups: list[dict[str, object]],
+    artist: str,
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    """Drop artists found only through a release they share with the searched artist."""
+    artist_key = _artist_display_dedupe_key(artist)
+    artist_album_keys = {
+        album.get("key")
+        for group in groups
+        if _artist_display_dedupe_key(str(group.get("artist") or "").strip()) == artist_key
+        for album in group.get("albums") or []
+    }
+
+    def _is_release_coartist(group: dict[str, object]) -> bool:
+        name = str(group.get("artist") or "").strip()
+        albums = list(group.get("albums") or [])
+        return (
+            bool(albums)
+            and _artist_display_dedupe_key(name) != artist_key
+            and all(album.get("key") in artist_album_keys for album in albums)
+            and not _artist_name_matches_search_query(
+                query,
+                name,
+                canonical_to_aliases.get(name, []),
+            )
+        )
+
+    return [group for group in groups if not _is_release_coartist(group)]
+
+
 def _merge_artist_groups_for_sidebar(
     primary_groups: list[dict[str, object]],
     extra_groups: list[dict[str, object]],
-    *,
-    artists: Iterable[object] | None = None,
 ) -> list[dict[str, object]]:
     merged: list[dict[str, object]] = []
     seen_keys: set[str] = set()
-    selected_keys = {
-        _artist_display_dedupe_key(artist)
-        for artist in (artists or [])
-        if str(artist or "").strip()
-    }
     for group in [*list(primary_groups or []), *list(extra_groups or [])]:
-        group_artist = str(group.get("artist") or "").strip()
-        if not group_artist:
+        artist = str(group.get("artist") or "").strip()
+        if not artist:
             continue
-        artist_key = _artist_display_dedupe_key(group_artist)
-        if selected_keys and artist_key not in selected_keys:
-            continue
+        artist_key = _artist_display_dedupe_key(artist)
         if artist_key in seen_keys:
             continue
         seen_keys.add(artist_key)

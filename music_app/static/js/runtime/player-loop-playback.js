@@ -313,6 +313,27 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 
 let playerTrackSelectionToken = 0;
 
+// A switch takes a moment to reach the listener; the click should not.
+function renderSelectedTrackState(track) {
+  if (track && typeof getPlayerElements === 'function') {
+    renderGlobalPlayerMetadata(getPlayerElements(), track);
+  }
+  if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
+  if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+}
+
+function showSelectedTrackImmediately(track, shouldAutoplay) {
+  if (!shouldAutoplay) return;
+  state.player.selectedTrack = track;
+  renderSelectedTrackState(track);
+}
+
+function clearSelectedTrack() {
+  if (!state.player.selectedTrack) return;
+  state.player.selectedTrack = null;
+  renderSelectedTrackState(state.player.current);
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
@@ -341,17 +362,21 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
+  showSelectedTrackImmediately(track, shouldAutoplay);
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
       startSeconds,
       autoplay: shouldAutoplay,
+      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
+    clearSelectedTrack();
     throw error;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  clearSelectedTrack();
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }
@@ -479,6 +504,11 @@ async function handleStreamingPlaybackEnded(event = {}) {
     await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
+  if (event.sampleRateChangeTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+    await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
+  }
 }
 
 async function handleStreamingPlaybackBoundary(event = {}) {

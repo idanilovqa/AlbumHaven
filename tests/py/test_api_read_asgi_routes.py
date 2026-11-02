@@ -2740,6 +2740,15 @@ def test_postgres_album_search_request_allows_search_preview_tier(app, asgi_app,
     assert asgi_read_routes._is_postgres_album_search_request(request) is True
 
 
+def test_postgres_album_search_request_allows_a_title_with_a_colon():
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    assert not asgi_read_routes._query_requires_file_backed_search_semantics(
+        "Hilda: Season 2 (Original Series Soundtrack)"
+    )
+    assert asgi_read_routes._query_requires_file_backed_search_semantics("artist:Broadcast")
+
+
 def test_postgres_album_search_request_allows_full_hydration_tier(app, asgi_app, monkeypatch):
     from starlette.requests import Request
     from music_app.routes import api_read_asgi_routes as asgi_read_routes

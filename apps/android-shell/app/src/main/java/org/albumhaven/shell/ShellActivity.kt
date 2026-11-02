@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
@@ -186,6 +187,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -240,7 +242,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
     }
 
-    private fun showConnectionFailure() {
+    private fun showConnectionFailure(cause: String) {
+        if (BuildConfig.DEBUG) Log.w(TAG, "Main frame failed: $cause")
         mainFrameFailed = true
         webView.visibility = View.INVISIBLE
         recovery.show(RecoveryState.ERROR, originHost())
@@ -275,17 +278,17 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (request.isForMainFrame) showConnectionFailure()
+            if (request.isForMainFrame) showConnectionFailure("error ${error.errorCode} ${error.description}")
         }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-            if (request.isForMainFrame && response.statusCode >= 500) showConnectionFailure()
+            if (request.isForMainFrame && response.statusCode >= 500) showConnectionFailure("HTTP ${response.statusCode}")
         }
 
         @SuppressLint("WebViewClientOnReceivedSslError")
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
             handler.cancel()
-            if (originPolicy.isSameOrigin(error.url, selectedOrigin)) showConnectionFailure()
+            if (originPolicy.isSameOrigin(error.url, selectedOrigin)) showConnectionFailure("TLS ${error.primaryError}")
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -313,6 +316,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     private companion object {
+        const val TAG = "AlbumHavenShell"
         const val BRIDGE_OBJECT = "AlbumHavenBridge"
         const val STATE_ORIGIN = "shell_origin"
         const val STATE_WEB_VIEW = "shell_web_view"

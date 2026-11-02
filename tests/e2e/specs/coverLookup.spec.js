@@ -836,8 +836,14 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.waitForDrawerOpen();
   await page.setViewportSize({ width: 390, height: 844 });
   const selected = notifications.at(-1);
+  // Cached candidates paint first; a save must follow the gallery response that replaces them.
+  const selectedGallery = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/utilities/cover-lookup/gallery'
+  ));
   const selectedTaskScrollTop = await coverLookupActions.openTaskById(selected.taskId);
   await coverLookupActions.waitForModalReady();
+  await (await selectedGallery).finished();
   await coverLookupActions.waitForModalResultsReady();
   await coverLookupActions.selectFirstRemoteCoverAndSave();
   await coverLookupActions.waitForDrawerOpen();
@@ -1437,6 +1443,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
 }) => {
   test.setTimeout(180_000);
 
+  const testStartedAtMs = Date.now();
   let originalActiveCover = null;
   let selectedLocalCover = null;
   let initialUnusedCandidatePaths = [];
@@ -1541,7 +1548,14 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '')).not.toBe('');
     expect(selectedLocalCover.sourcePath).toMatch(/[\\/]Art[\\/]Front\.jpg$/i);
     expect(fs.existsSync(path.join(tempRoot, 'app-data', 'display-cover-cache'))).toBe(true);
-    expect(fs.existsSync(path.join(path.dirname(selectedLocalCover.sourcePath), '.album-haven'))).toBe(false);
+    // Earlier cases in this shard may save art here, so only this case's previews count.
+    const nestedPreviewRoot = path.join(path.dirname(selectedLocalCover.sourcePath), '.album-haven');
+    const previewsWrittenHere = fs.existsSync(nestedPreviewRoot)
+      ? fs.readdirSync(nestedPreviewRoot, { recursive: true })
+        .map((name) => path.join(nestedPreviewRoot, String(name)))
+        .filter((file) => fs.statSync(file).isFile() && fs.statSync(file).mtimeMs >= testStartedAtMs)
+      : [];
+    expect(previewsWrittenHere).toEqual([]);
   });
 
   await stepLogger.step('Save nested Front.jpg over canonical cover.jpg and verify every immediate surface', async () => {

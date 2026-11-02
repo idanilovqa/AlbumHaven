@@ -25,7 +25,7 @@ const SUPPORTED_FOCUSED_AREAS = Object.freeze([
 ]);
 const FUNCTIONAL_SHARDS = Object.freeze(Object.keys(FUNCTIONAL_SHARD_CONFIGS));
 const FUNCTIONAL_SHARD_LABELS = Object.freeze({
-  'gallery-search-visual': ['gallery-search-visual'],
+  'gallery-search-visual': ['gallery-search-visual-1', 'gallery-search-visual-2'],
   'cover-providers': ['cover-providers-1', 'cover-providers-2'],
   'metadata-mutations': ['metadata-mutations'],
   'playback-utilities': [

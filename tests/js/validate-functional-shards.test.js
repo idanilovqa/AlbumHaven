@@ -17,7 +17,8 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 67],
+  ['gallery-search-visual-1', 32],
+  ['gallery-search-visual-2', 35],
   ['cover-providers-1', 22],
   ['cover-providers-2', 14],
   ['metadata-mutations', 16],
@@ -26,7 +27,8 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['playback-utilities-3', 14],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
-  ['gallery-search-visual', 'Gallery, Search & Visual'],
+  ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
+  ['gallery-search-visual-2', 'Gallery, Search & Visual 2'],
   ['cover-providers-1', 'Cover Providers 1'],
   ['cover-providers-2', 'Cover Providers 2'],
   ['metadata-mutations', 'Metadata Mutations'],
@@ -116,7 +118,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved seven-way 161-case assignment', () => {
+test('functional shard contract pins the approved eight-way 161-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -392,7 +394,7 @@ validatorTest(name, () => {
 validatorTest('shard runner can isolate one exact owned case for CI diagnosis', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
-  const shard = clone(contract.shards.find((candidate) => candidate.name === 'gallery-search-visual'));
+  const shard = clone(contract.shards.find((candidate) => candidate.name === 'gallery-search-visual-1'));
   const focusedCase = shard.invocations
     .flatMap((invocation) => invocation.cases)
     .find((ownedCase) => ownedCase.case.startsWith('FTC-ALBUM-TRACK-CREDITS-001'));
@@ -403,7 +405,7 @@ validatorTest('shard runner can isolate one exact owned case for CI diagnosis', 
   assert.deepEqual(filtered.invocations[0].cases.map((ownedCase) => ownedCase.case), [focusedCase.case]);
   assert.throws(
     () => validator.filterFunctionalShardCases(shard, ['FTC-NOT-OWNED']),
-    /not owned by functional shard gallery-search-visual/i,
+    /not owned by functional shard gallery-search-visual-1/i,
   );
 });
 
@@ -766,8 +768,15 @@ validatorTest('gallery startup projections share one early app process before is
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
-  const shard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual');
-  const waves = validator.executionWavesForShard(shard, matrix);
+  const shardWaves = contract.shards
+    .filter((candidate) => candidate.name.startsWith('gallery-search-visual-'))
+    .map((shard) => validator.executionWavesForShard(shard, matrix));
+  const waves = [1, 2, 3, 4].map((wave) => ({
+    wave,
+    invocations: shardWaves.flatMap((perShard) => (
+      perShard.find((candidate) => candidate.wave === wave)?.invocations || []
+    )),
+  }));
 
   assert.equal(waves.length, 4);
   assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4]);
@@ -775,9 +784,9 @@ validatorTest('gallery startup projections share one early app process before is
     invocation.baselineMode === 'isolated-app-process'
   ));
   assert.equal(isolatedFirstWave.length, 4);
-  assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
-  assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
-  const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
+  const sharedReaderNames = waves[0].invocations
+    .filter((invocation) => invocation.baselineMode === 'shared-setup')
+    .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
   assert.equal(sharedReaderNames.length, 32);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
@@ -792,7 +801,7 @@ validatorTest('gallery startup projections share one early app process before is
     assert.ok(sharedReaderNames.includes(caseName), `${caseName} must share the prepared gallery fixture`);
   }
   assert.deepEqual(
-    waves[0].invocations[0].cases.map((ownedCase) => ownedCase.case),
+    isolatedFirstWave[0].cases.map((ownedCase) => ownedCase.case),
     [
       'FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and keeps both raw credits',
       'FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated',
@@ -822,7 +831,7 @@ validatorTest('gallery startup projections share one early app process before is
     ({ case: name }) => name.startsWith('FTC-TAGS-020 '),
   ));
   assert.ok(mobileInvocationIndex >= 0);
-  assert.ok(ddtInvocationIndex > mobileInvocationIndex);
+  assert.ok(ddtInvocationIndex >= 0);
   assert.deepEqual(
     waves[1].invocations[mobileInvocationIndex].cases.map((ownedCase) => ownedCase.case),
     ['FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale'],
@@ -919,12 +928,13 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   );
 });
 
-validatorTest('all seven shards use explicit effect-compatible wave budgets', () => {
+validatorTest('all eight shards use explicit effect-compatible wave budgets', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 67, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
+    ['gallery-search-visual-2', { cases: 35, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 14, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
@@ -979,7 +989,7 @@ validatorTest('read-only shard cases reuse one prepared fixture and restore once
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
-  const sourceShard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual');
+  const sourceShard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual-1');
   const readOnlyCases = sourceShard.invocations
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ({ invocation, ownedCase })))
     .filter(({ ownedCase }) => {
@@ -1070,14 +1080,14 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   };
 
   assert.throws(
-    () => validator.runFunctionalShard(contract, 'gallery-search-visual', {
+    () => validator.runFunctionalShard(contract, 'gallery-search-visual-1', {
       repoRoot,
       env: { ...baseEnv, ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT: '' },
     }),
     /non-root child of RUNNER_TEMP/,
   );
   assert.throws(
-    () => validator.runFunctionalShard(contract, 'gallery-search-visual', {
+    () => validator.runFunctionalShard(contract, 'gallery-search-visual-1', {
       repoRoot,
       env: { ...baseEnv, ALBUM_HAVEN_FUNCTIONAL_BLOB_ROOT: runnerTemp },
     }),
@@ -1085,13 +1095,13 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   );
 });
 
-test('functional workflow uses the approved selectable seven-shard Windows matrix with isolated names and ports', () => {
+test('functional workflow uses the approved selectable eight-shard Windows matrix with isolated names and ports', () => {
   const { workflow, job } = functionalJobSource();
   assert.match(job, /name:\s*["']E2E:\s*\$\{\{\s*matrix\.shard\s*\}\}["']/);
   assert.match(workflow, /e2e_production_parity:\s*\r?\n\s+name:\s*["']E2E:\s*Production Parity["']/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.match(job, /fail-fast:\s*false/);
-  assert.match(job, /max-parallel:\s*7\b/);
+  assert.match(job, /max-parallel:\s*8\b/);
   assert.doesNotMatch(job, /--browser(?:=|\s+)edge\b/i);
   assert.doesNotMatch(job, /if:\s*\$\{\{\s*false\s*\}\}|if:\s*false/);
 
@@ -1106,7 +1116,7 @@ test('functional workflow uses the approved selectable seven-shard Windows matri
   for (const field of ['portBase']) {
     const values = matrix.map((entry) => entry[field]);
     assert.ok(values.every(Boolean), `every functional matrix row must define ${field}`);
-    assert.equal(new Set(values).size, 7, `${field} must be unique per functional shard`);
+    assert.equal(new Set(values).size, 8, `${field} must be unique per functional shard`);
   }
   assert.ok(matrix.every((entry) => Number(entry.portBase) > 1024));
   assert.match(job, /\$arguments = @\("--run-shard=\$\{\{\s*matrix\.shard\s*\}\}"\)/);

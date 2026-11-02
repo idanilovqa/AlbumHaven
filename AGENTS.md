@@ -55,8 +55,8 @@ operate, or contribute to the application.
   invalidation, watcher reconciliation that can invalidate projections,
   artist-tree filtering or selection, pagination, or search-related rendering.
 - The command is the complete local search gate: PostgreSQL/API contracts,
-  JavaScript and component tests, the `gallery-search-visual` functional E2E
-  shard, and the measured `artist-family`, `search-all-artists`, and
+  JavaScript and component tests, both `gallery-search-visual` functional E2E
+  shards, and the measured `artist-family`, `search-all-artists`, and
   `search-browse` performance targets. Do not replace it with a narrower test
   selection. Keep the timed cold duplicate-projection cache-miss test in this
   gate so an interactive search cannot synchronously rebuild the global

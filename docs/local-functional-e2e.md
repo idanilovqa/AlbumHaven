@@ -79,7 +79,7 @@ alone does not prove a hang.
 Run one complete shard:
 
 ```powershell
-npm run test:e2e:functional:local -- -Shard gallery-search-visual
+npm run test:e2e:functional:local -- -Shard gallery-search-visual-1
 ```
 
 Run all four functional shards sequentially:
@@ -96,7 +96,7 @@ or Python executable without changing the supported setup path:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-functional-e2e-local.ps1 `
-  -Shard gallery-search-visual `
+  -Shard gallery-search-visual-1 `
   -FixtureDistribution $env:ALBUM_HAVEN_TEST_DATA_DIST `
   -PythonPath $env:PLAYWRIGHT_PYTHON
 ```

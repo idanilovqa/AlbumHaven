@@ -133,6 +133,7 @@ function loadRuntime(overrides = {}) {
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;'),
     console,
+    hasHydratedLibraryNonAlbumTracks: () => false,
     albumHasDisplayCover: album => Boolean(album?.cover_url),
     buildAlbumDisplayCoverUrl: album => album?.cover_url || '',
     buildAlbumLightboxCoverUrl: album => album?.cover_url || '',
@@ -461,6 +462,48 @@ function createStateForContract() {
   };
 }
 
+test('artist non-album tracks start loading with the gallery and remain clickable while pending', () => {
+  const requested = [];
+  const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: selector => selector === '[data-open-non-album-tracks]' ? [button] : [],
+      querySelector: () => null,
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.updateGalleryMainControls();
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].libraryWide, false);
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-disabled'], 'false');
+  context.state.view.non_album_tracks_deferred = false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty artist collection is disabled');
+  button.dataset.libraryWide = '1';
+  context.hasHydratedLibraryNonAlbumTracks = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty library collection is disabled');
+  button.dataset.libraryWide = '';
+  context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(requested.at(-1).libraryWide, true, 'search checks library-wide loose tracks without opening the menu');
+  assert.equal(button.dataset.searchMatch, 'false');
+  context.hasNonAlbumSearchMatches = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.dataset.searchMatch, 'true');
+  assert.equal(button['aria-description'], 'Contains tracks matching your search');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,
@@ -480,7 +523,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(button\.dataset\.libraryWide === '1' && state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /Boolean\(state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
   );
   assert.match(
     galleryMainInteractionsSource,
@@ -1561,7 +1604,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
   assert.equal(summary.textContent, '0 artists · 0 albums');
 });
 
-test('gallery bar stays hidden throughout active search transitions', () => {
+test('gallery bar stays visible throughout active search transitions', () => {
   assert.match(bootstrapGalleryEventHandlersSource,
     /function updateGallerySearchDraftQuery\(nextQuery\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
   const name = { textContent: '' };
@@ -1584,12 +1627,12 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'draft query hides stale Gallery context while loading');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.query = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'committed query keeps Gallery context hidden');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.state.view.selected_artist = 'Neal Morse';
@@ -1598,7 +1641,7 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse band';
   context.syncGalleryBarSearchVisibility();
-  assert.equal(bar.hidden, true, 'editing a resolved artist query hides its stale Gallery family controls');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.selected_artist = '';
@@ -1607,9 +1650,9 @@ test('gallery bar stays hidden throughout active search transitions', () => {
   assert.equal(bar.hidden, false, 'clearing search restores Gallery context');
 });
 
-test('server-rendered searches hide the gallery bar only until an artist is resolved', () => {
+test('server-rendered searches retain the gallery bar', () => {
   assert.match(indexTemplateSource,
-    /gallery_bar\('Gallery'[^)]*hidden=query and not effective_selected_artist\)/);
+    /gallery_bar\('Gallery'[^)]*aria_label='Gallery controls'\)/);
 });
 
 test('root gallery summary counts canonical albums once across artist credits after filtering', () => {

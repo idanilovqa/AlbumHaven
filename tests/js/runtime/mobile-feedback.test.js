@@ -1173,13 +1173,13 @@ test('mobile gallery cards do not move when touch hover or focus changes during 
   );
 });
 
-test('mobile album Cover Lookup keeps Manual Search visible without desktop composer controls', () => {
+test('mobile album Cover Lookup keeps the full image extractor visible', () => {
   const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
   assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+\.cover-lookup-manual-add[^}]*display:\s*none/,
   );
-  assert.match(
+  assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+:is\(\.cover-lookup-manual-row,\s*\.cover-lookup-manual-actions\)\s*\{[^}]*display:\s*none/,
   );

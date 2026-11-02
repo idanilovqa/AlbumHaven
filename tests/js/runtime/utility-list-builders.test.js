@@ -2471,6 +2471,44 @@ test('album-name merge keeps all sixteen tracks visible before canonical refresh
   }
 });
 
+test('partial tag rename retains the untouched album and Hoard styling through destination-only completion', () => {
+  const context = loadHelpers();
+  context.flattenVisibleAlbums = () => context.state.view.artist_groups.flatMap(group => group.albums);
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+  const artist = 'Мумий Тролль';
+  const original = {
+    key: 'мумий тролль::8', name: '8', album_artist: artist, year: 2008,
+    root_provenance: { categories: ['hoard'] },
+    tracks: [
+      { path: 'hoard/8/part1.mp3', title: 'First part', album: '8', album_artist: artist, duration_seconds: 120 },
+      { path: 'hoard/8/part2.mp3', title: 'Second part', album: '8', album_artist: artist, duration_seconds: 180 },
+    ],
+  };
+  const groups = [{ artist, albums: [original] }];
+  context.state.view = { ...context.state.view, selected_artist: artist, related_artists: [], artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [] };
+  const edits = { 'hoard/8/part1.mp3': { album: '8 Часть 1' } };
+  const optimistic = context.buildOptimisticUpdatedAlbumsFromEdits(original, edits);
+  const assertSplit = () => {
+    for (const field of ['artist_groups', 'primary_artist_groups']) {
+      const albums = context.state.view[field].flatMap(group => group.albums);
+      assert.equal(albums.length, 2);
+      const remainder = albums.find(album => album.name === '8');
+      const edited = albums.find(album => album.name === '8 Часть 1');
+      assert.deepEqual(Array.from(remainder.tracks, track => track.path), ['hoard/8/part2.mp3']);
+      assert.deepEqual(Array.from(edited.tracks, track => track.path), ['hoard/8/part1.mp3']);
+      for (const album of albums) assert.deepEqual(Array.from(album.root_provenance.categories), ['hoard']);
+    }
+  };
+  context.applyUpdatedAlbumsToCurrentView(optimistic, { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
+  const destination = optimistic.find(album => album.name === '8 Часть 1');
+  context.applyUpdatedAlbumsToCurrentView([destination], { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
+  context.applyUpdatedAlbumsToCurrentView(optimistic, { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
+});
+
 test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist source projections during restore', () => {
   const context = loadHelpers();
   const sourcePaths = Array.from({ length: 13 }, (_value, index) => (

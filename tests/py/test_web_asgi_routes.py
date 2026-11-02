@@ -421,6 +421,31 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     assert b"Discovery Center" in news_body
 
 
+def test_selected_artist_search_reload_requests_lightweight_summary(monkeypatch):
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+
+    captured = []
+
+    class SummaryRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, *, query_params, library_state):
+            captured.append(query_params)
+            return {"selected_artist": "Hans Zimmer", "artist_groups": [], "artists_sidebar": []}
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
+    web_asgi._build_postgres_selected_artist_startup_view(
+        config={}, library_state={},
+        query_args=QueryParams("artist=Hans+Zimmer&q=hans+zimmer&category=hoard&category=main_library"),
+    )
+    assert captured[0].get("payload_tier") == "gallery_summary"
+    assert captured[0].get("q") == "hans zimmer"
+    assert captured[0].getlist("category") == ["hoard", "main_library"]
+    assert captured[0].get("root_sidebar") is None
+
+
 @pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
 def test_selected_artist_startup_requests_summary_without_losing_repeated_filters(monkeypatch, requested_tier, expected_tier):
     from starlette.datastructures import QueryParams

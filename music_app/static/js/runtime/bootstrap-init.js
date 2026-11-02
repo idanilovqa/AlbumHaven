@@ -499,3 +499,9 @@ if (tagEditorFooter) {
     primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
   });
 }
+
+// Standalone admin pages link back to the library-owned Settings surface.
+if (new URL(window.location.href).searchParams.get("settings") === "appearance") {
+  setUtilityActiveTab("appearance");
+  openUtilityModal();
+}

@@ -140,6 +140,95 @@ def test_same_volume_move_is_atomic_and_checkpointed(tmp_path):
     assert repository.completed[0]["status"] == "completed"
 
 
+def test_relocation_removes_empty_album_preview_tree_and_preserves_music(tmp_path):
+    album = tmp_path / "album"
+    source = album / ".album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    music = album / "song.mp3"
+    music.write_bytes(b"music")
+    target = tmp_path / "ssd/v1/cover_variants/ab/preview.webp"
+    repository = FakeRepository([item(source, target, b"preview")])
+    run_worker(repository)
+    assert target.read_bytes() == b"preview"
+    assert not (album / ".album-haven").exists()
+    assert music.read_bytes() == b"music"
+
+
+def test_relocation_prunes_only_moved_preview_ancestors_without_scanning_siblings(tmp_path, monkeypatch):
+    root = tmp_path / "album/.album-haven"
+    source = root / "cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    sibling = root / "cover_variants/cd/keep.webp"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"keep")
+    target = tmp_path / "ssd/preview.webp"
+
+    def unexpected_listing(_path):
+        raise AssertionError("Relocating one preview must not enumerate cache siblings")
+
+    monkeypatch.setattr(Path, "iterdir", unexpected_listing)
+    run_worker(FakeRepository([item(source, target, b"preview")]))
+    assert not source.parent.exists()
+    assert sibling.read_bytes() == b"keep"
+    assert target.read_bytes() == b"preview"
+
+
+@pytest.mark.parametrize("same_volume", [True, False])
+def test_pruning_failure_preserves_verified_relocation(tmp_path, monkeypatch, caplog, same_volume):
+    source = tmp_path / "album/.album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    content = b"verified-preview"
+    source.write_bytes(content)
+    target = tmp_path / "ssd/preview.webp"
+    repository = FakeRepository([item(source, target, content)])
+    monkeypatch.setattr(relocation, "_same_volume", lambda _source, _target: same_volume)
+
+    def fail_pruning(directory, *, emptied_directory):
+        assert directory == source.parents[2]
+        assert emptied_directory == source.parent
+        assert not source.exists()
+        assert target.read_bytes() == content
+        raise PermissionError("empty preview directory is locked")
+
+    monkeypatch.setattr(relocation, "remove_empty_album_preview_directories", fail_pruning)
+    run_worker(repository)
+
+    assert not source.exists()
+    assert target.read_bytes() == content
+    assert repository.completed == [{
+        "operation_id": repository.operation_id,
+        "item_id": 1,
+        "status": "completed",
+        "byte_count": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "error": None,
+    }]
+    assert "empty preview directory is locked" in caplog.text
+
+
+def test_relocation_preserves_unrecognized_files_in_preview_directory(tmp_path):
+    source = tmp_path / "album/.album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    keep = source.parents[2] / "keep.txt"
+    keep.write_text("keep")
+    target = tmp_path / "ssd/preview.webp"
+    run_worker(FakeRepository([item(source, target, b"preview")]))
+    assert keep.read_text() == "keep"
+    assert not source.parent.exists()
+
+
+def test_previous_relocation_empty_directories_are_pruned(tmp_path):
+    from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
+    root = tmp_path / "album/.album-haven"
+    (root / "v1/cover_variants/ab").mkdir(parents=True)
+    remove_empty_album_preview_directories(root)
+    assert not root.exists()
+    assert root.parent.exists()
+
+
 def test_same_volume_move_preserves_source_recreated_after_terminal_checkpoint(tmp_path):
     content = b"preview-recreated-during-relocation"
     source = tmp_path / "source.webp"

@@ -1441,10 +1441,16 @@ def test_asgi_cover_lookup_save_remote_scopes_persisted_unknown_album_notificati
     assert restored_task["possible_matches"][0]["id"] == "yaruga-cover"
 
 
+@pytest.mark.parametrize("include_local", [True, False])
 def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider_search(
     app,
     monkeypatch,
+    include_local,
 ):
+    from music_app.services import cover_state
+    if not include_local:
+        monkeypatch.setattr(cover_state, "iter_local_cover_candidates",
+                            lambda *_args, **_kwargs: pytest.fail("progress polling must not scan local art"))
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
@@ -1456,6 +1462,8 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     album = {**_album_payload(track_path), "album_id": 41}
+    from threading import get_ident
+    event_loop_thread = get_ident()
     repository_calls: list[dict[str, object]] = []
     candidate = {
         "id": "candidate-1",
@@ -1473,6 +1481,7 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
             return 41
 
         def get_for_album_context(self, *, album_id):
+            assert get_ident() != event_loop_thread, "saved candidates must not block the ASGI event loop"
             repository_calls.append({"album_id": album_id})
             return {
                 "album_id": album_id,
@@ -1502,11 +1511,13 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
         asgi_app,
         "POST",
         "/utilities/cover-lookup/gallery",
-        json_body={"album": album},
+        json_body={"album": album, "include_local": include_local},
     )
 
     assert status == 200
     payload = _decode_json(body)
+    assert payload["local_inventory_complete"] is include_local
+    assert ("local_covers" in payload) is include_local
     assert payload["task"] is None
     assert payload["candidate_snapshot"] == {
         "candidates": [candidate],
@@ -3104,6 +3115,10 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
 
     monkeypatch.setattr(asgi_routes, "log_app_event", fake_log_app_event)
     monkeypatch.setattr(asgi_routes, "update_cover_lookup_task", recording_update_cover_lookup_task)
+    monkeypatch.setattr(
+        asgi_routes, "mark_cover_lookup_task_notification_action_taken",
+        lambda *_args, **_kwargs: pytest.fail("Extract must not mark artwork chosen"),
+    )
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     cover_lookup_tasks.update_cover_lookup_task(
@@ -3146,6 +3161,8 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
     assert add_status == 200
     payload = _decode_json(add_body)
     assert payload["ok"] is True
+    assert payload["task"].get("notification_action_taken", False) is False
+    assert payload["gallery"]["task"].get("notification_action_taken", False) is False
     assert [item["id"] for item in payload["task"]["possible_matches"]] == ["candidate-old", "candidate-new"]
     assert payload["task"]["possible_matches"][0]["source"] == "discogs"
     assert payload["task"]["possible_matches"][0]["width"] == 700

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.opinion_read_seams import (
     build_track_popularity_payload,
     resolve_viewer_opinion_preferences,
@@ -161,7 +162,11 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         _normalize_artist_key(member)
         for member in album_owner_members
     }
-    track_members = _stable_artist_credit_members(track_artist)
+    track_members = _stable_unique_artist_credits(
+        member
+        for segment in _stable_artist_credit_members(track_artist)
+        for member in track_artist_credit_members(segment, album_artist)
+    )
     track_primary_keys = {
         _normalize_artist_key(_extract_terminal_featured_credit(member)[0])
         for member in track_members

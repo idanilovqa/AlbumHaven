@@ -468,10 +468,12 @@ async def _serialize_cover_gallery_from_asgi(
     task_payload: Mapping[str, object] | None = None,
     *,
     refresh_persisted_cover_state: bool = False,
+    include_local: bool = True,
 ) -> dict[str, object]:
     config = _app_config(request)
-    file_cache = _library_state(request).get("file_cache", {}) or {}
-    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - set(file_cache)
+    runtime_entries = _library_state(request).get("file_cache", {}) or {}
+    file_cache = {path: runtime_entries[path] for path in track_paths if path in runtime_entries}
+    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - file_cache.keys()
     if paths_to_load and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -495,6 +497,7 @@ async def _serialize_cover_gallery_from_asgi(
         is_squareish_cover=_is_squareish_cover,
         task_payload=serialized_task_payload,
         candidate_snapshot=candidate_snapshot,
+        include_local=include_local,
     )
 
 
@@ -872,7 +875,8 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album,
         album_context.track_paths,
@@ -909,7 +913,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     candidate_snapshot = None
     if not album.get("_cover_lookup_task_scoped_context"):
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=int(album_id),
+            )
         except Exception:
             candidate_snapshot = _candidate_snapshot_read_failure(
                 "candidate_snapshot_read_failed"
@@ -932,6 +938,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             candidate_snapshot,
             task_payload,
             refresh_persisted_cover_state=True,
+            include_local=payload.get("include_local") is not False,
         )
     )
 

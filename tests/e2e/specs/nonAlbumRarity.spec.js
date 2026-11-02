@@ -365,14 +365,32 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
         await navigationPanelActions.selectSidebarArtistByName(RARITY_ARTIST);
       }
       await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
-      await page.reload();
-      await galleryActions.waitForGalleryReady();
-      await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
-      await galleryActions.waitForSelectedArtistGallery(RARITY_ARTIST);
+      const looseRequests = [];
+      const observeLooseTracks = request => {
+        const url = new URL(request.url());
+        if (url.pathname === '/view-data' && url.searchParams.get('include_non_album') === '1') {
+          looseRequests.push(url);
+        }
+      };
+      page.on('request', observeLooseTracks);
+      try {
+        await page.reload();
+        await galleryActions.waitForGalleryReady();
+        await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
+        await galleryActions.waitForSelectedArtistGallery(RARITY_ARTIST);
+        await expect.poll(() => looseRequests.length).toBe(1);
+        expect(looseRequests[0].searchParams.get('artist')).toBe(RARITY_ARTIST);
+        expect(looseRequests[0].searchParams.has('include_library_wide_non_album')).toBe(false);
+        await artistPageSettingsActions.open();
+        const nonAlbumAction = artistPageSettingsActions.artistPageSettings.nonAlbumTracksButton;
+        await expect(nonAlbumAction).toBeEnabled({ timeout: 1000 });
+        await nonAlbumAction.click();
+      } finally {
+        page.off('request', observeLooseTracks);
+      }
       await galleryActions.expectAlbumAbsentFromSettledGallery({
         artist: RARITY_ARTIST, album: RARITY_ALBUM, query: '',
       });
-      await artistPageSettingsActions.openNonAlbumTracks(2);
       await artistPageSettingsActions.expectCompactGroupedNonAlbumTable({
         sections: ['Non-album rarity', 'Interviews'],
         tracks: [
@@ -515,8 +533,32 @@ test('FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in lib
       );
     });
 
-    await stepLogger.step('Clear the exception and restore normal Gallery membership', async () => {
+    await stepLogger.step('Find a collection song through the Loose Tracks search indicator', async () => {
       await artistPageSettingsActions.closeNonAlbumTracks();
+      await searchToolbarActions.search(RARITY_TRACK_TITLE, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(RARITY_TRACK_TITLE);
+      const button = artistPageSettingsActions.artistPageSettings.libraryWideNonAlbumTracksButton;
+      await expect(button).toBeVisible();
+      await expect(button).toBeEnabled();
+      await expect(button).toHaveAttribute('data-search-match', 'true');
+      await expect.poll(() => artistPageSettingsActions.artistPageSettings.readLibraryWideSearchIndicatorWidth()).toBe('6px');
+      await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(RARITY_TRACK_TITLE)).toBeVisible();
+      const matchingRow = artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(RARITY_TRACK_TITLE);
+      await expect(matchingRow).toHaveAttribute('data-track-search-match', 'true');
+      await expect(matchingRow).toHaveClass(/album-track-table__row--search-match/);
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(SIBLING_TRACK_TITLE)).toHaveCount(0);
+      await artistPageSettingsActions.closeNonAlbumTracks();
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await expect(button).toHaveAttribute('data-search-match', 'false');
+      await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(RARITY_TRACK_TITLE)).toBeVisible();
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(RARITY_TRACK_TITLE)).not.toHaveClass(/album-track-table__row--search-match/);
+      await artistPageSettingsActions.closeNonAlbumTracks();
+    });
+
+    await stepLogger.step('Clear the exception and restore normal Gallery membership', async () => {
       await restoreFixture();
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
       await galleryActions.waitForGalleryReady();

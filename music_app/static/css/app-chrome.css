@@ -133,7 +133,7 @@
 }
 .app-bar .button:not(.action-button) { padding: 0 12px; font-size: 12px; }
 .app-bar .cover-lookup-drawer-glyph { width: 20px; height: 20px; }
-.app-bar #settings-button .settings-button__icon {
+.app-bar [data-account-menu-trigger] .settings-button__icon {
   width: 20px;
   height: 20px;
   transform: translateY(-1px);

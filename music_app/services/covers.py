@@ -240,9 +240,9 @@ def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | Non
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
-    if images_are_visually_similar(current_cover, raw_bytes):
-        return None
     current_bytes = current_cover.read_bytes()
+    if current_bytes == raw_bytes:
+        return None
     index = 1
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"

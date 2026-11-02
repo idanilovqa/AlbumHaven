@@ -312,20 +312,17 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
         raw_bytes = base64.b64decode(encoded, validate=True)
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
-    target = album_root / "cover.jpg"
-    with suppress_library_watch_events((target,)):
-        if Image is None:
-            if mime_type != "image/jpeg":
-                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-            target.write_bytes(raw_bytes)
-            return target
-        try:
-            with Image.open(io.BytesIO(raw_bytes)) as img:
-                converted = img.convert("RGB")
-                converted.save(target, format="JPEG", quality=95)
-        except Exception as exc:
-            raise ValueError("Clipboard image could not be processed.") from exc
-    return target
+    if Image is None:
+        if mime_type != "image/jpeg":
+            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+        target = album_root / "cover.jpg"
+        reserve_existing_cover_variant(album_root, raw_bytes)
+        _atomic_replace_file_bytes(target, raw_bytes)
+        return target
+    saved = write_remote_cover_bytes_as_authoritative_cover(album_root, raw_bytes)
+    if saved is None:
+        raise ValueError("Clipboard image could not be processed.")
+    return saved
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:
@@ -515,6 +512,7 @@ def begin_local_image_promotion(
                 else None
             ),
         )
+        promotion.reserve_artifact = reserve_existing_cover_variant(album_root, raw_bytes)
         _atomic_replace_file_bytes(target, raw_bytes)
     except Exception:
         if "promotion" in locals():

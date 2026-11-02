@@ -88,8 +88,14 @@ function ensureVersionPickerModal() {
   modal.innerHTML = `
     <div class="confirm-modal-dialog version-picker-card" role="dialog" aria-modal="true" aria-labelledby="version-picker-title">
       <div class="version-picker-header">
-        <h3 id="version-picker-title">Mark As A Version</h3>
-        <button type="button" class="icon-button version-picker-close" data-close-version-picker="1" aria-label="Close version picker">&times;</button>
+        ${buildAlbumDetailsHeaderHtml({
+          variant: 'copy', title: 'Mark As A Version', titleId: 'version-picker-title',
+          subtitleId: 'version-picker-subtitle',
+          actionsHtml: ButtonComponent.renderActionButton({
+            icon: 'close', ariaLabel: 'Close version picker', presentation: 'bare',
+            attributes: { 'data-close-version-picker': '1' },
+          }),
+        })}
       </div>
       <div class="version-picker-body">
         <p class="version-picker-description" data-version-picker-description></p>
@@ -245,6 +251,20 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
+function hasHydratedLibraryNonAlbumTracks() {
+  const view = state.view || {};
+  const url = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
+  url.searchParams.set('include_non_album', '1');
+  return view.library_non_album_tracks_hydrated_scope === getDeferredNonAlbumScopeKey(url);
+}
+
+function hasNonAlbumSearchMatches(options = {}) {
+  const view = state.view || {};
+  if (!String(view.query || '').trim() || view.non_album_tracks_deferred) return false;
+  if (options.libraryWide && !hasHydratedLibraryNonAlbumTracks()) return false;
+  return getVisibleNonAlbumTracks(options).length > 0;
+}
+
 let deferredNonAlbumHydrationRequest = null;
 
 function getDeferredNonAlbumScopeKey(url) {
@@ -353,6 +373,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
     };
   });
 }

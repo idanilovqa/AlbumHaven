@@ -5519,6 +5519,22 @@ def test_gallery_page_returns_restart_conflict(app, monkeypatch):
     assert _decode_json(body)["restart_required"] is True
 
 
+def test_gallery_page_returns_retryable_pending_for_deleted_stale_occurrence(app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    def pending(*args, **kwargs):
+        raise routes.GalleryProjectionPending("Gallery is being prepared.")
+
+    monkeypatch.setattr(routes.PostgresLibraryBrowseRepository, "build_root_startup_preview_payload", pending)
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(), "GET", "/view-data", query={"surface": "albums", "omit_sidebar": "1", "gallery_page_size": "50"},
+    )
+    assert status == 503
+    assert _decode_json(body)["code"] == "gallery_projection_pending"
+    assert headers["retry-after"] == "1"
+    assert headers["cache-control"] == "no-store"
+
+
 def test_cold_scan_gallery_pages_use_published_snapshot_with_bounded_continuations(
     app, asgi_app, monkeypatch
 ):

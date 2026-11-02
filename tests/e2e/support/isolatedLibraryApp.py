@@ -2193,6 +2193,10 @@ def build_file_cache(
                     title = ORDINARY_GROUPED_FEATURE_TRACK_TITLE
                     track_artist = ORDINARY_GROUPED_FEATURE_TRACK_ARTIST
                     track_path = album_dir / "03 - Grouped Feature Signal.mp3"
+                elif is_ordinary_track_credit_fixture and track_index == 3:
+                    title = "Semicolon Feature Signal"
+                    track_artist = f"{ORDINARY_TRACK_CREDIT_ARTIST}; Guest One; Guest Two; Guest One"
+                    track_path = album_dir / "04 - Semicolon Feature Signal.mp3"
                 if artist == SNOW_WHITE_RAW_ARTIST and album == SNOW_WHITE_ALBUM:
                     track_artist = SNOW_WHITE_TRACK_ARTISTS[
                         track_index % len(SNOW_WHITE_TRACK_ARTISTS)

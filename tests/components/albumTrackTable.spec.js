@@ -52,6 +52,48 @@ const buttonComponentCssPath = path.join(
 const componentUrl = 'http://album-track-table-component.test/album-track-table';
 const detailsComponentUrl = 'http://album-track-table-component.test/album-details';
 
+for (const width of [390, 960]) {
+  test(`long track artist credits pan without moving the row at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await page.setContent('<div id="table"></div>');
+    await page.addStyleTag({ path: compactDataTableCssPath });
+    await page.addStyleTag({ path: albumTrackTableCssPath });
+    await page.evaluate(() => {
+      window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+      window.ButtonComponent = { renderIconSvg: () => '' };
+    });
+    for (const file of ['compact-data-table.js', 'album-track-table.js']) {
+      await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
+    }
+    await page.evaluate(() => {
+      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ groups: [{ tracks: [
+        { title: 'Track with guests', secondaryArtist: 'Featured guest artist and orchestra with a very long complete credit '.repeat(5), duration: '3:42' },
+        { title: 'Short credit', secondaryArtist: 'Guest', duration: '2:10' },
+      ] }] });
+    });
+    const rows = page.locator('.album-track-table__row');
+    const before = await rows.first().boundingBox();
+    const credit = page.locator('.album-track-table__secondary').first();
+    await credit.locator('span').evaluate(node => {
+      const animation = node.getAnimations()[0];
+      animation.pause();
+      animation.currentTime = 11000;
+    });
+    const boxes = await credit.evaluate(node => ({ outer: node.getBoundingClientRect().toJSON(), inner: node.firstElementChild.getBoundingClientRect().toJSON() }));
+    expect(boxes.inner.left).toBeLessThan(boxes.outer.left);
+    expect(boxes.inner.right).toBeCloseTo(boxes.outer.right, 0);
+    expect(await rows.first().boundingBox()).toEqual(before);
+    const short = page.locator('.album-track-table__secondary').last();
+    await short.locator('span').evaluate(node => {
+      const animation = node.getAnimations()[0]; animation.pause(); animation.currentTime = 11000;
+    });
+    expect(await short.locator('span').evaluate(node => new DOMMatrix(getComputedStyle(node).transform).m41)).toBe(0);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await expect(credit).toHaveAttribute('title', /Featured guest artist/);
+  });
+}
+
 async function mountAlbumTrackTable(page) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',

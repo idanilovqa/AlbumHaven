@@ -3,12 +3,6 @@ async function loadProblematicFiles(force = false, options = {}) {
   const shouldRenderInitialPage = () => (
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
-    && !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
-  );
-  const canRenderBoundedPage = () => (
-    !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
   );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
@@ -126,8 +120,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
         }
-        if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
+        if ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -2244,6 +2237,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
+        root_provenance: deepCloneJson(album?.root_provenance || visibleSourceAlbum?.root_provenance || null),
+        library_root_category: album?.library_root_category || visibleSourceAlbum?.library_root_category,
+        source: album?.source || visibleSourceAlbum?.source,
         cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
         cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
         remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,

@@ -82,6 +82,7 @@
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
         </form>
         <div class="toolbar-right">
+          {% call action_button('Loose Tracks', title='Loose tracks across the library', disabled=true, attributes={'data-open-non-album-tracks': '1', 'data-library-wide': '1'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>{% endcall %}
           {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
               <img class="cover-lookup-drawer-glyph-default" src="{{ url_for('static', filename='images/cover-lookup-notification-icon-offwhite.png') }}" alt="">
@@ -166,8 +167,7 @@
       </div>
 
       {% set initial_gallery_summary = (bootstrap_payload.initial_view.artist_count | default(0)) ~ ' artists · ' ~ (bootstrap_payload.initial_view.album_count | default(0)) ~ ' albums' %}
-      {% call gallery_bar('Gallery', initial_gallery_summary, instance='gallery', mobile_layout='mobile-primary', gallery_context=true, aria_label='Gallery controls', hidden=query and not effective_selected_artist) %}
-          <button class="gallery-action-button" type="button" data-open-non-album-tracks="1" data-library-wide="1" aria-label="Loose Tracks" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg></button>
+      {% call gallery_bar('Gallery', initial_gallery_summary, instance='gallery', mobile_layout='mobile-primary', gallery_context=true, aria_label='Gallery controls') %}
           <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family"{% if not effective_selected_artist %} hidden{% endif %} aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
 
           <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster>
@@ -183,7 +183,7 @@
         <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep', 'compilation'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
         {% endfor %}
         <div class="gallery-menu-divider"></div>
-        <button class="gallery-type-choice" type="button" data-gallery-split-albums="1" aria-pressed="true"><span aria-hidden="true">✓</span>Show split albums</button>
+        <button class="gallery-type-choice" type="button" data-gallery-split-albums="1" aria-pressed="true"><span aria-hidden="true">✓</span>Show Split Albums</button>
         <button class="gallery-type-choice" type="button" data-gallery-featured-on="1" aria-pressed="true"><span aria-hidden="true">✓</span>Featured On</button>
         <div class="gallery-menu-divider"></div>
         <button class="gallery-menu-action" type="button" data-open-non-album-tracks="1" disabled aria-disabled="true">Non-album tracks</button>

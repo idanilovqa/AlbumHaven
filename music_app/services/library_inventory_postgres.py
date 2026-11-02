@@ -412,7 +412,7 @@ def _non_album_candidates_sql(
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
           (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)
+            'local_album_membership_problem', nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '')
           ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,
@@ -483,7 +483,7 @@ def _non_album_candidates_sql(
         {query_scope}
         and (
             {effective_non_album_predicate}
-            or exists (select 1 from local_album_membership where file_id = library.local_track_files.id and problem is not null)
+            or nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
             or exception_override.exception_type is not null
             or (
               not coalesce(exception_override.override_payload ? 'exception_type', false)

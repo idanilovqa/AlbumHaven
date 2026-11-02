@@ -114,7 +114,7 @@
   border-bottom: 1px solid var(--border);
 }
 #utility-modal .utility-tab:focus-visible { outline: 2px solid var(--utility-tab-accent); outline-offset: -4px; }
-#utility-modal .utility-modal-close { align-self: flex-start; flex: 0 0 34px; width: 34px; height: 34px; min-height: 34px; }
+#utility-modal .utility-modal-close { align-self: flex-start; }
 .utility-modal-body {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);

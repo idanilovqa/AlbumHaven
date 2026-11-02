@@ -1,4 +1,4 @@
-"""Album identity, not equivalent encodes, defines multi-root duplicates."""
+"""Album identity and overlapping tracks define multi-root duplicates across encodes."""
 
 from dataclasses import asdict
 from pathlib import Path
@@ -41,18 +41,18 @@ def _sources(*tracks):
     )
 
 
-@pytest.mark.parametrize("change", [
-    {"duration_seconds": 240},
-    {"title": "A different tagged title"},
-    {"edition": "Deluxe"},
-    {"artist": "Guest Performer"},
-    {"path": Path("hoard/copy/01.mp3")},
-])
-def test_duplicate_identity_ignores_track_and_encoding_differences(change):
+@pytest.mark.parametrize("change,expected_count", [
+    ({"duration_seconds": 240}, 2),
+    ({"title": "A different tagged title"}, 0),
+    ({"edition": "Deluxe"}, 2),
+    ({"artist": "Guest Performer"}, 2),
+    ({"path": Path("hoard/copy/01.mp3")}, 2),
+], ids=["change0", "change1", "change2", "change3", "change4"])
+def test_duplicate_identity_ignores_track_and_encoding_differences(change, expected_count):
     sources = _sources(_track("main/original"), _track("hoard/copy", **change))
 
-    assert len(sources) == 2
-    assert {source["track_count"] for source in sources} == {1}
+    assert len(sources) == expected_count
+    assert {source["track_count"] for source in sources} == ({1} if expected_count else set())
 
 
 def test_bonus_tracks_do_not_hide_duplicates_or_concatenate_source_queues():

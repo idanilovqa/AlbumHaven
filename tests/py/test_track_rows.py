@@ -97,6 +97,44 @@ def test_build_track_row_payload_returns_server_owned_album_detail_shape():
     }
 
 
+@pytest.mark.parametrize(
+    ("artist", "secondary_credit", "expected"),
+    [
+        ("Maroon 5", "", None),
+        ("Maroon 5; Megan Thee Stallion", "", "feat. Megan Thee Stallion"),
+        ("Maroon 5; Nipsey Hussle; YG", "", "feat. Nipsey Hussle, YG"),
+        ("Maroon 5; Megan Thee Stallion; Megan Thee Stallion", "", "feat. Megan Thee Stallion"),
+        ("Maroon 5; To/Die/For", "", "feat. To/Die/For"),
+        ("Maroon 5; Fire & Ash", "", "feat. Fire & Ash"),
+        ("Maroon 5; Megan Thee Stallion", "feat. Explicit Guest", "feat. Explicit Guest"),
+    ],
+    ids=["owner-only", "one-guest", "multiple-guests", "repeated-guest", "slash-band", "ampersand-band", "explicit-credit-wins"],
+)
+def test_semicolon_track_credits_show_only_guests_with_feature_prefix(artist, secondary_credit, expected):
+    album = SimpleNamespace(album_artist="Maroon 5", artists=["Maroon 5"])
+    track = SimpleNamespace(
+        path="/JORDI/track.flac", title="Track", artist=artist,
+        album_artist=album.album_artist, secondary_credit=secondary_credit,
+    )
+
+    assert build_track_rows([track], album=album)[0]["secondary_artist"] == expected
+
+
+def test_semicolon_guest_credit_preserves_both_joint_album_owners():
+    album = SimpleNamespace(
+        album_artist="Brian Eno / David Byrne", artists=["Brian Eno", "David Byrne"],
+        is_split_album=False,
+    )
+    track = SimpleNamespace(
+        path="/Joint/track.flac", title="Joint Track", artist="Brian Eno; Guest Voice",
+        album_artist=album.album_artist,
+    )
+
+    assert build_track_rows([track], album=album)[0]["secondary_artist"] == (
+        "Brian Eno / David Byrne / feat. Guest Voice"
+    )
+
+
 def test_build_track_rows_keeps_album_artist_matches_out_of_secondary_artist():
     track = SimpleNamespace(
         path=r"C:\Music\Artist One\Album One\01 Track.flac",

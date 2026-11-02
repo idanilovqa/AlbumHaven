@@ -108,6 +108,11 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  if (!items.length && state.utility.problematicFilesComplete === false) {
+    replaceListContents('<div class="utility-empty-state compact">Loading remaining albums...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading remaining albums...</div>';
+    return;
+  }
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
@@ -823,6 +828,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  const navigationChanged = els.list?.dataset?.utilityNavigationOwner !== activeTab;
 
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset
@@ -846,6 +852,15 @@ function renderUtilityModalContent(options = {}) {
   }
   syncUtilityTabAlignment(els);
   if (options.shellOnly === true) {
+    if (navigationChanged) {
+      if (els.list) {
+        els.list.innerHTML = '<div class="utility-empty-state compact">Loading...</div>';
+        els.list.scrollTop = 0;
+      }
+      if (els.detail) els.detail.innerHTML = '<div class="utility-empty-state">Loading...</div>';
+      if (els.count) els.count.textContent = '';
+      if (els.sidebarLabel) els.sidebarLabel.textContent = selectedTab?.textContent?.trim() || '';
+    }
     if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
     if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
     return;

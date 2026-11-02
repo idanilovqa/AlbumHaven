@@ -31,6 +31,7 @@ test('TrackModalActions waits for one atomic exact album-details render', async 
       };
     },
   });
+  actions.waitForReady = async () => {};
   actions.readSummary = async () => ({ trackRows: 2 });
 
   const summary = await actions.waitForExactAlbumDetails({

@@ -15,6 +15,22 @@ from music_app.services.relation_projection_postgres import (
 )
 
 
+def test_repeated_artist_alias_merge_preserves_canonical_bucket():
+    from music_app.services.relation_projection_builder import _merge_artist_alias
+
+    canonical = "Composer"
+    alternate = "Composer & Collaborator"
+    aliases = {canonical: canonical, alternate: alternate}
+    buckets = {canonical: {canonical}, alternate: {alternate}}
+    _merge_artist_alias(canonical, alternate, aliases, buckets)
+    expected_aliases, expected_buckets = deepcopy(aliases), deepcopy(buckets)
+
+    _merge_artist_alias(canonical, alternate, aliases, buckets)
+
+    assert aliases == expected_aliases
+    assert buckets == expected_buckets == {canonical: {canonical, alternate}}
+
+
 @pytest.mark.parametrize("owner,guest", [
     ("Synthetic Scale Artist 0647", "Synthetic Scale Artist 0594"),
     ("Chamber Ensemble 1001", "Chamber Ensemble 1002"),

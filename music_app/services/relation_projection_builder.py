@@ -310,7 +310,7 @@ def _merge_artist_alias(
     if not canonical or not alternate or canonical == alternate:
         return
     alternate_canonical = str(alias_to_canonical.get(alternate, alternate) or "").strip()
-    if not alternate_canonical:
+    if not alternate_canonical or alternate_canonical == canonical:
         return
     canonical_aliases = canonical_to_aliases.setdefault(canonical, set())
     alternate_aliases = canonical_to_aliases.pop(alternate_canonical, set())

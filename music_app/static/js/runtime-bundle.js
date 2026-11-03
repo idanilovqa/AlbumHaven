@@ -11777,6 +11777,10 @@ const ANDROID_NATIVE_LOOP_RATE = 48000;
 const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 // A cached reference is reused only while it stays valid well past a long track.
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
+// The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
+const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 const ANDROID_NATIVE_LISTEN_EFFECTS = {
   '/playback/session/now-playing': 'now-playing',
   '/playback/session/scrobble': 'scrobble',
@@ -11960,6 +11964,7 @@ async function startAndroidNativePlaybackTrack(track, { startSeconds = 0, autopl
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
   native.items = window.slice(0, payload.items.length);
+  saveAndroidNativeAttachment(revision, native.items);
   native.index = 0;
   native.generation += 1;
   native.streamId += 1;
@@ -11977,6 +11982,111 @@ async function startAndroidNativePlaybackTrack(track, { startSeconds = 0, autopl
   });
   native.mode = autoplay ? 'starting' : 'paused';
   return androidNativeCurrentRole();
+}
+
+function androidNativeStoredTrack(track) {
+  return {
+    src: String(track.src || ''),
+    path: String(track.path || ''),
+    title: String(track.title || ''),
+    artist: String(track.artist || ''),
+    ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
+    album: String(track.album || ''),
+    coverPath: String(track.coverPath || ''),
+    ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
+  };
+}
+
+// The queue this document handed Android, kept beside the persisted player state so the next
+// document of this origin can name the tracks Android is still playing.
+function saveAndroidNativeAttachment(revision, items) {
+  if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    clientId: getAndroidNativePlaybackClientId(),
+    queueRevision: revision,
+    tracks: items.map(androidNativeStoredTrack),
+  }));
+}
+
+// Only the exact native client and revision that queue was applied as can be adopted.
+function readAndroidNativeAttachment(live) {
+  if (typeof getLocalStorageItem !== 'function') return null;
+  let record = null;
+  try {
+    record = JSON.parse(getLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY) || 'null');
+  } catch (_error) {
+    return null;
+  }
+  const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
+  if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
+      || !tracks.every(track => track?.path && track.src)) return null;
+  return tracks;
+}
+
+// Null outside the APK, so ordinary browsers restore exactly as before.
+function attachAndroidNativePlayback(persistedState = null) {
+  if (!isAndroidShell()) return null;
+  return connectAndroidBridge().then(() => adoptAndroidNativePlayback(persistedState));
+}
+
+// A reloaded document of the same origin takes over the queue Android kept playing instead of
+// restarting it: the same tracks, item, position and revision. Its listen session resumes from
+// the heard position, as a browser reload resumes its own playback; frames heard before belong
+// to the listen the previous document finalized.
+function adoptAndroidNativePlayback(persistedState) {
+  const native = androidNativePlayback;
+  const live = androidBridge.info?.playback;
+  if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
+      || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
+  const tracks = readAndroidNativeAttachment(live);
+  if (!tracks) return false;
+  const track = tracks[live.currentIndex];
+  const playing = live.state !== 'paused';
+  native.revision = live.queueRevision;
+  native.appliedRevision = live.queueRevision;
+  native.items = tracks;
+  native.index = live.currentIndex;
+  native.generation += 1;
+  native.streamId += 1;
+  native.firstFrameNotified = live.state === 'playing';
+  native.referenceRetried = false;
+  native.loopKind = null;
+  native.lastError = null;
+  native.ownerIntent = playing;
+  if (live.state === 'playing') native.ownership = 'owned';
+  native.mode = { playing: 'playing', paused: 'paused', loading: 'starting', buffering: 'buffering' }[live.state];
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(live.positionMs) || 0) / 1000,
+    duration: Number(track.durationSeconds) || Math.max(0, Number(live.durationMs) || 0) / 1000,
+    paused: !playing,
+    ended: false,
+    src: track.src,
+    readyState: live.state === 'playing' ? 4 : 0,
+  });
+  native.measure = {
+    key: `${native.generation}:${native.index}`,
+    role: { role: 'current', track },
+    rendered: Math.max(0, Number(live.renderedFrames) || 0),
+    underruns: Math.max(0, Number(live.underruns) || 0),
+  };
+  state.player.playbackQueue = null;
+  const restoredQueue = persistedState && typeof restorePersistedPlaybackQueue === 'function'
+    && restorePersistedPlaybackQueue(persistedState, track.path);
+  if (!restoredQueue && typeof resolveAlbumForPlayerTrack === 'function' && typeof setAlbumPlaybackQueue === 'function') {
+    const album = resolveAlbumForPlayerTrack(track);
+    if (album) setAlbumPlaybackQueue(album, track.path);
+  }
+  if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
+  // A reload restores loops inactive, so Android's loop ends with the old document.
+  void sendAndroidNativeTransport('playback.clearLoop', { queueRevision: native.appliedRevision }).catch(() => {});
+  if (playing && typeof beginStreamingPlayerListenSession === 'function') {
+    beginStreamingPlayerListenSession(track, native.snapshot.currentTime);
+  }
+  notifyAndroidNativeWaveformReady();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  if (typeof persistPlayerState === 'function') persistPlayerState(true);
+  return true;
 }
 
 function sendAndroidNativeTransport(name, payload = {}) {
@@ -12054,8 +12164,10 @@ function setAndroidNativeLoop(active) {
   return true;
 }
 
-async function stopAndroidNativePlayback(_reason = 'stopped', { preserveSnapshot = false, preserveError = false } = {}) {
+async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot = false, preserveError = false } = {}) {
   const native = androidNativePlayback;
+  // A media session outlives the document: the next document of this origin re-attaches to it.
+  if (reason === 'unload' && hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY)) return;
   const wasLoaded = native.appliedRevision > 0 && native.items.length > 0;
   native.revision += 1;
   native.ownerIntent = false;
@@ -12144,9 +12256,56 @@ function notifyAndroidNativeWaveformReady() {
   })).catch(error => console.warn('[AlbumHaven][Waveform] Optional peak load failed.', error));
 }
 
+// Android's notification, lock screen, media buttons, Bluetooth and audio focus act on the native
+// queue directly. The web then runs its own pause or resume path, so listen writes and ownership
+// release happen exactly as after an on-page tap; Android has already applied the change.
+function followAndroidNativeSystemState(payload) {
+  const snapshot = androidNativePlayback.snapshot;
+  const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
+  if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
+    snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+  } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
+    togglePlayerPlayback({ focusTimelineOnResume: false });
+  }
+}
+
+// A skip from Android's controls: the web selects the item Android moved to as its own skip
+// buttons would, finalizing the outgoing listen and starting the incoming one.
+function followAndroidNativeSystemStep(payload) {
+  const native = androidNativePlayback;
+  const incoming = native.items[payload.currentIndex];
+  if (!incoming || payload.currentIndex === native.index) return;
+  const previousPlaybackSnapshot = getAndroidNativePlaybackSnapshot();
+  native.index = payload.currentIndex;
+  native.streamId += 1;
+  native.firstFrameNotified = false;
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(payload.positionMs) || 0) / 1000,
+    duration: Number(incoming.durationSeconds) || 0,
+    src: incoming.src || '',
+    ended: false,
+  });
+  const queue = state.player.playbackQueue;
+  if (payload.reason === 'next' && typeof peekNextQueuedTrack === 'function'
+      && String(peekNextQueuedTrack()?.path || '') === String(incoming.path)) {
+    getNextQueuedTrack();
+  } else if (Array.isArray(queue?.tracks)) {
+    const found = queue.tracks.findIndex(track => String(track?.path || '') === String(incoming.path));
+    if (found >= 0) queue.currentIndex = found;
+  }
+  if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(incoming, { previousPlaybackSnapshot });
+  if (!native.snapshot.paused && typeof beginStreamingPlayerListenSession === 'function') {
+    beginStreamingPlayerListenSession(incoming, 0);
+  }
+  notifyAndroidNativeWaveformReady();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
 function handleAndroidNativeState(payload) {
   const native = androidNativePlayback;
   const snapshot = native.snapshot;
+  if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
   snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
@@ -12205,7 +12364,11 @@ function handleAndroidNativePosition(payload) {
 
 function handleAndroidNativeCurrentItem(payload) {
   const native = androidNativePlayback;
-  // Load, next and previous name items the web already selected; only a natural advance is new.
+  if (payload.initiator === 'system' && (payload.reason === 'next' || payload.reason === 'previous')) {
+    followAndroidNativeSystemStep(payload);
+    return;
+  }
+  // The web's own loads name items it already selected; only a natural advance is new.
   if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
@@ -12461,6 +12624,9 @@ async function handlePlaybackOwnershipEvent() {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion || 0;
   try {
+    // Inside the APK the native client may already own playback a reloaded document re-attaches to;
+    // only the handshake names it, so asking before it would report this app's own playback as elsewhere.
+    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
     const snapshot = await playbackOwnershipRequest('GET',
       `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
     if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);
@@ -37704,6 +37870,10 @@ function restorePlayerState() {
   const ownershipResult = !savedPaused
     && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
+    // Inside the APK a reloaded document re-attaches to the queue Android kept playing.
+    const nativeAttachment = typeof attachAndroidNativePlayback === 'function'
+      ? attachAndroidNativePlayback(parsed) : null;
+    if (nativeAttachment && await nativeAttachment) return;
     let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);

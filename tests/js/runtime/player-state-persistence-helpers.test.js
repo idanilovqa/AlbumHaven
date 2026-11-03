@@ -1653,3 +1653,32 @@ test('bootstrap attach cannot restore denied media before the later engine prepa
   assert.deepEqual(f.effects, []);
   assert.equal(f.context.state.player.restoredFromStorage, false);
 });
+
+test('a restore inside the APK re-attaches to the native queue instead of starting it again', async () => {
+  const persistedTrack = { src: '/track?path=a.flac', path: 'C:/Music/a.flac', title: 'A', durationSeconds: 60 };
+  const persisted = JSON.stringify({ track: persistedTrack, playbackQueue: null, currentTime: 12, paused: false, loop: {} });
+  const run = async (attached) => {
+    const starts = [];
+    const attachments = [];
+    const context = loadHelper({
+      state: { player: { current: null, lastKnownWasPlaying: false, lastPersistedSnapshot: '', restoredFromStorage: false } },
+      getLocalStorageItem: () => persisted,
+      startStreamingTrack: (track, options) => { starts.push([track.path, options.startSeconds]); return Promise.resolve(null); },
+      attachAndroidNativePlayback: (state) => { attachments.push(state.track.path); return attached; },
+    });
+    context.restorePlayerState();
+    await new Promise((resolve) => setImmediate(resolve));
+    return { starts, attachments };
+  };
+
+  const adopted = await run(Promise.resolve(true));
+  assert.deepEqual(adopted.attachments, [persistedTrack.path]);
+  assert.deepEqual(adopted.starts, []);
+
+  // No live native queue to adopt: the persisted track restores exactly as before.
+  const restarted = await run(Promise.resolve(false));
+  assert.deepEqual(restarted.starts, [[persistedTrack.path, 12]]);
+  // Outside the APK the bridge answers null synchronously and nothing waits for it.
+  const browser = await run(null);
+  assert.deepEqual(browser.starts, [[persistedTrack.path, 12]]);
+});

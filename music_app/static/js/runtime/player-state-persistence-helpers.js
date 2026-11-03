@@ -250,6 +250,10 @@ function restorePlayerState() {
   const ownershipResult = !savedPaused
     && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
+    // Inside the APK a reloaded document re-attaches to the queue Android kept playing.
+    const nativeAttachment = typeof attachAndroidNativePlayback === 'function'
+      ? attachAndroidNativePlayback(parsed) : null;
+    if (nativeAttachment && await nativeAttachment) return;
     let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);

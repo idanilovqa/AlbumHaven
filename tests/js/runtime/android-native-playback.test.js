@@ -392,3 +392,161 @@ test('a closing document hands its listen checkpoint to Android instead of a bea
   assert.equal(effect.payload.body.measured_listened_seconds, 40);
   assert.ok(!('claimToken' in effect.payload.body));
 });
+
+function withPlayer(context) {
+  const storage = new Map();
+  const player = { tracks: [], sessions: [], pauses: [], toggles: [], persisted: 0 };
+  Object.assign(context, {
+    getLocalStorageItem: key => storage.get(key) || '',
+    setLocalStorageItem: (key, value) => { storage.set(key, value); return true; },
+    setCurrentPlayerTrack: (track, options) => player.tracks.push([track.path, options]),
+    beginStreamingPlayerListenSession: (track, startSeconds) => player.sessions.push([track.path, startSeconds]),
+    pausePlayerPlaybackForHandoff: snapshot => { player.pauses.push(snapshot); return context.pauseStreamingPlayback(); },
+    togglePlayerPlayback: options => player.toggles.push(options),
+    persistPlayerState: () => { player.persisted += 1; },
+  });
+  return { storage, player };
+}
+
+function liveHandshake(playback) {
+  return message => (message.name === 'bridge.handshake'
+    ? { ...handshakePayload, playback: { ...handshakePayload.playback, ...playback } }
+    : null);
+}
+
+test('a loaded queue is remembered for the next document of the origin', async () => {
+  const { api, context } = createHarness();
+  const { storage } = withPlayer(context);
+  await api.start(tracks[1]);
+  const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v1'));
+  assert.equal(record.clientId, handshakePayload.playback.clientId);
+  assert.equal(record.queueRevision, 1);
+  assert.deepEqual(record.tracks.map(track => track.path), [tracks[1].path, tracks[2].path]);
+});
+
+test('a reloaded document re-attaches its UI to the queue Android kept playing', async () => {
+  const live = { state: 'playing', queueRevision: 7, currentIndex: 1, positionMs: 61500, durationMs: 180000,
+    renderedFrames: 96000, sampleRate: 48000, underruns: 0 };
+  const { api, bridge, fetches, context } = createHarness({ respond: liveHandshake(live) });
+  const { storage, player } = withPlayer(context);
+  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
+    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
+  }));
+  const recorded = [];
+  context.recordMeasuredStreamingFrames = (role, message) => {
+    role.measuredListenSession ||= {};
+    recorded.push(message.frames);
+  };
+
+  assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), true);
+  assert.equal(commands(bridge, 'playback.loadQueue').length, 0);
+  assert.equal(fetches.length, 0);
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath), [tracks[1].path]);
+  assert.deepEqual(player.sessions, [[tracks[1].path, 61.5]]);
+  assert.deepEqual(commands(bridge, 'playback.clearLoop').map(message => message.payload), [{ queueRevision: 7 }]);
+  assert.equal(api.snapshot().paused, false);
+  assert.equal(api.snapshot().currentTime, 61.5);
+  assert.equal(api.snapshot().mode, 'playing');
+
+  // Only frames heard after the handshake count toward the new listen.
+  bridge.event('playback.position', { ...state(7, 'playing', 62500, 1), renderedFrames: 144000, sampleRate: 48000 });
+  assert.deepEqual(recorded, [48000]);
+  await api.pause();
+  assert.deepEqual(commands(bridge, 'playback.pause').map(message => message.payload), [{}]);
+  assert.equal(await api.resume(), true);
+  assert.deepEqual(commands(bridge, 'playback.play').map(message => message.payload), [{ queueRevision: 7 }]);
+  await api.start(tracks[0]);
+  assert.equal(commands(bridge, 'playback.loadQueue')[0].payload.queueRevision, 8);
+});
+
+test('a queue another client or revision applied is never adopted', async () => {
+  for (const record of [
+    { clientId: 'b3c1e2d4-0000-4000-8000-000000000000', queueRevision: 7 },
+    { clientId: handshakePayload.playback.clientId, queueRevision: 6 },
+  ]) {
+    const { bridge, context } = createHarness({
+      respond: liveHandshake({ state: 'playing', queueRevision: 7, currentIndex: 0, positionMs: 1000 }),
+    });
+    const { storage, player } = withPlayer(context);
+    storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({ ...record, tracks }));
+    assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);
+    assert.equal(player.tracks.length, 0);
+    assert.equal(bridge.sent.filter(message => message.name !== 'bridge.handshake').length, 0);
+  }
+  const { context } = createHarness({ respond: liveHandshake({ state: 'idle', queueRevision: 7, currentIndex: 0 }) });
+  const { storage } = withPlayer(context);
+  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
+    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
+  }));
+  assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);
+  assert.equal(vm.runInContext('attachAndroidNativePlayback({})', createHarness({ shell: false }).context), null);
+});
+
+test('pauses and resumes from Android controls run the web pause and resume paths once', async () => {
+  const { api, bridge, context } = createHarness();
+  const { player } = withPlayer(context);
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+
+  bridge.event('playback.state', { ...state(1, 'paused', 4000), initiator: 'system' });
+  assert.equal(player.pauses.length, 1);
+  assert.equal(player.pauses[0].paused, false);
+  assert.equal(player.pauses[0].currentTime, 4);
+  assert.equal(api.snapshot().paused, true);
+  bridge.event('playback.state', { ...state(1, 'paused', 4000), initiator: 'system' });
+  assert.equal(player.pauses.length, 1);
+
+  bridge.event('playback.state', { ...state(1, 'loading', 4000), initiator: 'system' });
+  assert.equal(JSON.stringify(player.toggles), '[{"focusTimelineOnResume":false}]');
+  assert.equal(api.snapshot().paused, false);
+  // The web's own pause is already applied when Android reports it.
+  await api.pause();
+  bridge.event('playback.state', state(1, 'paused', 5000));
+  assert.equal(player.pauses.length, 1);
+});
+
+test('a skip from Android controls selects the item Android moved to', async () => {
+  const { api, bridge, context } = createHarness();
+  const { player } = withPlayer(context);
+  context.peekNextQueuedTrack = () => tracks[1];
+  let advanced = 0;
+  context.getNextQueuedTrack = () => { advanced += 1; return tracks[1]; };
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 1), reason: 'next', initiator: 'system' });
+  assert.equal(advanced, 1);
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath), [tracks[1].path]);
+  assert.equal(player.tracks[0][1].previousPlaybackSnapshot.currentTime, 1);
+  assert.deepEqual(player.sessions, [[tracks[1].path, 0]]);
+  assert.equal(api.native.index, 1);
+  assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
+
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 0), reason: 'previous', initiator: 'system' });
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath), [tracks[1].path, tracks[0].path]);
+  assert.equal(context.state.player.playbackQueue.currentIndex, 0);
+  // The web's own skips load a queue, so their echoes change nothing.
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 1), reason: 'next' });
+  assert.equal(player.tracks.length, 2);
+});
+test('a closing document leaves playback to the media session that outlives it', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+  await api.stop('unload');
+  assert.equal(commands(bridge, 'playback.stop').length, 0);
+  assert.equal(api.snapshot().paused, false);
+  await api.stop('stopped');
+  assert.equal(commands(bridge, 'playback.stop').length, 1);
+});
+test('an ownership read inside the APK waits for the handshake that names the native client', async () => {
+  const { context } = createHarness({ listen: true });
+  const urls = [];
+  context.AbortController = AbortController;
+  context.fetch = async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ is_playing_elsewhere: false }) };
+  };
+  await vm.runInContext('handlePlaybackOwnershipEvent()', context);
+  assert.deepEqual(urls, [`/playback/state?client_id=${handshakePayload.playback.clientId}`]);
+});

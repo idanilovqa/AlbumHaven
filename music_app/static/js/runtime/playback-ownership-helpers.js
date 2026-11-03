@@ -142,6 +142,9 @@ async function handlePlaybackOwnershipEvent() {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion || 0;
   try {
+    // Inside the APK the native client may already own playback a reloaded document re-attaches to;
+    // only the handshake names it, so asking before it would report this app's own playback as elsewhere.
+    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
     const snapshot = await playbackOwnershipRequest('GET',
       `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
     if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);

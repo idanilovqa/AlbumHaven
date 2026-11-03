@@ -14,6 +14,18 @@ test('artist navigation requests summaries while explicit full and sidebar tiers
 });
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 
+test('selected artist gallery requests its scoped loose tracks in the first response', () => {
+  const { buildApiUrl } = loadHelpers();
+  const view = { selected_artist: '3', gallery_scope: 'all' };
+  const params = options => new URL(buildApiUrl(view, options), 'http://localhost').searchParams;
+  assert.equal(params({ omitSidebar: true }).get('include_non_album'), '1');
+  assert.equal(params({ omitSidebar: true }).has('include_library_wide_non_album'), false);
+  assert.equal(params({ omitSidebar: true }).get('payload_tier'), 'gallery_summary');
+  assert.equal(params({ rootSidebar: true }).has('include_non_album'), false);
+  assert.equal(params({ payloadTier: 'sidebar' }).has('include_non_album'), false);
+  assert.equal(new URL(buildApiUrl({ gallery_scope: 'all' }), 'http://localhost').searchParams.has('include_non_album'), false);
+});
+
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
   path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'),

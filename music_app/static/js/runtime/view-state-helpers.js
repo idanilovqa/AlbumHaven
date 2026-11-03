@@ -194,6 +194,10 @@ function buildApiUrl(view, options = {}) {
   ) {
     params.set('payload_tier', 'full');
   }
+  if (resolvedSurface === 'albums' && view.selected_artist && !view.query
+      && !view.all_artists_active && !options.rootSidebar && options.payloadTier !== 'sidebar') {
+    params.set('include_non_album', '1');
+  }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;
 }

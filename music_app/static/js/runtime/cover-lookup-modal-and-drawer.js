@@ -621,13 +621,18 @@ function applyCoverLookupCandidateSource(candidateSource) {
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
+  const task = (state.coverLookup.tasks || []).find((item) => (
+    String(item?.id || '') === String(modal.taskId || '')
+  ));
+  const hasManualChoice = modal.album?.cover_selection_origin === 'user'
+    || Boolean(task && isActionedCoverLookupNotification(task))
+    || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
+  modal.suggestedRemoteId = bestCandidateIsSelectable && !hasManualChoice ? bestCandidateId : '';
   if (hasPendingNonRemoteSelection) {
-    modal.suggestedRemoteId = '';
     modal.selectedRemoteId = '';
     return;
   }
   if (bestCandidateIsSelectable) {
-    modal.suggestedRemoteId = bestCandidateId;
     modal.selectedRemoteId = bestCandidateId;
     return;
   }
@@ -939,10 +944,10 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
+    ButtonComponent.setDisabled(submitButton, searchControlsDisabled || !coverLookupHasManualInput());
   }
   if (findBetterButton instanceof HTMLButtonElement) {
-    findBetterButton.disabled = searchControlsDisabled;
+    ButtonComponent.setDisabled(findBetterButton, searchControlsDisabled);
   }
 }
 
@@ -961,7 +966,7 @@ function syncCoverLookupSaveButton() {
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
   saveButton.hidden = false;
-  saveButton.disabled = mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -1029,8 +1034,8 @@ function syncCoverLookupSelectionUi() {
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
     const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
-    const isSuggested = isActive
-      && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    const isSuggested = !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+      && !pendingLocalPath && !pendingPastedImageId
       && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
     card.classList.toggle('is-active', isActive);
     card.classList.toggle('is-suggested', isSuggested);
@@ -2210,8 +2215,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
   const isSuggested = kind === 'remote'
-    && isActive
     && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    && !state.coverLookup.modal.pendingLocalPath && !state.coverLookup.modal.pendingPastedImageId
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
@@ -2594,10 +2599,10 @@ function renderCoverLookupModal() {
         </div>
       </section>`;
     els.body.scrollTop = 0;
-    if (els.findBetter) els.findBetter.disabled = true;
+    if (els.findBetter) ButtonComponent.setDisabled(els.findBetter, true);
     if (els.saveRemote) {
       els.saveRemote.hidden = false;
-      els.saveRemote.disabled = true;
+      ButtonComponent.setDisabled(els.saveRemote, true);
     }
     return;
   }
@@ -3447,7 +3452,7 @@ async function openCoverLookupModal(album, options = {}) {
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
@@ -3498,7 +3503,7 @@ function closeCoverLookupModal() {
   if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
@@ -3559,7 +3564,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
   }
   try {
     if (triggerButton) {
-      triggerButton.disabled = true;
+      ButtonComponent.setDisabled(triggerButton, true);
       triggerButton.setAttribute?.('aria-busy', 'true');
     }
     if (backgroundOnly && retryTask) {
@@ -3640,7 +3645,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
     if (triggerButton) {
-      triggerButton.disabled = triggerWasDisabled;
+      ButtonComponent.setDisabled(triggerButton, triggerWasDisabled);
       triggerButton.removeAttribute?.('aria-busy');
     }
     if (!backgroundOnly) {

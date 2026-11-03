@@ -284,6 +284,17 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+test('initial artist loose tracks remain usable without a second gallery request', async () => {
+  const { context } = loadHelper();
+  const tracks = [{ path: '/music/agalloch/loose.flac', artist: 'Agalloch', title: 'Loose' }];
+  context.state.view = { selected_artist: 'Agalloch', non_album_tracks: tracks, non_album_tracks_deferred: false };
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Agalloch&include_non_album=1';
+  context.URL = URL;
+  context.fetch = () => { throw new Error('Initial artist payload must not trigger another gallery request'); };
+  assert.deepEqual(await context.hydrateDeferredNonAlbumTracks(), tracks);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks);
+});
+
 test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
   const { context } = loadHelper();
   const requested = [];

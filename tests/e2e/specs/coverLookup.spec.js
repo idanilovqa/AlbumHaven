@@ -113,6 +113,8 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
 
   await stepLogger.step('Retain the valid image and pasted URL when remote extraction fails', async () => {
     await coverLookupActions.pasteManualUrl(missingUrl);
+    await expect(lookup.manualExtractButton).toBeEnabled();
+    await expect(lookup.manualExtractButton).toHaveAttribute('aria-disabled', 'false');
     const failed = await coverLookupActions.extractComposerLinks();
     expect(failed.status).toBe(400);
     expect(failed.payload.ok).toBe(false);
@@ -120,6 +122,8 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await expect(lookup.manualStatus).toHaveText("Couldn't extract images.");
     await expect(lookup.manualStatus).toHaveAttribute('role', 'alert');
     await expect(lookup.manualUrlInput).toHaveValue(missingUrl);
+    await expect(lookup.manualExtractButton).toBeEnabled();
+    await expect(lookup.findBetterButton).toBeEnabled();
     await expect(lookup.stagedCoverCardByName(pickerName)).toBeVisible();
     await expect(lookup.stagedCoverCardByName('image.png')).toBeVisible();
     await expect(lookup.pendingAttachments).toHaveCount(0);
@@ -2345,6 +2349,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(neutralCandidate).toBeTruthy();
     expect(neutralCandidate.resolution).toBe('600x600');
     expect(neutralCandidate.selected).toBe(false);
+    await expect(coverLookupActions.coverLookup.suggestedCoverCards).toHaveCount(0);
     const neutralCandidateEvidence = await coverLookupActions.readRemoteCandidateEvidence(neutralCandidate.id);
     expect(neutralCandidateEvidence.naturalWidth).toBe(600);
     expect(neutralCandidateEvidence.naturalHeight).toBe(600);
@@ -2393,6 +2398,17 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     const evidenceAfterOpen = await coverLookupActions.readProviderFixtureEvidence();
     expect(evidenceAfterOpen).toEqual(evidenceBeforeOpen);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+    const suggestedCard = coverLookupActions.coverLookup.remoteCoverCardById(automaticCandidate.id);
+    await expect(suggestedCard).toBeVisible();
+    await expect(suggestedCard).toHaveClass(/\bis-suggested\b/);
+    await expect(suggestedCard).not.toHaveClass(/\bis-active\b/);
+    await expect(coverLookupActions.coverLookup.activeLocalCoverCard).toHaveClass(/\bis-active\b/);
+    await coverLookupActions.selectLocalCoverByNameAndSave('cover.jpg');
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await expect(suggestedCard).toBeVisible();
+    await expect(suggestedCard).not.toHaveClass(/\bis-suggested\b/);
+    await expect(coverLookupActions.coverLookup.activeLocalCoverCard).toHaveClass(/\bis-active\b/);
   });
 });
 

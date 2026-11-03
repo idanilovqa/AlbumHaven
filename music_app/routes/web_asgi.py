@@ -1401,15 +1401,16 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if not cache_roots:
-            # Unrevisioned lookup candidates stay app-local; configured storage is a read fallback.
-            app_cache_roots = display_cover_variant_cache_roots(
+            cache_roots = display_cover_variant_cache_roots(
                 resolved,
                 data_dir=config.get("DATA_DIR"),
+                storage_policy=storage_policy,
             )
-            cache_roots = tuple(dict.fromkeys((
-                *app_cache_roots,
-                *display_cover_variant_cache_roots(resolved, storage_policy=storage_policy),
-            )))
+            if storage_policy is None:
+                cache_roots = tuple(dict.fromkeys((
+                    *cache_roots,
+                    *display_cover_variant_cache_roots(resolved),
+                )))
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
@@ -1430,8 +1431,7 @@ def _cover_response(
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 source_path = resolved
                 generation_options = {}
-                # Unrevisioned previews stay app-local and must never enter relocation.
-                if inventory_recorder is not None and normalized_revision:
+                if inventory_recorder is not None:
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,

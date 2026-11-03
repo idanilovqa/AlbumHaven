@@ -543,6 +543,7 @@ function openNonAlbumModal(options = {}) {
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
     const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
@@ -732,6 +733,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;

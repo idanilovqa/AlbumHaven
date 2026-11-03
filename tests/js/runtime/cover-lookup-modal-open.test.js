@@ -16,9 +16,11 @@ const helperPath = path.join(
   'cover-lookup-modal-and-drawer.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const ButtonComponent = require(path.join(__dirname, '../../../music_app/static/js/button-component.js'));
 
 test('opening Cover Lookup starts one gallery request without loading notification history', async () => {
   class TestButton {
+    setAttribute(name, value) { this[name] = String(value); }
     constructor() {
       this.hidden = false;
       this.disabled = false;
@@ -33,6 +35,7 @@ test('opening Cover Lookup starts one gallery request without loading notificati
   const saveButton = new TestButton();
   let galleryRequestCount = 0;
   const context = {
+    ButtonComponent,
     window: {},
     state: {
       coverLookup: {
@@ -354,6 +357,7 @@ test('mobile sheet swipe dismisses only after a downward threshold', () => {
 
 test('opening a persisted notification renders usable cached art and loads unresolved candidates', async () => {
   class TestButton {
+    setAttribute(name, value) { this[name] = String(value); }
     constructor() {
       this.hidden = false;
       this.disabled = false;
@@ -388,6 +392,7 @@ test('opening a persisted notification renders usable cached art and loads unres
   const overlay = { hidden: true };
   const renderSnapshots = [];
   const context = {
+    ButtonComponent,
     window: {},
     state: {
       coverLookup: {
@@ -863,6 +868,7 @@ test('background lookup marks its trigger busy before the start request settles'
     },
   };
   const context = {
+    ButtonComponent,
     window: {},
     state: {
       coverLookup: {

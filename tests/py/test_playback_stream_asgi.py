@@ -1012,19 +1012,22 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
 ):
     from music_app.services.waveform_peaks import WaveformPeaksBusyError
 
-    class BusyRegistryDouble:
-        async def run(self, _path: Path, *, bins: int):
-            assert bins == 280
-            raise WaveformPeaksBusyError("waveform peak job already active")
-
     async def scenario() -> None:
-        playback_app.state.waveform_peaks_registry = BusyRegistryDouble()
         monitor_started = asyncio.Event()
         monitor_cancelled = asyncio.Event()
         release_monitor = asyncio.Event()
         response_started = asyncio.Event()
         messages: list[dict[str, object]] = []
         request_delivered = False
+
+        class BusyRegistryDouble:
+            async def run(self, _path: Path, *, bins: int):
+                assert bins == 280
+                # Reach the cancellation scenario before returning the busy result.
+                await monitor_started.wait()
+                raise WaveformPeaksBusyError("waveform peak job already active")
+
+        playback_app.state.waveform_peaks_registry = BusyRegistryDouble()
 
         async def receive() -> dict[str, object]:
             nonlocal request_delivered

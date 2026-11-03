@@ -3178,6 +3178,7 @@
     ],
     "ownerApproval": "approved"
   },
+
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
@@ -7310,26 +7311,6 @@
     "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
   },
   {
-    "config": "playwright.mobile-layout.config.js",
-    "project": "",
-    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
-    "case": "mobile Home and empty Search restore the unfiltered artist tree",
-    "profile": null,
-    "setupScope": "isolated",
-    "stateMode": "global-mutation",
-    "databaseScenarios": [
-      "generated:phase7-mobile-reset"
-    ],
-    "filesystemScenarios": [
-      "generated:mobile-layout-media"
-    ],
-    "expectedContracts": [
-      "mobile Home and empty Search restore the unfiltered artist tree"
-    ],
-    "ownerApproval": "approved",
-    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
-  },
-  {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/appearanceRecovery.spec.js",
@@ -8938,38 +8919,6 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
-    "test": "tests/components/albumTrackTable.spec.js",
-    "case": "long track artist credits pan without moving the row at 390px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "album-track-credit-overflow-pan",
-      "no-hover-layout-shift"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/albumTrackTable.spec.js",
-    "case": "long track artist credits pan without moving the row at 960px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "album-track-credit-overflow-pan",
-      "no-hover-layout-shift"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
     "test": "tests/components/playerViews.spec.js",
     "case": "mobile thin seek surface keeps touch dragging under player control",
     "profile": null,
@@ -9328,6 +9277,7 @@
     ],
     "ownerApproval": "approved"
   },
+
   {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
@@ -9340,127 +9290,6 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-gallery-touch-scroll-stability"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "Album Details keeps the Gallery header offset and tightens its identity lines",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "shared-mobile-header-geometry",
-      "compact-album-identity-spacing"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 320px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 320px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 320px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 390px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 390px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 390px",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
-    ],
-    "ownerApproval": "approved"
-  },
-  {
-    "config": "playwright.component.config.js",
-    "project": "",
-    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "classic_bar shows source labels beside the album type",
-    "profile": null,
-    "setupScope": "suite",
-    "stateMode": "read-only",
-    "databaseScenarios": [],
-    "filesystemScenarios": [],
-    "expectedContracts": [
-      "mobile-album-source-marker-placement"
     ],
     "ownerApproval": "approved"
   },
@@ -9491,6 +9320,22 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "Album Details keeps the Gallery header offset and tightens its identity lines",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-mobile-header-geometry",
+      "compact-album-identity-spacing"
     ],
     "ownerApproval": "approved"
   },
@@ -10031,6 +9876,55 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "mobile Home and empty Search restore the unfiltered artist tree",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "mobile-home-clears-search",
+      "empty-search-restores-unfiltered-artist-tree"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-032 watcher sorts I’m with Her before IZZ without changing display names",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-artist-collation"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-artist-collation-curly"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "leading-punctuation-collation",
+      "display-name-preservation",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-artist-collation-curly",
+      "filesystemCopy": "media/cases/watcher-artist-collation-curly"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/albumArtworkFit.spec.js",
@@ -10041,7 +9935,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "album-artwork-full-cover-fit"
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
     ],
     "ownerApproval": "approved"
   },
@@ -10056,7 +9951,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "album-artwork-full-cover-fit"
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
     ],
     "ownerApproval": "approved"
   },
@@ -10071,7 +9967,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "album-artwork-full-cover-fit"
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
     ],
     "ownerApproval": "approved"
   },
@@ -10086,7 +9983,40 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "album-artwork-full-cover-fit"
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "long track artist credits pan without moving the row at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "track-credit-overflow-pan",
+      "row-position-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "long track artist credits pan without moving the row at 960px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "track-credit-overflow-pan",
+      "row-position-stability"
     ],
     "ownerApproval": "approved"
   },
@@ -10101,7 +10031,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mobile-artist-info-bottom-sheet"
+      "mobile-artist-info-bottom-sheet",
+      "no-trigger-anchor-outline"
     ],
     "ownerApproval": "approved"
   },
@@ -10116,7 +10047,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "canonical-close-button-sizing"
+      "canonical-close-control-sizing",
+      "lightbox-keyboard-two-pixel-focus"
     ],
     "ownerApproval": "approved"
   },
@@ -10131,7 +10063,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "cover-lookup-album-entry-geometry"
+      "cover-lookup-extractor-available",
+      "gallery-header-geometry"
     ],
     "ownerApproval": "approved"
   },
@@ -10146,7 +10079,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "cover-lookup-album-entry-geometry"
+      "cover-lookup-extractor-available",
+      "gallery-header-geometry"
     ],
     "ownerApproval": "approved"
   },
@@ -10161,7 +10095,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "cover-lookup-mobile-header-truncation"
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
     ],
     "ownerApproval": "approved"
   },
@@ -10176,7 +10111,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "cover-lookup-mobile-header-truncation"
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
     ],
     "ownerApproval": "approved"
   },
@@ -10191,7 +10127,42 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "cover-lookup-mobile-header-truncation"
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardMetadataMotion.spec.js",
+    "case": "mobile Gallery year stays visible and stationary while its artist pans at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "stationary-visible-release-year",
+      "artist-overflow-motion",
+      "gallery-card-control-retention"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardMetadataMotion.spec.js",
+    "case": "mobile Gallery year stays visible and stationary while its artist pans at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "stationary-visible-release-year",
+      "artist-overflow-motion",
+      "gallery-card-control-retention"
     ],
     "ownerApproval": "approved"
   },
@@ -10206,7 +10177,8 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "loose-track-section-responsiveness"
+      "loose-track-rendering-responsiveness",
+      "collapse-scroll-stability"
     ],
     "ownerApproval": "approved"
   },
@@ -10221,7 +10193,200 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "loose-track-section-responsiveness"
+      "loose-track-rendering-responsiveness",
+      "collapse-scroll-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile classic_bar retains source icons through header handoff at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile stacked_bar retains source icons through header handoff at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile editorial_canvas retains source icons through header handoff at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile classic_bar retains source icons through header handoff at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile stacked_bar retains source icons through header handoff at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile editorial_canvas retains source icons through header handoff at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "classic_bar shows source labels beside the album type",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "alert removal action stays in place when hovered and accepts an edge click",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "alert-action-hover-geometry-stability",
+      "alert-removal-edge-click"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "bare lightbox close has no pointer outline and retains its keyboard focus ring",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "lightbox-close-pointer-style",
+      "lightbox-close-keyboard-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with artist section",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with gallery header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card metadata distinguishes numeric artists, unknown years, and absent artists",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
     ],
     "ownerApproval": "approved"
   }

@@ -111,18 +111,16 @@ class CoverPreviewBackfill:
                     remove_empty_album_preview_directories(previous_root)
                 except OSError:
                     self._logger.warning("Unable to prune old preview directories in %s", previous_root, exc_info=True)
-            storage_policy = policy if cover_revision or not self._data_dir else None
             generation_options = {}
             recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-            # An app-local preview is not managed storage; recording it would relocate it endlessly.
-            if recorder is not None and storage_policy is not None:
+            if recorder is not None:
                 generation_options["on_published"] = recorder
             self._generate(
                 source_path,
                 cache_root=display_cover_variant_cache_root(
                     source_path,
                     data_dir=self._data_dir,
-                    storage_policy=storage_policy,
+                    storage_policy=self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY"),
                 ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",

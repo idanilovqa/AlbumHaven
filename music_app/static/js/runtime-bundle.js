@@ -2256,6 +2256,10 @@ function buildApiUrl(view, options = {}) {
   ) {
     params.set('payload_tier', 'full');
   }
+  if (resolvedSurface === 'albums' && view.selected_artist && !view.query
+      && !view.all_artists_active && !options.rootSidebar && options.payloadTier !== 'sidebar') {
+    params.set('include_non_album', '1');
+  }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;
 }
@@ -4620,12 +4624,14 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const artist = String(config.artist ?? '').trim();
+  const year = String(config.year ?? '').trim();
+  const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -11432,6 +11438,20 @@ function splitArtistGroupForDisplay(group) {
     ),
     display_artist_key: canonicalArtist || String(group?.artist_display || ''),
   };
+  const selectedArtist = normalizeArtistPreferenceKey(state.view?.selected_artist);
+  if (
+    canonicalArtist && canonicalArtist === selectedArtist
+    && !looksLikeCombinedArtistName(selectedArtist) && !/\s+\/\s+/.test(selectedArtist)
+  ) {
+    // A guest release's owner credit must not create another artist section.
+    return [{
+      ...defaultGroup,
+      albums: [
+        ...albums.filter((album) => album.artist_relationship !== 'featured'),
+        ...albums.filter((album) => album.artist_relationship === 'featured').sort(compareDisplayGroupAlbums),
+      ],
+    }];
+  }
   // Root membership belongs to the canonical sidebar/page inventory. Raw album
   // credits must not split its headings when a later page adds another credit.
   const canonicalRoot = typeof resolveViewSurface === 'function'
@@ -12344,6 +12364,7 @@ function openNonAlbumModal(options = {}) {
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
     const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
@@ -12533,6 +12554,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
@@ -13410,6 +13432,7 @@ function albumRequiresHydration(album) {
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
@@ -13453,6 +13476,7 @@ function renderTrackModalLoadingState(album) {
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (els.title) {
     els.title.textContent = '';
   }
@@ -13855,6 +13879,7 @@ function renderTrackModalIdentitySplitChoices(releases) {
   const choices = Array.isArray(releases) ? releases : [];
   if (choices.length < 2) return false;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   state.ui.trackModalIdentitySplitChoices = choices;
   els.subtitle.textContent = 'This album was split—choose the current release';
   els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
@@ -14419,6 +14444,7 @@ function closeImageLightbox() {
 function closeTrackModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
   const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
@@ -19554,6 +19580,51 @@ function buildCompactDataTable(config = {}) {
 // END js/runtime/compact-data-table.js
 
 // BEGIN js/runtime/album-track-table.js
+
+const albumTrackCreditMotion = new WeakMap();
+
+function disposeAlbumTrackCreditMotion(root) {
+  albumTrackCreditMotion.get(root)?.();
+  albumTrackCreditMotion.delete(root);
+}
+
+function syncAlbumTrackCreditMotion(root) {
+  disposeAlbumTrackCreditMotion(root);
+  if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
+  const rows = Array.from(root.querySelectorAll('.album-track-table__secondary'));
+  if (!rows.length) return;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+  let disposed = false;
+  const refresh = () => {
+    frame = 0;
+    for (const row of rows) {
+      const text = row.firstElementChild;
+      const motion = resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
+      });
+      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+    }
+  };
+  const schedule = () => {
+    if (!disposed && !frame) frame = requestAnimationFrame(refresh);
+  };
+  const observer = new ResizeObserver(schedule);
+  for (const row of rows) {
+    observer.observe(row);
+    observer.observe(row.firstElementChild);
+  }
+  reduced.addEventListener('change', schedule);
+  document.fonts?.ready.then(schedule);
+  albumTrackCreditMotion.set(root, () => {
+    disposed = true;
+    cancelAnimationFrame(frame);
+    observer.disconnect();
+    reduced.removeEventListener('change', schedule);
+    for (const row of rows) row.classList.remove('is-credit-overflowing');
+  });
+  schedule();
+}
 
 function buildAlbumTrackPlayButtonHtml(track = {}) {
   const trackPath = String(track.path || '');
@@ -30317,13 +30388,18 @@ function applyCoverLookupCandidateSource(candidateSource) {
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
+  const task = (state.coverLookup.tasks || []).find((item) => (
+    String(item?.id || '') === String(modal.taskId || '')
+  ));
+  const hasManualChoice = modal.album?.cover_selection_origin === 'user'
+    || Boolean(task && isActionedCoverLookupNotification(task))
+    || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
+  modal.suggestedRemoteId = bestCandidateIsSelectable && !hasManualChoice ? bestCandidateId : '';
   if (hasPendingNonRemoteSelection) {
-    modal.suggestedRemoteId = '';
     modal.selectedRemoteId = '';
     return;
   }
   if (bestCandidateIsSelectable) {
-    modal.suggestedRemoteId = bestCandidateId;
     modal.selectedRemoteId = bestCandidateId;
     return;
   }
@@ -30635,10 +30711,10 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
+    ButtonComponent.setDisabled(submitButton, searchControlsDisabled || !coverLookupHasManualInput());
   }
   if (findBetterButton instanceof HTMLButtonElement) {
-    findBetterButton.disabled = searchControlsDisabled;
+    ButtonComponent.setDisabled(findBetterButton, searchControlsDisabled);
   }
 }
 
@@ -30657,7 +30733,7 @@ function syncCoverLookupSaveButton() {
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
   saveButton.hidden = false;
-  saveButton.disabled = mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -30725,8 +30801,8 @@ function syncCoverLookupSelectionUi() {
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
     const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
-    const isSuggested = isActive
-      && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    const isSuggested = !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+      && !pendingLocalPath && !pendingPastedImageId
       && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
     card.classList.toggle('is-active', isActive);
     card.classList.toggle('is-suggested', isSuggested);
@@ -31906,8 +31982,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
   const isSuggested = kind === 'remote'
-    && isActive
     && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    && !state.coverLookup.modal.pendingLocalPath && !state.coverLookup.modal.pendingPastedImageId
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
@@ -32290,10 +32366,10 @@ function renderCoverLookupModal() {
         </div>
       </section>`;
     els.body.scrollTop = 0;
-    if (els.findBetter) els.findBetter.disabled = true;
+    if (els.findBetter) ButtonComponent.setDisabled(els.findBetter, true);
     if (els.saveRemote) {
       els.saveRemote.hidden = false;
-      els.saveRemote.disabled = true;
+      ButtonComponent.setDisabled(els.saveRemote, true);
     }
     return;
   }
@@ -33143,7 +33219,7 @@ async function openCoverLookupModal(album, options = {}) {
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
@@ -33194,7 +33270,7 @@ function closeCoverLookupModal() {
   if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
@@ -33255,7 +33331,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
   }
   try {
     if (triggerButton) {
-      triggerButton.disabled = true;
+      ButtonComponent.setDisabled(triggerButton, true);
       triggerButton.setAttribute?.('aria-busy', 'true');
     }
     if (backgroundOnly && retryTask) {
@@ -33336,7 +33412,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
     if (triggerButton) {
-      triggerButton.disabled = triggerWasDisabled;
+      ButtonComponent.setDisabled(triggerButton, triggerWasDisabled);
       triggerButton.removeAttribute?.('aria-busy');
     }
     if (!backgroundOnly) {
@@ -35948,6 +36024,7 @@ function renderTrackModalRelease(album) {
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;

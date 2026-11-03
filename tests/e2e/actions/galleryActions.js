@@ -782,6 +782,10 @@ export class GalleryActions {
     return this.galleryPage.readAlbumSubsectionTitle(artistName, albumName);
   }
 
+  readArtistDiscographySections(artistName) {
+    return this.galleryPage.readArtistDiscographySections(artistName);
+  }
+
   async waitForPositiveRenderedAlbumCardTrackCounts(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();

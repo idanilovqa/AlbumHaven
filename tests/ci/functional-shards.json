@@ -356,6 +356,13 @@
               "case": "FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names",
               "area": "gallery-search"
             },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-032 watcher sorts I’m with Her before IZZ without changing display names",
+              "area": "gallery-search"
+            },
 
             {
               "config": "playwright.config.js",

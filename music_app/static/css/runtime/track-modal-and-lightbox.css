@@ -579,7 +579,6 @@
 .image-lightbox-close {
   position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: 12px;
   color: var(--lightbox-control-ink);
-  outline: none !important;
 }
 .image-lightbox-nav {
   position: absolute;

@@ -63,13 +63,13 @@ def inventory(database):
                     track_ids.append(track_id)
                     entry = {"path": path, "title": f"Track {number}", "album": title, "album_artist": artist_name, "artist": artist_name, "year": year, "edition": label, "disc_number": 1, "track_number": number, "duration_seconds": 100 + number, "library_root_category": category}
                     connection.execute("insert into library.local_track_files(track_id,library_root_id,private_path,metadata) values(%s,%s,%s,%s)", (track_id, root_ids[category], path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}})))
-        def add_track(label, relative_path, *, year=2002, scan_tags=True, category="new_arrivals_roots", title_text="Extra"):
+        def add_track(label, relative_path, *, year=2002, scan_tags=True, category="new_arrivals_roots", track_title="Extra"):
             path = str(Path(paths["main"][0]).parent / relative_path)
             with isolatedPostgres._connect(setup) as connection:
                 album_id = connection.execute("select id from library.local_albums where library_id=%s and album_key=%s", (library_id, keys[label])).fetchone()["id"]
-                track_id = connection.execute("insert into library.local_tracks(library_id,album_id,artist_id,track_key,title,disc_number,track_number,duration_seconds) values(%s,%s,%s,%s,%s,2,2,120) returning id", (library_id, album_id, artist_id, prefix + "::extra::" + uuid.uuid4().hex, title_text)).fetchone()["id"]
+                track_id = connection.execute("insert into library.local_tracks(library_id,album_id,artist_id,track_key,title,disc_number,track_number,duration_seconds) values(%s,%s,%s,%s,%s,2,2,120) returning id", (library_id, album_id, artist_id, prefix + "::extra::" + uuid.uuid4().hex, track_title)).fetchone()["id"]
                 track_ids.append(track_id)
-                entry = {"path": path, "title": title_text, "album": title, "album_artist": artist_name, "artist": artist_name, "year": year, "disc_number": 2, "track_number": 2, "library_root_category": category}
+                entry = {"path": path, "title": track_title, "album": title, "album_artist": artist_name, "artist": artist_name, "year": year, "disc_number": 2, "track_number": 2, "library_root_category": category}
                 connection.execute("insert into library.local_track_files(track_id,library_root_id,private_path,metadata) values(%s,%s,%s,%s)", (track_id, root_ids[category], path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}} if scan_tags else {})))
             return path
 
@@ -126,10 +126,9 @@ def test_candidate_container_includes_unknown_or_conflicting_multidisc_row(inven
 
 def test_separated_release_lookup_scopes_duplicate_sources_to_displayed_year(inventory):
     repository, keys, _paths, add_track, separate = inventory
-    # Duplicate folders must share a track; the existing 2002 reissue holds "Track 1".
     new_paths = {
-        add_track("main", "../release-2002-a/one.flac", year=2002, title_text="Track 1"),
-        add_track("main", "../release-2002-b/one.flac", year=2002, title_text="Track 1"),
+        add_track("main", "../release-2002-a/one.flac", year=2002, track_title="Track 1"),
+        add_track("main", "../release-2002-b/one.flac", year=2002, track_title="Track 1"),
     }
     separate("main")
     detail = repository.build_album_detail_payload(keys["main"] + "::year::2002")
@@ -161,7 +160,7 @@ def test_separated_release_provenance_uses_only_displayed_year(inventory):
 
 def test_candidate_year_matching_is_symmetric_across_catalogue_years(inventory):
     repository, keys, paths, add_track, _separate = inventory
-    path = add_track("reissue", "../reissue-2001-copy/one.flac", year=2001, title_text="Track 1")
+    path = add_track("reissue", "../reissue-2001-copy/one.flac", year=2001, track_title="Track 1")
     for label in ("main", "reissue"):
         detail = repository.build_album_detail_payload(keys[label])
         found = {track["path"] for source in detail["duplicate_sources"] for track in source["tracks"]}

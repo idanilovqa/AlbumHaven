@@ -180,6 +180,9 @@
 .artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) { text-decoration: underline; }
 .artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):focus-visible { text-decoration-thickness: 2px; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
+.album-card .album-subtitle.gallery-card__metadata { display: flex; align-items: baseline; gap: 4px; }
+.gallery-card__artist { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gallery-card__year { flex: 0 0 auto; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
 .album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }

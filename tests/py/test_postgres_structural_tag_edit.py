@@ -847,6 +847,45 @@ def _live_restore_rows(connection, *, track_ids, track_file_ids):
     return tracks, track_files
 
 
+@pytest.mark.parametrize("changed_field", ["album", "year"])
+def test_structural_single_artist_subset_projects_owner_without_rewriting_credits(changed_field):
+    from copy import deepcopy
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.scan_cache_persistence import _structural_destination_album_projection
+
+    entry = {
+        "path": "C:/Music/Mixed/01.flac", "album": "Selected Release",
+        "album_artist": "Various Artists", "artist": "Solo Voice",
+        "title": "Clean Signal (feat. Featured Voice)", "year": 2030,
+        "track_number": "1", "disc_number": "1",
+    }
+    entries = {entry["path"]: entry}
+    original = deepcopy(entries)
+    projection = _structural_destination_album_projection(
+        build_albums_from_file_cache, entries, frozenset({changed_field}), set(),
+    )
+    assert projection.album_artist == "Solo Voice"
+    assert projection.artists == ["Solo Voice"]
+    assert entries == original
+    assert projection.tracks[0].artist == "Solo Voice"
+    assert projection.tracks[0].title == "Clean Signal (feat. Featured Voice)"
+
+
+@pytest.mark.parametrize("artist", ["Unknown Artist", "Various Artists", "First Artist / Second Artist"])
+def test_structural_subset_does_not_invent_owner_from_unknown_or_composite_credit(artist):
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.scan_cache_persistence import _structural_destination_album_projection
+
+    entry = {
+        "path": "C:/Music/Mixed/01.flac", "album": "Selected Release",
+        "album_artist": "Various Artists", "artist": artist, "title": "Track",
+    }
+    projection = _structural_destination_album_projection(
+        build_albums_from_file_cache, {entry["path"]: entry}, frozenset({"album"}), set(),
+    )
+    assert projection.album_artist == "Various Artists"
+
+
 def test_artist_only_projection_keeps_existing_album_owner():
     from music_app.services.library import build_albums_from_file_cache
     from music_app.services.scan_cache_persistence import (

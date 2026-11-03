@@ -1520,6 +1520,69 @@ def test_asgi_unrevisioned_cover_preview_stays_in_app_data(app, asgi_app):
     assert not (cover_path.parent / ".album-haven").exists()
 
 
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asgi_app, tmp_path, mode):
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "red").save(cover_path)
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    asgi_app.state.generated_preview_storage_policy = policy
+    recorded = []
+    asgi_app.state.generated_preview_inventory_recorder = lambda source, preview: recorded.append(
+        (source, preview)
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert body != cover_path.read_bytes()
+    assert len(recorded) == 1
+    assert recorded[0][0] == cover_path
+    preview_path = recorded[0][1]
+    assert preview_path.is_relative_to(policy.write_cache_root(cover_path))
+    assert preview_path.read_bytes() == body
+    assert not (app.config["DATA_DIR"] / "display-cover-cache").exists()
+
+    status, _headers, cached_body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert cached_body == body
+    assert len(recorded) == 1
+
+
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, asgi_app, tmp_path, mode):
+    from music_app.services.covers import resolve_cover_display_variant
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "blue").save(cover_path)
+    legacy_preview = resolve_cover_display_variant(
+        cover_path, cache_root=app.config["DATA_DIR"] / "display-cover-cache", max_size=480,
+    )
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    asgi_app.state.generated_preview_storage_policy = policy
+    asgi_app.state.generated_preview_inventory_recorder = lambda *_args: pytest.fail(
+        "a legacy cache hit must not regenerate or register another preview"
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert body == legacy_preview.read_bytes()
+    assert not policy.write_cache_root(cover_path).exists()
+
+
 def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_app, monkeypatch):
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1694,14 +1757,7 @@ def test_asgi_cover_route_maps_missing_priority_header_to_foreground(app, asgi_a
     assert observed_priorities == ["foreground"]
 
 
-@pytest.mark.parametrize(
-    ("revision", "recorded"),
-    [("a" * 64, True), ("", False)],
-    ids=["revisioned", "app-local"],
-)
-def test_asgi_cover_route_records_only_revisioned_generated_preview(
-    app, asgi_app, monkeypatch, tmp_path, revision, recorded
-):
+def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, tmp_path):
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (640, 640), color=(64, 96, 128)).save(
@@ -1721,7 +1777,6 @@ def test_asgi_cover_route_records_only_revisioned_generated_preview(
         cache_root,
         max_size,
         priority,
-        revision="",
         on_published=None,
     ):
         observed_recorders.append(on_published)
@@ -1735,13 +1790,12 @@ def test_asgi_cover_route_records_only_revisioned_generated_preview(
         asgi_app,
         "GET",
         "/cover",
-        query={"path": str(cover_path), "size": "480", "v": revision},
+        query={"path": str(cover_path), "size": "480"},
     )
 
     assert status == 200
     assert body == bounded_variant.read_bytes()
-    # App-local previews never enter relocation, or it would move them endlessly.
-    assert observed_recorders == [recorder if recorded else None]
+    assert observed_recorders == [recorder]
 
 
 def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi_app, monkeypatch):

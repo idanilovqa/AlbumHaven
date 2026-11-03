@@ -118,38 +118,29 @@ const GROUPED_FEATURE_TARGET = Object.freeze({
   trackTitle: 'Grouped Feature Signal',
   trackArtist: 'Feature Credit Owner / Guest One / Guest Two / Guest One',
 });
-// A Various Artists tag names up to three real artists, so these need a fourth to stay a compilation.
-const COMPILATION_PERFORMERS = Object.freeze([
-  'Watcher Compilation Performer',
-  'Watcher Compilation Second Performer',
-  'Watcher Compilation Third Performer',
-]);
-const COMPILATION_TRACK_TITLES = Object.freeze([
-  'Featured Signal', 'Owner Signal', 'Third Signal', 'Fourth Signal',
-]);
 const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
   Object.freeze({
     artist: 'Belle Stars',
     album: 'Rain Man',
     albumArtist: 'Various Artists',
-    trackArtists: ['Belle Stars', ...COMPILATION_PERFORMERS],
-    trackTitles: COMPILATION_TRACK_TITLES,
+    isCompilation: true,
+    trackArtists: ['Belle Stars', 'Watcher Compilation Performer'],
     year: 1988,
   }),
   Object.freeze({
     artist: 'Ben Del Maestro',
     album: 'The Lord Of The Rings: The Return Of The King',
     albumArtist: 'Various Artists',
-    trackArtists: ['Ben Del Maestro', ...COMPILATION_PERFORMERS],
-    trackTitles: COMPILATION_TRACK_TITLES,
+    isCompilation: true,
+    trackArtists: ['Ben Del Maestro', 'Watcher Compilation Performer'],
     year: 2003,
   }),
   Object.freeze({
     artist: 'Beny Moré',
     album: 'Dexter: Music From The Showtime Original Series',
     albumArtist: 'Various Artists',
-    trackArtists: ['Beny Moré', ...COMPILATION_PERFORMERS],
-    trackTitles: COMPILATION_TRACK_TITLES,
+    isCompilation: true,
+    trackArtists: ['Beny Moré', 'Watcher Compilation Performer'],
     year: 2007,
   }),
   Object.freeze({
@@ -157,9 +148,24 @@ const FEATURED_OWNERSHIP_TARGETS = Object.freeze([
     album: 'Hilda: Season 2 (Original Series Soundtrack)',
     albumArtist: 'Ryan Carlson',
     trackArtists: ['Bella Ramsey', 'RYAN CARLSON.'],
-    trackTitles: ['Featured Signal', 'Owner Signal'],
     year: 2020,
   }),
+]);
+
+const FEATURED_SECTION_ARTIST = 'Watcher Spirit Composer';
+const FEATURED_SECTION_TARGETS = Object.freeze([
+  { album: 'Watcher Spirit', folderName: 'Spirit Songs', year: 2002,
+    albumArtist: `Watcher Spirit Vocalist / ${FEATURED_SECTION_ARTIST}`,
+    trackArtists: ['Watcher Spirit Vocalist', FEATURED_SECTION_ARTIST] },
+  { album: 'Watcher Spirit', folderName: 'Spirit Score', year: 2002,
+    albumArtist: FEATURED_SECTION_ARTIST,
+    trackArtists: [FEATURED_SECTION_ARTIST, FEATURED_SECTION_ARTIST] },
+  { album: 'Watcher Later Guest Release', folderName: 'Later Guest', year: 2020,
+    albumArtist: 'Watcher Owner A & Watcher Owner B',
+    trackArtists: [FEATURED_SECTION_ARTIST, 'Watcher Owner A & Watcher Owner B'] },
+  { album: 'Watcher Earlier Guest Release', folderName: 'Earlier Guest', year: 1989,
+    albumArtist: 'Various Artists',
+    trackArtists: [FEATURED_SECTION_ARTIST, 'Watcher Guest Performer', 'Watcher Compilation Performer'] },
 ]);
 
 async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount) {
@@ -615,7 +621,8 @@ test('FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from
   }
 });
 
-test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names", {
+for (const apostrophe of ["'", '\u2019']) {
+test(`FTC-SEARCH-NAV-032 watcher sorts I${apostrophe}m with Her before IZZ without changing display names`, {
   tag: '@area:gallery-search',
 }, async ({
   appBarActions,
@@ -629,7 +636,11 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
   test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
   test.setTimeout(240000);
 
-  const expectedArtists = ARTIST_COLLATION_TARGETS.map(({ artist }) => artist);
+  const collationTargets = ARTIST_COLLATION_TARGETS.map(target => ({
+    ...target,
+    artist: target.artist === "I'm with Her" ? `I${apostrophe}m with Her` : target.artist,
+  }));
+  const expectedArtists = collationTargets.map(({ artist }) => artist);
   const targetArtists = new Set(expectedArtists);
   const readTargetOrder = async () => (await navigationPanelActions.readSidebarArtistNames())
     .filter((artist) => targetArtists.has(artist));
@@ -642,7 +653,7 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
       const status = await libraryFilesystemWatcherActions.readStatus();
       expect(status.scan_in_progress).toBe(false);
 
-      const [initial, ...siblings] = ARTIST_COLLATION_TARGETS;
+      const [initial, ...siblings] = collationTargets;
       fixture = await createWatchedAlbumFixture({
         artist: initial.artist,
         trackArtist: initial.artist,
@@ -651,6 +662,7 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
         year: initial.year,
         trackTitles: ['Collation Signal'],
         fixtureDirectory: 'watcher-artist-collation',
+        ...(apostrophe === '\u2019' ? { ownedDirectoryName: 'watcher-artist-collation-curly' } : {}),
         context,
         managedAppLifecycle,
       });
@@ -694,6 +706,7 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
     else if (originalFailure) throw originalFailure;
   }
 });
+}
 
 test('FTC-SEARCH-NAV-033 watcher projects one joint-credit release under both constituent artists', {
   tag: '@area:gallery-search',
@@ -962,9 +975,10 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         artist: 'Watcher Soundtracks',
         trackArtist: initial.artist,
         albumArtist: initial.albumArtist,
+        isCompilation: initial.isCompilation,
         album: initial.album,
         year: initial.year,
-        trackTitles: initial.trackTitles,
+        trackTitles: ['Featured Signal', 'Owner Signal'],
         trackArtists: initial.trackArtists,
         fixtureDirectory: 'watcher-featured-ownership',
         context,
@@ -975,9 +989,16 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
           album: target.album,
           folderName: target.album.replaceAll(':', ' -'),
           year: target.year,
-          trackTitles: target.trackTitles,
+          trackTitles: ['Featured Signal', 'Owner Signal'],
           trackArtists: target.trackArtists,
           albumArtist: target.albumArtist,
+          isCompilation: target.isCompilation,
+        });
+      }
+      for (const target of FEATURED_SECTION_TARGETS) {
+        await fixture.createSiblingAlbum({
+          ...target,
+          trackTitles: ['Composer Signal', 'Release Owner Signal', 'Compilation Guest Signal'].slice(0, target.trackArtists.length),
         });
       }
       await libraryFilesystemWatcherActions.waitForRevisionAfter(
@@ -995,7 +1016,7 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
             year: target.year,
           });
           return identity.track_counts;
-        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([target.trackTitles.length]);
+        }, { timeout: 60000, intervals: [250, 500, 1000] }).toEqual([2]);
       }
     });
 
@@ -1020,6 +1041,26 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         galleryActions,
         navigationPanelActions,
       });
+    });
+
+    await stepLogger.step('Keep distinct Spirit releases owned and all guest releases under one chronological heading', async () => {
+      await navigationPanelActions.selectSidebarArtistByName(FEATURED_SECTION_ARTIST);
+      await navigationPanelActions.waitForSidebarSelection(FEATURED_SECTION_ARTIST);
+      await galleryActions.waitForArtistHeadings([FEATURED_SECTION_ARTIST]);
+      await galleryActions.waitForAlbumVisible('Watcher Spirit', 60000);
+      await galleryActions.waitForAlbumVisible('Watcher Later Guest Release', 60000);
+      await expect.poll(async () => {
+        const sections = await galleryActions.readArtistDiscographySections(FEATURED_SECTION_ARTIST);
+        return sections.map(({ title, albums }) => ({ title, names: albums.map(({ name }) => name) }));
+      }).toEqual([
+        { title: null, names: ['Watcher Spirit', 'Watcher Spirit'] },
+        { title: 'Featured On', names: ['Watcher Earlier Guest Release', 'Watcher Later Guest Release'] },
+      ]);
+      const [owned] = await galleryActions.readArtistDiscographySections(FEATURED_SECTION_ARTIST);
+      expect(new Set(owned.albums.map(({ key }) => key)).size).toBe(2);
+      expect(owned.albums.map(({ subtitle }) => subtitle).join('\n')).toContain(
+        `Watcher Spirit Vocalist / ${FEATURED_SECTION_ARTIST}`,
+      );
     });
 
     await stepLogger.step('Keep an album-title search under its selected track performer', async () => {

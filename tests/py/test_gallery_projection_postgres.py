@@ -545,7 +545,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
-                assert params["builder_version"] == "root-gallery-v4"
+                assert params["builder_version"] == "root-gallery-v5"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])
@@ -563,7 +563,9 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
     assert metadata["source_generation"] == 9
 
 
-def test_old_gallery_builder_snapshot_uses_computed_fallback():
+@pytest.mark.parametrize("old_builder", ["root-gallery-v1", "root-gallery-v4"])
+@pytest.mark.parametrize("allow_stale", [False, True])
+def test_old_gallery_builder_snapshot_uses_computed_fallback(old_builder, allow_stale):
     from music_app.services import gallery_projection_postgres as projection
 
     class Connection:
@@ -574,12 +576,15 @@ def test_old_gallery_builder_snapshot_uses_computed_fallback():
                     "sidebar": [],
                     "album_count": 1,
                     "occurrence_count": 1,
-                } if params["builder_version"] == "root-gallery-v1" else None)
+                } if params["builder_version"] == old_builder else None)
                 return SimpleNamespace(fetchone=lambda: row)
             raise AssertionError("old projection occurrences must not be loaded")
 
     assert projection.load_gallery_projection_page(
-        Connection(), {}, {}, context={"library_id": 1, "generation": 1},
+        Connection(), {}, {}, context={"library_id": 1, "generation": 1}, allow_stale=allow_stale,
+    ) is None
+    assert projection.load_gallery_projection_sidebar(
+        Connection(), {}, context={"library_id": 1, "generation": 1},
     ) is None
 
 

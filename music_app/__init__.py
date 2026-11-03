@@ -415,6 +415,7 @@ def create_asgi_app():
         TargetedLibraryReconciler,
     )
     from music_app.services.targeted_reconciliation_scheduler import (
+        LibraryRootUnavailableError,
         TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
@@ -660,7 +661,8 @@ def create_asgi_app():
 
         def persist_library_watch_health(event) -> None:
             try:
-                runtime.library_watch_health_service.record_event(event)
+                if runtime.library_watch_health_service.record_event(event):
+                    targeted_executor.request_catch_up(frozenset({event.root_id}))
             except Exception:
                 runtime.logger.exception(
                     "Unable to persist library watcher health event."
@@ -690,9 +692,7 @@ def create_asgi_app():
                     )
                 root_path = Path(str(root.get("path") or ""))
                 if not root_path.is_dir():
-                    raise OSError(
-                        f"Library watcher catch-up root is unavailable: {root_id}"
-                    )
+                    raise LibraryRootUnavailableError(root_id)
                 result = targeted_reconciler.reconcile(
                     TargetedReconciliationRequest(
                         root_id=root_id,
@@ -781,6 +781,17 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        try:
+            configured_root_ids = {
+                str(root.get("id") or "") for root in get_library_roots(runtime.config)
+            }
+            targeted_executor.request_catch_up(frozenset(
+                problem.root_id
+                for problem in runtime.library_watch_health_service.load_problems()
+                if problem.root_id in configured_root_ids
+            ))
+        except Exception:
+            runtime.logger.exception("Unable to schedule persisted library watcher recovery.")
         try:
             yield
         finally:

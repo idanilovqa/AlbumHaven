@@ -148,6 +148,10 @@ background: var(--appearance-item-action-pressed, var(--appearance-item-action-h
 .action-button:focus-visible {
 outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
+.action-button--bare:not(:focus-visible),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close']:not(:focus-visible) {
+  outline: none;
+}
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *),
 :root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close'],
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive) {

@@ -18,7 +18,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 32],
-  ['gallery-search-visual-2', 35],
+  ['gallery-search-visual-2', 36],
   ['cover-providers-1', 22],
   ['cover-providers-2', 14],
   ['metadata-mutations', 16],
@@ -118,7 +118,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 161-case assignment', () => {
+test('functional shard contract pins the approved eight-way 162-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -132,7 +132,7 @@ test('functional shard contract pins the approved eight-way 161-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 161);
+  assert.equal(total, 162);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -934,7 +934,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 35, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-2', { cases: 36, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 14, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],

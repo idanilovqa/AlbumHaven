@@ -339,6 +339,9 @@ async function claimPlaybackOwnership(track, options = {}) {
 }
 
 async function releasePlaybackOwnership() {
+  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
+    return releaseAndroidNativePlaybackOwnership();
+  }
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   const claim = ownership.activeClaim;
@@ -410,7 +413,13 @@ function isActivePlaybackOwner() {
   return Boolean(claim?.claimToken && Date.parse(claim.expiresAt) > Date.now());
 }
 
-function canEmitPlaybackSessionSideEffects() { return isActivePlaybackOwner(); }
+function canEmitPlaybackSessionSideEffects() {
+  // Inside a native-playback APK only Android's claim authorizes listen writes.
+  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
+    return isAndroidNativePlaybackOwner();
+  }
+  return isActivePlaybackOwner();
+}
 
 function getPlaybackClaimContext() {
   const claim = getPlaybackOwnershipState().activeClaim;

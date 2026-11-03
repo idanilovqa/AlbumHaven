@@ -265,7 +265,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -282,7 +282,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -321,7 +321,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 

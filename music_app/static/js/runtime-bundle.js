@@ -2246,6 +2246,8 @@ function buildApiUrl(view, options = {}) {
     params.set('payload_tier', String(options.payloadTier).trim());
   } else if (resolvedSurface === 'albums' && view.selected_artist && !view.query && !options.rootSidebar) {
     params.set('payload_tier', 'gallery_summary');
+    // The artist's own loose tracks arrive with its gallery, in the same request.
+    params.set('include_non_album', '1');
   } else if (
     options.rootFullPayload
     && resolvedSurface === 'albums'

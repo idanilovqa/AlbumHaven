@@ -579,6 +579,7 @@
 .image-lightbox-close {
   position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: 12px;
   color: var(--lightbox-control-ink);
+  outline: none !important;
 }
 .image-lightbox-nav {
   position: absolute;
@@ -599,6 +600,7 @@
   z-index: 2;
   outline: none !important;
 }
+.image-lightbox-close:focus-visible,
 .image-lightbox-nav:focus-visible {
   outline: 2px solid var(--lightbox-control-accent) !important;
   outline-offset: 2px !important;

@@ -43,12 +43,11 @@ test('fullscreen artwork controls suppress resting outlines but retain keyboard 
   const closeRule = readRule('.image-lightbox-close');
   const navRule = readRule('.image-lightbox-nav');
 
-  // The close control is the shared close button, which owns its own outline states.
-  assert.doesNotMatch(closeRule, /outline/);
+  assert.match(closeRule, /outline:\s*none\s*!important\s*;/);
   assert.match(navRule, /outline:\s*none\s*!important\s*;/);
   assert.match(
     stylesheet,
-    /\.image-lightbox-nav:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightbox-control-accent\)\s*!important\s*;[^}]*outline-offset:\s*2px\s*!important\s*;/s,
+    /\.image-lightbox-close:focus-visible,\s*\.image-lightbox-nav:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--lightbox-control-accent\)\s*!important\s*;[^}]*outline-offset:\s*2px\s*!important\s*;/s,
   );
 });
 

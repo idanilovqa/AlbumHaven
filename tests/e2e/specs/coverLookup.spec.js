@@ -1103,8 +1103,9 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(modal.activeLocalCover.coverPath).toBe(selectedCoverPath);
     expect(persistedSelectedRemoteCover.sha256).toBe(selectedRemoteCover.sha256);
     expect(persistedCandidateSummary?.selected).toBe(false);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
@@ -2519,8 +2520,9 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await coverLookupActions.waitForModalReady();
     const reopenedUpgrade = await coverLookupActions.inspectModalComponents();
     expect(reopenedUpgrade.activeLocalCover.coverPath).toBe(upgradedAlbum.cover_path);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect((await coverLookupActions.readRemoteCandidateSummaries())
       .find((candidate) => candidate.imageSrc.includes('user-owned-same-art-improvement'))
       ?.selected).toBe(false);

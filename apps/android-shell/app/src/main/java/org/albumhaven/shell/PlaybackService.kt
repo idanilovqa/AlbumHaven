@@ -185,8 +185,16 @@ class PlaybackService : MediaSessionService() {
             events = { event -> main.post { if (controller === created) onControllerEvent(event) } },
             clientId = clientId,
             warmer = OkHttpConnectionWarmer(client, shellSession, clientId),
+            deviceId = listenDeviceId(),
         )
         return created.also { it.start() }
+    }
+
+    /** A random, path-free installation ID that keeps listen sessions apart, as the browser's per-profile one does. */
+    private fun listenDeviceId(): String {
+        val preferences = getSharedPreferences(LISTEN_PREFERENCES, MODE_PRIVATE)
+        preferences.getString(KEY_DEVICE_ID, null)?.let { return it }
+        return UUID.randomUUID().toString().also { id -> preferences.edit { putString(KEY_DEVICE_ID, id) } }
     }
 
     private fun retireController() {
@@ -259,6 +267,8 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_BIND_SHELL = "org.albumhaven.shell.action.BIND_PLAYBACK"
         private const val RESTORE_PREFERENCES = "playback_restore"
         private const val KEY_QUEUE = "queue"
+        private const val LISTEN_PREFERENCES = "listen"
+        private const val KEY_DEVICE_ID = "device_id"
         private const val SAVE_INTERVAL_MS = 10_000L
     }
 }

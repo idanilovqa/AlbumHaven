@@ -342,9 +342,8 @@ async function claimPlaybackOwnership(track, options = {}) {
 }
 
 async function releasePlaybackOwnership() {
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
-    return releaseAndroidNativePlaybackOwnership();
-  }
+  // Android releases its own claim once its listen writes drain.
+  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return false;
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   const claim = ownership.activeClaim;

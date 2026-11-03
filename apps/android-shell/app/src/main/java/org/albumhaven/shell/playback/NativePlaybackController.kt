@@ -15,10 +15,13 @@ data class QueueItem(
     val album: String,
     val artworkUrl: String?,
     val durationMs: Long,
+    val trackNumber: String = "",
 ) {
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
 
     fun claimTrack() = ClaimTrack(playbackRef, title, artist, album, artworkUrl)
+
+    fun listenTrack() = ListenTrack(playbackRef, title, artist, album, trackNumber)
 
     companion object {
         private const val MAX_TEXT_CHARS = 512
@@ -66,12 +69,7 @@ enum class NativePlaybackState(val wire: String) {
     ERROR("error"),
 }
 
-/**
- * Path-free state reported by the handshake, `playback.snapshot` and every event. Events also
- * carry the measured listening of the current item: frames actually heard at [sampleRate] and
- * the underruns that broke its contiguous listening, which the web listen session records as
- * `rendered-pcm-v1`.
- */
+/** Path-free state reported by the handshake, `playback.snapshot` and every event. */
 data class NativePlaybackSnapshot(
     val clientId: String,
     val state: NativePlaybackState,
@@ -79,9 +77,6 @@ data class NativePlaybackSnapshot(
     val currentIndex: Int?,
     val positionMs: Long,
     val durationMs: Long,
-    val renderedFrames: Long = 0,
-    val sampleRate: Int? = null,
-    val underruns: Int = 0,
     /** The applied queue's display metadata, for system media controls; never sent to the web. */
     val items: List<QueueItem> = emptyList(),
 )
@@ -105,11 +100,9 @@ sealed interface NativePlaybackEvent {
         val source: CommandSource = CommandSource.WEB,
     ) : NativePlaybackEvent
     data class Position(override val snapshot: NativePlaybackSnapshot) : NativePlaybackEvent
-    /** [outgoingRenderedFrames] closes the measured listening of the item a natural advance left. */
     data class CurrentItem(
         override val snapshot: NativePlaybackSnapshot,
         val reason: CurrentItemReason,
-        val outgoingRenderedFrames: Long? = null,
         val source: CommandSource = CommandSource.WEB,
     ) : NativePlaybackEvent
     data class LoopWrapped(override val snapshot: NativePlaybackSnapshot) : NativePlaybackEvent
@@ -125,7 +118,8 @@ enum class CommandResult { ACCEPTED, STALE_REVISION, NO_QUEUE }
  * The native playback owner: one queue, one [NativePcmEngine] per native rate, one PCM
  * socket and the server claim. Commands may come from any thread; all state lives on the
  * playback thread, which [start] runs and tests drive through [runOnce]. It knows nothing
- * of the WebView, so a Media3 player can adapt it unchanged.
+ * of the WebView, so a Media3 player can adapt it unchanged. As the claim owner it also sends
+ * the listen writes ([ListenSessions]), whether or not a web document is attached.
  */
 class NativePlaybackController(
     private val transports: PcmTransportFactory,
@@ -138,6 +132,9 @@ class NativePlaybackController(
     private val events: (NativePlaybackEvent) -> Unit,
     val clientId: String = UUID.randomUUID().toString(),
     private val warmer: ConnectionWarmer = ConnectionWarmer {},
+    /** This installation's listen device, kept like the browser's per-profile one. */
+    deviceId: String = UUID.randomUUID().toString(),
+    wallClockMs: () -> Long = System::currentTimeMillis,
 ) {
     private val tasks = LinkedBlockingQueue<Runnable>()
 
@@ -157,6 +154,19 @@ class NativePlaybackController(
         private set
 
     private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent)
+
+    private val listens = ListenSessions(
+        deviceId = deviceId,
+        originId = clientId,
+        writer = ::sendListen,
+        canEmit = { claims.owned || claims.acquiring },
+        playingDurationSeconds = { (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0 },
+        wallClockMs = wallClockMs,
+    )
+
+    // Frames and underruns of the current item already handed to [listens].
+    private var listenedFrames = 0L
+    private var listenedUnderruns = 0
 
     // Playback-thread state.
     private var queue: List<QueueItem> = emptyList()
@@ -185,9 +195,8 @@ class NativePlaybackController(
     /** Set once the engine drained the queue; [ended] waits until the output has played it. */
     private var endDrainUntilMs: Long? = null
 
-    // Ownership is kept after pause, stop and end until the web's listen writes for them drain.
+    // Ownership is kept after pause, stop and end until the listen writes for them drain.
     private var releasePending = false
-    private var releaseAtMs = 0L
     private var effectsInFlight = 0
 
     private var warmEnabled = false
@@ -242,23 +251,6 @@ class NativePlaybackController(
 
     /** Runs [callback] on the playback thread once every command sent before it has been applied. */
     fun afterPendingCommands(callback: Runnable) = post(callback)
-
-    /** The web finished the listen writes that follow a pause, stop or end; the claim may go. */
-    fun releaseOwnership() = post { releaseOwnershipNow() }
-
-    /**
-     * Sends one listen write built by the web as the active owner, waiting for a pending claim.
-     * [onResult] runs on the playback thread.
-     */
-    fun listenEffect(effect: ListenEffect, body: JSONObject, onResult: (ListenEffectResult) -> Unit) = post {
-        claims.awaitOwnership { outcome ->
-            if (outcome == ClaimOutcome.GRANTED) {
-                sendListenEffect(effect, body, onResult)
-            } else {
-                onResult(ListenEffectResult.NotOwner)
-            }
-        }
-    }
 
     /** Warms the connections a first start needs, then keeps them warm while nothing plays. */
     fun warmConnections() = post {
@@ -334,6 +326,9 @@ class NativePlaybackController(
     }
 
     private fun applyLoad(load: QueueLoad) {
+        measureListening()
+        val outgoing = queue.getOrNull(index)
+        val outgoingPositionMs = positionMs()
         unload("replacement")
         resetItemMeasurement()
         wantPlay = false
@@ -343,6 +338,7 @@ class NativePlaybackController(
         loop = load.loop
         heldPositionMs = load.positionMs
         recoveryAttempted = false
+        changeListenTrack(outgoing, outgoingPositionMs)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
         if (load.autoplay) {
             requestPlay()
@@ -381,6 +377,7 @@ class NativePlaybackController(
                 }
             }
         }
+        listens.begin(item.listenTrack(), heldPositionMs / 1000.0)
     }
 
     /** Starts or resumes once both the claim and the socket are ready. */
@@ -476,10 +473,14 @@ class NativePlaybackController(
     }
 
     private fun advanced() {
+        if (index + 1 >= queue.size) {
+            boundaryFrame = null
+            return
+        }
         val boundary = boundaryFrame
-        boundaryFrame = null
-        if (index + 1 >= queue.size) return
-        val outgoing = itemHeardBase + ((boundary ?: itemMarker) - itemMarker).coerceAtLeast(0)
+        // Everything written before the boundary is the outgoing item's, played or still queued.
+        measureListening(itemHeardBase + ((boundary ?: itemMarker) - itemMarker).coerceAtLeast(0))
+        val outgoing = queue[index]
         index += 1
         heldPositionMs = 0
         resetItemMeasurement()
@@ -489,7 +490,8 @@ class NativePlaybackController(
         }
         queue[index].let { claims.updateTrack(it.claimTrack()) }
         queue.getOrNull(index + 1)?.let { engine?.setQueuedNext(it.pcmTrack()) }
-        emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE, outgoing) }
+        advanceListen(outgoing)
+        emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE) }
     }
 
     /** Ends the queue once the output has played its last frame, so neither ear nor listen loses the tail. */
@@ -503,13 +505,15 @@ class NativePlaybackController(
 
     private fun ended() {
         val hasNext = index + 1 < queue.size
+        measureListening()
         if (hasNext && (pendingRateChange || wantPlay)) {
             // A successor at another native rate starts on a new engine after this one drains.
-            val outgoing = itemRenderedFrames()
+            val outgoing = queue[index]
             index += 1
             resetItemMeasurement()
             queue[index].let { claims.updateTrack(it.claimTrack()) }
-            emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE, outgoing) }
+            advanceListen(outgoing)
+            emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE) }
             startEngineAt(index, 0)
             return
         }
@@ -520,6 +524,7 @@ class NativePlaybackController(
         wantPlay = false
         heldPositionMs = queue.getOrNull(index)?.durationMs ?: 0
         sink?.pause()
+        listens.ended(heldPositionMs / 1000.0, heldPositionMs / 1000.0)
         retireClaim()
         setState(NativePlaybackState.ENDED)
     }
@@ -553,7 +558,9 @@ class NativePlaybackController(
 
     private fun pauseNow() {
         if (state == NativePlaybackState.IDLE || state == NativePlaybackState.ENDED) return
+        measureListening()
         if (loaded) heldPositionMs = positionMs()
+        if (wantPlay) listens.pause(heldPositionMs / 1000.0)
         wantPlay = false
         engine?.takeIf { loaded }?.pause()
         // A drained queue still plays its tail; the next play resumes it and ends the queue.
@@ -576,6 +583,8 @@ class NativePlaybackController(
     private fun seekTo(positionMs: Long) {
         val item = queue.getOrNull(index) ?: return
         val target = positionMs.coerceIn(0, maxOf(0, item.durationMs))
+        measureListening()
+        listens.seek(item.listenTrack(), positionMs() / 1000.0, target / 1000.0, wantPlay)
         heldPositionMs = target
         val current = engine
         if (loaded && current != null) {
@@ -599,11 +608,15 @@ class NativePlaybackController(
         val reason = if (direction > 0) CurrentItemReason.NEXT else CurrentItemReason.PREVIOUS
         if (target >= queue.size) return
         val playing = wantPlay
+        measureListening()
+        val outgoing = queue.getOrNull(index)
+        val outgoingPositionMs = positionMs()
         unload("replacement")
         index = target.coerceAtLeast(0)
         heldPositionMs = 0
         resetItemMeasurement()
         recoveryAttempted = false
+        changeListenTrack(outgoing, outgoingPositionMs)
         queue[index].let { claims.updateTrack(it.claimTrack()) }
         emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
         if (playing) {
@@ -686,40 +699,70 @@ class NativePlaybackController(
 
     // ---- Ownership and listen writes ----
 
-    /** Pause, stop, end and errors release ownership once the web's listen writes for them drain. */
+    /** Pause, stop, end and errors release ownership once the listen writes for them drain. */
     private fun retireClaim() {
         if (!claims.owned) {
             releasePending = false
             claims.release()
             return
         }
-        if (!releasePending) {
-            releasePending = true
-            releaseAtMs = clock() + RELEASE_GRACE_MS
-        }
-    }
-
-    private fun releaseOwnershipNow() {
-        if (wantPlay || !claims.owned) return
-        releaseAtMs = if (releasePending) minOf(releaseAtMs, clock()) else clock()
         releasePending = true
     }
 
     private fun maybeRelease() {
-        if (!releasePending || effectsInFlight > 0 || clock() < releaseAtMs) return
+        if (!releasePending || effectsInFlight > 0) return
         releasePending = false
         claims.release()
     }
 
-    private fun sendListenEffect(effect: ListenEffect, body: JSONObject, onResult: (ListenEffectResult) -> Unit) {
-        val token = claims.heldToken ?: return onResult(ListenEffectResult.NotOwner)
+    /** One listen write as the owner, once a pending claim settles; [done] runs on the playback thread. */
+    private fun sendListen(effect: ListenEffect, body: JSONObject, done: (Boolean) -> Unit) {
         effectsInFlight += 1
-        listenIo.execute {
-            val result = listenApi.post(effect, clientId, token, body)
-            post {
+        claims.awaitOwnership { outcome ->
+            val token = claims.heldToken
+            if (outcome != ClaimOutcome.GRANTED || token == null) {
+                done(false)
                 effectsInFlight -= 1
-                onResult(result)
+                return@awaitOwnership
             }
+            listenIo.execute {
+                val result = listenApi.post(effect, clientId, token, body)
+                post {
+                    // A write that follows from this one is queued before the claim may go.
+                    done(result is ListenEffectResult.Answered && result.status in 200..299 && result.data.optBoolean("ok"))
+                    effectsInFlight -= 1
+                }
+            }
+        }
+    }
+
+    /** The web's `setCurrentPlayerTrack`: another track ends the listen of the one left. */
+    private fun changeListenTrack(outgoing: QueueItem?, outgoingPositionMs: Long) {
+        val incoming = queue.getOrNull(index)
+        if (incoming != null && listens.currentTrack?.playbackRef != incoming.playbackRef) {
+            // An unknown position or duration falls back to the incoming item's, as the web's snapshot does.
+            val positionMs = outgoingPositionMs.takeIf { it > 0 } ?: heldPositionMs
+            val durationMs = outgoing?.durationMs?.takeIf { it > 0 } ?: incoming.durationMs
+            listens.trackChange(positionMs / 1000.0, durationMs / 1000.0)
+        }
+        listens.measureItem(incoming?.listenTrack())
+    }
+
+    /** The web's gapless boundary: the outgoing listen ends complete and the incoming one starts. */
+    private fun advanceListen(outgoing: QueueItem) {
+        val incoming = queue[index].listenTrack()
+        val durationSeconds = outgoing.durationMs / 1000.0
+        listens.advance(if (durationSeconds > 0) durationSeconds else positionMs() / 1000.0, durationSeconds, incoming)
+        listens.measureItem(incoming)
+    }
+
+    /** Hands the item's frames heard since the last call, and any new underrun, to the current listen. */
+    private fun measureListening(frames: Long = itemRenderedFrames()) {
+        val rate = sink?.sampleRate ?: return
+        if (frames > listenedFrames && listens.heard(frames - listenedFrames, rate)) listenedFrames = frames
+        if (itemUnderruns > listenedUnderruns) {
+            listenedUnderruns = itemUnderruns
+            listens.underrun()
         }
     }
 
@@ -747,6 +790,8 @@ class NativePlaybackController(
         measuring = false
         itemHeardBase = 0
         itemUnderruns = 0
+        listenedFrames = 0
+        listenedUnderruns = 0
         boundaryFrame = null
     }
 
@@ -770,11 +815,13 @@ class NativePlaybackController(
         if (event == ClaimEvent.Lost) {
             // Another client owns playback now; this one must fall silent at once.
             releasePending = false
+            measureListening()
             if (loaded) heldPositionMs = positionMs()
             wantPlay = false
             engine?.takeIf { loaded }?.pause()
             setState(NativePlaybackState.PAUSED)
         }
+        if (event == ClaimEvent.Lost || event == ClaimEvent.Blocked) listens.ownershipLost(heldPositionMs / 1000.0)
         emit { NativePlaybackEvent.Ownership(it, ownership) }
     }
 
@@ -793,6 +840,7 @@ class NativePlaybackController(
         if (now - lastPositionEventMs < POSITION_INTERVAL_MS) return
         lastPositionEventMs = now
         emit { NativePlaybackEvent.Position(it) }
+        listens.position()
     }
 
     private fun positionMs(): Long {
@@ -810,13 +858,11 @@ class NativePlaybackController(
         currentIndex = index.takeIf { it in queue.indices },
         positionMs = positionMs(),
         durationMs = queue.getOrNull(index)?.durationMs ?: 0,
-        renderedFrames = itemRenderedFrames(),
-        sampleRate = sink?.sampleRate,
-        underruns = itemUnderruns,
         items = queue,
     ).also { snapshot = it }
 
     private fun emit(build: (NativePlaybackSnapshot) -> NativePlaybackEvent) {
+        measureListening()
         events(build(refreshSnapshot()))
     }
 
@@ -834,12 +880,6 @@ class NativePlaybackController(
         const val IDLE_WAIT_MS = 5L
         const val POSITION_INTERVAL_MS = 250L
         const val MAX_KNOWN_RATES = 512
-
-        /**
-         * Longest a paused, stopped or ended owner keeps its claim waiting for the web's listen
-         * writes (two ten-second writes at worst); it equals the server's own lease.
-         */
-        const val RELEASE_GRACE_MS = PlaybackClaimOwner.LEASE_MS
 
         /** OkHttp keeps an idle pooled connection for five minutes. */
         const val KEEP_WARM_MS = 4L * 60 * 1000

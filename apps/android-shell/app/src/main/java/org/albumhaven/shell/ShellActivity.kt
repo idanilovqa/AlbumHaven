@@ -98,9 +98,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         bridge = BridgeController(
             ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
             this,
-            ControllerPlaybackPort({ checkNotNull(playbackService).controller }) { answer ->
-                mainHandler.post { if (!isDestroyed) answer.run() }
-            },
+            ControllerPlaybackPort { checkNotNull(playbackService).controller },
         )
         recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
         webView = findViewById(R.id.shell_web_view)

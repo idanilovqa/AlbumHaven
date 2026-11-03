@@ -235,7 +235,7 @@ class BridgeControllerTest {
     @Test
     fun invalidPlaybackPayloadsAreRejected() {
         send(sandbox, handshake())
-        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000}"""
+        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1"}"""
         val cases = listOf(
             load(items = "[]"),
             load(items = "[" + item.replace("\"durationMs\":1000", "\"durationMs\":1000,\"path\":\"/music/a.flac\"") + "]"),
@@ -244,6 +244,8 @@ class BridgeControllerTest {
             load(items = "[" + item.replace("null", "\"/cover?path=x\"") + "]"),
             load(items = "[" + item.replace("null", "\"https://elsewhere.example/a.jpg\"") + "]"),
             load(items = "[" + item.replace("1000", "1000.5") + "]"),
+            load(items = "[" + item.replace(",\"trackNumber\":\"1\"", "") + "]"),
+            load(items = "[" + item.replace("\"trackNumber\":\"1\"", "\"trackNumber\":1") + "]"),
             load(items = "[" + List(PlaybackBridge.MAX_QUEUE_ITEMS + 1) { item }.joinToString(",") + "]"),
             load(currentIndex = 1),
             load(positionMs = "-1"),
@@ -292,50 +294,12 @@ class BridgeControllerTest {
     }
 
     @Test
-    fun listenWritesAnswerAsynchronouslyAndOnlyTheNativeOwnerAddsCredentials() {
-        val track = SyntheticTrack(tag = 1, frames = 3L * RATE)
-        val owner = ControllerHarness(track)
-        val bridge = BridgeController(
-            ShellIdentity("org.albumhaven.app.sandbox", ShellChannel.SANDBOX, "0.9.50", 1),
-            host,
-            ControllerPlaybackPort({ owner.controller }),
-        )
-        send(bridge, handshake())
-        owner.step()
-        assertEquals(listOf(true), owner.warms)
-
+    fun theWebCannotRelayListenWritesOrReleaseTheClaim() {
+        send(sandbox, handshake())
         listOf(
-            """{"effect":"delete","body":{}}""",
-            """{"effect":"complete","body":{"claimToken":"t"}}""",
-            """{"effect":"complete","body":{"clientId":"c"}}""",
-            """{"effect":"complete"}""",
-            """{"effect":"complete","body":{},"extra":1}""",
-        ).forEach { assertEquals("invalid_payload", errorCode(send(bridge, command("playback.listenEffect", it)))) }
-
-        val effect = command("playback.listenEffect", """{"effect":"complete","body":{"title":"Signal 1"}}""")
-        var reply: String? = null
-        bridge.handle(effect, ORIGIN, true) { reply = it }
-        assertNull(reply)
-        owner.step()
-        assertEquals("not_owner", errorCode(JSONObject(reply!!)))
-
-        owner.load(1, track)
-        owner.runUntil { owner.state() == NativePlaybackState.PLAYING }
-        reply = null
-        bridge.handle(effect, ORIGIN, true) { reply = it }
-        owner.step()
-        val answer = JSONObject(reply!!).getJSONObject("payload")
-        assertTrue(answer.getBoolean("ok"))
-        assertEquals(200, answer.getInt("status"))
-        assertTrue(answer.getJSONObject("data").getBoolean("ok"))
-        assertEquals("Signal 1", owner.listen.posts.single().third.getString("title"))
-
-        owner.controller.pause()
-        owner.step()
-        assertTrue(ok(send(bridge, command("playback.releaseOwnership"))))
-        assertEquals("invalid_payload", errorCode(send(bridge, command("playback.releaseOwnership", """{"now":true}"""))))
-        owner.step()
-        assertEquals(listOf("owned", "released"), owner.ownership())
+            command("playback.listenEffect", """{"effect":"complete","body":{"title":"Signal 1"}}"""),
+            command("playback.releaseOwnership"),
+        ).forEach { assertEquals("unsupported_command", errorCode(send(sandbox, it))) }
     }
 
     @Test
@@ -346,7 +310,6 @@ class BridgeControllerTest {
             NativePlaybackEvent.State(
                 NativePlaybackSnapshot(
                     payload.getString("clientId"), NativePlaybackState.PLAYING, 1, 0, 1_250, 180_000,
-                    renderedFrames = 60_000, sampleRate = 48_000, underruns = 0,
                 ),
             ),
         )
@@ -377,7 +340,7 @@ class BridgeControllerTest {
 
     private fun load(
         revision: Int = 1,
-        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000}]""",
+        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1"}]""",
         currentIndex: Int = 0,
         positionMs: String = "0",
         loop: String = "null",

@@ -54,10 +54,7 @@
         "queueRevision": 0,
         "currentIndex": null,
         "positionMs": 0,
-        "durationMs": 0,
-        "renderedFrames": 0,
-        "sampleRate": null,
-        "underruns": 0
+        "durationMs": 0
       },
       "sandbox": {
         "slot": 2,
@@ -79,7 +76,8 @@
           "artist": "Android Acceptance",
           "album": "Playback Ownership",
           "artworkUrl": null,
-          "durationMs": 180000
+          "durationMs": 180000,
+          "trackNumber": "1"
         },
         {
           "playbackRef": "opaque-ref-b",
@@ -87,7 +85,8 @@
           "artist": "Android Acceptance",
           "album": "Playback Ownership",
           "artworkUrl": null,
-          "durationMs": 180000
+          "durationMs": 180000,
+          "trackNumber": "2"
         }
       ],
       "currentIndex": 0,
@@ -107,10 +106,7 @@
       "queueRevision": 1,
       "currentIndex": 0,
       "positionMs": 1250,
-      "durationMs": 180000,
-      "renderedFrames": 60000,
-      "sampleRate": 48000,
-      "underruns": 0
+      "durationMs": 180000
     }
   },
   "rejectedEnvelopes": [

@@ -76,12 +76,7 @@ class BridgeController(
                 reply(BridgeCodec.failure(message, protocol, "incompatible_bridge", "Wrong protocol"))
             message.name == SANDBOX_SELECT && SANDBOX_CAPABILITY in capabilities() ->
                 selectSandbox(message, protocol, reply)
-            else -> {
-                val async = playbackBridge.handleAsync(message.name, message.payload) {
-                    respond(message, protocol, it, reply)
-                }
-                if (!async) respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
-            }
+            else -> respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
         }
     }
 

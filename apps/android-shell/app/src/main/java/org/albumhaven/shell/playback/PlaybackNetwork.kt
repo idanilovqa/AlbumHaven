@@ -114,11 +114,11 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
 }
 
 /**
- * Listen writes as the active native owner: the web builds the payload exactly as it does in a
- * browser, and only this side adds the claim credentials, so the token never reaches the WebView.
+ * Listen writes ([ListenSessions]) as the active native owner, which alone adds the claim
+ * credentials, so the token never reaches the WebView.
  */
 class HttpListenEffectApi(client: OkHttpClient, private val session: ShellSession) : ListenEffectApi {
-    // The web listen session aborts these writes after ten seconds.
+    // The browser listen session aborts these writes after ten seconds.
     private val client = client.newBuilder().callTimeout(LISTEN_TIMEOUT_SECONDS, TimeUnit.SECONDS).build()
 
     override fun post(effect: ListenEffect, clientId: String, claimToken: String, body: JSONObject): ListenEffectResult {
@@ -142,7 +142,7 @@ class HttpListenEffectApi(client: OkHttpClient, private val session: ShellSessio
         }
     }
 
-    /** The web reads only `ok` and `error`; nested listen entries stay on the server. */
+    /** The owner reads only `ok`; nested listen entries are not kept. */
     private fun scalars(json: JSONObject): JSONObject = JSONObject().also { copy ->
         json.keys().forEach { key ->
             val value = json.opt(key)

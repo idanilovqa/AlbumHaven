@@ -83,9 +83,9 @@ function connectAndroidBridge() {
 
 // ---- Native playback (playback.native.v1) ----
 // Inside an APK that negotiates native playback, the streaming facade routes every transport
-// call here instead of starting AudioWorklet output. The web player keeps its queue, listen and
-// UI logic; Android owns the audible clock, the PCM socket and the server playback claim. The web
-// still builds every listen write, and Android sends it with the claim the WebView never sees.
+// call here instead of starting AudioWorklet output. The web player keeps its queue and UI logic;
+// Android owns the audible clock, the PCM socket, the server playback claim and every listen write
+// (now-playing, scrobble, completion), so listening is recorded with or without this document.
 const ANDROID_NATIVE_PLAYBACK_CAPABILITY = 'playback.native.v1';
 const ANDROID_NATIVE_QUEUE_LIMIT = 100;
 const ANDROID_NATIVE_TEXT_LIMIT = 512;
@@ -98,11 +98,6 @@ const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
 const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
-const ANDROID_NATIVE_LISTEN_EFFECTS = {
-  '/playback/session/now-playing': 'now-playing',
-  '/playback/session/scrobble': 'scrobble',
-  '/playback/session/complete': 'complete',
-};
 
 const androidNativePlayback = {
   revision: 0,
@@ -120,7 +115,6 @@ const androidNativePlayback = {
   ownership: 'none',
   ownerIntent: false,
   refs: new Map(),
-  measure: { key: '', role: null, rendered: 0, underruns: 0 },
   snapshot: { currentTime: 0, duration: 0, paused: true, ended: false, src: '', readyState: 0 },
 };
 
@@ -145,28 +139,6 @@ function getAndroidNativePlaybackClientId() {
 function isAndroidNativePlaybackOwner() {
   const native = androidNativePlayback;
   return isAndroidNativePlayback() && (native.ownership === 'owned' || native.ownerIntent);
-}
-
-// The listen session's writes, sent by Android with its claim; the answer keeps only top-level fields.
-async function postAndroidNativeListenEffect(url, body) {
-  const effect = ANDROID_NATIVE_LISTEN_EFFECTS[url];
-  if (!effect) throw new Error('Playback sync failed');
-  const result = await sendAndroidBridgeCommand('playback.listenEffect', { effect, body });
-  const data = result?.data && typeof result.data === 'object' ? result.data : {};
-  if (!(result.status >= 200 && result.status < 300) || !data.ok) throw new Error(data.error || 'Playback sync failed');
-  return data;
-}
-
-// Pause, stop and end keep Android's claim until their listen writes drain, as the web keeps its own.
-async function releaseAndroidNativePlaybackOwnership() {
-  const native = androidNativePlayback;
-  if (native.ownerIntent) return false;
-  if (typeof drainPlaybackSessionRequests === 'function') {
-    await drainPlaybackSessionRequests(getAndroidNativePlaybackClientId());
-  }
-  if (native.ownerIntent || !native.appliedRevision) return false;
-  await sendAndroidBridgeCommand('playback.releaseOwnership').catch(() => {});
-  return true;
 }
 
 function androidNativeText(value) {
@@ -243,6 +215,7 @@ function buildAndroidNativeQueuePayload(revision, items, refs, startSeconds, aut
       album: androidNativeText(item.album),
       artworkUrl: null,
       durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
+      trackNumber: androidNativeText(item.trackNumber),
     })),
     currentIndex: 0,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
@@ -310,6 +283,7 @@ function androidNativeStoredTrack(track) {
     ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
     album: String(track.album || ''),
     coverPath: String(track.coverPath || ''),
+    ...(track.trackNumber ? { trackNumber: String(track.trackNumber) } : {}),
     ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
   };
 }
@@ -348,9 +322,7 @@ function attachAndroidNativePlayback(persistedState = null) {
 }
 
 // A reloaded document of the same origin takes over the queue Android kept playing instead of
-// restarting it: the same tracks, item, position and revision. Its listen session resumes from
-// the heard position, as a browser reload resumes its own playback; frames heard before belong
-// to the listen the previous document finalized.
+// restarting it: the same tracks, item, position and revision. Android's listen continues.
 function adoptAndroidNativePlayback(persistedState) {
   const native = androidNativePlayback;
   const live = androidBridge.info?.playback;
@@ -381,12 +353,6 @@ function adoptAndroidNativePlayback(persistedState) {
     src: track.src,
     readyState: live.state === 'playing' ? 4 : 0,
   });
-  native.measure = {
-    key: `${native.generation}:${native.index}`,
-    role: { role: 'current', track },
-    rendered: Math.max(0, Number(live.renderedFrames) || 0),
-    underruns: Math.max(0, Number(live.underruns) || 0),
-  };
   state.player.playbackQueue = null;
   const restoredQueue = persistedState && typeof restorePersistedPlaybackQueue === 'function'
     && restorePersistedPlaybackQueue(persistedState, track.path);
@@ -397,9 +363,6 @@ function adoptAndroidNativePlayback(persistedState) {
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
   void sendAndroidNativeTransport('playback.clearLoop', { queueRevision: native.appliedRevision }).catch(() => {});
-  if (playing && typeof beginStreamingPlayerListenSession === 'function') {
-    beginStreamingPlayerListenSession(track, native.snapshot.currentTime);
-  }
   notifyAndroidNativeWaveformReady();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
   if (typeof persistPlayerState === 'function') persistPlayerState(true);
@@ -531,34 +494,6 @@ function getAndroidNativePlaybackSnapshot() {
   };
 }
 
-function androidNativeMeasure() {
-  const native = androidNativePlayback;
-  const key = `${native.generation}:${native.index}`;
-  if (native.measure.key !== key) {
-    native.measure = { key, role: { role: 'current', track: native.items[native.index] || null }, rendered: 0, underruns: 0 };
-  }
-  return native.measure;
-}
-
-// Android reports the frames of the current item it actually played; the web listen session
-// counts them exactly as it counts AudioWorklet output (`rendered-pcm-v1`).
-function recordAndroidNativeListening(payload) {
-  const measure = androidNativeMeasure();
-  const rendered = Number(payload.renderedFrames);
-  const sampleRate = Number(payload.sampleRate);
-  if (Number.isInteger(rendered) && rendered > measure.rendered && sampleRate > 0 && measure.role.track
-      && typeof recordMeasuredStreamingFrames === 'function') {
-    recordMeasuredStreamingFrames(measure.role, { frames: rendered - measure.rendered }, sampleRate);
-    // Frames the session could not take yet are counted once it exists.
-    if (measure.role.measuredListenSession) measure.rendered = rendered;
-  }
-  const underruns = Number(payload.underruns);
-  if (Number.isInteger(underruns) && underruns > measure.underruns) {
-    measure.underruns = underruns;
-    if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(measure.role.measuredListenSession);
-  }
-}
-
 function observeAndroidNativeFacade(result, source) {
   if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(result, source);
 }
@@ -574,8 +509,8 @@ function notifyAndroidNativeWaveformReady() {
 }
 
 // Android's notification, lock screen, media buttons, Bluetooth and audio focus act on the native
-// queue directly. The web then runs its own pause or resume path, so listen writes and ownership
-// release happen exactly as after an on-page tap; Android has already applied the change.
+// queue directly. The web then runs its own pause or resume path so its UI follows as after an
+// on-page tap; Android has already applied the change and its listen writes.
 function followAndroidNativeSystemState(payload) {
   const snapshot = androidNativePlayback.snapshot;
   const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
@@ -588,7 +523,7 @@ function followAndroidNativeSystemState(payload) {
 }
 
 // A skip from Android's controls: the web selects the item Android moved to as its own skip
-// buttons would, finalizing the outgoing listen and starting the incoming one.
+// buttons would.
 function followAndroidNativeSystemStep(payload) {
   const native = androidNativePlayback;
   const incoming = native.items[payload.currentIndex];
@@ -612,9 +547,6 @@ function followAndroidNativeSystemStep(payload) {
     if (found >= 0) queue.currentIndex = found;
   }
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(incoming, { previousPlaybackSnapshot });
-  if (!native.snapshot.paused && typeof beginStreamingPlayerListenSession === 'function') {
-    beginStreamingPlayerListenSession(incoming, 0);
-  }
   notifyAndroidNativeWaveformReady();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
 }
@@ -626,7 +558,6 @@ function handleAndroidNativeState(payload) {
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
   snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-  recordAndroidNativeListening(payload);
   // Android plays only while it holds the claim.
   if (nativeState === 'playing') native.ownership = 'owned';
   else if (nativeState !== 'buffering' && nativeState !== 'loading') native.ownerIntent = false;
@@ -668,7 +599,6 @@ function handleAndroidNativePosition(payload) {
   const native = androidNativePlayback;
   const trackPath = String(native.items[native.index]?.path || '');
   native.snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-  recordAndroidNativeListening(payload);
   if (typeof handleStreamingPlaybackPosition === 'function' && trackPath) {
     observeAndroidNativeFacade(handleStreamingPlaybackPosition({
       generation: native.generation, streamId: native.streamId, trackPath,
@@ -690,8 +620,6 @@ function handleAndroidNativeCurrentItem(payload) {
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
   if (!outgoing || !incoming) return;
-  // The outgoing listen is complete before the boundary finalizes it.
-  recordAndroidNativeListening({ sampleRate: payload.sampleRate, renderedFrames: payload.outgoingRenderedFrames });
   const outgoingPlaybackSnapshot = {
     ...native.snapshot,
     currentTime: Number(outgoing.durationSeconds) || native.snapshot.currentTime,
@@ -720,7 +648,6 @@ function handleAndroidNativeCurrentItem(payload) {
       continuityKind: 'queued-next',
     }), 'boundary-facade-error');
   }
-  recordAndroidNativeListening(payload);
   notifyAndroidNativeWaveformReady();
 }
 

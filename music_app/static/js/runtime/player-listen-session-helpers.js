@@ -147,11 +147,12 @@ function buildPlaybackRequestOrigin() {
   };
 }
 
+// Inside a native-playback APK, Android builds and sends every listen write itself.
+function isListenRecordedNatively() {
+  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
+}
+
 async function postPlaybackSession(url, payload) {
-  // Inside a native-playback APK, Android sends the write with the claim the WebView never holds.
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
-    return trackPlaybackSessionRequest(getAndroidNativePlaybackClientId(), postAndroidNativeListenEffect(url, payload));
-  }
   const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PLAYBACK_SESSION_REQUEST_TIMEOUT_MS);
@@ -166,20 +167,12 @@ async function postPlaybackSession(url, payload) {
     if (!response.ok || !data.ok) throw new Error(data.error || 'Playback sync failed');
     return data;
   })();
-  try {
-    return await trackPlaybackSessionRequest(claim.claimToken, promise);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-// Release drains the requests of the claim they were sent under.
-async function trackPlaybackSessionRequest(claimToken, promise) {
-  const pending = { claimToken, promise };
+  const pending = { claimToken: claim.claimToken, promise };
   pendingPlaybackSessionRequests.add(pending);
   try {
     return await promise;
   } finally {
+    clearTimeout(timeout);
     pendingPlaybackSessionRequests.delete(pending);
   }
 }
@@ -231,6 +224,7 @@ function closeListenSegment(currentTime = null, session = state.player.listenSes
 }
 
 function maybeSendNowPlaying(track, session) {
+  if (isListenRecordedNatively()) return Promise.resolve(false);
   if (session?.nowPlayingPromise) return session.nowPlayingPromise;
   if (session?.nowPlayingSent) return Promise.resolve(true);
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
@@ -290,7 +284,7 @@ function startListenSession(track) {
 }
 
 function createListenSession(track) {
-  if (!track) return null;
+  if (!track || isListenRecordedNatively()) return null;
   return {
     measurement: { deviceId: getMeasuredPlaybackDeviceId(), sessionId: newMeasuredPlaybackId(), total: 0, contiguous: 0, longest: 0 },
     track: {
@@ -433,8 +427,7 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
     state.player.listenSession = null;
     return false;
   }
-  const nativeOwner = typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
-  if (!nativeOwner && typeof stagePlaybackOwnershipHandoff !== 'function') {
+  if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
@@ -461,20 +454,10 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
       end_seconds: Number(segment.end_seconds || 0),
     })),
   } : null;
-  let accepted;
-  if (nativeOwner) {
-    // Android outlives the document, so it sends the closing checkpoint a browser hands off in a beacon.
-    accepted = Boolean(completion?.measurement_version);
-    if (accepted) {
-      void postPlaybackSession('/playback/session/complete', completion)
-        .catch(error => console.warn('[AlbumHaven][Playback] Failed to persist listen session.', error));
-    }
-  } else {
-    accepted = stagePlaybackOwnershipHandoff(
-      completion?.measurement_version ? completion : null,
-      snapshot,
-    );
-  }
+  const accepted = stagePlaybackOwnershipHandoff(
+    completion?.measurement_version ? completion : null,
+    snapshot,
+  );
   session.completionState = 'done';
   clearListenPauseMarker(session);
   state.player.listenSession = null;

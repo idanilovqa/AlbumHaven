@@ -55,7 +55,8 @@ class PlaybackClaimOwner(
     private var token: String? = null
     private var track: ClaimTrack? = null
     private var epoch = 0L
-    private var acquiring = false
+    var acquiring = false
+        private set
     private var renewing = false
     private var lastRenewSentMs = 0L
     private var leaseEndsMs = 0L

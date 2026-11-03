@@ -188,7 +188,6 @@ def _restore_low_value_counts(connection, library_id, views, keys):
         views['artists_sidebar'].append({'artist': canonical, 'count': sum(counts.values())})
         views['canonical_to_aliases'][canonical] = sorted(counts, key=str.casefold)
         views['alias_to_canonical'].update({name: canonical for name in counts})
-        views['folder_related'].setdefault(canonical, set())
     for section in ('family_to_artists', 'folder_related'):
         views[section] = {
             (canonical_names.get(_normalize_key(name), name) if section == 'folder_related' else name):

@@ -190,6 +190,29 @@ def test_scoped_source_query_restricts_album_ids_before_locations_and_artist_agg
     assert 'album_id is not null' not in targeted
 
 
+@pytest.mark.parametrize('artist', ['VA', 'Unknown Artist', 'Various Artists'])
+def test_low_value_count_restoration_does_not_manufacture_folder_relations(artist):
+    key = artist.casefold()
+    class Cursor:
+        def fetchall(self):
+            return [{'name': artist, 'key': key, 'count': 1}]
+    class Connection:
+        def execute(self, *_args):
+            return Cursor()
+    views = build_postgres_relation_views([
+        source(1, artist, 'Separate'), source(2, 'Known', 'Family/One'),
+        source(3, 'Other', 'Family/Two'),
+    ])
+    expected_related = deepcopy(views['folder_related'])
+    assert artist not in expected_related
+    assert expected_related['Known'] == {'Other'}
+    scoped._restore_low_value_counts(Connection(), 1, views, {key})
+    assert views['folder_related'] == expected_related
+    assert views['alias_to_canonical'][artist] == artist
+    assert views['canonical_to_aliases'][artist] == [artist]
+    assert next(row['count'] for row in views['artists_sidebar'] if row['artist'] == artist) == 1
+
+
 def test_low_value_counts_restore_global_display_without_rebuilding_other_sources():
     class Cursor:
         def fetchall(self):

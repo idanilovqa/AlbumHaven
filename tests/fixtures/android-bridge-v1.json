@@ -5,13 +5,15 @@
     "stable": [
       "playback.native.v1",
       "playback.queue.v1",
-      "playback.loops.v1"
+      "playback.loops.v1",
+      "playback.media_session.v1"
     ],
     "sandbox": [
       "sandbox.select.v1",
       "playback.native.v1",
       "playback.queue.v1",
-      "playback.loops.v1"
+      "playback.loops.v1",
+      "playback.media_session.v1"
     ]
   },
   "handshakeRequest": {
@@ -42,7 +44,8 @@
         "sandbox.select.v1",
         "playback.native.v1",
         "playback.queue.v1",
-        "playback.loops.v1"
+        "playback.loops.v1",
+        "playback.media_session.v1"
       ],
       "origin": "https://sandbox2.albumhaven.org",
       "playback": {
@@ -51,7 +54,10 @@
         "queueRevision": 0,
         "currentIndex": null,
         "positionMs": 0,
-        "durationMs": 0
+        "durationMs": 0,
+        "renderedFrames": 0,
+        "sampleRate": null,
+        "underruns": 0
       },
       "sandbox": {
         "slot": 2,

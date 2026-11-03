@@ -19,6 +19,19 @@ data class QueueItem(
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
 
     fun claimTrack() = ClaimTrack(playbackRef, title, artist, album, artworkUrl)
+
+    companion object {
+        private const val MAX_TEXT_CHARS = 512
+        private const val MAX_URL_CHARS = 2_048
+
+        /** Same bounds `PUT /playback/state` applies to mirrored track text. */
+        fun isDisplayText(value: String): Boolean = value.length <= MAX_TEXT_CHARS && value.none { it.code < 32 }
+
+        /** A same-origin absolute path without query, which is all the claim mirror accepts. */
+        fun isArtworkPath(value: String): Boolean =
+            value.length <= MAX_URL_CHARS && value.startsWith("/") && !value.startsWith("//") &&
+                value.none { it.code < 33 || it == '\\' || it == '?' || it == '#' }
+    }
 }
 
 /** A loop range on the bridge's fixed 48 kHz media timeline. */
@@ -69,7 +82,12 @@ data class NativePlaybackSnapshot(
     val renderedFrames: Long = 0,
     val sampleRate: Int? = null,
     val underruns: Int = 0,
+    /** The applied queue's display metadata, for system media controls; never sent to the web. */
+    val items: List<QueueItem> = emptyList(),
 )
+
+/** Who asked for a change: the web document, or Android's own media controls, focus and routes. */
+enum class CommandSource { WEB, SYSTEM }
 
 enum class CurrentItemReason(val wire: String) {
     LOAD("load"),
@@ -81,13 +99,18 @@ enum class CurrentItemReason(val wire: String) {
 sealed interface NativePlaybackEvent {
     val snapshot: NativePlaybackSnapshot
 
-    data class State(override val snapshot: NativePlaybackSnapshot) : NativePlaybackEvent
+    /** [source] is [CommandSource.SYSTEM] when Android's media controls changed the state, so the web can follow. */
+    data class State(
+        override val snapshot: NativePlaybackSnapshot,
+        val source: CommandSource = CommandSource.WEB,
+    ) : NativePlaybackEvent
     data class Position(override val snapshot: NativePlaybackSnapshot) : NativePlaybackEvent
     /** [outgoingRenderedFrames] closes the measured listening of the item a natural advance left. */
     data class CurrentItem(
         override val snapshot: NativePlaybackSnapshot,
         val reason: CurrentItemReason,
         val outgoingRenderedFrames: Long? = null,
+        val source: CommandSource = CommandSource.WEB,
     ) : NativePlaybackEvent
     data class LoopWrapped(override val snapshot: NativePlaybackSnapshot) : NativePlaybackEvent
     data class Ownership(override val snapshot: NativePlaybackSnapshot, val ownership: String) : NativePlaybackEvent
@@ -123,6 +146,12 @@ class NativePlaybackController(
 
     private val revisionLock = Any()
     private var acceptedRevision = 0L
+
+    /** A new document counts revisions from one; its first queue replaces the running one whatever its revision. */
+    private var documentRestarted = false
+
+    // Set while a command task runs, so the events it causes name who asked for them.
+    private var source = CommandSource.WEB
 
     @Volatile var snapshot = NativePlaybackSnapshot(clientId, NativePlaybackState.IDLE, 0, null, 0, 0)
         private set
@@ -177,42 +206,42 @@ class NativePlaybackController(
 
     fun loadQueue(load: QueueLoad): CommandResult {
         synchronized(revisionLock) {
-            if (load.queueRevision <= acceptedRevision) return CommandResult.STALE_REVISION
+            if (load.queueRevision <= acceptedRevision && !documentRestarted) return CommandResult.STALE_REVISION
             acceptedRevision = load.queueRevision
+            documentRestarted = false
         }
         post { applyLoad(load) }
         return CommandResult.ACCEPTED
     }
 
-    fun play(queueRevision: Long) = revisioned(queueRevision) { requestPlay() }
+    fun play(queueRevision: Long, from: CommandSource = CommandSource.WEB) =
+        revisioned(queueRevision, from) { requestPlay() }
 
-    fun seek(queueRevision: Long, positionMs: Long) = revisioned(queueRevision) { seekTo(positionMs) }
+    fun seek(queueRevision: Long, positionMs: Long, from: CommandSource = CommandSource.WEB) =
+        revisioned(queueRevision, from) { seekTo(positionMs) }
 
-    fun next(queueRevision: Long) = revisioned(queueRevision) { step(+1) }
+    fun next(queueRevision: Long, from: CommandSource = CommandSource.WEB) = revisioned(queueRevision, from) { step(+1) }
 
-    fun previous(queueRevision: Long) = revisioned(queueRevision) { step(-1) }
+    fun previous(queueRevision: Long, from: CommandSource = CommandSource.WEB) =
+        revisioned(queueRevision, from) { step(-1) }
 
     fun setLoop(queueRevision: Long, range: LoopRange48k?) = revisioned(queueRevision) { applyLoop(range) }
 
-    fun pause() = post { pauseNow() }
+    fun pause(from: CommandSource = CommandSource.WEB) = post(from) { pauseNow() }
 
-    fun stop() = post { stopNow(NativePlaybackState.IDLE) }
+    fun stop(from: CommandSource = CommandSource.WEB) = post(from) { stopNow(NativePlaybackState.IDLE) }
 
     /**
-     * A new document replaces the web player: playback stops, the claim goes as soon as listen
-     * writes already sent finish, and queue revisions restart because the document counts from one.
+     * A new document of the same origin re-attaches to the running queue: playback, the claim and
+     * the applied revision continue, so the document can adopt them from its handshake snapshot.
+     * A document counts revisions from one, so its first queue replaces this one whatever its revision.
      */
-    fun startDocument() {
-        synchronized(revisionLock) { acceptedRevision = 0 }
-        post {
-            stopNow(NativePlaybackState.IDLE)
-            queue = emptyList()
-            revision = 0
-            index = -1
-            releaseOwnershipNow()
-            refreshSnapshot()
-        }
+    fun documentStarted() {
+        synchronized(revisionLock) { documentRestarted = true }
     }
+
+    /** Runs [callback] on the playback thread once every command sent before it has been applied. */
+    fun afterPendingCommands(callback: Runnable) = post(callback)
 
     /** The web finished the listen writes that follow a pause, stop or end; the claim may go. */
     fun releaseOwnership() = post { releaseOwnershipNow() }
@@ -286,12 +315,21 @@ class NativePlaybackController(
 
     private fun post(task: () -> Unit) = post(Runnable(task))
 
-    private fun revisioned(queueRevision: Long, task: () -> Unit): CommandResult {
+    private fun post(from: CommandSource, task: () -> Unit) = post {
+        source = from
+        try {
+            task()
+        } finally {
+            source = CommandSource.WEB
+        }
+    }
+
+    private fun revisioned(queueRevision: Long, from: CommandSource = CommandSource.WEB, task: () -> Unit): CommandResult {
         synchronized(revisionLock) {
             if (acceptedRevision == 0L) return CommandResult.NO_QUEUE
             if (queueRevision != acceptedRevision) return CommandResult.STALE_REVISION
         }
-        post { if (queueRevision == revision) task() }
+        post(from) { if (queueRevision == revision) task() }
         return CommandResult.ACCEPTED
     }
 
@@ -567,7 +605,7 @@ class NativePlaybackController(
         resetItemMeasurement()
         recoveryAttempted = false
         queue[index].let { claims.updateTrack(it.claimTrack()) }
-        emit { NativePlaybackEvent.CurrentItem(it, reason) }
+        emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
         if (playing) {
             wantPlay = false
             requestPlay()
@@ -746,7 +784,7 @@ class NativePlaybackController(
             return
         }
         state = next
-        emit { NativePlaybackEvent.State(it) }
+        emit { NativePlaybackEvent.State(it, source) }
     }
 
     private fun maybeEmitPosition() {
@@ -775,6 +813,7 @@ class NativePlaybackController(
         renderedFrames = itemRenderedFrames(),
         sampleRate = sink?.sampleRate,
         underruns = itemUnderruns,
+        items = queue,
     ).also { snapshot = it }
 
     private fun emit(build: (NativePlaybackSnapshot) -> NativePlaybackEvent) {

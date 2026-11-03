@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.core)
     implementation(libs.androidx.webkit)
+    implementation(libs.media3.session)
     implementation(libs.okhttp)
 
     testImplementation(libs.junit)

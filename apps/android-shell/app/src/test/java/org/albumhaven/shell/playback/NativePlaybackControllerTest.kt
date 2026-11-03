@@ -517,21 +517,66 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aNewDocumentStopsPlaybackReleasesWhenIdleAndCountsRevisionsFromOneAgain() {
-        val harness = ControllerHarness(first)
-        harness.load(3, first)
+    fun aNewDocumentReattachesToTheRunningQueueWithItsClaimAndRevision() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, realTime = true)
+        harness.load(3, long)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        val written = harness.sinks.last().writtenFrames
 
-        harness.controller.startDocument()
+        harness.controller.documentStarted()
+        harness.runUntil { harness.sinks.last().writtenFrames > written + RATE }
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertEquals(3, harness.controller.snapshot.queueRevision)
+        assertEquals(listOf("acquire:null"), harness.claims.calls.filter { !it.startsWith("acquire:token") })
+        assertEquals(listOf("owned"), harness.ownership())
+
+        // The adopting document drives the live revision; a document that starts its own queue counts from one.
+        harness.controller.pause()
         harness.step()
-        assertEquals(NativePlaybackState.IDLE, harness.state())
-        assertEquals(0, harness.controller.snapshot.queueRevision)
-        assertEquals("release:token-1", harness.claims.calls.last())
-        assertEquals(CommandResult.NO_QUEUE, harness.controller.play(3))
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(CommandResult.ACCEPTED, harness.controller.play(3))
+        harness.controller.documentStarted()
+        assertEquals(CommandResult.ACCEPTED, harness.load(1, long))
+        assertEquals(CommandResult.STALE_REVISION, harness.load(1, long))
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING && harness.controller.snapshot.queueRevision == 1L }
+    }
 
-        assertEquals(CommandResult.ACCEPTED, harness.load(1, first))
+    @Test
+    fun systemCommandsNameTheirSourceAndWebCommandsDoNot() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, second, realTime = true)
+        harness.load(1, long, second)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
-        assertEquals(1, harness.controller.snapshot.queueRevision)
+
+        harness.controller.pause(CommandSource.SYSTEM)
+        harness.step()
+        val paused = harness.events.filterIsInstance<NativePlaybackEvent.State>().last()
+        assertEquals(NativePlaybackState.PAUSED to CommandSource.SYSTEM, paused.snapshot.state to paused.source)
+
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.step()
+        val next = harness.events.filterIsInstance<NativePlaybackEvent.CurrentItem>().last()
+        assertEquals(Triple(CurrentItemReason.NEXT, 1, CommandSource.SYSTEM), Triple(next.reason, next.snapshot.currentIndex, next.source))
+        assertEquals(listOf(long.pcm.playbackRef, second.pcm.playbackRef), next.snapshot.items.map { it.playbackRef })
+
+        harness.controller.play(1)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        val resumed = harness.events.filterIsInstance<NativePlaybackEvent.State>()
+            .dropWhile { it !== paused }.drop(1)
+        assertTrue(resumed.isNotEmpty() && resumed.all { it.source == CommandSource.WEB })
+    }
+
+    @Test
+    fun aCallbackAfterPendingCommandsSeesThemApplied() {
+        val harness = ControllerHarness(first)
+        harness.load(1, first)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        var observed: NativePlaybackState? = null
+        harness.controller.pause(CommandSource.SYSTEM)
+        harness.controller.afterPendingCommands { observed = harness.controller.snapshot.state }
+        harness.step()
+        assertEquals(NativePlaybackState.PAUSED, observed)
     }
 
     @Test

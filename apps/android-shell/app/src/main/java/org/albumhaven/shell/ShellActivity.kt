@@ -3,15 +3,17 @@ package org.albumhaven.shell
 import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
@@ -35,17 +37,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import okhttp3.OkHttpClient
-import org.albumhaven.shell.playback.AudioTrackPcmSink
-import org.albumhaven.shell.playback.HttpListenEffectApi
-import org.albumhaven.shell.playback.HttpPlaybackClaimApi
-import org.albumhaven.shell.playback.NativePlaybackController
-import org.albumhaven.shell.playback.OkHttpConnectionWarmer
-import org.albumhaven.shell.playback.OkHttpPcmTransportFactory
-import org.albumhaven.shell.playback.ShellSession
+import org.albumhaven.shell.playback.NativePlaybackEvent
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -54,16 +48,30 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private val channel = ShellChannel.fromWireName(BuildConfig.CHANNEL)
     private val originPolicy = OriginPolicy(channel, BuildConfig.DEV_ORIGIN)
     private val probeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val playbackIo: ExecutorService = Executors.newSingleThreadExecutor()
-    private val listenIo: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var preferences: ShellPreferences
-
-    // Read by the playback network threads when a request starts.
-    @Volatile private lateinit var selectedOrigin: String
-    private lateinit var playback: NativePlaybackController
+    private lateinit var selectedOrigin: String
     private lateinit var bridge: BridgeController
+
+    // The page loads only once the playback service is bound, so the bridge always has a controller.
+    private var playbackService: PlaybackService? = null
+    private var playbackBound = false
+    private var pendingWebState: Bundle? = null
+    private val playbackEvents: (NativePlaybackEvent) -> Unit = { event -> bridge.emit(event) }
+    private val playbackConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            val service = (binder as PlaybackService.LocalBinder).service
+            playbackService = service
+            service.selectOrigin(selectedOrigin)
+            service.addListener(playbackEvents)
+            if (!isDestroyed) loadSelectedOrigin()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            playbackService = null
+        }
+    }
     private lateinit var webView: WebView
     private lateinit var recovery: RecoveryPanel
 
@@ -87,11 +95,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         preferences = ShellPreferences(this)
         selectedOrigin = originPolicy.initialOrigin(preferences.selectedSandboxSlot)
-        playback = createPlayback()
         bridge = BridgeController(
             ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
             this,
-            ControllerPlaybackPort(playback) { answer -> mainHandler.post { if (!isDestroyed) answer.run() } },
+            ControllerPlaybackPort({ checkNotNull(playbackService).controller }) { answer ->
+                mainHandler.post { if (!isDestroyed) answer.run() }
+            },
         )
         recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
         webView = findViewById(R.id.shell_web_view)
@@ -104,20 +113,27 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         onBackPressedDispatcher.addCallback(this) {
             if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
         }
-        val restored = savedInstanceState
+        pendingWebState = savedInstanceState
             ?.takeIf { it.getString(STATE_ORIGIN) == selectedOrigin }
             ?.getBundle(STATE_WEB_VIEW)
-            ?.let { webView.restoreState(it) }
-        if (restored == null) {
-            recovery.show(RecoveryState.LOADING, originHost())
-            webView.loadUrl(selectedOrigin)
-        }
+        recovery.show(RecoveryState.LOADING, originHost())
+        playbackBound = bindService(
+            Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_BIND_SHELL),
+            playbackConnection,
+            BIND_AUTO_CREATE,
+        )
+    }
+
+    private fun loadSelectedOrigin() {
+        val state = pendingWebState
+        pendingWebState = null
+        if (state?.let { webView.restoreState(it) } == null) webView.loadUrl(selectedOrigin)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_ORIGIN, selectedOrigin)
-        outState.putBundle(STATE_WEB_VIEW, Bundle().also { webView.saveState(it) })
+        outState.putBundle(STATE_WEB_VIEW, pendingWebState ?: Bundle().also { webView.saveState(it) })
     }
 
     override fun onPause() {
@@ -126,10 +142,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     override fun onDestroy() {
-        // Foreground only for now: playback stops and its claim is released with the Activity.
-        playback.shutdown()
-        playbackIo.shutdown()
-        listenIo.shutdown()
+        // Playback belongs to the service and outlives the Activity; only this listener goes.
+        playbackService?.removeListener(playbackEvents)
+        if (playbackBound) unbindService(playbackConnection)
+        playbackService = null
         probeExecutor.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
         fileChooserCallback?.onReceiveValue(null)
@@ -164,29 +180,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 if (reachable) {
                     preferences.selectedSandboxSlot = slot
                     selectedOrigin = origin
+                    // Playback, its claim and its queue stay with the origin that started them.
+                    playbackService?.selectOrigin(origin)
                     clearHistoryOnNextPage = true
                     reload()
                 }
             }
         }
-    }
-
-    private fun createPlayback(): NativePlaybackController {
-        val session = ShellSession({ selectedOrigin }) { url -> CookieManager.getInstance().getCookie(url) }
-        val client = OkHttpClient()
-        val clientId = UUID.randomUUID().toString()
-        return NativePlaybackController(
-            transports = OkHttpPcmTransportFactory(client, session),
-            claimApi = HttpPlaybackClaimApi(client, session),
-            listenApi = HttpListenEffectApi(client, session),
-            sinks = ::AudioTrackPcmSink,
-            io = playbackIo,
-            listenIo = listenIo,
-            clock = SystemClock::elapsedRealtime,
-            events = { event -> mainHandler.post { if (!isDestroyed) bridge.emit(event) } },
-            clientId = clientId,
-            warmer = OkHttpConnectionWarmer(client, session, clientId),
-        ).also { it.start() }
     }
 
     private fun isReachable(origin: String): Boolean = try {
@@ -303,8 +303,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.reset()
-            // Playback state never crosses documents or origins; the claim goes once sent listen writes finish.
-            playback.startDocument()
+            // The same origin's next document re-attaches to the running queue from its handshake.
+            playbackService?.controller?.documentStarted()
             incompatibleWeb = false
         }
 

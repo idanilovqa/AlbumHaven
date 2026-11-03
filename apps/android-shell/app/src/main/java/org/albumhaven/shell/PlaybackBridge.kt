@@ -1,6 +1,7 @@
 package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.CommandResult
+import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.ListenEffect
 import org.albumhaven.shell.playback.ListenEffectResult
 import org.albumhaven.shell.playback.LoopRange48k
@@ -28,24 +29,27 @@ interface NativePlaybackPort {
     fun warmConnections()
 }
 
-/** [deliver] moves listen-write answers to the thread that replies to the WebView. */
+/**
+ * [controller] names the current origin's controller, which a sandbox switch replaces; [deliver]
+ * moves listen-write answers to the thread that replies to the WebView.
+ */
 class ControllerPlaybackPort(
-    private val controller: NativePlaybackController,
+    private val controller: () -> NativePlaybackController,
     private val deliver: (Runnable) -> Unit = Runnable::run,
 ) : NativePlaybackPort {
-    override val snapshot get() = controller.snapshot
-    override fun loadQueue(load: QueueLoad) = controller.loadQueue(load)
-    override fun play(queueRevision: Long) = controller.play(queueRevision)
-    override fun pause() = controller.pause()
-    override fun stop() = controller.stop()
-    override fun next(queueRevision: Long) = controller.next(queueRevision)
-    override fun previous(queueRevision: Long) = controller.previous(queueRevision)
-    override fun seek(queueRevision: Long, positionMs: Long) = controller.seek(queueRevision, positionMs)
-    override fun setLoop(queueRevision: Long, range: LoopRange48k?) = controller.setLoop(queueRevision, range)
-    override fun releaseOwnership() = controller.releaseOwnership()
+    override val snapshot get() = controller().snapshot
+    override fun loadQueue(load: QueueLoad) = controller().loadQueue(load)
+    override fun play(queueRevision: Long) = controller().play(queueRevision)
+    override fun pause() = controller().pause()
+    override fun stop() = controller().stop()
+    override fun next(queueRevision: Long) = controller().next(queueRevision)
+    override fun previous(queueRevision: Long) = controller().previous(queueRevision)
+    override fun seek(queueRevision: Long, positionMs: Long) = controller().seek(queueRevision, positionMs)
+    override fun setLoop(queueRevision: Long, range: LoopRange48k?) = controller().setLoop(queueRevision, range)
+    override fun releaseOwnership() = controller().releaseOwnership()
     override fun listenEffect(effect: ListenEffect, body: JSONObject, onResult: (ListenEffectResult) -> Unit) =
-        controller.listenEffect(effect, body) { result -> deliver { onResult(result) } }
-    override fun warmConnections() = controller.warmConnections()
+        controller().listenEffect(effect, body) { result -> deliver { onResult(result) } }
+    override fun warmConnections() = controller().warmConnections()
 }
 
 /** Validates `playback.*` commands and encodes native playback events (Web/Native Bridge v1). */
@@ -158,7 +162,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         val album = text(item.opt("album")) ?: return null
         val artwork = when (val value = item.opt("artworkUrl")) {
             JSONObject.NULL -> null
-            is String -> value.takeIf(::isSameOriginPath) ?: return null
+            is String -> value.takeIf(QueueItem::isArtworkPath) ?: return null
             else -> return null
         }
         val duration = nonNegativeLong(item.opt("durationMs")) ?: return null
@@ -172,14 +176,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         return if (end > start) LoopRange48k(start, end) else null
     }
 
-    /** Same bounds `PUT /playback/state` applies to mirrored track text. */
-    private fun text(value: Any?): String? =
-        (value as? String)?.takeIf { text -> text.length <= MAX_TEXT_CHARS && text.none { it.code < 32 } }
-
-    /** A same-origin absolute path without query, which is all the claim mirror accepts. */
-    private fun isSameOriginPath(value: String): Boolean =
-        value.length <= MAX_URL_CHARS && value.startsWith("/") && !value.startsWith("//") &&
-            value.none { it.code < 33 || it == '\\' || it == '?' || it == '#' }
+    private fun text(value: Any?): String? = (value as? String)?.takeIf(QueueItem::isDisplayText)
 
     private fun nonNegativeLong(value: Any?): Long? = when (value) {
         is Int -> value.toLong()
@@ -193,7 +190,13 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         const val NATIVE_CAPABILITY = "playback.native.v1"
         const val QUEUE_CAPABILITY = "playback.queue.v1"
         const val LOOPS_CAPABILITY = "playback.loops.v1"
-        val CAPABILITIES = listOf(NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY)
+
+        /**
+         * Playback lives in a media session that outlasts the document: a same-origin reload
+         * re-attaches to the running queue, and Android's own controls send `initiator: "system"`.
+         */
+        const val MEDIA_SESSION_CAPABILITY = "playback.media_session.v1"
+        val CAPABILITIES = listOf(NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY)
 
         private const val LOAD_QUEUE = "playback.loadQueue"
         private const val PLAY = "playback.play"
@@ -211,8 +214,6 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         /** `POST /playback/refs` issues at most this many references per batch. */
         const val MAX_QUEUE_ITEMS = 100
         private const val MAX_REFERENCE_CHARS = 2_048
-        private const val MAX_TEXT_CHARS = 512
-        private const val MAX_URL_CHARS = 2_048
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
         private val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
@@ -225,22 +226,26 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
             .put("currentIndex", snapshot.currentIndex ?: JSONObject.NULL)
             .put("positionMs", snapshot.positionMs)
             .put("durationMs", snapshot.durationMs)
+            .put("renderedFrames", snapshot.renderedFrames)
+            .put("sampleRate", snapshot.sampleRate ?: JSONObject.NULL)
+            .put("underruns", snapshot.underruns)
 
         /**
-         * The bridge event name and payload; every payload echoes the applied queue revision and
-         * the measured listening of the current item.
+         * The bridge event name and payload; every payload echoes the applied queue revision and,
+         * like the handshake and snapshot, the measured listening of the current item.
          */
         fun encode(event: NativePlaybackEvent): Pair<String, JSONObject> {
             val payload = snapshotJson(event.snapshot)
-                .put("renderedFrames", event.snapshot.renderedFrames)
-                .put("sampleRate", event.snapshot.sampleRate ?: JSONObject.NULL)
-                .put("underruns", event.snapshot.underruns)
             val name = when (event) {
-                is NativePlaybackEvent.State -> "playback.state"
+                is NativePlaybackEvent.State -> {
+                    payload.putInitiator(event.source)
+                    "playback.state"
+                }
                 is NativePlaybackEvent.Position -> "playback.position"
                 is NativePlaybackEvent.CurrentItem -> {
                     payload.put("reason", event.reason.wire)
                     event.outgoingRenderedFrames?.let { payload.put("outgoingRenderedFrames", it) }
+                    payload.putInitiator(event.source)
                     "playback.currentItem"
                 }
                 is NativePlaybackEvent.LoopWrapped -> "playback.loopWrapped"
@@ -255,6 +260,11 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
                 is NativePlaybackEvent.ReferenceExpired -> "playback.referenceExpired"
             }
             return name to payload
+        }
+
+        /** Only changes Android's own controls made are marked; the web already knows its own. */
+        private fun JSONObject.putInitiator(source: CommandSource) {
+            if (source == CommandSource.SYSTEM) put("initiator", "system")
         }
 
         private fun JSONObject.fieldNames(): Set<String> = keys().asSequence().toSet()

@@ -1,7 +1,9 @@
 package org.albumhaven.shell
 
+import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.ControllerHarness
 import org.albumhaven.shell.playback.CurrentItemReason
+import org.albumhaven.shell.playback.QueueItem
 import org.albumhaven.shell.playback.RATE
 import org.albumhaven.shell.playback.SyntheticTrack
 import org.albumhaven.shell.playback.NativePlaybackEvent
@@ -47,7 +49,7 @@ class BridgeControllerTest {
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
     private fun controller(channel: ShellChannel, id: String) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort(playback.controller))
+        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }))
 
     private fun send(
         controller: BridgeController,
@@ -296,7 +298,7 @@ class BridgeControllerTest {
         val bridge = BridgeController(
             ShellIdentity("org.albumhaven.app.sandbox", ShellChannel.SANDBOX, "0.9.50", 1),
             host,
-            ControllerPlaybackPort(owner.controller),
+            ControllerPlaybackPort({ owner.controller }),
         )
         send(bridge, handshake())
         owner.step()
@@ -350,6 +352,27 @@ class BridgeControllerTest {
         )
         assertEquals(expected.getString("name"), name)
         assertSameJson(payload, encoded)
+    }
+
+    @Test
+    fun onlyChangesMadeBySystemControlsNameTheirInitiatorAndQueueMetadataNeverReachesTheWeb() {
+        val item = QueueItem("opaque-ref", "T", "A", "B", null, 1_000)
+        val snapshot = NativePlaybackSnapshot(
+            playback.controller.clientId, NativePlaybackState.PAUSED, 2, 0, 500, 1_000, items = listOf(item),
+        )
+        val web = PlaybackBridge.encode(NativePlaybackEvent.State(snapshot)).second
+        val system = PlaybackBridge.encode(NativePlaybackEvent.State(snapshot, CommandSource.SYSTEM)).second
+        val next = PlaybackBridge.encode(
+            NativePlaybackEvent.CurrentItem(snapshot, CurrentItemReason.NEXT, source = CommandSource.SYSTEM),
+        ).second
+
+        assertFalse(web.has("initiator"))
+        assertEquals("system", system.getString("initiator"))
+        assertEquals("system", next.getString("initiator"))
+        listOf(web, system, next).forEach { payload ->
+            assertFalse(payload.has("items"))
+            assertFalse(payload.toString().contains("opaque-ref"))
+        }
     }
 
     private fun load(

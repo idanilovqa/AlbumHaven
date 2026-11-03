@@ -873,6 +873,27 @@ def test_whitespace_aliases_collapse_while_empty_signatures_stay_isolated():
         assert relation_views["alias_to_canonical"][artist] == artist
 
 
+def test_relation_view_serialization_breaks_casefold_ties_without_merging_aliases():
+    expected = ['10CC', '10cc', 'ANGE', 'Ange']
+    for aliases in (expected, list(reversed(expected))):
+        views = {
+            'artists': aliases,
+            'canonical_to_aliases': {'Ange': aliases},
+            'family_to_artists': {'family': aliases},
+            'folder_related': {'Ange': aliases},
+            'sidebar_families': [{'family': 'family', 'artists': aliases}],
+            'artists_sidebar': [{'artist': 'Ange', 'count': 1}, {'artist': '10cc', 'count': 2}],
+        }
+        serialized = serialize_relation_views(views)
+        assert serialized['artists'] == expected
+        assert serialized['canonical_to_aliases']['Ange'] == expected
+        assert serialized['family_to_artists']['family'] == expected
+        assert serialized['folder_related']['Ange'] == expected
+        assert serialized['sidebar_families'][0]['artists'] == expected
+        assert serialized['artists_sidebar'] == views['artists_sidebar']
+        assert deserialize_relation_views(views)['canonical_to_aliases']['Ange'] == expected
+
+
 def test_sidebar_family_label_survives_relation_view_serialization_roundtrip():
     relation_views = _build(_family_rows())
 

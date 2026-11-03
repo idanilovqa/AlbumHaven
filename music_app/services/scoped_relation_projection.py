@@ -610,9 +610,12 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     legacy = serialize_relation_views(build_postgres_relation_views(rows, alias_policy=LEGACY_ALIAS_POLICY))
     normalized = _first_row(connection.execute(
         'select library.local_relation_views(%s,true) as views', (library_id,)))
-    if not normalized or normalized['views'] != current:
+    if (not normalized or not isinstance(normalized['views'], dict)
+            or normalized['views'].keys() != current.keys()
+            or serialize_relation_views(normalized['views']) != current):
         raise RuntimeError('Cached source facts differ from current normalized relations; journal retained.')
-    if captured_legacy_views is None or captured_legacy_views != legacy:
+    if (not isinstance(captured_legacy_views, dict) or captured_legacy_views.keys() != legacy.keys()
+            or serialize_relation_views(captured_legacy_views) != legacy):
         raise RuntimeError('Legacy publication differs from the frozen legacy source rebuild; journal retained.')
     connection.execute('delete from library.local_relation_compatibility_entries where library_id=%s', (library_id,))
     _upsert_entries(connection, library_id, _view_entries(legacy), compatibility=True)

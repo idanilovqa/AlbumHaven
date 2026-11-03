@@ -127,7 +127,7 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
 def _sorted_text_values(values) -> list[str]:
     return sorted(
         [str(value or "").strip() for value in (values or []) if str(value or "").strip()],
-        key=lambda value: value.casefold(),
+        key=lambda value: (value.casefold(), value),
     )
 
 

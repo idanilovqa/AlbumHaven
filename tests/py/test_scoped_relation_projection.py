@@ -7,6 +7,36 @@ from music_app.services.relation_projection_builder import build_postgres_relati
 from music_app.services.relation_projection_postgres import load_relation_source_rows_sql
 
 
+def test_relation_proof_ignores_only_unordered_member_order():
+    from music_app.services.cache import serialize_relation_views
+    original = serialize_relation_views(build_postgres_relation_views([
+        source(1, 'Ange', 'One'), source(2, 'ANGE', 'Two'), source(3, 'Known', 'Three'),
+    ]))
+    reordered = deepcopy(original)
+    for aliases in reordered['canonical_to_aliases'].values():
+        aliases.reverse()
+    assert scoped._relation_views_equal(original, reordered)
+    missing = deepcopy(original)
+    canonical = next(name for name, aliases in missing['canonical_to_aliases'].items() if len(aliases) > 1)
+    missing['canonical_to_aliases'][canonical].pop()
+    assert not scoped._relation_views_equal(original, missing)
+    reordered['artists_sidebar'].reverse()
+    assert not scoped._relation_views_equal(original, reordered)
+    missing_section = deepcopy(original)
+    missing_section.pop('folder_related')
+    assert not scoped._relation_views_equal(original, missing_section)
+    assert not scoped._relation_views_equal(original, {**original, 'unknown': []})
+    assert not scoped._relation_views_equal({**original, 'unknown': []}, {**original, 'unknown': []})
+    extra_field = deepcopy(original)
+    extra_field['artists_sidebar'][0]['unexpected'] = True
+    assert not scoped._relation_views_equal(original, extra_field)
+    duplicate = deepcopy(original)
+    duplicate['canonical_to_aliases'][canonical].append(duplicate['canonical_to_aliases'][canonical][0])
+    assert not scoped._relation_views_equal(original, duplicate)
+    malformed = {**original, 'artists_sidebar': None}
+    assert not scoped._relation_views_equal(malformed, malformed)
+
+
 def test_initialized_stale_readiness_never_falls_back_to_full_inventory(monkeypatch):
     import pytest
     from contextlib import nullcontext

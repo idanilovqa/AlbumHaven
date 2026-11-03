@@ -316,6 +316,34 @@ def _scan_journal_receipt(connection, library_id):
       from library.local_relation_dirty_albums dirty where library_id=%s""", (library_id,)))['journal']
 
 
+def _relation_views_equal(left, right):
+    if not isinstance(left, dict) or not isinstance(right, dict) or left.keys() != right.keys():
+        return False
+    if left.keys() != (set(_LIST_KEYS) | set(_MAP_KEYS)):
+        return False
+    def members(values):
+        if not isinstance(values, (list, tuple, set)) or not all(isinstance(value, str) for value in values):
+            raise TypeError('Relation members must be text collections')
+        return sorted(values, key=lambda value: (value.casefold(), value))
+    def canonical(views):
+        # Preserve every field and duplicate; only unordered member collections move.
+        if not all(isinstance(views[section], dict) for section in _MAP_KEYS):
+            raise TypeError('Relation mappings must be objects')
+        for section in ('artists_sidebar', 'sidebar_families'):
+            if not isinstance(views[section], list) or not all(isinstance(row, dict) for row in views[section]):
+                raise TypeError('Relation sidebar rows must be objects')
+        result = {**views, 'artists': members(views['artists'])}
+        for section in ('family_to_artists', 'folder_related', 'canonical_to_aliases'):
+            result[section] = {key: members(values) for key, values in views[section].items()}
+        result['sidebar_families'] = [
+            {**row, 'artists': members(row['artists'])} for row in views['sidebar_families']]
+        return result
+    try:
+        return canonical(left) == canonical(right)
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+
 def pending_scan_baseline(connection):
     """Retain the proven legacy contract before a native scan changes sources."""
     context = _first_row(connection.execute(_CONTEXT))
@@ -329,7 +357,7 @@ def pending_scan_baseline(connection):
         raise RuntimeError('Pending scan baseline is not proven.')
     shadow = _first_row(connection.execute(
         'select library.local_relation_compatibility_views(%s) as views', (context['library_id'],)))['views']
-    if shadow != _stored_legacy_views(connection, context['library_id']):
+    if not _relation_views_equal(shadow, _stored_legacy_views(connection, context['library_id'])):
         raise RuntimeError('Retained legacy relations differ from the proven baseline.')
     if state.get('pending_scan_receipt') is not None:
         raise RuntimeError('Pending scan must be reconciled before publishing another scan.')
@@ -377,7 +405,7 @@ def _validate_pending_scan_receipt(connection, context, state, metadata, retaine
         raise RuntimeError('Pending scan receipt does not match retained publication evidence.')
     shadow = _first_row(connection.execute(
         'select library.local_relation_compatibility_views(%s) as views', (context['library_id'],)))['views']
-    if shadow != retained:
+    if not _relation_views_equal(shadow, retained):
         raise RuntimeError('Retained legacy relations differ from the pending scan baseline.')
 
 
@@ -609,12 +637,9 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     legacy = serialize_relation_views(build_postgres_relation_views(rows, alias_policy=LEGACY_ALIAS_POLICY))
     normalized = _first_row(connection.execute(
         'select library.local_relation_views(%s,true) as views', (library_id,)))
-    if (not normalized or not isinstance(normalized['views'], dict)
-            or normalized['views'].keys() != current.keys()
-            or serialize_relation_views(normalized['views']) != current):
+    if not normalized or not _relation_views_equal(normalized['views'], current):
         raise RuntimeError('Cached source facts differ from current normalized relations; journal retained.')
-    if (not isinstance(captured_legacy_views, dict) or captured_legacy_views.keys() != legacy.keys()
-            or serialize_relation_views(captured_legacy_views) != legacy):
+    if not _relation_views_equal(captured_legacy_views, legacy):
         raise RuntimeError('Legacy publication differs from the frozen legacy source rebuild; journal retained.')
     connection.execute('delete from library.local_relation_compatibility_entries where library_id=%s', (library_id,))
     _upsert_entries(connection, library_id, _view_entries(legacy), compatibility=True)
@@ -635,7 +660,7 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
         _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)
     if legacy_views is not None:
         rebuilt = _first_row(connection.execute('select library.local_relation_compatibility_views(%s) as views', (library_id,)))
-        if not rebuilt or rebuilt['views'] != legacy_views:
+        if not rebuilt or not _relation_views_equal(rebuilt['views'], legacy_views):
             raise RuntimeError('Legacy publication differs from the scoped source rebuild; journal retained.')
     metadata.update(status='ready', targeted_patch_reason=reason,
                     targeted_patch_timestamp=datetime.now(timezone.utc).isoformat())
@@ -748,7 +773,7 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
                 and state['publication_xid'] == context.get('normalized_publication_xid')):
             shadow = _first_row(connection.execute(
                 'select library.local_relation_compatibility_views(%s) as views', (library_id,)))
-            if not shadow or shadow['views'] != legacy_views:
+            if not shadow or not _relation_views_equal(shadow['views'], legacy_views):
                 raise RuntimeError('Legacy publication differs from proven compatibility entries; journal retained.')
             return {'compatibility_prepared': False}
         _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)

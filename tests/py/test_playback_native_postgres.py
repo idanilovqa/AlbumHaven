@@ -1536,3 +1536,145 @@ def test_handoff_migration_preserves_rows_enforces_shape_and_retains_runtime_acc
         handoff=handoff,
     )
     assert consumed["claimToken"] == runtime_token
+
+
+def measured_listen_body(client_id, claim_token, *, session_id, track, sequence=2):
+    started = datetime(2026, 11, 2, 10, 0, tzinfo=timezone.utc)
+    return {
+        "clientId": client_id, "claimToken": claim_token, **track,
+        "title": "Track", "artist": "Owner", "album": "Album", "album_artist": "Owner",
+        "duration_seconds": 120, "track_number": "2", "started_at": started.isoformat(),
+        "started_at_unix": int(started.timestamp()), "ended_at": (started + timedelta(seconds=90)).isoformat(),
+        "request_origin": {"client_kind": "private_web", "origin_type": "browser_tab", "origin_id": client_id},
+        "measurement_version": "rendered-pcm-v1", "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+        "session_id": session_id, "sequence": sequence, "finalized": True, "measured_listened_seconds": 90,
+        "max_measured_contiguous_seconds": 90, "total_listened_seconds": 90, "max_contiguous_seconds": 90,
+        "completion_reason": "ended", "finished_fully": True, "skipped": False, "scrobble_eligible": True,
+        "scrobbled": False, "segments": [{"start_seconds": 0, "end_seconds": 90}],
+    }
+
+
+def native_listen_claim(fixture, playback_app, actor=None):
+    actor = actor or fixture.actor
+    configure_native_app(playback_app, fixture, actor)
+    clock = lambda: datetime.now(timezone.utc)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    claims = claims_service(fixture, clock)
+    client_id = str(uuid4())
+    claim = claims.acquire(actor, client_id=client_id, client_surface="mobile", track={
+        "playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None,
+    })
+    return claims, reference, client_id, claim["claimToken"]
+
+
+def test_reference_listen_writes_store_the_same_history_as_path_writes(playback_inventory, playback_app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    fixture = playback_inventory
+    claims, reference, client_id, token = native_listen_claim(fixture, playback_app)
+    provider = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    monkeypatch.setattr(routes, "update_now_playing", lambda _config, normalized, **kwargs: provider.append(normalized))
+    monkeypatch.setattr(routes, "scrobble_track", lambda _config, normalized, **kwargs: provider.append(normalized))
+    forms = {
+        "path": {"path": fixture.paths[1], "cover_path": fixture.paths[1] + ".jpg"},
+        "ref": {"playbackRef": reference},
+    }
+    sessions = {form: str(uuid4()) for form in forms}
+    try:
+        for form, track in forms.items():
+            body = measured_listen_body(client_id, token, session_id=sessions[form], track=track)
+            for effect, sequence in (("now-playing", 0), ("scrobble", 1), ("complete", 2)):
+                status, _, raw = run_asgi_request(playback_app, "POST", "/playback/session/" + effect,
+                                                  json_body={**body, "sequence": sequence,
+                                                             "finalized": effect == "complete"})
+                assert status == 200, (form, effect, decode_json(raw))
+                assert all(path not in raw.decode() for path in fixture.paths)
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            rows = {row["session_id"]: row for row in connection.execute(
+                "select session_id::text as session_id, track_id, last_sequence, finalized, "
+                "measured_listened_seconds, metadata from integration.listen_history "
+                "where account_id = %s and library_id = %s and session_id::text = any(%s)",
+                (fixture.actor.account_id, fixture.actor.current_library_id, list(sessions.values()))).fetchall()}
+    finally:
+        claims.release(fixture.actor, client_id=client_id, claim_token=token)
+
+    def stored(form):
+        row = dict(rows[sessions[form]])
+        payload = dict(row.pop("metadata")["source_payload"])
+        for key in ("id", "session_id", "recorded_at", "scrobbled_at", "last_scrobble_attempt_at"):
+            payload.pop(key, None)
+        row.pop("session_id")
+        return row, payload
+
+    assert stored("ref") == stored("path")
+    row, payload = stored("ref")
+    assert payload["path"] == fixture.paths[1] and "cover_path" not in payload and "playbackRef" not in payload
+    assert row["last_sequence"] == 2 and row["finalized"] is True
+    assert len(provider) == 4 and provider[:2] == provider[2:], "provider calls must not depend on the track form"
+
+
+@pytest.mark.parametrize("endpoint", ["now-playing", "scrobble", "complete"])
+def test_reference_listen_writes_reject_mixed_invalid_and_unclaimed_tracks(
+    playback_inventory, playback_app, monkeypatch, endpoint,
+):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    fixture = playback_inventory
+    claims, reference, client_id, token = native_listen_claim(fixture, playback_app)
+    calls = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    monkeypatch.setattr(routes, "update_now_playing", lambda *args, **kwargs: calls.append("now-playing"))
+    monkeypatch.setattr(routes, "record_playback_session_complete",
+                        lambda *args, **kwargs: (calls.append("ledger") or {"ok": True}, 200))
+    expired = issue(reference_service(fixture, lambda: datetime.now(timezone.utc) - timedelta(hours=25)),
+                    fixture)["tracks"][0]["playbackRef"]
+    forged = reference[:-1] + ("A" if reference[-1] != "A" else "B")
+    stale = issue(reference_service(fixture, lambda: datetime.now(timezone.utc)), fixture)["tracks"][1]["playbackRef"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_track_files where private_path = %s",
+                           (fixture.paths[0],))
+    cases = {
+        "ref and path": ({"playbackRef": reference, "path": fixture.paths[1]}, token, 400),
+        "ref and cover": ({"playbackRef": reference, "cover_path": fixture.paths[1] + ".jpg"}, token, 400),
+        "forged": ({"playbackRef": forged}, token, 403),
+        "expired": ({"playbackRef": expired}, token, 403),
+        "not a string": ({"playbackRef": 7}, token, 403),
+        "file no longer current": ({"playbackRef": stale}, token, 404),
+        "no claim": ({"playbackRef": reference}, "x" * 43, 403),
+        "valid": ({"playbackRef": reference}, token, 200),
+    }
+    try:
+        for name, (track, claim_token, expected) in cases.items():
+            calls.clear()
+            body = measured_listen_body(client_id, claim_token, session_id=str(uuid4()), track=track, sequence=1)
+            status, _, raw = run_asgi_request(playback_app, "POST", "/playback/session/" + endpoint, json_body=body)
+            assert status == expected, (name, decode_json(raw))
+            assert all(path not in raw.decode() for path in fixture.paths), name
+            assert bool(calls) == (expected == 200), name
+    finally:
+        claims.release(fixture.actor, client_id=client_id, claim_token=token)
+
+
+def test_reference_listen_writes_recheck_media_read(playback_inventory, playback_app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    fixture = playback_inventory
+    library_id = fixture.actor.current_library_id
+    member = create_member(fixture)
+    listener = replace(member, capability_grants=tuple(
+        CapabilityGrant(action, "library", library_id)
+        for action in ("library.media.read", "integration.lastfm.complete")))
+    claims, reference, client_id, token = native_listen_claim(fixture, playback_app, listener)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(routes, "record_playback_session_complete", lambda *args, **kwargs: ({"ok": True}, 200))
+    body = measured_listen_body(client_id, token, session_id=str(uuid4()), track={"playbackRef": reference})
+    path_body = {**{key: value for key, value in body.items() if key != "playbackRef"}, "path": fixture.paths[1]}
+    try:
+        assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=body)[0] == 200
+        configure_native_app(playback_app, fixture, replace(listener, capability_grants=(
+            CapabilityGrant("integration.lastfm.complete", "library", library_id),)))
+        assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=body)[0] == 403
+        assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=path_body)[0] == 200
+    finally:
+        claims.release(listener, client_id=client_id, claim_token=token)

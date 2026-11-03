@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
-from music_app.routes.playback_control_asgi import require_playback_claim
+from music_app.routes.playback_control_asgi import require_playback_claim, resolve_listen_track
 from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
@@ -720,6 +720,7 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
     await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
     session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
@@ -741,6 +742,7 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
     await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
     session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
@@ -792,6 +794,7 @@ async def playback_session_complete(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
     await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     if payload.get("measurement_version") != "rendered-pcm-v1":
         return JSONResponse({"ok": False, "error": "unsupported_measurement"}, status_code=400)
     scope = {}

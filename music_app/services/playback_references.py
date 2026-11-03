@@ -73,7 +73,7 @@ class PlaybackReferenceService:
             configured_root_paths=[Path(row["root_path"])])
         if resolved is None:
             raise PlaybackContractError(404)
-        row["private_path"] = str(resolved)
+        row["media_path"] = Path(resolved)
         return row
 
     def issue_batch(self, actor, tracks):
@@ -98,6 +98,14 @@ class PlaybackReferenceService:
         return {"protocol": 1, "expiresAt": expires.isoformat(), "tracks": results}
 
     def resolve(self, actor, playback_ref):
+        """The media file a reference names, for decoding."""
+        return self._resolve_file(actor, playback_ref)["media_path"]
+
+    def resolve_library_path(self, actor, playback_ref):
+        """The inventory path the browser names the same track by, so listen history is identical."""
+        return self._resolve_file(actor, playback_ref)["private_path"]
+
+    def _resolve_file(self, actor, playback_ref):
         _, library_id = playback_scope(actor)
         try:
             if not isinstance(playback_ref, str) or len(playback_ref) > 512:
@@ -116,4 +124,4 @@ class PlaybackReferenceService:
             raise PlaybackContractError(403) from None
         with self._connect(self._database_url) as connection:
             require_playback_membership(connection, actor)
-            return Path(self._file(connection, library_id, file_id=file_id)["private_path"])
+            return self._file(connection, library_id, file_id=file_id)

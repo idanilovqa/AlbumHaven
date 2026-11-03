@@ -21,6 +21,7 @@ from music_app.services.listen_history import (
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
+from music_app.services.policy_asgi import require_action
 
 
 router = APIRouter()
@@ -168,3 +169,19 @@ async def release_playback(request: Request):
 async def require_playback_claim(request, payload):
     await playback_call(PostgresPlaybackClaims(playback_config(request)).require_claim,
         request.state.current_actor, client_id=payload.get("clientId"), claim_token=payload.get("claimToken"))
+
+
+async def resolve_listen_track(request, payload):
+    """A listen write names its track by the browser's `path` or by a native `playbackRef`, never both.
+
+    A reference resolves exactly as a PCM open does and becomes the inventory path the browser
+    sends for the same track, so the stored listen is identical. `cover_path` is never stored.
+    """
+    if "playbackRef" not in payload:
+        return payload
+    if "path" in payload or "cover_path" in payload:
+        raise HTTPException(400, "Invalid playback request.")
+    await require_action("library.media.read")(request)
+    service = PlaybackReferenceService(playback_config(request))
+    path = await playback_call(service.resolve_library_path, request.state.current_actor, payload["playbackRef"])
+    return {**{key: value for key, value in payload.items() if key != "playbackRef"}, "path": path}

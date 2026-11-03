@@ -223,7 +223,7 @@ def _refresh_low_value_family_references(connection, library_id, views, canonica
                 views[section] = [entry for entry in views[section] if entry['family'] != key] + [replacement]
             else:
                 views[section][key] = set(renamed)
-    views['folder_related'].update(related)
+    views['folder_related'].update({name: members for name, members in related.items() if members})
     return changed
 
 

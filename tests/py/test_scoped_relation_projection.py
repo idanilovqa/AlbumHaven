@@ -194,11 +194,14 @@ def test_scoped_source_query_restricts_album_ids_before_locations_and_artist_agg
 def test_low_value_count_restoration_does_not_manufacture_folder_relations(artist):
     key = artist.casefold()
     class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
         def fetchall(self):
-            return [{'name': artist, 'key': key, 'count': 1}]
+            return self.rows
     class Connection:
-        def execute(self, *_args):
-            return Cursor()
+        def execute(self, sql, *_args):
+            return Cursor([{'name': artist, 'key': key, 'count': 1}]
+                          if 'jsonb_to_recordset' in sql else [])
     views = build_postgres_relation_views([
         source(1, artist, 'Separate'), source(2, 'Known', 'Family/One'),
         source(3, 'Other', 'Family/Two'),
@@ -206,7 +209,8 @@ def test_low_value_count_restoration_does_not_manufacture_folder_relations(artis
     expected_related = deepcopy(views['folder_related'])
     assert artist not in expected_related
     assert expected_related['Known'] == {'Other'}
-    scoped._restore_low_value_counts(Connection(), 1, views, {key})
+    canonical_names = scoped._restore_low_value_counts(Connection(), 1, views, {key})
+    scoped._refresh_low_value_family_references(Connection(), 1, views, canonical_names)
     assert views['folder_related'] == expected_related
     assert views['alias_to_canonical'][artist] == artist
     assert views['canonical_to_aliases'][artist] == [artist]

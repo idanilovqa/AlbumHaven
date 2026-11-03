@@ -98,6 +98,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-TAGS-028 adds the missing sibling disc without losing selection or unsaved edits",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release",
               "area": "tag-edit"
@@ -245,7 +252,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
+              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
               "area": "tag-edit"
             },
             {
@@ -304,7 +311,6 @@
               "case": "FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -312,7 +318,6 @@
               "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -320,7 +325,6 @@
               "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -328,7 +332,6 @@
               "case": "FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -340,10 +343,9 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
-              "case": "FTC-SEARCH-NAV-032 watcher sorts I’m with Her before IZZ without changing display names",
+              "case": "FTC-SEARCH-NAV-032 watcher sorts I\u2019m with Her before IZZ without changing display names",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -358,7 +360,6 @@
               "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
               "area": "album-details"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -366,7 +367,6 @@
               "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -374,14 +374,15 @@
               "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
               "area": "library-roots"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
               "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
               "area": "library-roots",
-              "relatedAreas": ["album-details"]
+              "relatedAreas": [
+                "album-details"
+              ]
             },
             {
               "config": "playwright.config.js",
@@ -416,6 +417,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-003 finds accented artist names through visible search and direct links",
               "area": "gallery-search"
             },
             {
@@ -661,13 +669,13 @@
               "case": "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
               "area": "cover-providers"
             },
-          {
-            "config": "playwright.config.js",
-            "project": "functional",
-            "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
-            "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
-            "area": "cover-providers"
-          },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+              "area": "cover-providers"
+            },
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -971,6 +979,16 @@
               "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
               "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
               "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/notificationIdentity.spec.js",
+              "case": "FTC-COVERS-044 saved notification tracks recover missing identity history without duplicating cards",
+              "area": "tag-edit",
+              "relatedAreas": [
+                "cover-providers"
+              ]
             }
           ]
         }

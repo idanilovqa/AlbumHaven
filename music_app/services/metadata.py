@@ -68,6 +68,7 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and not isinstance(value, bool)
         and value == FILE_METADATA_SCHEMA_VERSION
         and "release_date" in entry
+        and "compilation_tag" in entry
     )
 
 
@@ -653,6 +654,11 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
     album_type = first_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"]) or first_custom_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"])
     album_rating = extract_album_rating(tags)
+    compilation_flag = first_tag(tags, ["compilation", "tcmp", "cpil"])
+    is_compilation = {
+        "1": True, "true": True, "yes": True,
+        "0": False, "false": False, "no": False,
+    }.get(str(compilation_flag or "").strip().casefold())
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {
         "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
@@ -663,5 +669,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "artists": track_artists,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
+        "is_compilation": is_compilation,
+        "compilation_tag": is_compilation,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }

@@ -80,6 +80,8 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        serialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
     return serialized
@@ -115,6 +117,8 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:
         deserialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        deserialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
     return deserialized
@@ -607,11 +611,18 @@ def persist_cover_selection_for_tracks_for_config(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
-    return adapter.persist_cover_selection(
+    result = adapter.persist_cover_selection(
         track_paths=track_paths,
         selected_cover_path=selected_cover_path,
         **persistence_options,
     )
+    inventory = config.get("_LOCAL_COVER_INVENTORY")
+    if inventory is not None and not remote_cover_url:
+        try:
+            inventory.invalidate_paths(track_paths)
+        except Exception:
+            _LOGGER.exception("Could not refresh local artwork inventory after the committed cover selection.")
+    return result
 
 
 def persist_structural_tag_edit_for_config(

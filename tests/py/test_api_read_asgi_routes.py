@@ -2412,7 +2412,9 @@ def test_asgi_selected_artist_primary_filter_uses_postgres_browse(app, asgi_app,
     assert payload["view_data_source"] == "postgres_library_browse"
 
 
-def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch):
+@pytest.mark.parametrize("loose_track_flags", [{}, {"include_non_album": "1", "include_library_wide_non_album": "1"}])
+@pytest.mark.parametrize("query", ["tender", "Hilda: Season 2 (Original Series Soundtrack)", "AC:DC", '"Hilda: Season 2"', "I'm Wide Awake", '"Unknown: Title'])
+def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch, loose_track_flags, query):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     hydrate_calls: list[bool] = []
@@ -2458,13 +2460,15 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
             assert config["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://album_haven_app@localhost/app"
 
         def build_search_payload(self, *, query_params=None, library_state=None):
-            assert query_params.get("q") == "tender"
+            assert query_params.get("q") == query
             assert query_params.get("surface") == "albums"
             assert query_params.get("gallery_display") == "covers"
+            for key, value in loose_track_flags.items():
+                assert query_params.get(key) == value
             assert query_params.getlist("category") == ["main_library"]
             assert library_state is asgi_app.state.library_state
             return {
-                "query": "tender",
+                "query": query,
                 "selected_artist": "",
                 "artist_groups": [{"artist": "Broadcast", "albums": []}],
                 "primary_artist_groups": [{"artist": "Broadcast", "albums": []}],
@@ -2496,17 +2500,18 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
         "GET",
         "/view-data",
         query={
-            "q": "tender",
+            "q": query,
             "surface": "albums",
             "gallery_display": "covers",
             "category": ["main_library"],
+            **loose_track_flags,
         },
     )
 
     assert status == 200
     payload = _decode_json(body)
     assert hydrate_calls == []
-    assert payload["query"] == "tender"
+    assert payload["query"] == query
     assert payload["selected_artist"] == ""
     assert payload["payload_tier"] == "full"
     assert payload["view_data_source"] == "postgres_library_browse"
@@ -3245,6 +3250,17 @@ def test_asgi_album_search_postgres_selection_rejects_unsupported_search_request
         {"q": "tender", "surface": "albums", "payload_tier": "invalid-tier"},
         {"q": "artist:Broadcast", "surface": "albums"},
         {"q": "persons:Mike", "surface": "albums"},
+        {"q": 'artist:"Watcher Spirit Composer"', "surface": "albums"},
+        {"q": '-persons:"Mike Oldfield"', "surface": "albums"},
+        {"q": "album:Hilda", "surface": "albums"},
+        {"q": "title:Song", "surface": "albums"},
+        {"q": ":loved", "surface": "albums"},
+        {"q": 'artist:"unclosed', "surface": "albums"},
+        {"q": '"artist:Name', "surface": "albums"},
+        {"q": '"-persons:Name', "surface": "albums"},
+        {"q": '-"persons:Name', "surface": "albums"},
+        {"q": '":loved', "surface": "albums"},
+        {"q": '"#loved', "surface": "albums"},
         {"q": "#loved", "surface": "albums"},
         {"q": "%", "surface": "albums"},
         {"q": "_", "surface": "albums"},
@@ -3657,9 +3673,11 @@ def test_asgi_album_details_accepts_matching_current_id_and_key_before_lineage(
     }
 
 
+@pytest.mark.parametrize("surviving_identity", ["neither", "id_only", "key_only", "both"])
 def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_identity(
     asgi_app,
     monkeypatch,
+    surviving_identity,
 ):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -3683,11 +3701,19 @@ def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_iden
         },
     ]
 
+    if surviving_identity in {"id_only", "both"}:
+        choices[0]["album_id"] = 17
+    if surviving_identity in {"key_only", "both"}:
+        choices[0]["album_key"] = "artist::current"
+
     class FakeBrowseRepository:
         def __init__(self, _config):
             pass
 
         def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            if surviving_identity == "both":
+                assert album_id == 17
+                return {"album_id": 17, "key": "artist::current"}
             raise AssertionError(
                 f"Known stale identity {album_id} must resolve lineage before current lookup"
             )
@@ -3732,6 +3758,13 @@ def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_iden
         },
     )
 
+    if surviving_identity == "both":
+        assert status == 200
+        assert _decode_json(body) == {
+            "ok": True,
+            "album": {"album_id": 17, "key": "artist::current"},
+        }
+        return
     assert status == 409
     assert _decode_json(body) == {
         "ok": False,
@@ -5652,3 +5685,9 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+@pytest.mark.parametrize("query", ['"artist:Name', '"-persons:Name', '-"persons:Name', '":loved', '"#loved', ':loved"', "-:loved'", ':loved\\', '-:loved\\'])
+def test_album_search_guard_rejects_malformed_structured_tokens(query):
+    from music_app.routes.api_read_asgi_routes import _query_requires_file_backed_search_semantics
+
+    assert _query_requires_file_backed_search_semantics(query) is True

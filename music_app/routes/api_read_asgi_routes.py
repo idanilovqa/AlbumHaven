@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request, normalize_
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
 
 import logging
+import shlex
 import time
 from collections.abc import Iterable, Mapping
 
@@ -47,6 +48,7 @@ from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
+from music_app.services.private_track_search import build_private_track_search_contract
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
@@ -815,6 +817,8 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         "gallery_scale_percent",
         "category",
         "omit_sidebar",
+        "include_non_album",
+        "include_library_wide_non_album",
     }
     if any(str(key) not in allowed_search_params for key in request.query_params.keys()):
         return False
@@ -944,13 +948,25 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
     normalized = str(query or "").strip()
     if not normalized:
         return True
-    for token in normalized.split():
+    malformed_quotes = False
+    try:
+        tokens = shlex.split(normalized)
+    except ValueError:
+        malformed_quotes = True
+        tokens = normalized.split()
+    grammar = build_private_track_search_contract()["grammar"]
+    for token in tokens:
+        if malformed_quotes:
+            token = token.strip("\"'\\")
         candidate = token[1:] if token.startswith("-") else token
+        if malformed_quotes:
+            candidate = candidate.strip("\"'\\")
         if "%" in candidate or "_" in candidate:
             return True
-        if candidate.startswith("#"):
+        if candidate.startswith("#") or candidate in grammar["shortcut_tokens"]:
             return True
-        if ":" in candidate:
+        field_name, separator, _value = candidate.partition(":")
+        if separator and field_name.casefold() in grammar["field_terms"]:
             return True
     return False
 
@@ -1063,6 +1079,18 @@ async def album_details(request: Request) -> JSONResponse:
                 )
             except (RuntimeError, OSError):
                 lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split" and album_id is not None and album_key:
+                surviving_album = next(
+                    (
+                        choice
+                        for choice in lineage["choices"]
+                        if choice.get("album_id") == album_id
+                        and choice.get("album_key") == album_key
+                    ),
+                    None,
+                )
+                if surviving_album is not None:
+                    lineage = {"status": "resolved", "album": surviving_album, "choices": []}
             if lineage["status"] == "split":
                 return JSONResponse(
                     {

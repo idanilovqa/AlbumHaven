@@ -91,3 +91,13 @@ test('bootstrap release drops every retained embedded view patch while preservin
   assert.equal(afterRelease.startupHydration.followupEndpoint, '/view-data');
   assert.equal(afterRelease.startupHydration.tier, 'sidebar');
 });
+
+test('empty-shell version defaults remain unconfirmed while real rule payloads are authoritative', () => {
+  for (const [initialView, expected] of [[{}, false], [{ ignored_version_keys: [], manual_version_links: {} }, true]]) {
+    const context = { document: { querySelector: () => null }, window: { __ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__: { initial_view: initialView } } };
+    vm.createContext(context);
+    vm.runInContext(`${helperSource}\nthis.testAppBootstrap = appBootstrap;`, context);
+    assert.equal(context.testAppBootstrap.getInitialView().version_rules_loaded.ignored, expected);
+    assert.equal(context.testAppBootstrap.getInitialView().version_rules_loaded.manual, expected);
+  }
+});

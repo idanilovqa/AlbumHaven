@@ -1092,9 +1092,9 @@ def test_alias_facts_compact_validated_containers_without_losing_fallback(monkey
     original = builder._build_alias_views
     captured = []
 
-    def capture(albums):
+    def capture(albums, **kwargs):
         captured.extend(albums)
-        return original(albums)
+        return original(albums, **kwargs)
 
     monkeypatch.setattr(builder, '_build_alias_views', capture)
     actual = builder.build_postgres_relation_alias_views(rows)
@@ -1157,3 +1157,40 @@ def test_artist_typo_upper_bound_preserves_original_decisions(isolated_artist_st
             and SequenceMatcher(None, a, b).ratio() >= 0.9
         )
         assert builder._are_probable_artist_typos(left, right) == expected, (left, right)
+
+
+@pytest.mark.parametrize(('joint', 'solo'), [
+    ('Lisa Gerrard & Klaus Badelt', 'Lisa Gerrard'),
+    ("Luca Turilli's Rhapsody", 'Rhapsody'),
+    ("Rikard Sjöblom's Gungfly", 'Gungfly'),
+])
+@pytest.mark.parametrize('builder_name', ['build_postgres_relation_views', 'build_postgres_relation_alias_views'])
+def test_explicit_alias_policy_preserves_both_v11_contracts(joint, solo, builder_name):
+    from music_app.services import relation_projection_builder
+    build_views = getattr(relation_projection_builder, builder_name)
+
+    rows = [
+        _row(album_id=1, artist=joint, relative_path='Shared/Era/Joint/01.flac'),
+        _row(album_id=2, artist=solo, relative_path='Shared/Era/Solo/01.flac'),
+    ]
+    current = build_views(rows)
+    explicit_current = build_views(rows, alias_policy='current-v11-explicit-collaboration')
+    legacy = build_views(rows, alias_policy='legacy-v11-broad-aliases')
+    assert current == explicit_current
+    assert current['alias_to_canonical'][joint] == joint
+    assert legacy['alias_to_canonical'][joint] == solo
+    assert legacy['alias_to_canonical'][solo] == solo
+    assert set(current) == set(legacy)
+    import json
+    golden = json.loads((Path(__file__).parents[1] / 'fixtures' / 'relation_legacy_v11_contracts.json').read_text(encoding='utf-8'))[joint]
+    serialized = serialize_relation_views(legacy)
+    assert {section: serialized[section] for section in legacy} == {section: golden[section] for section in legacy}
+
+
+@pytest.mark.parametrize('builder_name', ['build_postgres_relation_views', 'build_postgres_relation_alias_views'])
+def test_relation_alias_policy_rejects_unknown_semantics(builder_name):
+    from music_app.services import relation_projection_builder
+    build_views = getattr(relation_projection_builder, builder_name)
+
+    with pytest.raises(ValueError, match='Unknown relation alias policy'):
+        build_views([], alias_policy='unrecognized')

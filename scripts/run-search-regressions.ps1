@@ -7,6 +7,7 @@ param(
     [string]$Pgbin = $env:PGBIN,
     [string]$ChromeExecutable = $env:PLAYWRIGHT_CHROME_EXECUTABLE,
     [ValidateSet('17', '18')][string]$PostgresMajor = '18',
+    [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
     [ValidateRange(1025, 65000)][int]$PerformanceBasePort = 4710
 )
 
@@ -65,7 +66,7 @@ $env:PGBIN = $Pgbin
 Set-Location $repositoryRoot
 
 Invoke-Checked {
-    & $PythonPath -m pytest tests\py\test_library_browse_postgres.py `
+    & $PythonPath -m pytest tests\py\test_library_browse_postgres.py tests\py\test_artist_accent_search.py `
         tests\py\test_api_read_asgi_routes.py tests\py\test_web_asgi_routes.py `
         tests\py\test_gallery_album_capability_projection.py `
         -k 'search or selected_artist or test_duplicate_source_attachment_defers_global_index_cache_miss or duplicate_absence or gallery_summary_projects_request_edit_permission' -q
@@ -103,7 +104,7 @@ Invoke-Checked {
 Invoke-Checked {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
         -Shard gallery-search-visual -PythonPath $PythonPath `
-        -FixtureDistribution $fixtureDistributionRoot
+        -FixtureDistribution $fixtureDistributionRoot -PostgresPort $PostgresPort
 } 'Search functional E2E shard'
 
 New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
@@ -116,6 +117,7 @@ try {
             -BasePort $PerformanceBasePort `
             -DatabaseSuffixBase "searchreg_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
+            -PostgresPort $PostgresPort `
             -Pgbin $Pgbin `
             -RepositoryRoot $repositoryRoot `
             -RunnerTemp $performanceTemp `

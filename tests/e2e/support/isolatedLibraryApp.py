@@ -499,6 +499,7 @@ ALIAS_PARITY_ARTIST_FIXTURES = {
     **MORSE_ALIAS_FIXTURES,
     **EMPTY_KEY_ARTIST_FIXTURES,
     **WHITESPACE_FAMILY_FIXTURES,
+    "Onségen Ensemble": ("Awalaï", 2016),
     SNOW_WHITE_RAW_ARTIST: (SNOW_WHITE_ALBUM, SNOW_WHITE_YEAR),
 }
 _NAME_RNG = random.Random(os.urandom(16))
@@ -3087,6 +3088,43 @@ def persist_fixture_inventory(
     persist_legacy_ignored_album_contract(setup_database_url)
 
 
+def seed_cover_lookup_local_inventory(database_url, library_root):
+    import psycopg
+    from config import Config, PERSISTENCE_BACKEND_POSTGRES
+    from music_app.services.cover_workflow import resolve_album_root_from_track_paths
+    from music_app.services.local_cover_inventory import (
+        LocalCoverInventoryRepository,
+        context_key,
+        discover_local_cover_inventory,
+    )
+
+    with psycopg.connect(database_url) as connection:
+        paths = {row[0] for row in connection.execute(
+            """select files.private_path from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               join library.local_albums albums on albums.id = tracks.album_id
+               join library.local_artists artists on artists.id = albums.artist_id
+               where artists.name = %s and albums.title = %s
+               and coalesce((files.metadata #>> '{scan_cache,stale}')::boolean, false) is false""",
+            ("Mastodon", "Crack The Skye"),
+        )}
+    if not paths:
+        return
+    inventory_config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "MUSIC_DIR": library_root,
+        "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
+        "IMAGE_EXTENSIONS": Config.IMAGE_EXTENSIONS,
+    }
+    root = resolve_album_root_from_track_paths(inventory_config, paths)
+    if root is None:
+        raise RuntimeError("Canonical cover fixture must resolve to an album root before startup")
+    repository = LocalCoverInventoryRepository(inventory_config)
+    repository.request_context(paths, foreground=False)
+    repository.publish_context(context_key(paths), 1, root, foreground=False)
+    repository.publish(root, 1, discover_local_cover_inventory(root, inventory_config))
+
+
 def ensure_provider_storage_policy_cover_spec(
     cover_specs: list[dict[str, object]],
 ) -> dict[str, object] | None:
@@ -5576,6 +5614,9 @@ def main() -> None:
             persist_fixture_inventory(setup_database_url, library_root, file_cache)
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
+
+        if not reuse_state:
+            seed_cover_lookup_local_inventory(setup_database_url, library_root)
 
         if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
             provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)

@@ -1067,9 +1067,9 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         navigationPanelActions,
         ...target,
       });
-      const observation = await galleryActions.readProductionVisibleAlbumObservation(
+      const observation = await galleryActions.readCurrentProductionVisibleAlbumObservation(
         target.artist,
-        [target.album],
+        [{ album: target.album, year: String(target.year) }],
       );
       expect(observation.albumCount).toBe(1);
       expect(observation.renderedIdentities).toEqual([

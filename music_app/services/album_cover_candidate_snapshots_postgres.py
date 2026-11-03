@@ -46,10 +46,25 @@ class AlbumCoverCandidateSnapshotRepository:
         config: Mapping[str, object],
         *,
         connect: Callable[[str], Any] | None = None,
+        task_id: str = "",
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._use_shared_connection_pool = connect is None
         self._connect = connect or _connect
+        self._task_id = str(task_id or "").strip()
+
+    def _owns_search_generation(self, connection: Any, generation: str) -> bool:
+        if not self._task_id:
+            return True
+        row = connection.execute("""
+            select task_key from ops.cover_lookup_tasks
+            where task_key = %s
+              and metadata #>> '{source_payload,search_generation}' = %s
+              and status in ('pending', 'running')
+              and coalesce(metadata #>> '{source_payload,job_contract,job_kind}', '') <> 'save_remote_selection'
+            for share
+        """, (self._task_id, generation)).fetchone()
+        return row is not None
 
     def get_for_album_context(self, *, album_id: int) -> dict[str, object] | None:
         with self._connect_to_database() as connection:
@@ -138,6 +153,8 @@ class AlbumCoverCandidateSnapshotRepository:
         }
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                if not self._owns_search_generation(connection, str(search_generation)):
+                    return False
                 row = _first_row(connection.execute(_publish_generation_sql(), params))
         return bool(_row_mapping(row).get("accepted"))
 
@@ -147,6 +164,8 @@ class AlbumCoverCandidateSnapshotRepository:
         album_id: int,
         search_generation: str,
         status: str,
+        candidates: list[dict[str, object]] | None = None,
+        best_candidate_id: str | None = None,
     ) -> bool:
         normalized_status = str(status or "").strip().casefold()
         if normalized_status not in _TERMINAL_STATUSES:
@@ -155,9 +174,13 @@ class AlbumCoverCandidateSnapshotRepository:
             "album_id": album_id,
             "search_generation": str(search_generation),
             "status": normalized_status,
+            "candidates": _jsonb(candidates) if candidates is not None else None,
+            "best_candidate_id": best_candidate_id,
         }
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                if not self._owns_search_generation(connection, str(search_generation)):
+                    return False
                 row = _first_row(connection.execute(_finish_generation_sql(), params))
         return bool(_row_mapping(row).get("accepted"))
 
@@ -504,6 +527,12 @@ def _finish_generation_sql() -> str:
         + """
         update library.local_album_cover_candidate_snapshots
         set status = %(status)s,
+            candidates = coalesce(%(candidates)s::jsonb, library.local_album_cover_candidate_snapshots.candidates),
+            best_candidate_id = case when %(candidates)s::jsonb is null
+              then library.local_album_cover_candidate_snapshots.best_candidate_id
+              else %(best_candidate_id)s end,
+            revision = library.local_album_cover_candidate_snapshots.revision
+              + case when %(candidates)s::jsonb is null then 0 else 1 end,
             updated_at = now(),
             finished_at = now()
         from active_album

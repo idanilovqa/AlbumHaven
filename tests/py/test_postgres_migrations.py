@@ -465,7 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-63:] == [
+    assert migration_names[-71:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -529,6 +529,14 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0101_create_local_album_identity_transitions.sql",
         "0102_narrow_synthetic_unknown_album_identity_guard.sql",
         "0103_repair_synthetic_unknown_cover_task_identities.sql",
+        "0104_preserve_cover_notification_order.sql",
+        "0105_index_cover_notification_track_sets.sql",
+        "0106_index_accent_insensitive_artist_search.sql",
+        "0107_add_local_cover_inventory.sql",
+        "0108_add_scoped_relation_projection.sql",
+        "0109_add_incremental_gallery_membership.sql",
+        "0110_journal_gallery_metadata_changes.sql",
+        "0111_add_relation_projection_compatibility.sql",
     ]
 
 
@@ -3312,3 +3320,22 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+
+def test_relation_compatibility_migration_is_additive_and_has_no_backfill():
+    sql = _normalized_sql((Path(__file__).parents[2] / 'migrations' / 'postgres' / '0111_add_relation_projection_compatibility.sql').read_text(encoding='utf-8'))
+    assert 'create table library.local_relation_compatibility_entries' in sql
+    assert 'like library.local_relation_projection_entries including all' in sql
+    assert 'create table library.local_relation_compatibility_state' in sql
+    assert "legacy_semantics = 'legacy-v11-broad-aliases'" in sql
+    assert "current_semantics = 'current-v11-explicit-collaboration'" in sql
+    assert 'last_publication_xid xid8 not null' in sql
+    assert 'revoke all on function library.local_relation_compatibility_views(bigint) from public' in sql
+    import re
+    ddl = re.sub(r'create(?: or replace)? function.*?\$\$;', '', sql, flags=re.S)
+    assert 'create view library.local_artist_search_projection_current' in sql
+    assert 'create table library.local_artist_search_projection_current_entries' in sql
+    assert 'insert into' not in ddl
+    assert 'update library.' not in ddl
+    assert 'delete from' not in ddl
+    assert 'drop table' not in sql

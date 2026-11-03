@@ -101,7 +101,10 @@
       "queueRevision": 1,
       "currentIndex": 0,
       "positionMs": 1250,
-      "durationMs": 180000
+      "durationMs": 180000,
+      "renderedFrames": 60000,
+      "sampleRate": 48000,
+      "underruns": 0
     }
   },
   "rejectedEnvelopes": [

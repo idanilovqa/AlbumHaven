@@ -184,6 +184,13 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
         private set
     val operations = mutableListOf<String>()
 
+    /** Written frames the fake output has not played yet. */
+    var pending = 0
+
+    override fun pendingFrames() = minOf(pending, writtenFrames)
+
+    override fun heardFrames() = (writtenFrames - pendingFrames()).toLong()
+
     override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
         val accepted = minOf(frames, acceptFrames)
         while ((writtenFrames + accepted) * 2 > trace.size) trace = trace.copyOf(trace.size * 2)

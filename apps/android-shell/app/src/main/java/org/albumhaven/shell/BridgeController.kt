@@ -76,12 +76,20 @@ class BridgeController(
                 reply(BridgeCodec.failure(message, protocol, "incompatible_bridge", "Wrong protocol"))
             message.name == SANDBOX_SELECT && SANDBOX_CAPABILITY in capabilities() ->
                 selectSandbox(message, protocol, reply)
-            else -> when (val result = playbackBridge.handle(message.name, message.payload)) {
-                is PlaybackBridge.Result.Ok -> reply(BridgeCodec.success(message, protocol, result.payload))
-                is PlaybackBridge.Result.Failed ->
-                    reply(BridgeCodec.failure(message, protocol, result.code, result.message))
-                null -> reply(BridgeCodec.failure(message, protocol, "unsupported_command", "Unsupported command"))
+            else -> {
+                val async = playbackBridge.handleAsync(message.name, message.payload) {
+                    respond(message, protocol, it, reply)
+                }
+                if (!async) respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
             }
+        }
+    }
+
+    private fun respond(message: BridgeMessage, protocol: Int, result: PlaybackBridge.Result?, reply: (String) -> Unit) {
+        when (result) {
+            is PlaybackBridge.Result.Ok -> reply(BridgeCodec.success(message, protocol, result.payload))
+            is PlaybackBridge.Result.Failed -> reply(BridgeCodec.failure(message, protocol, result.code, result.message))
+            null -> reply(BridgeCodec.failure(message, protocol, "unsupported_command", "Unsupported command"))
         }
     }
 
@@ -101,6 +109,8 @@ class BridgeController(
         negotiatedProtocol = selected
         eventSink = reply
         reply(BridgeCodec.success(message, selected, handshakePayload(selected)))
+        // A document that can play is connected; its first start should not pay for cold connections.
+        playback.warmConnections()
     }
 
     private fun handshakePayload(selected: Int): JSONObject {

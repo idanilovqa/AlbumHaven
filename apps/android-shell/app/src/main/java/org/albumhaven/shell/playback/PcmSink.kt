@@ -13,6 +13,9 @@ interface PcmSink {
     /** Frames written but not yet heard, so a position can name the audible frame. */
     fun pendingFrames(): Int = 0
 
+    /** Frames actually played since this sink was created; flushed frames never count. */
+    fun heardFrames(): Long
+
     fun play()
 
     fun pause()

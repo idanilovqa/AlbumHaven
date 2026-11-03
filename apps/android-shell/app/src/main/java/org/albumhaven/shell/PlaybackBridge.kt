@@ -1,6 +1,8 @@
 package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.CommandResult
+import org.albumhaven.shell.playback.ListenEffect
+import org.albumhaven.shell.playback.ListenEffectResult
 import org.albumhaven.shell.playback.LoopRange48k
 import org.albumhaven.shell.playback.NativePlaybackController
 import org.albumhaven.shell.playback.NativePlaybackEvent
@@ -21,9 +23,16 @@ interface NativePlaybackPort {
     fun previous(queueRevision: Long): CommandResult
     fun seek(queueRevision: Long, positionMs: Long): CommandResult
     fun setLoop(queueRevision: Long, range: LoopRange48k?): CommandResult
+    fun releaseOwnership()
+    fun listenEffect(effect: ListenEffect, body: JSONObject, onResult: (ListenEffectResult) -> Unit)
+    fun warmConnections()
 }
 
-class ControllerPlaybackPort(private val controller: NativePlaybackController) : NativePlaybackPort {
+/** [deliver] moves listen-write answers to the thread that replies to the WebView. */
+class ControllerPlaybackPort(
+    private val controller: NativePlaybackController,
+    private val deliver: (Runnable) -> Unit = Runnable::run,
+) : NativePlaybackPort {
     override val snapshot get() = controller.snapshot
     override fun loadQueue(load: QueueLoad) = controller.loadQueue(load)
     override fun play(queueRevision: Long) = controller.play(queueRevision)
@@ -33,6 +42,10 @@ class ControllerPlaybackPort(private val controller: NativePlaybackController) :
     override fun previous(queueRevision: Long) = controller.previous(queueRevision)
     override fun seek(queueRevision: Long, positionMs: Long) = controller.seek(queueRevision, positionMs)
     override fun setLoop(queueRevision: Long, range: LoopRange48k?) = controller.setLoop(queueRevision, range)
+    override fun releaseOwnership() = controller.releaseOwnership()
+    override fun listenEffect(effect: ListenEffect, body: JSONObject, onResult: (ListenEffectResult) -> Unit) =
+        controller.listenEffect(effect, body) { result -> deliver { onResult(result) } }
+    override fun warmConnections() = controller.warmConnections()
 }
 
 /** Validates `playback.*` commands and encodes native playback events (Web/Native Bridge v1). */
@@ -50,7 +63,33 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         SET_LOOP -> setLoop(payload)
         CLEAR_LOOP -> revision(payload)?.let { result(port.setLoop(it, null)) } ?: invalid()
         SNAPSHOT -> if (payload.length() == 0) Result.Ok(snapshotJson(port.snapshot)) else invalid()
+        RELEASE_OWNERSHIP -> empty(payload) { port.releaseOwnership() }
         else -> null
+    }
+
+    /** Handles the asynchronous commands; returns false when [name] is not one of them. */
+    fun handleAsync(name: String, payload: JSONObject, respond: (Result) -> Unit): Boolean {
+        if (name != LISTEN_EFFECT) return false
+        val effect = ListenEffect.fromWire(payload.opt("effect"))
+        val body = payload.opt("body") as? JSONObject
+        // The WebView never holds the claim; only the native owner adds its credentials.
+        if (payload.fieldNames() != setOf("effect", "body") || effect == null || body == null ||
+            body.has("clientId") || body.has("claimToken")
+        ) {
+            respond(invalid())
+            return true
+        }
+        port.listenEffect(effect, body) { result ->
+            respond(
+                when (result) {
+                    is ListenEffectResult.Answered ->
+                        Result.Ok(JSONObject().put("status", result.status).put("data", result.data))
+                    ListenEffectResult.NotOwner -> Result.Failed("not_owner", "This app does not own playback")
+                    ListenEffectResult.Unreachable -> Result.Failed("network_error", "Playback sync failed")
+                },
+            )
+        }
+        return true
     }
 
     sealed interface Result {
@@ -166,6 +205,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private const val SET_LOOP = "playback.setLoop"
         private const val CLEAR_LOOP = "playback.clearLoop"
         private const val SNAPSHOT = "playback.snapshot"
+        private const val RELEASE_OWNERSHIP = "playback.releaseOwnership"
+        private const val LISTEN_EFFECT = "playback.listenEffect"
 
         /** `POST /playback/refs` issues at most this many references per batch. */
         const val MAX_QUEUE_ITEMS = 100
@@ -185,14 +226,21 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
             .put("positionMs", snapshot.positionMs)
             .put("durationMs", snapshot.durationMs)
 
-        /** The bridge event name and payload; every payload echoes the applied queue revision. */
+        /**
+         * The bridge event name and payload; every payload echoes the applied queue revision and
+         * the measured listening of the current item.
+         */
         fun encode(event: NativePlaybackEvent): Pair<String, JSONObject> {
             val payload = snapshotJson(event.snapshot)
+                .put("renderedFrames", event.snapshot.renderedFrames)
+                .put("sampleRate", event.snapshot.sampleRate ?: JSONObject.NULL)
+                .put("underruns", event.snapshot.underruns)
             val name = when (event) {
                 is NativePlaybackEvent.State -> "playback.state"
                 is NativePlaybackEvent.Position -> "playback.position"
                 is NativePlaybackEvent.CurrentItem -> {
                     payload.put("reason", event.reason.wire)
+                    event.outgoingRenderedFrames?.let { payload.put("outgoingRenderedFrames", it) }
                     "playback.currentItem"
                 }
                 is NativePlaybackEvent.LoopWrapped -> "playback.loopWrapped"

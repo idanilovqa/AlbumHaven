@@ -36,6 +36,9 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
     /** Frames written since the last flush; the playback head counts from the same point. */
     private var writtenFrames = 0L
 
+    /** Frames heard before the last flush. */
+    private var heardBeforeFlush = 0L
+
     override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
         val written = track.write(
             samples,
@@ -54,11 +57,14 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
         return (writtenFrames - played).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
     }
 
+    override fun heardFrames(): Long = heardBeforeFlush + writtenFrames - pendingFrames()
+
     override fun play() = track.play()
 
     override fun pause() = track.pause()
 
     override fun flush() {
+        heardBeforeFlush = heardFrames()
         track.flush()
         writtenFrames = 0
     }

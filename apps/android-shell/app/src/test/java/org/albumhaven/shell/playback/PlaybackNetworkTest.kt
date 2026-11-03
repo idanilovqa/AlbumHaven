@@ -96,6 +96,87 @@ class PlaybackNetworkTest {
     }
 
     @Test
+    fun listenWritesCarryTheOwnersClaimAndReturnOnlyTopLevelScalars() {
+        server.enqueue(
+            MockResponse.Builder().code(409)
+                .body("""{"ok":false,"error":"account_scoped_scrobble_unavailable","retryable":false,"entry":{"path":"x"}}""")
+                .build(),
+        )
+        val body = JSONObject().put("title", "Signal A").put("measurement_version", "rendered-pcm-v1")
+        val result = HttpListenEffectApi(client, session()).post(ListenEffect.NOW_PLAYING, TEST_CLIENT_ID, "held", body)
+
+        assertTrue(result is ListenEffectResult.Answered)
+        result as ListenEffectResult.Answered
+        assertEquals(409, result.status)
+        assertEquals(setOf("ok", "error", "retryable"), result.data.keys().asSequence().toSet())
+        assertEquals("account_scoped_scrobble_unavailable", result.data.getString("error"))
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("POST", request.method)
+        assertEquals("/playback/session/now-playing", request.url.encodedPath)
+        assertEquals(origin, request.headers["Origin"])
+        assertEquals(cookieHeader, request.headers["Cookie"])
+        assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
+        val sent = JSONObject(request.body!!.utf8())
+        assertEquals("Signal A", sent.getString("title"))
+        assertEquals(TEST_CLIENT_ID, sent.getString("clientId"))
+        assertEquals("held", sent.getString("claimToken"))
+        assertFalse(body.has("claimToken"))
+    }
+
+    @Test
+    fun aListenWriteWithoutAJsonAnswerIsUnreachable() {
+        server.enqueue(MockResponse.Builder().code(502).body("<html>bad gateway</html>").build())
+        assertEquals(
+            ListenEffectResult.Unreachable,
+            HttpListenEffectApi(client, session()).post(ListenEffect.COMPLETE, TEST_CLIENT_ID, "held", JSONObject()),
+        )
+    }
+
+    @Test
+    fun warmingReadsTheOwnershipStateOncePerNeededConnection() {
+        repeat(3) { server.enqueue(MockResponse.Builder().code(200).body("{}").build()) }
+        val warmer = OkHttpConnectionWarmer(client, session(), TEST_CLIENT_ID)
+        warmer.warm(socketConnection = true)
+        val warmed = listOf(server.takeRequest(5, TimeUnit.SECONDS)!!, server.takeRequest(5, TimeUnit.SECONDS)!!)
+        warmer.warm(socketConnection = false)
+        val rewarmed = server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        (warmed + rewarmed).forEach { request ->
+            assertEquals("GET", request.method)
+            assertEquals("/playback/state", request.url.encodedPath)
+            assertEquals(TEST_CLIENT_ID, request.url.queryParameter("client_id"))
+            assertEquals(cookieHeader, request.headers["Cookie"])
+        }
+        assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun thePcmUpgradeReusesTheWarmedConnection() {
+        server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+        server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+        server.enqueue(
+            MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(code, null)
+                }
+            }).build(),
+        )
+        OkHttpConnectionWarmer(client, session(), TEST_CLIENT_ID).warm(socketConnection = true)
+        val warmed = setOf(server.takeRequest(5, TimeUnit.SECONDS)!!.connectionIndex, server.takeRequest(5, TimeUnit.SECONDS)!!.connectionIndex)
+        // Let both warm calls return their connections to the pool.
+        Thread.sleep(200)
+
+        val listener = RecordingListener()
+        val socket = OkHttpPcmTransportFactory(client, session()).connect(listener)
+        assertEquals("open", listener.next())
+        val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/playback/pcm", upgrade.url.encodedPath)
+        assertTrue(upgrade.connectionIndex in warmed)
+        socket.close()
+        assertEquals(1000, listener.next())
+    }
+
+    @Test
     fun anUnreachableServerIsNotARefusal() {
         server.close()
         assertEquals(ClaimResponse.Unreachable, HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, null, track))

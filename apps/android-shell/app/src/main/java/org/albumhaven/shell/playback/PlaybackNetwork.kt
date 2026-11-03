@@ -1,7 +1,10 @@
 package org.albumhaven.shell.playback
 
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -12,6 +15,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLDecoder
+import java.util.concurrent.TimeUnit
 
 /**
  * The WebView session as request headers for one origin. Cookies are read when a request
@@ -106,6 +110,85 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
 
     private companion object {
         val JSON = "application/json".toMediaType()
+    }
+}
+
+/**
+ * Listen writes as the active native owner: the web builds the payload exactly as it does in a
+ * browser, and only this side adds the claim credentials, so the token never reaches the WebView.
+ */
+class HttpListenEffectApi(client: OkHttpClient, private val session: ShellSession) : ListenEffectApi {
+    // The web listen session aborts these writes after ten seconds.
+    private val client = client.newBuilder().callTimeout(LISTEN_TIMEOUT_SECONDS, TimeUnit.SECONDS).build()
+
+    override fun post(effect: ListenEffect, clientId: String, claimToken: String, body: JSONObject): ListenEffectResult {
+        val payload = JSONObject(body.toString()).put("clientId", clientId).put("claimToken", claimToken)
+        val request = session.authorize(Request.Builder(), withCsrf = true)
+            .url("${session.origin()}/playback/session/${effect.wire}")
+            .header("Cache-Control", "no-store")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                val text = response.body.source().let { source ->
+                    if (!source.request(MAX_RESPONSE_BYTES + 1)) source.buffer.readUtf8() else null
+                } ?: return ListenEffectResult.Unreachable
+                ListenEffectResult.Answered(response.code, scalars(JSONObject(text)))
+            }
+        } catch (_: IOException) {
+            ListenEffectResult.Unreachable
+        } catch (_: JSONException) {
+            ListenEffectResult.Unreachable
+        }
+    }
+
+    /** The web reads only `ok` and `error`; nested listen entries stay on the server. */
+    private fun scalars(json: JSONObject): JSONObject = JSONObject().also { copy ->
+        json.keys().forEach { key ->
+            val value = json.opt(key)
+            if (value is String || value is Number || value is Boolean || value == JSONObject.NULL) copy.put(key, value)
+        }
+    }
+
+    private companion object {
+        val JSON = "application/json".toMediaType()
+        const val LISTEN_TIMEOUT_SECONDS = 10L
+        const val MAX_RESPONSE_BYTES = 64L * 1024
+    }
+}
+
+/**
+ * Warms one HTTP/2 connection for claim and listen calls and, while no socket is open, one
+ * HTTP/1.1 connection the `/playback/pcm` upgrade can reuse from the shared pool.
+ */
+class OkHttpConnectionWarmer(
+    private val client: OkHttpClient,
+    private val session: ShellSession,
+    private val clientId: String,
+) : ConnectionWarmer {
+    private val socketClient = client.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build()
+
+    override fun warm(socketConnection: Boolean) {
+        get(client)
+        if (socketConnection) get(socketClient)
+    }
+
+    // The same ownership read the web polls, sent on OkHttp's own threads; its answer is not needed.
+    private fun get(target: OkHttpClient) {
+        val request = session.authorize(Request.Builder(), withCsrf = false)
+            .url("${session.origin()}/playback/state?client_id=$clientId")
+            .header("Cache-Control", "no-store")
+            .build()
+        target.newCall(request).enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                // Reading the body to its end returns the connection to the pool.
+                response.use { it.body.bytes() }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                // A cold connection is only slower.
+            }
+        })
     }
 }
 

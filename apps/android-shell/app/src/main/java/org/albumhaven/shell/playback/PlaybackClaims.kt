@@ -63,6 +63,21 @@ class PlaybackClaimOwner(
 
     val owned: Boolean get() = token != null
 
+    /** The held claim token, for the owner's own listen writes only; never leaves native memory. */
+    val heldToken: String? get() = token
+
+    /**
+     * Answers once whether this client owns playback: at once when the claim is held or none is
+     * being requested, otherwise when the pending acquisition settles.
+     */
+    fun awaitOwnership(onResult: (ClaimOutcome) -> Unit) {
+        when {
+            token != null -> onResult(ClaimOutcome.GRANTED)
+            acquiring -> waiters += onResult
+            else -> onResult(ClaimOutcome.UNAVAILABLE)
+        }
+    }
+
     /** Requests ownership for [claimTrack]; [onResult] runs once on the playback thread. */
     fun acquire(claimTrack: ClaimTrack, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
@@ -106,7 +121,7 @@ class PlaybackClaimOwner(
         }
     }
 
-    /** Pause, stop, end and teardown release ownership; an expired claim needs no answer. */
+    /** Gives the claim back now; an expired claim needs no answer. The owner calls it once listen writes drain. */
     fun release() {
         val held = token
         val wasActive = held != null || acquiring

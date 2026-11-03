@@ -37,12 +37,15 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import okhttp3.OkHttpClient
 import org.albumhaven.shell.playback.AudioTrackPcmSink
+import org.albumhaven.shell.playback.HttpListenEffectApi
 import org.albumhaven.shell.playback.HttpPlaybackClaimApi
 import org.albumhaven.shell.playback.NativePlaybackController
+import org.albumhaven.shell.playback.OkHttpConnectionWarmer
 import org.albumhaven.shell.playback.OkHttpPcmTransportFactory
 import org.albumhaven.shell.playback.ShellSession
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -52,6 +55,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private val originPolicy = OriginPolicy(channel, BuildConfig.DEV_ORIGIN)
     private val probeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val playbackIo: ExecutorService = Executors.newSingleThreadExecutor()
+    private val listenIo: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var preferences: ShellPreferences
@@ -87,7 +91,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         bridge = BridgeController(
             ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
             this,
-            ControllerPlaybackPort(playback),
+            ControllerPlaybackPort(playback) { answer -> mainHandler.post { if (!isDestroyed) answer.run() } },
         )
         recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
         webView = findViewById(R.id.shell_web_view)
@@ -125,6 +129,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         // Foreground only for now: playback stops and its claim is released with the Activity.
         playback.shutdown()
         playbackIo.shutdown()
+        listenIo.shutdown()
         probeExecutor.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
         fileChooserCallback?.onReceiveValue(null)
@@ -169,13 +174,18 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private fun createPlayback(): NativePlaybackController {
         val session = ShellSession({ selectedOrigin }) { url -> CookieManager.getInstance().getCookie(url) }
         val client = OkHttpClient()
+        val clientId = UUID.randomUUID().toString()
         return NativePlaybackController(
             transports = OkHttpPcmTransportFactory(client, session),
             claimApi = HttpPlaybackClaimApi(client, session),
+            listenApi = HttpListenEffectApi(client, session),
             sinks = ::AudioTrackPcmSink,
             io = playbackIo,
+            listenIo = listenIo,
             clock = SystemClock::elapsedRealtime,
             events = { event -> mainHandler.post { if (!isDestroyed) bridge.emit(event) } },
+            clientId = clientId,
+            warmer = OkHttpConnectionWarmer(client, session, clientId),
         ).also { it.start() }
     }
 
@@ -293,8 +303,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.reset()
-            // Playback state never crosses documents or origins.
-            playback.stop()
+            // Playback state never crosses documents or origins; the claim goes once sent listen writes finish.
+            playback.startDocument()
             incompatibleWeb = false
         }
 

@@ -3,6 +3,7 @@ package org.albumhaven.shell.playback
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.Executor
@@ -28,16 +29,47 @@ class FakeClaimApi : PlaybackClaimApi {
     }
 }
 
+/** Records listen writes and answers each with [answer]. */
+class FakeListenApi : ListenEffectApi {
+    val posts = mutableListOf<Triple<ListenEffect, String, JSONObject>>()
+    var answer: () -> ListenEffectResult = { ListenEffectResult.Answered(200, JSONObject().put("ok", true)) }
+
+    override fun post(effect: ListenEffect, clientId: String, claimToken: String, body: JSONObject): ListenEffectResult {
+        check(clientId == TEST_CLIENT_ID)
+        posts += Triple(effect, claimToken, body)
+        return answer()
+    }
+}
+
+/** Runs queued work only when [drain] is called, like a busy network thread. */
+class ManualExecutor : Executor {
+    private val queued = ArrayDeque<Runnable>()
+    override fun execute(command: Runnable) {
+        queued += command
+    }
+
+    fun drain() {
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+    }
+}
+
 /**
  * Drives [NativePlaybackController] on the test thread against the fake socket server and sink.
  * With [realTime], each five-millisecond step lets the sink take only five milliseconds of audio.
  */
-class ControllerHarness(vararg tracks: SyntheticTrack, realTime: Boolean = false) {
+class ControllerHarness(
+    vararg tracks: SyntheticTrack,
+    realTime: Boolean = false,
+    claimIo: Executor = Executor { it.run() },
+    listenIo: Executor = Executor { it.run() },
+) {
     var now = 0L
     val server = FakeAhpcServer(tracks.toList())
     val claims = FakeClaimApi()
+    val listen = FakeListenApi()
     val sinks = mutableListOf<RecordingSink>()
     val events = mutableListOf<NativePlaybackEvent>()
+    val warms = mutableListOf<Boolean>()
     var listener: PcmTransportListener? = null
     var connects = 0
     var closes = 0
@@ -55,13 +87,16 @@ class ControllerHarness(vararg tracks: SyntheticTrack, realTime: Boolean = false
             }
         },
         claimApi = claims,
+        listenApi = listen,
         sinks = { rate ->
             RecordingSink(rate, if (realTime) rate * STEP_MS.toInt() / 1000 else Int.MAX_VALUE).also(sinks::add)
         },
-        io = Executor { it.run() },
+        io = claimIo,
+        listenIo = listenIo,
         clock = { now },
         events = { events += it },
         clientId = TEST_CLIENT_ID,
+        warmer = { socketConnection -> warms += socketConnection },
     )
 
     fun item(track: SyntheticTrack) = QueueItem(
@@ -130,6 +165,10 @@ class NativePlaybackControllerTest {
             listOf(CurrentItemReason.LOAD to 0, CurrentItemReason.ADVANCE to 1),
             harness.reasons(),
         )
+        // The claim outlives the end until the web's listen writes for it are done.
+        assertEquals(listOf("owned"), harness.ownership())
+        harness.controller.releaseOwnership()
+        harness.step()
         assertEquals(listOf("owned", "released"), harness.ownership())
         assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
         assertEquals(1, harness.connects)
@@ -140,7 +179,7 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun noStreamOpensBeforeTheClaimIsGranted() {
+    fun nothingIsHeardBeforeTheClaimAndARefusalClosesThePrefetchedStream() {
         val harness = ControllerHarness(first)
         harness.claims.acquireResponse = { ClaimResponse.Conflict }
         harness.load(1, first)
@@ -148,8 +187,154 @@ class NativePlaybackControllerTest {
 
         assertEquals(NativePlaybackState.PAUSED, harness.state())
         assertEquals(listOf("blocked"), harness.ownership())
-        assertTrue(harness.server.texts.none { it.contains("\"open\"") })
-        assertTrue(harness.sinks.isEmpty())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
+        assertNull(harness.server.streamPosition(1))
+        assertEquals(emptyList<String>(), harness.server.violations)
+
+        // A prefetch the server accepted is closed once its open is confirmed.
+        val cdAudio = SyntheticTrack(tag = 4, frames = 3L * 44_100, sampleRate = 44_100)
+        val accepted = ControllerHarness(cdAudio)
+        accepted.claims.acquireResponse = { ClaimResponse.Conflict }
+        accepted.load(1, cdAudio)
+        repeat(20) { accepted.step() }
+        assertTrue(accepted.sinks.all { it.writtenFrames == 0 })
+        assertEquals(1, accepted.server.texts.count { JSONObject(it).getString("type") == "close" })
+        assertNull(accepted.server.streamPosition(1))
+        assertEquals(emptyList<String>(), accepted.server.violations)
+    }
+
+    @Test
+    fun theStreamFillsItsCushionWhileTheClaimIsRequestedAndPlaysOnlyOnceGranted() {
+        val claimIo = ManualExecutor()
+        val harness = ControllerHarness(first, claimIo = claimIo)
+        harness.load(1, first)
+        repeat(20) { harness.step() }
+
+        val open = harness.sinks.last()
+        assertTrue(harness.controller.snapshot.state != NativePlaybackState.PLAYING)
+        assertEquals(0, open.writtenFrames)
+        assertTrue(harness.server.texts.count { it.contains("\"credit\"") } > 0)
+
+        claimIo.drain()
+        harness.step()
+        assertTrue(open.writtenFrames > 0)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        assertEquals(listOf(Run(1, 0, first.frames)), harness.sinks.last().runs())
+    }
+
+    @Test
+    fun aResumeBeforeTheWebReleasesKeepsTheSameClaim() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.controller.pause()
+        harness.step()
+        harness.controller.play(1)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertEquals(listOf("owned"), harness.ownership())
+    }
+
+    @Test
+    fun listenWritesGoOutWithTheHeldClaimAndWaitForAPendingOne() {
+        val claimIo = ManualExecutor()
+        val harness = ControllerHarness(first, claimIo = claimIo)
+        val results = mutableListOf<ListenEffectResult>()
+        val body = JSONObject().put("title", "Signal 1").put("measurement_version", "rendered-pcm-v1")
+
+        harness.controller.listenEffect(ListenEffect.NOW_PLAYING, body) { results += it }
+        harness.step()
+        assertEquals(listOf<ListenEffectResult>(ListenEffectResult.NotOwner), results)
+
+        harness.load(1, first)
+        harness.step()
+        harness.controller.listenEffect(ListenEffect.NOW_PLAYING, body) { results += it }
+        harness.step()
+        assertEquals(1, results.size)
+        assertTrue(harness.listen.posts.isEmpty())
+
+        claimIo.drain()
+        harness.step()
+        assertEquals(200, (results[1] as ListenEffectResult.Answered).status)
+        val (effect, token, sent) = harness.listen.posts.single()
+        assertEquals(ListenEffect.NOW_PLAYING, effect)
+        assertEquals("token-1", token)
+        assertEquals("Signal 1", sent.getString("title"))
+        assertFalse(sent.has("claimToken"))
+    }
+
+    @Test
+    fun theClaimIsReleasedOnlyAfterListenWritesInFlightFinish() {
+        val listenIo = ManualExecutor()
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.controller.pause()
+        harness.controller.listenEffect(ListenEffect.COMPLETE, JSONObject().put("completion_reason", "paused")) {}
+        harness.controller.releaseOwnership()
+        repeat(5) { harness.step() }
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+
+        listenIo.drain()
+        harness.step()
+        harness.step()
+        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertEquals(ListenEffect.COMPLETE, harness.listen.posts.single().first)
+    }
+
+    @Test
+    fun eventsCarryTheHeardFramesOfEachItemAndAnAdvanceClosesTheOutgoingOne() {
+        val harness = ControllerHarness(first, second)
+        harness.load(1, first, second)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+
+        val advance = harness.events.filterIsInstance<NativePlaybackEvent.CurrentItem>()
+            .single { it.reason == CurrentItemReason.ADVANCE }
+        assertEquals(first.frames, advance.outgoingRenderedFrames)
+        val ended = harness.events.filterIsInstance<NativePlaybackEvent.State>().last()
+        assertEquals(NativePlaybackState.ENDED, ended.snapshot.state)
+        assertEquals(second.frames, ended.snapshot.renderedFrames)
+        assertEquals(RATE, ended.snapshot.sampleRate)
+        val positions = harness.events.filterIsInstance<NativePlaybackEvent.Position>()
+            .filter { it.snapshot.currentIndex == 0 }.map { it.snapshot.renderedFrames }
+        assertEquals(positions.sorted(), positions)
+        assertTrue(positions.all { it <= first.frames })
+    }
+
+    @Test
+    fun theQueueEndsOnlyAfterTheOutputHasPlayedItsLastFrame() {
+        val harness = ControllerHarness(first)
+        harness.load(1, first)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.sinks.last().pending = RATE / 4
+        harness.runUntil { harness.sinks.last().writtenFrames.toLong() == first.frames }
+        repeat(10) { harness.step() }
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+
+        harness.sinks.last().pending = 0
+        harness.step()
+        assertEquals(NativePlaybackState.ENDED, harness.state())
+        assertEquals(first.frames, harness.controller.snapshot.renderedFrames)
+    }
+
+    @Test
+    fun theHandshakeWarmsBothConnectionsAndIdleTimeKeepsThemWarm() {
+        val harness = ControllerHarness(first)
+        harness.controller.warmConnections()
+        harness.step()
+        assertEquals(listOf(true), harness.warms)
+
+        harness.load(1, first)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        harness.controller.releaseOwnership()
+        harness.step()
+        harness.now += NativePlaybackController.KEEP_WARM_MS
+        harness.step()
+        // The socket stays open after a play, so only the HTTP connection needs warming.
+        assertEquals(listOf(true, false), harness.warms)
     }
 
     @Test
@@ -162,11 +347,11 @@ class NativePlaybackControllerTest {
         assertEquals(NativePlaybackState.ERROR, harness.state())
         val error = harness.events.filterIsInstance<NativePlaybackEvent.Error>().single()
         assertEquals("ownership_unavailable", error.code)
-        assertTrue(harness.server.texts.none { it.contains("\"open\"") })
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
     }
 
     @Test
-    fun pauseReleasesTheClaimAndPlayReacquiresAndResumesInPlace() {
+    fun pauseKeepsTheClaimUntilTheWebReleasesItAndPlayReacquiresAndResumesInPlace() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
         val harness = ControllerHarness(long)
         harness.load(1, long)
@@ -178,6 +363,9 @@ class NativePlaybackControllerTest {
         repeat(20) { harness.step() }
         assertEquals(writtenAtPause, harness.sinks.last().writtenFrames)
         assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        harness.controller.releaseOwnership()
+        harness.step()
         assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
 
         assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
@@ -306,6 +494,11 @@ class NativePlaybackControllerTest {
         harness.runUntil { harness.state() == NativePlaybackState.ERROR }
 
         assertTrue(harness.events.any { it is NativePlaybackEvent.ReferenceExpired })
+        // Without a release from the web the claim goes when the server lease would have.
+        val graceEnds = harness.now + NativePlaybackController.RELEASE_GRACE_MS
+        while (harness.now < graceEnds - 1) harness.step(minOf(1_000L, graceEnds - 1 - harness.now))
+        assertEquals("owned", harness.ownership().last())
+        harness.step(1)
         assertEquals("released", harness.ownership().last())
     }
 
@@ -321,6 +514,24 @@ class NativePlaybackControllerTest {
 
         assertEquals(NativePlaybackState.PLAYING, harness.state())
         assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+    }
+
+    @Test
+    fun aNewDocumentStopsPlaybackReleasesWhenIdleAndCountsRevisionsFromOneAgain() {
+        val harness = ControllerHarness(first)
+        harness.load(3, first)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+
+        harness.controller.startDocument()
+        harness.step()
+        assertEquals(NativePlaybackState.IDLE, harness.state())
+        assertEquals(0, harness.controller.snapshot.queueRevision)
+        assertEquals("release:token-1", harness.claims.calls.last())
+        assertEquals(CommandResult.NO_QUEUE, harness.controller.play(3))
+
+        assertEquals(CommandResult.ACCEPTED, harness.load(1, first))
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(1, harness.controller.snapshot.queueRevision)
     }
 
     @Test

@@ -2,6 +2,8 @@ package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.ControllerHarness
 import org.albumhaven.shell.playback.CurrentItemReason
+import org.albumhaven.shell.playback.RATE
+import org.albumhaven.shell.playback.SyntheticTrack
 import org.albumhaven.shell.playback.NativePlaybackEvent
 import org.albumhaven.shell.playback.NativePlaybackSnapshot
 import org.albumhaven.shell.playback.NativePlaybackState
@@ -288,12 +290,62 @@ class BridgeControllerTest {
     }
 
     @Test
+    fun listenWritesAnswerAsynchronouslyAndOnlyTheNativeOwnerAddsCredentials() {
+        val track = SyntheticTrack(tag = 1, frames = 3L * RATE)
+        val owner = ControllerHarness(track)
+        val bridge = BridgeController(
+            ShellIdentity("org.albumhaven.app.sandbox", ShellChannel.SANDBOX, "0.9.50", 1),
+            host,
+            ControllerPlaybackPort(owner.controller),
+        )
+        send(bridge, handshake())
+        owner.step()
+        assertEquals(listOf(true), owner.warms)
+
+        listOf(
+            """{"effect":"delete","body":{}}""",
+            """{"effect":"complete","body":{"claimToken":"t"}}""",
+            """{"effect":"complete","body":{"clientId":"c"}}""",
+            """{"effect":"complete"}""",
+            """{"effect":"complete","body":{},"extra":1}""",
+        ).forEach { assertEquals("invalid_payload", errorCode(send(bridge, command("playback.listenEffect", it)))) }
+
+        val effect = command("playback.listenEffect", """{"effect":"complete","body":{"title":"Signal 1"}}""")
+        var reply: String? = null
+        bridge.handle(effect, ORIGIN, true) { reply = it }
+        assertNull(reply)
+        owner.step()
+        assertEquals("not_owner", errorCode(JSONObject(reply!!)))
+
+        owner.load(1, track)
+        owner.runUntil { owner.state() == NativePlaybackState.PLAYING }
+        reply = null
+        bridge.handle(effect, ORIGIN, true) { reply = it }
+        owner.step()
+        val answer = JSONObject(reply!!).getJSONObject("payload")
+        assertTrue(answer.getBoolean("ok"))
+        assertEquals(200, answer.getInt("status"))
+        assertTrue(answer.getJSONObject("data").getBoolean("ok"))
+        assertEquals("Signal 1", owner.listen.posts.single().third.getString("title"))
+
+        owner.controller.pause()
+        owner.step()
+        assertTrue(ok(send(bridge, command("playback.releaseOwnership"))))
+        assertEquals("invalid_payload", errorCode(send(bridge, command("playback.releaseOwnership", """{"now":true}"""))))
+        owner.step()
+        assertEquals(listOf("owned", "released"), owner.ownership())
+    }
+
+    @Test
     fun stateEventMatchesTheSharedFixture() {
         val expected = fixture.getJSONObject("stateEvent")
         val payload = expected.getJSONObject("payload")
         val (name, encoded) = PlaybackBridge.encode(
             NativePlaybackEvent.State(
-                NativePlaybackSnapshot(payload.getString("clientId"), NativePlaybackState.PLAYING, 1, 0, 1_250, 180_000),
+                NativePlaybackSnapshot(
+                    payload.getString("clientId"), NativePlaybackState.PLAYING, 1, 0, 1_250, 180_000,
+                    renderedFrames = 60_000, sampleRate = 48_000, underruns = 0,
+                ),
             ),
         )
         assertEquals(expected.getString("name"), name)

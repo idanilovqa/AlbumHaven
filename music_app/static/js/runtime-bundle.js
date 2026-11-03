@@ -2246,6 +2246,8 @@ function buildApiUrl(view, options = {}) {
     params.set('payload_tier', String(options.payloadTier).trim());
   } else if (resolvedSurface === 'albums' && view.selected_artist && !view.query && !options.rootSidebar) {
     params.set('payload_tier', 'gallery_summary');
+    // The artist's own loose tracks arrive with its gallery, in the same request.
+    params.set('include_non_album', '1');
   } else if (
     options.rootFullPayload
     && resolvedSurface === 'albums'
@@ -5482,10 +5484,12 @@ const state = {
     appearanceKey: 'backgrounds',
   },
   player: {
+    selectedTrack: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
       context: null,
+      sampleRate: 0,
       node: null,
       socket: null,
       preparePromise: null,
@@ -5494,7 +5498,7 @@ const state = {
       expectedSocketClose: null,
       deferredCreditFrames: { current: 0, continuity: 0 },
       roles: { current: null, continuity: null },
-      limits: { currentSeconds: 12, continuitySeconds: 5 },
+      limits: { currentSeconds: 12, continuitySeconds: 12 },
       snapshot: {
         currentTime: 0,
         duration: 0,
@@ -6905,7 +6909,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  if (String(state.view.query || '').trim() || hasSelectedArtist || galleryMainSurfaceController?.current?.()?.key === 'album-types'
+  // Selecting an artist stays one request; its loose tracks load when the menu opens.
+  if (String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
       || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
@@ -7508,30 +7513,128 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
 
 // END js/runtime/compact-player-helpers.js
 
+// BEGIN js/runtime/player-streaming-decoders.js
+
+// Every client decodes with these pinned builds, never a browser or system decoder.
+const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
+const STREAMING_DECODER_BUILDS = {
+  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder' },
+  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder' },
+};
+const STREAMING_DECODER_SELF_CHECK_TOLERANCE = 0.01;
+const STREAMING_DECODER_SELF_CHECK_CLIPS = {
+  "mp3": {
+    "bytes": "//tQZAAAAYsL0h08YAAAAA0goAABC0DNPlnGgAAAADSDAAAACv22AV6vV6vV7PHu/VkU/xviFhqxcy5qMREABAIBiD4f4IcTg/wQdOdPu6fOdPu6fdghhhAAhOAIC//2YPDhhAV6EJI8Chk34oDCIYMLL1Iw5SYAgPgZIDp8D1E+Ea/EaJEeo4f8T4RoLsO0YX/yRMi8XkS7/+PUyLxeMS6Xf/9IvF4FQWBr/iUJA0r+/u8EAUmA8CKYIQGZgcALmBgDaYTQnZkQFAmPl5OYc//7UmQQAPHiC0WHewAAAAANIOAAAQa0KxlA58LAAAA0gAAABJrxj3g5GB4A6YCQHIcCqMwEpO9DP+r////2f/t8AAolIgmB2rhQ7Fn5cZOYRChfgwHtTzRIC4AADKMzYYhOUdl6oq/ZV02udRP7//1q/fu/9NeCCKK6zLVNi1QILmJvGAyJkZksAIoYA8AXg0AGWBgCQSKd6j9v//kFWI6fbr1cm2zi//9R4AEBIYEwIAKBYMAcB8wOAGjAdDnMgkuEywehzocOYMugYwwcgAiE//tSZC2P8YsLRIAa+LAAAA0gAAABB2gtFhXsAAAAADSCgAAECUwPQFzPsoG3BXH//+3b/7dKIQAAADAQA+g+uu4wBgCPJgpPME0QJWAwARGzRmAvMHwA4y4SOzBBAQMgsoQwFwI/AyAMBhl+BmAwGkIBIX/hY+A0PDGgtn/iaClyCCtBzf/xH4YzFoFgEGDL//5bIkSBBxc5DhkP//xOA6x3jTIIiYlYiH///jMEaOMWMhhUsAAADYkFgkFgsFYYAADFgDJpGOeC3PgaCI8qwMz/+1JkTYAD8E1LJnqAAAAADSDAAAAP0QlZuSmAEAAANIMAAAAQBQE0b4JzD0wGImpdQ4GtwGGwA0wUwdUiZeDfQ3QYjEfBgFJzFFvhCYP4CIwN2gIGGAHSWr/C3sG1gvSFkgn0LRgxaitkkv+JCHhDpgteD9w1QGKQ2YOL+r/8+TpNFIrlWkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqv/7UmQlj/AAAGkHAAAIAAANIOAAAQAAAaQAAAAgAAA0gAAABKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    "frames": 5760,
+    "magnitude": 189.017
+  },
+  "flac": {
+    "bytes": "ZkxhQwAAACIEAAQAAADqAAGYCsRC8AAADcg4Ot8jxz5ldGCP1KLOJYo0BAAALAwAAABMYXZmNjMuMS4xMDEBAAAAFAAAAGVuY29kZXI9TGF2ZjYzLjEuMTAxgQAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//ipiADmTgAAAZkDKwSsBhYHYAiDCXvmJAbkM8+gC2AbUE0A6j5egAFnDSRCk4czhMkpQJphKTJ5oWcLCycyZhSFJDnDJPDoFnM4SWQLJM5Jnh0wkQlCRJmUmGwJTySmcJSZSESUkzAoUkImQ0MM5PDmFhSknyFk0h4ScocnmZJSTJPJQwphLIWZhyhOQ8nJYTw8MySkzhykkzklmTnDOZmZnJmgcmTIULCFJMklMDSYWSIUCMCwsJnmBQyUDMPApNChnDlJlCSkLJMnMOTMyhoF4SmeBTJwyVCeHhM5KE+Q0IUoZPMJYUmZYekLMyTOYaBYSZMMQDwnKBEOZmHCk4RApMhEDnJJEJ5CQQkKkNCh4ULOZNAqEywlmTmThQ5hyhnDlmUhlDwmcOZJQpAiHKGkw5GAVJOTnChk2B8Dhyklk2BznkzOZyHMzCkIhwiUhSZKGZyUJLMnkOZUMOSmQqEkpCJOZOAAAADrP//4qYgB4U4JKQoDCqcLFgtLC0YLBgqO5if+yd375BgYFk+i4Sc++wAIUiGgUQKc4UJQyRAoZEDCkpPJCKBEhElApOBSTJMkOSEQmUwggUlwoFCkwoUCISZDhmgEECIEThTCkoUzMKE5hnJhSczCmZYXJQyQiBM5hhyGISJCIEQsoUphECkMlJCShMLgRJSUhEhTQlkksJQwLAoFJMlkmU0zOESZCwwoTCkmZJ5mEQzQnCIFDCgRCZCJCeSklJZKEQpQMzwsPJhTJmhk+c5ShlDMmgFkNDJkIgaEQNmUyZCIQsJOSkKYUlChoUmGhQ5hlCklhJZDmQpKhmkzQ4UOcMlCEQmZJmEQIhECkxAoRMw8MKSFCgRCFJQofNDIhzKYEQlMmHCaEzKHkocLCkKZoSIShmTJOFMIkiBiZ54EQLCZJhSTJnhoU0ORDKcPApMlIeFJKZLCISJDzPAsgRIEQOYZJKEQwiBQ0hSnMzyBEk5CISgUzNAiBTImSZQ5KEyZMyT4UyIXyEEJQpCkIgcmZCYZgUgAAACoEP/4qYgC6E4KvwojCVMIUgcoBdgEaQLl5iYs1bPobBAoIl/eoQ2+wAAMIkJyZmFChJEAiEKQiE4dDnKEpKBiBOSUCZpDock8ocKWQmhJMlAmUJzCknQlyVCVDlh4ZM5QJTwsNJIhQPMNCJDMsCySUkPnKcLKFNCUw5kKQocnCkkqAWESBRDJnJhOQphmTk0KS0ymUKQ0MnDJmUDOTkSFPDEMQJSgSRAoZKEmUhOFhQoRCU8mkMKGGGZJOc0ChZKaULhOYUlITyGFhoaFnM0KHCmGTCUJhwySIHlMpLDLJUCkyYUJlAoRAoThUJpoFw8ksAsDhZJyZZJIhLKFOSmShMzDKQnCh5kwiSbAslDMJQmTDJSSFlnwqGYRJwpCkKFCFkMpkLSaZKRDSFDJQhnIVApKQslKEQ5YdIUOQIkJkh0JhTDmIUJYEQKSZJQNA0hJwhSUPNA4hlnCk4RAnCSYUkphEMyheZw5hzQmYSnChSFISJQmIVAjDkySkJkyQiTkIw8oAAAA97X/+HmIAwHHo04DcAHgAEf+rf0Z+5X6JvjX5ixDsyAetBfX/0+EAXs+vgAAgEQiBEDSQoEIhAlJCwKEQIIFQpLzhTycCIFAlAwKBSeESF6EcIkIhKHIRAKSFApChCIQsKFkggUQImwIwLA4FCGThAgIARDmlKBFAuRAsyUChIgcDMKBkwiBEwqBBAqB0CMOShhhEAIgZww4aBE0IIUKwiBYaBlAoQiEKE0DkIIZBAImWGhSZmBSQKFAMmBTCw0NKU/QiBQzDDJAsJCIBBCZPShECIRCzSShmGSGYGSTMLgRCoXNCIcAAAAATQk=",
+    "frames": 3528,
+    "magnitude": 198.443
+  }
+};
+
+function loadStreamingDecoderScript(file) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const version = String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || '');
+    script.src = STREAMING_DECODER_BASE_URL + file
+      + (version ? `?v=${encodeURIComponent(version)}` : '');
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Failed to load ${file}`));
+    document.head.appendChild(script);
+  });
+}
+
+function createStreamingDecoder(codec) {
+  const { global, className } = STREAMING_DECODER_BUILDS[codec];
+  return new window[global][className]();
+}
+
+async function streamingDecoderPassesSelfCheck(codec) {
+  const clip = STREAMING_DECODER_SELF_CHECK_CLIPS[codec];
+  const bytes = Uint8Array.from(atob(clip.bytes), (char) => char.charCodeAt(0));
+  const decoder = createStreamingDecoder(codec);
+  await decoder.ready;
+  try {
+    const decoded = await decoder.decode(bytes);
+    const flushed = await decoder.flush?.();
+    const frames = decoded.samplesDecoded + (flushed?.samplesDecoded || 0);
+    let magnitude = 0;
+    for (const output of [decoded, flushed]) {
+      for (const sample of output?.channelData?.[0] || []) magnitude += Math.abs(sample);
+    }
+    return frames === clip.frames
+      && Math.abs(magnitude - clip.magnitude) <= STREAMING_DECODER_SELF_CHECK_TOLERANCE;
+  } finally {
+    decoder.free();
+  }
+}
+
+async function detectVerifiedStreamingCodecs() {
+  const codecs = [];
+  for (const [codec, build] of Object.entries(STREAMING_DECODER_BUILDS)) {
+    try {
+      await loadStreamingDecoderScript(build.file);
+      if (await streamingDecoderPassesSelfCheck(codec)) codecs.push(codec);
+      else console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+    } catch (error) {
+      console.warn(`[AlbumHaven][Playback] The ${codec} decoder is unavailable.`, error);
+    }
+  }
+  return codecs;
+}
+
+function ensureStreamingDecoders() {
+  const engine = state.player.streaming;
+  engine.decodersPromise ??= detectVerifiedStreamingCodecs().then((codecs) => {
+    engine.encodedCodecs = codecs;
+    return codecs;
+  });
+  return engine.decodersPromise;
+}
+
+// END js/runtime/player-streaming-decoders.js
+
 // BEGIN js/runtime/player-streaming-engine.js
 
-const STREAMING_SAMPLE_RATE = 48_000;
 const STREAMING_RUNTIME_ASSET_VERSION = encodeURIComponent(
   String(window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ || ''),
 );
 const STREAMING_WORKLET_URL = '/static/js/audio-worklets/gapless-playback-processor.js'
   + (STREAMING_RUNTIME_ASSET_VERSION ? `?v=${STREAMING_RUNTIME_ASSET_VERSION}` : '');
 const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
-const STREAMING_MAX_CREDIT_FRAMES = 48_000;
-const STREAMING_CREDIT_LOW_WATER_FRAMES = 12_000;
-const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = 2 * STREAMING_SAMPLE_RATE;
+const STREAMING_MAX_CREDIT_SECONDS = 1;
+const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
+const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
-const STREAMING_QUEUED_NEXT_PREPARE_FRAMES = 3 * STREAMING_SAMPLE_RATE;
-const STREAMING_REPLACEMENT_PREPARE_FRAMES = 2 * STREAMING_SAMPLE_RATE;
-const STREAMING_SEEK_PREPARE_FRAMES = 12_000;
-const STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES = STREAMING_SAMPLE_RATE;
-const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES = STREAMING_REPLACEMENT_PREPARE_FRAMES;
-const STREAMING_WAVEFORM_READY_FRAMES = 48_000;
+const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
+const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
+const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
+const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
+const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
+const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
+const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
 const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
+const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
+const STREAMING_ENCODED_BUFFER_SECONDS = { current: 120, continuity: 30 };
+const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
+const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
+const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
+const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+const STREAMING_RECENT_STALL_MS = 60_000;
+const STREAMING_REQUIRED_HEADROOM = 1.5;
+const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
+const STREAMING_OUTPUT_REPORT_INTERVAL_MS = 5000;
 
 function streamingEngineState() {
   return state.player.streaming;
+}
+
+function streamingFrames(seconds) {
+  return Math.round(seconds * streamingEngineState().sampleRate);
 }
 
 function publishStreamingDiagnostics() {
@@ -7611,8 +7714,8 @@ function streamingWireRoleAccepted(roleState, wireRole) {
 function initialStreamingBackingCapacities() {
   const engine = streamingEngineState();
   return {
-    current: engine.limits.currentSeconds * STREAMING_SAMPLE_RATE,
-    continuity: engine.limits.continuitySeconds * STREAMING_SAMPLE_RATE,
+    current: streamingFrames(engine.limits.currentSeconds),
+    continuity: streamingFrames(engine.limits.continuitySeconds),
   };
 }
 
@@ -7625,7 +7728,7 @@ function ensureStreamingBackingCapacities() {
 function streamingRoleCapacityFrames(roleState) {
   const engine = streamingEngineState();
   const role = roleState?.role;
-  const logicalCapacityFrames = engine.limits[`${role}Seconds`] * STREAMING_SAMPLE_RATE;
+  const logicalCapacityFrames = streamingFrames(engine.limits[`${role}Seconds`]);
   const backingCapacityFrames = Number(roleState?.backingCapacityFrames)
     || Number(ensureStreamingBackingCapacities()[role])
     || logicalCapacityFrames;
@@ -7784,8 +7887,8 @@ function maybeNotifyStreamingWaveformReady({ includeCommittedFrames = false } = 
   const currentCapacityFrames = streamingRoleCapacityFrames(current);
   const currentPlayableFrames = streamingRolePlayableFrames(current);
   const currentTargetFrames = currentPlayableFrames === null
-    ? Math.min(currentCapacityFrames, STREAMING_WAVEFORM_READY_FRAMES)
-    : Math.min(currentCapacityFrames, STREAMING_WAVEFORM_READY_FRAMES, currentPlayableFrames);
+    ? Math.min(currentCapacityFrames, streamingFrames(STREAMING_WAVEFORM_READY_SECONDS))
+    : Math.min(currentCapacityFrames, streamingFrames(STREAMING_WAVEFORM_READY_SECONDS), currentPlayableFrames);
   if (typeof handleStreamingPlaybackWaveformReady !== 'function') return;
   const currentCommittedFrames = engine.diagnostics.bufferedFrames.current
     + (includeCommittedFrames ? engine.diagnostics.inFlightFrames.current : 0);
@@ -7799,10 +7902,10 @@ function maybeNotifyStreamingWaveformReady({ includeCommittedFrames = false } = 
   const continuityPlayableFrames = streamingRolePlayableFrames(continuity);
   const continuityCapacityFrames = continuity
     ? streamingRoleCapacityFrames(continuity)
-    : STREAMING_SAMPLE_RATE;
+    : streamingFrames(1);
   const continuityTargetFrames = continuityPlayableFrames === null
-    ? Math.min(STREAMING_SAMPLE_RATE, continuityCapacityFrames)
-    : Math.min(STREAMING_SAMPLE_RATE, continuityCapacityFrames, continuityPlayableFrames);
+    ? Math.min(streamingFrames(1), continuityCapacityFrames)
+    : Math.min(streamingFrames(1), continuityCapacityFrames, continuityPlayableFrames);
   const continuityReady = !continuity
     || continuityCommittedFrames >= continuityTargetFrames;
   if (!currentReady || !continuityReady) return;
@@ -7952,7 +8055,7 @@ function protectedQueuedContinuityReady(engine, current, options) {
     && !engine.snapshot.paused
     && !engine.roles.continuity
     && (current.eosReceived === true
-      || engine.diagnostics.bufferedFrames.current >= STREAMING_SAMPLE_RATE);
+      || engine.diagnostics.bufferedFrames.current >= streamingFrames(1));
 }
 
 function maybeSchedulePendingStreamingContinuity() {
@@ -7998,8 +8101,8 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
         generation: continuity.generation,
         active: false,
         kind: options.kind,
-        startFrame: Math.round(options.startSeconds * STREAMING_SAMPLE_RATE),
-        endFrame: Math.round(options.endSeconds * STREAMING_SAMPLE_RATE),
+        startFrame: streamingFrames(options.startSeconds),
+        endFrame: streamingFrames(options.endSeconds),
         retainedStreamId: continuity.streamId,
       });
     }
@@ -8052,9 +8155,9 @@ function flushStreamingControls() {
 function streamingRoleCommittedCapacityFrames(roleState) {
   const engine = streamingEngineState();
   const capacityFrames = streamingRoleCapacityFrames(roleState);
-  const fullCurrentCapacityFrames = engine.limits.currentSeconds * STREAMING_SAMPLE_RATE;
+  const fullCurrentCapacityFrames = streamingFrames(engine.limits.currentSeconds);
   return roleState?.role === 'current' && capacityFrames === fullCurrentCapacityFrames
-    ? Math.max(1, capacityFrames - STREAMING_MAX_CREDIT_FRAMES)
+    ? Math.max(1, capacityFrames - streamingFrames(STREAMING_MAX_CREDIT_SECONDS))
     : capacityFrames;
 }
 
@@ -8073,7 +8176,7 @@ function grantStreamingCredit(roleState, requestedFrames) {
   if (outgoingReplacementCurrent) {
     const remainingSafetyFrames = Math.max(
       0,
-      STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES
+      streamingFrames(STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS)
         - bufferedFrames
         - inFlightFrames,
     );
@@ -8091,9 +8194,16 @@ function grantStreamingCredit(roleState, requestedFrames) {
     0,
     committedCapacityFrames - bufferedFrames - inFlightFrames,
   );
-  const serverAvailableFrames = Math.max(0, STREAMING_MAX_CREDIT_FRAMES - inFlightFrames);
+  const serverAvailableFrames = Math.max(0, streamingFrames(STREAMING_MAX_CREDIT_SECONDS) - inFlightFrames);
   const frames = Math.min(requestedFrames, availableFrames, serverAvailableFrames);
   if (frames <= 0) return 0;
+  if (roleState.encoded) {
+    if (roleState.eosReceived) return 0;
+    roleState.encoded.localCreditFrames += frames;
+    engine.diagnostics.inFlightFrames[role] += frames;
+    void pumpStreamingEncodedRole(roleState);
+    return frames;
+  }
   const accepted = sendStreamingControl({
     type: 'credit',
     generation: roleState.generation,
@@ -8117,9 +8227,9 @@ function refillStreamingRoleCredit(roleState, missingFrames) {
     return grantStreamingCredit(roleState, missingFrames);
   }
   const inFlightFrames = engine.diagnostics.inFlightFrames.current;
-  if (missingFrames < STREAMING_MAX_CREDIT_FRAMES
-      || inFlightFrames > STREAMING_CREDIT_LOW_WATER_FRAMES) return 0;
-  return grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES - inFlightFrames);
+  if (missingFrames < streamingFrames(STREAMING_MAX_CREDIT_SECONDS)
+      || inFlightFrames > streamingFrames(STREAMING_CREDIT_LOW_WATER_SECONDS)) return 0;
+  return grantStreamingCredit(roleState, streamingFrames(STREAMING_MAX_CREDIT_SECONDS) - inFlightFrames);
 }
 
 function continuityCreditNeedsOutgoingRenderCushion(roleState) {
@@ -8129,7 +8239,7 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   const queuedNextNeedsCushion = roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'queued-next'
     && !current?.eosReceived
-    && engine.diagnostics.bufferedFrames.current < STREAMING_SAMPLE_RATE;
+    && engine.diagnostics.bufferedFrames.current < streamingFrames(1);
   const replacementNeedsCushion = roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'seek'
     && pendingReplacement?.kind === 'replacement'
@@ -8137,7 +8247,7 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
     && pendingReplacement.streamId === roleState.streamId
     && pendingReplacement.currentStreamId === current?.streamId
     && !current.eosReceived
-    && engine.diagnostics.bufferedFrames.current < STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES;
+    && engine.diagnostics.bufferedFrames.current < streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
   return queuedNextNeedsCushion || replacementNeedsCushion;
 }
 
@@ -8154,7 +8264,7 @@ function settleStreamingReplacementCushionWaiter(ready) {
 function replacementOutgoingCushionReady(engine, current) {
   return current?.eosReceived === true
     || engine.diagnostics.bufferedFrames.current
-      >= STREAMING_REPLACEMENT_OUTGOING_CUSHION_FRAMES;
+      >= streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
 }
 
 function maybeResolveStreamingReplacementCushion() {
@@ -8196,8 +8306,8 @@ function grantStreamingInitialCredit(roleState) {
   }
   roleState.initialCreditDeferred = false;
   return grantStreamingCredit(roleState, Math.min(
-    STREAMING_MAX_CREDIT_FRAMES,
-    Number(roleState.targetBufferFrames) || STREAMING_MAX_CREDIT_FRAMES,
+    streamingFrames(STREAMING_MAX_CREDIT_SECONDS),
+    Number(roleState.targetBufferFrames) || streamingFrames(STREAMING_MAX_CREDIT_SECONDS),
   ));
 }
 
@@ -8211,8 +8321,12 @@ function validateStreamingMetadata(message, roleState) {
   return message.generation === roleState.generation
     && message.streamId === roleState.streamId
     && message.role === roleState.role
-    && message.sampleRate === STREAMING_SAMPLE_RATE
+    && message.sampleRate === streamingEngineState().sampleRate
     && message.channels === 2
+    && (message.codec === undefined
+      || (streamingEngineState().encodedCodecs?.includes(message.codec)
+        && Number.isInteger(message.skipFrames) && message.skipFrames >= 0
+        && Number.isInteger(message.totalFrames) && message.totalFrames >= 0))
     && Number.isInteger(message.provisionalTotalFrames)
     && message.provisionalTotalFrames >= 0
     && message.requestedStartFrame === roleState.startFrame
@@ -8223,9 +8337,20 @@ function validateStreamingMetadata(message, roleState) {
 function handleStreamingControl(message) {
   const engine = streamingEngineState();
   if (!message || typeof message !== 'object') return;
+  if (message.type === 'probe-result') {
+    settleStreamingSampleRateProbe(message.requestId, Number(message.sampleRate) || 0, {
+      fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
+      sizeBytes: Number(message.sizeBytes) || 0,
+    });
+    return;
+  }
   const roleState = streamingRoleForId(message.streamId);
   if (!roleState || message.generation !== engine.generation) {
     engine.diagnostics.staleMessages += 1;
+    return;
+  }
+  if (message.type === 'rate-mismatch') {
+    handleStreamingRateMismatch(roleState, message);
     return;
   }
   if (message.type === 'metadata') {
@@ -8238,6 +8363,18 @@ function handleStreamingControl(message) {
       return;
     }
     roleState.metadataAccepted = true;
+    if (message.codec) {
+      createStreamingEncodedRole(roleState, message);
+      refillStreamingEncodedBytes(roleState);
+      // Compressed audio keeps arriving far faster than it plays, so a shorter head is safe.
+      if (engine.pendingSeek?.kind === 'replacement'
+          && engine.pendingSeek.streamId === roleState.streamId) {
+        roleState.targetBufferFrames = Math.min(
+          roleState.targetBufferFrames,
+          streamingFrames(STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS),
+        );
+      }
+    }
     roleState.provisionalTotalFrames = message.provisionalTotalFrames;
     roleState.timelineStartFrame = message.timelineStartFrame;
     if (roleState.continuityOptions?.kind === 'seek') {
@@ -8290,11 +8427,16 @@ function handleStreamingControl(message) {
       return;
     }
     if (roleState.eosReceived) return;
+    if (roleState.encoded && !roleState.encoded.delivered) {
+      roleState.encoded.eos = message;
+      void pumpStreamingEncodedRole(roleState);
+      return;
+    }
     roleState.eosReceived = true;
     roleState.closed = true;
     engine.diagnostics.inFlightFrames[roleState.role] = 0;
     if (roleState.role === 'current' && !roleState.seekTarget) {
-      engine.snapshot.duration = message.authoritativeTotalFrames / STREAMING_SAMPLE_RATE;
+      engine.snapshot.duration = message.authoritativeTotalFrames / engine.sampleRate;
     }
     engine.node.port.postMessage({
       type: 'eos',
@@ -8326,6 +8468,70 @@ function handleStreamingControl(message) {
     { message: `Unknown active streaming control: ${String(message.type)}` },
     'control-protocol-error',
   );
+}
+
+function leaveStreamingTrackForRateChange(track) {
+  const engine = streamingEngineState();
+  // One AudioContext has one rate, so this track starts its own context after `ended`.
+  engine.sampleRateChangeNext = { generation: engine.generation, path: String(track.path || '') };
+  engine.node?.port.postMessage({
+    type: 'expect-continuity',
+    generation: engine.generation,
+    active: false,
+  });
+}
+
+function handleStreamingRateMismatch(roleState, message) {
+  const engine = streamingEngineState();
+  rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
+    fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
+    sizeBytes: 0,
+  });
+  const replacement = engine.pendingSeek;
+  if (replacement?.kind === 'replacement' && replacement.streamId === roleState.streamId) {
+    engine.roles.continuity = null;
+    engine.pendingSeek = null;
+    refreshStreamingActiveRoles();
+    startStreamingTrack(roleState.track, { startSeconds: roleState.continuityOptions.startSeconds })
+      .then(replacement.resolve, replacement.reject);
+    return;
+  }
+  if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
+    failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
+    return;
+  }
+  engine.roles.continuity = null;
+  engine.pcmEvidenceByStream?.delete(roleState.streamId);
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  refreshStreamingActiveRoles();
+  leaveStreamingTrackForRateChange(roleState.track);
+}
+
+function reportStreamingAudioOutput() {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const now = performance.now();
+  if (!context || now - (Number(engine.outputReportedAtMs) || 0)
+      < STREAMING_OUTPUT_REPORT_INTERVAL_MS) return;
+  const stats = context.playbackStats;
+  const underruns = Number(stats?.underrunEvents) || 0;
+  const alreadyReported = engine.outputReportedContext === context
+    && underruns <= (Number(engine.outputReportedUnderruns) || 0);
+  engine.outputReportedAtMs = now;
+  if (alreadyReported) return;
+  engine.outputReportedContext = context;
+  engine.outputReportedUnderruns = underruns;
+  engine.diagnostics.outputUnderruns = underruns;
+  sendStreamingControl({
+    type: 'output-report',
+    sampleRate: engine.sampleRate,
+    baseLatencyMs: Math.round((Number(context.baseLatency) || 0) * 1000),
+    outputLatencyMs: Math.round((Number(context.outputLatency) || 0) * 1000),
+    underruns,
+    underrunMs: Math.round((Number(stats?.underrunDuration) || 0) * 1000),
+    statsAvailable: Boolean(stats),
+  });
 }
 
 function maybePrepareStreamingSeek(roleState) {
@@ -8360,6 +8566,273 @@ function settlePendingStreamingCutover(error = null, roleState = null) {
   else resolve?.(roleState);
 }
 
+function acceptStreamingPcm(roleState, frameCount, pcm) {
+  const engine = streamingEngineState();
+  const role = roleState.role;
+  const capacityFrames = streamingRoleCapacityFrames(roleState);
+  const sequence = roleState.nextSequence;
+  recordStreamingPcmEvidence(roleState, frameCount, pcm);
+  roleState.nextSequence += 1;
+  engine.diagnostics.inFlightFrames[role] -= frameCount;
+  engine.diagnostics.bufferedFrames[role] += frameCount;
+  if (role === 'current') {
+    maybeResolveStreamingReplacementCushion();
+    maybeGrantDeferredReplacementCredit();
+    maybeSchedulePendingStreamingContinuity();
+  }
+  engine.node.port.postMessage({
+    type: 'enqueue',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role,
+    sequence,
+    frameCount,
+    pcm,
+  }, [pcm.buffer]);
+  if (!roleState.eosReceived) {
+    const targetFrames = Number(roleState.targetBufferFrames) || capacityFrames;
+    const missingFrames = targetFrames
+      - engine.diagnostics.bufferedFrames[role]
+      - engine.diagnostics.inFlightFrames[role];
+    refillStreamingRoleCredit(roleState, missingFrames);
+  }
+  maybeNotifyStreamingWaveformReady({ includeCommittedFrames: true });
+  maybePrepareStreamingSeek(roleState);
+  publishStreamingDiagnostics();
+}
+
+function sweepStreamingEncodedDecoders() {
+  const engine = streamingEngineState();
+  const live = [engine.roles.current?.encoded, engine.roles.continuity?.encoded];
+  for (const encoded of [...(engine.encodedStreams || [])]) {
+    if (live.includes(encoded) || encoded.pumping) continue;
+    engine.encodedStreams.delete(encoded);
+    void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
+  }
+}
+
+function createStreamingEncodedRole(roleState, message) {
+  const engine = streamingEngineState();
+  const decoder = createStreamingDecoder(message.codec);
+  const encoded = {
+    codec: message.codec,
+    decoder,
+    ready: false,
+    skipFrames: message.skipFrames,
+    remainingFrames: message.totalFrames,
+    deliveredFrames: 0,
+    queue: [],
+    queuedBytes: 0,
+    creditedBytes: Number(message.initialCreditBytes) || 0,
+    nextWireSequence: 0,
+    lastArrivalMs: 0,
+    localCreditFrames: 0,
+    decodedPcm: [],
+    decodedFrames: 0,
+    pumping: false,
+    eos: null,
+    flushed: false,
+    delivered: false,
+  };
+  engine.encodedStreams ??= new Set();
+  engine.encodedStreams.add(encoded);
+  roleState.encoded = encoded;
+  sweepStreamingEncodedDecoders();
+  decoder.ready.then(() => {
+    encoded.ready = true;
+    return pumpStreamingEncodedRole(roleState);
+  }).catch(() => failStreamingEncodedRole(roleState, 'decoder-unavailable'));
+}
+
+function streamingEncodedBufferBytes(roleState) {
+  const engine = streamingEngineState();
+  const sizeBytes = Number(engine.trackFormats?.get(String(roleState.track?.path || ''))?.sizeBytes);
+  const durationSeconds = Number(roleState.track?.durationSeconds);
+  const bytesPerSecond = roleState.quality !== '320' && sizeBytes > 0 && durationSeconds > 0
+    ? sizeBytes / durationSeconds
+    : STREAMING_FALLBACK_BYTES_PER_SECOND;
+  return Math.min(
+    STREAMING_ENCODED_BUFFER_MAX_BYTES,
+    Math.max(
+      STREAMING_ENCODED_BUFFER_MIN_BYTES,
+      bytesPerSecond * STREAMING_ENCODED_BUFFER_SECONDS[roleState.role],
+    ),
+  );
+}
+
+function refillStreamingEncodedBytes(roleState) {
+  const encoded = roleState.encoded;
+  if (encoded.eos || roleState.closed) return;
+  // The stream being left must not compete with the audio the listener just asked for.
+  if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
+  const missingBytes = streamingEncodedBufferBytes(roleState)
+    - encoded.queuedBytes - encoded.creditedBytes;
+  if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
+      || encoded.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
+  const frames = STREAMING_ENCODED_CREDIT_BYTES;
+  if (sendStreamingControl({
+    type: 'credit',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    frames,
+  })) encoded.creditedBytes += frames;
+}
+
+function appendStreamingDecodedAudio(encoded, decoded) {
+  const [left, right = left] = decoded.channelData;
+  const skipped = Math.min(encoded.skipFrames, decoded.samplesDecoded);
+  encoded.skipFrames -= skipped;
+  const kept = Math.min(decoded.samplesDecoded - skipped, encoded.remainingFrames);
+  if (kept <= 0) return;
+  const pcm = new Float32Array(kept * 2);
+  for (let frame = 0; frame < kept; frame += 1) {
+    pcm[frame * 2] = left[skipped + frame];
+    pcm[(frame * 2) + 1] = right[skipped + frame];
+  }
+  encoded.remainingFrames -= kept;
+  encoded.decodedPcm.push(pcm);
+  encoded.decodedFrames += kept;
+}
+
+function takeStreamingDecodedPcm(encoded, frameCount) {
+  const pcm = new Float32Array(frameCount * 2);
+  let written = 0;
+  while (written < pcm.length) {
+    const head = encoded.decodedPcm[0];
+    const taken = Math.min(head.length, pcm.length - written);
+    pcm.set(head.subarray(0, taken), written);
+    written += taken;
+    if (taken === head.length) encoded.decodedPcm.shift();
+    else encoded.decodedPcm[0] = head.subarray(taken);
+  }
+  encoded.decodedFrames -= frameCount;
+  return pcm;
+}
+
+function streamingRoleIsLive(roleState) {
+  return roleState.generation === streamingEngineState().generation
+    && streamingRoleForId(roleState.streamId) === roleState;
+}
+
+async function pumpStreamingEncodedRole(roleState) {
+  const encoded = roleState.encoded;
+  if (!encoded?.ready || encoded.pumping || !streamingRoleIsLive(roleState)) return;
+  encoded.pumping = true;
+  try {
+    while (streamingRoleIsLive(roleState)) {
+      if (encoded.localCreditFrames > 0 && encoded.decodedFrames > 0) {
+        const frameCount = Math.min(encoded.localCreditFrames, encoded.decodedFrames);
+        encoded.localCreditFrames -= frameCount;
+        encoded.deliveredFrames += frameCount;
+        acceptStreamingPcm(roleState, frameCount, takeStreamingDecodedPcm(encoded, frameCount));
+      } else if ((encoded.localCreditFrames > 0 || !encoded.remainingFrames)
+          && encoded.queue.length) {
+        const bytes = encoded.queue.shift();
+        encoded.queuedBytes -= bytes.length;
+        appendStreamingDecodedAudio(encoded, await encoded.decoder.decode(bytes));
+      } else if (encoded.eos && !encoded.flushed && !encoded.queue.length) {
+        encoded.flushed = true;
+        const flushed = await encoded.decoder.flush?.();
+        if (flushed?.samplesDecoded) appendStreamingDecodedAudio(encoded, flushed);
+      } else {
+        break;
+      }
+      refillStreamingEncodedBytes(roleState);
+    }
+    if (streamingRoleIsLive(roleState) && encoded.eos && encoded.flushed
+        && !encoded.decodedFrames && !encoded.queue.length) {
+      finishStreamingEncodedRole(roleState);
+    }
+  } catch (_error) {
+    failStreamingEncodedRole(roleState, 'decode-error');
+  } finally {
+    encoded.pumping = false;
+    sweepStreamingEncodedDecoders();
+  }
+}
+
+function finishStreamingEncodedRole(roleState) {
+  const encoded = roleState.encoded;
+  if (encoded.remainingFrames > 0) reportStreamingDecoderFallback('short-decode');
+  const startFrame = encoded.eos.authoritativeTotalFrames - encoded.deliveredFrames
+    - encoded.remainingFrames;
+  const eos = {
+    ...encoded.eos,
+    emittedFrames: encoded.deliveredFrames,
+    authoritativeTotalFrames: startFrame + encoded.deliveredFrames,
+  };
+  encoded.eos = null;
+  encoded.delivered = true;
+  handleStreamingControl(eos);
+}
+
+function reportStreamingDecoderFallback(reason) {
+  const engine = streamingEngineState();
+  engine.encodedCodecs = [];
+  engine.diagnostics.decoderFallback = reason;
+  sendStreamingControl({ type: 'decoder-fallback', reason });
+}
+
+function failStreamingEncodedRole(roleState, reason) {
+  const engine = streamingEngineState();
+  if (!streamingRoleIsLive(roleState)) return;
+  reportStreamingDecoderFallback(reason);
+  const { track, continuityOptions } = roleState;
+  if (roleState.role === 'continuity' && continuityOptions?.kind !== 'seek') {
+    closeStreamingContinuityRole('decoder-fallback');
+    engine.pendingContinuityTrack = track;
+    engine.pendingContinuityOptions = continuityOptions;
+    maybeSchedulePendingStreamingContinuity();
+    return;
+  }
+  const replay = startStreamingTrack(track, {
+    startSeconds: roleState.role === 'continuity'
+      ? continuityOptions.startSeconds
+      : Number(engine.snapshot.currentTime) || 0,
+    autoplay: !engine.snapshot.paused,
+  });
+  void replay.catch((error) => failStreamingEngine('decoder', error, 'decoder-fallback-error'));
+}
+
+function handleStreamingEncodedBytes(view, buffer, failProtocol) {
+  const engine = streamingEngineState();
+  const generation = view.getUint32(8, false);
+  const streamId = view.getUint32(12, false);
+  const sequence = view.getUint32(16, false);
+  const byteCount = view.getUint32(20, false);
+  if (byteCount <= 0 || buffer.byteLength !== 24 + byteCount) {
+    failProtocol('declared byte length does not match payload');
+    return;
+  }
+  const roleState = streamingRoleForId(streamId);
+  const encoded = roleState?.encoded;
+  if (!encoded || generation !== engine.generation || generation !== roleState.generation
+      || sequence !== encoded.nextWireSequence) {
+    engine.diagnostics.staleMessages += 1;
+    return;
+  }
+  if (byteCount > encoded.creditedBytes) {
+    failProtocol('frame exceeds granted byte credit');
+    return;
+  }
+  const now = performance.now();
+  if (encoded.lastArrivalMs) {
+    engine.transferBytes = (Number(engine.transferBytes) || 0) + byteCount;
+    engine.transferMs = (Number(engine.transferMs) || 0) + (now - encoded.lastArrivalMs);
+    if (engine.transferBytes > STREAMING_TRANSFER_WINDOW_BYTES) {
+      engine.transferBytes /= 2;
+      engine.transferMs /= 2;
+    }
+  }
+  encoded.nextWireSequence += 1;
+  encoded.creditedBytes -= byteCount;
+  encoded.lastArrivalMs = encoded.creditedBytes > 0 ? now : 0;
+  encoded.queue.push(new Uint8Array(buffer, 24, byteCount));
+  encoded.queuedBytes += byteCount;
+  refillStreamingEncodedBytes(roleState);
+  void pumpStreamingEncodedRole(roleState);
+}
+
 function handleStreamingPcm(buffer) {
   const engine = streamingEngineState();
   const failProtocol = (message) => failStreamingEngine(
@@ -8378,7 +8851,8 @@ function handleStreamingPcm(buffer) {
       failProtocol('bad AHPC magic');
       return;
     }
-    if (view.getUint8(4) !== 1) {
+    const version = view.getUint8(4);
+    if (version !== 1 && version !== 2) {
       failProtocol('unsupported AHPC version');
       return;
     }
@@ -8389,6 +8863,10 @@ function handleStreamingPcm(buffer) {
     }
     if (view.getUint16(6, false) !== 0) {
       failProtocol('nonzero reserved flags');
+      return;
+    }
+    if (version === 2) {
+      handleStreamingEncodedBytes(view, buffer, failProtocol);
       return;
     }
     const wireRole = roleCode === 0 ? 'current' : 'continuity';
@@ -8426,28 +8904,7 @@ function handleStreamingPcm(buffer) {
     for (let index = 0; index < pcm.length; index += 1) {
       pcm[index] = view.getFloat32(24 + (index * 4), true);
     }
-    recordStreamingPcmEvidence(roleState, frameCount, pcm);
-    roleState.nextSequence += 1;
-    engine.diagnostics.inFlightFrames[role] -= frameCount;
-    engine.diagnostics.bufferedFrames[role] += frameCount;
-    if (role === 'current') {
-      maybeResolveStreamingReplacementCushion();
-      maybeGrantDeferredReplacementCredit();
-      maybeSchedulePendingStreamingContinuity();
-    }
-    engine.node.port.postMessage({
-      type: 'enqueue', generation, streamId, role, sequence, frameCount, pcm,
-    }, [pcm.buffer]);
-    if (!roleState.eosReceived) {
-      const targetFrames = Number(roleState.targetBufferFrames) || capacityFrames;
-      const missingFrames = targetFrames
-        - engine.diagnostics.bufferedFrames[role]
-        - engine.diagnostics.inFlightFrames[role];
-      refillStreamingRoleCredit(roleState, missingFrames);
-    }
-    maybeNotifyStreamingWaveformReady({ includeCommittedFrames: true });
-    maybePrepareStreamingSeek(roleState);
-    publishStreamingDiagnostics();
+    acceptStreamingPcm(roleState, frameCount, pcm);
   } catch (error) {
     failProtocol(error?.message || 'PCM decode failed');
   }
@@ -8495,6 +8952,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     const wasPaused = engine.snapshot.paused;
+    engine.diagnostics.cutoverPreparedFrames = engine.diagnostics.bufferedFrames.continuity;
     swapStreamingBackingCapacities(current, continuity);
     continuity.boundaryNotified = true;
     continuity.role = 'current';
@@ -8505,6 +8963,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
     engine.renderedPcmEvidenceByStream?.delete(current.streamId);
@@ -8519,7 +8978,7 @@ function handleStreamingWorkletMessage(message) {
     engine.diagnostics.seekCommittedAtMs = performance.now();
     engine.diagnostics.firstFrameAtMs = 0;
     Object.assign(engine.snapshot, {
-      currentTime: message.timelineFrame / STREAMING_SAMPLE_RATE,
+      currentTime: message.timelineFrame / engine.sampleRate,
       requestedStartFrame: pendingSeek.startFrame,
       timelineStartFrame: pendingSeek.startFrame,
       renderedFrame: message.renderedFrame,
@@ -8571,7 +9030,7 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.boundaryCapture = message.capture || null;
       engine.snapshot.currentTime = Math.max(
         loopState.startSeconds,
-        (Number(message.timelineFrame) || 0) / STREAMING_SAMPLE_RATE,
+        (Number(message.timelineFrame) || 0) / engine.sampleRate,
       );
       engine.snapshot.renderedFrame = Number(message.renderedFrame) || engine.snapshot.renderedFrame;
       return;
@@ -8605,7 +9064,7 @@ function handleStreamingWorkletMessage(message) {
       ...engine.snapshot,
       currentTime: Math.min(
         outgoingDuration || Number.POSITIVE_INFINITY,
-        outgoingFrame / STREAMING_SAMPLE_RATE,
+        outgoingFrame / engine.sampleRate,
       ),
       duration: outgoingDuration,
       src: String(current.track?.src || engine.snapshot.src || ''),
@@ -8618,6 +9077,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
     engine.renderedPcmEvidenceByStream?.delete(current.streamId);
@@ -8635,10 +9095,10 @@ function handleStreamingWorkletMessage(message) {
       ? message.timelineFrame
       : incomingBoundaryFrames;
     const timelineStartFrame = promotedLoop && promotedLoop.kind !== 'queued-next'
-      ? Math.round((Number(promotedLoop.startSeconds) || 0) * STREAMING_SAMPLE_RATE)
+      ? streamingFrames((Number(promotedLoop.startSeconds) || 0))
       : 0;
     Object.assign(engine.snapshot, {
-      currentTime: timelineFrame / STREAMING_SAMPLE_RATE,
+      currentTime: timelineFrame / engine.sampleRate,
       duration: Number(continuity.track?.durationSeconds) || 0,
       src: String(continuity.track?.src || ''),
       renderedFrame: incomingBoundaryFrames,
@@ -8699,9 +9159,10 @@ function handleStreamingWorkletMessage(message) {
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
       timelineFrame,
-      Math.round((Number(engine.snapshot.currentTime) || 0) * STREAMING_SAMPLE_RATE),
+      streamingFrames((Number(engine.snapshot.currentTime) || 0)),
     );
-    engine.snapshot.currentTime = monotonicTimelineFrame / STREAMING_SAMPLE_RATE;
+    engine.snapshot.currentTime = monotonicTimelineFrame / engine.sampleRate;
+    reportStreamingAudioOutput();
     const observedAtMs = performance.now();
     const previousObservedAtMs = Number(engine.positionFacadeAtMs) || 0;
     if (typeof handleStreamingPlaybackPosition === 'function'
@@ -8741,7 +9202,7 @@ function handleStreamingWorkletMessage(message) {
     }
     current.endedNotified = true;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
-    const currentTime = timelineFrame / STREAMING_SAMPLE_RATE;
+    const currentTime = timelineFrame / engine.sampleRate;
     Object.assign(engine.snapshot, {
       currentTime,
       renderedFrame: message.timelineFrame,
@@ -8758,6 +9219,9 @@ function handleStreamingWorkletMessage(message) {
           trackPath: String(current.track?.path || ''),
           timelineFrame,
           currentTime,
+          sampleRateChangeTrackPath: engine.sampleRateChangeNext?.generation === message.generation
+            ? engine.sampleRateChangeNext.path
+            : '',
         }), 'ended-facade-error');
       } catch (error) {
         failStreamingEngine('facade', error, 'ended-facade-error');
@@ -8784,9 +9248,9 @@ function handleStreamingWorkletMessage(message) {
       ? (roleState.startFrame + Math.max(
           0,
           message.renderedFrame - roleState.renderedFrameBase,
-        )) / STREAMING_SAMPLE_RATE
+        )) / engine.sampleRate
       : streamingAbsoluteTimelineFrame(roleState, message.renderedFrame)
-        / STREAMING_SAMPLE_RATE;
+        / engine.sampleRate;
     Object.assign(engine.snapshot, {
       startedAtContextTime: message.contextTime,
       renderedFrame: message.renderedFrame,
@@ -8814,7 +9278,9 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role !== 'current' || engine.diagnostics.buffering) return;
     engine.diagnostics.buffering = true;
     engine.mode = 'buffering';
-    grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES);
+    engine.stallStartedAtMs = performance.now();
+    engine.lastStallAtMs = engine.stallStartedAtMs;
+    grantStreamingCredit(roleState, streamingFrames(STREAMING_MAX_CREDIT_SECONDS));
     publishStreamingDiagnostics();
     return;
   }
@@ -8822,6 +9288,15 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role !== 'current' || !engine.diagnostics.buffering) return;
     engine.diagnostics.buffering = false;
     if (!engine.snapshot.paused && engine.mode !== 'error') engine.mode = 'playing';
+    sendStreamingControl({
+      type: 'stall-report',
+      generation: roleState.generation,
+      streamId: roleState.streamId,
+      durationMs: Math.max(0, Math.round(performance.now() - engine.stallStartedAtMs)),
+      targetBufferFrames: Number(roleState.targetBufferFrames)
+        || streamingRoleCommittedCapacityFrames(roleState),
+      pageVisible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
+    });
     publishStreamingDiagnostics();
     return;
   }
@@ -8835,7 +9310,7 @@ function handleStreamingWorkletMessage(message) {
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
     if (typeof recordMeasuredStreamingFrames === 'function') {
-      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+      recordMeasuredStreamingFrames(roleState, message, engine.sampleRate);
     }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
@@ -8851,11 +9326,9 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role === 'current') {
       engine.snapshot.currentTime = Math.max(
         0,
-        (Number(engine.snapshot.currentTime) || 0) + (message.frames / STREAMING_SAMPLE_RATE),
+        (Number(engine.snapshot.currentTime) || 0) + (message.frames / engine.sampleRate),
       );
-      const absoluteRenderedFrame = Math.round(
-        engine.snapshot.currentTime * STREAMING_SAMPLE_RATE,
-      );
+      const absoluteRenderedFrame = streamingFrames(engine.snapshot.currentTime);
       engine.snapshot.renderedFrame = !roleState.seekTarget && !roleState.continuityOptions
         ? Math.max(0, absoluteRenderedFrame - Math.max(0, Number(roleState.startFrame) || 0))
         : absoluteRenderedFrame;
@@ -8869,7 +9342,7 @@ function handleStreamingWorkletMessage(message) {
       if (restoringReplacementCushion) {
         grantStreamingCredit(
           roleState,
-          STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_FRAMES,
+          streamingFrames(STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS),
         );
       } else {
         const targetFrames = Number(roleState.targetBufferFrames)
@@ -8886,35 +9359,130 @@ function handleStreamingWorkletMessage(message) {
   }
 }
 
-async function prepareStreamingPlaybackEngine() {
+function knownStreamingSampleRate(track) {
+  return streamingEngineState().trackSampleRates?.get(String(track?.path || '')) || 0;
+}
+
+function chooseStreamingQuality(track) {
   const engine = streamingEngineState();
-  if (engine.context && engine.node && engine.socket) return;
-  if (engine.preparePromise) return engine.preparePromise;
+  const path = String(track?.path || '');
+  if (!path.toLowerCase().endsWith('.flac') || !engine.encodedCodecs?.includes('mp3')) {
+    return 'original';
+  }
+  if (engine.roles.current?.track?.path === track?.path) {
+    return engine.roles.current.quality || 'original';
+  }
+  if (engine.qualityPreference === 'original' || engine.qualityPreference === '320') {
+    return engine.qualityPreference;
+  }
+  const lastStallAtMs = Number(engine.lastStallAtMs) || 0;
+  if (lastStallAtMs && performance.now() - lastStallAtMs < STREAMING_RECENT_STALL_MS) return '320';
+  const transferSeconds = (Number(engine.transferMs) || 0) / 1000;
+  const durationSeconds = Number(track.durationSeconds) || 0;
+  const sizeBytes = Number(engine.trackFormats?.get(path)?.sizeBytes) || 0;
+  if (!transferSeconds || !durationSeconds || !sizeBytes) return 'original';
+  const measuredBitsPerSecond = (engine.transferBytes * 8) / transferSeconds;
+  return measuredBitsPerSecond < (sizeBytes * 8 * STREAMING_REQUIRED_HEADROOM) / durationSeconds
+    ? '320'
+    : 'original';
+}
+
+function streamingPlaybackRate(track) {
+  const engine = streamingEngineState();
+  const nativeRate = knownStreamingSampleRate(track);
+  if (chooseStreamingQuality(track) !== '320') return nativeRate;
+  return engine.trackFormats?.get(String(track?.path || ''))?.fallbackSampleRate || nativeRate;
+}
+
+function rememberStreamingTrackFormat(path, sampleRate, format) {
+  const engine = streamingEngineState();
+  engine.trackSampleRates ??= new Map();
+  engine.trackFormats ??= new Map();
+  if (engine.trackSampleRates.size >= STREAMING_MAX_KNOWN_TRACK_RATES) {
+    engine.trackSampleRates.clear();
+    engine.trackFormats.clear();
+  }
+  engine.trackSampleRates.set(path, sampleRate);
+  if (format) engine.trackFormats.set(path, format);
+}
+
+function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
+  const engine = streamingEngineState();
+  const probe = engine.sampleRateProbes?.get(requestId);
+  if (!probe) return;
+  engine.sampleRateProbes.delete(requestId);
+  if (sampleRate > 0) rememberStreamingTrackFormat(probe.path, sampleRate, format);
+  probe.resolve(sampleRate);
+}
+
+function requestStreamingSampleRate(track) {
+  const known = knownStreamingSampleRate(track);
+  if (known) return Promise.resolve(known);
+  const engine = streamingEngineState();
+  engine.sampleRateProbes ??= new Map();
+  engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
+  const requestId = engine.nextSampleRateProbeId;
+  return new Promise((resolve) => {
+    engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
+    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
+      settleStreamingSampleRateProbe(requestId, 0);
+    }
+  });
+}
+
+async function retireStreamingAudioGraph() {
+  const engine = streamingEngineState();
+  const { context, node } = engine;
+  engine.context = null;
+  engine.node = null;
+  engine.sampleRate = 0;
+  if (node) {
+    node.port.postMessage({ type: 'stop', generation: engine.generation, reason: 'sample-rate-change' });
+    node.disconnect();
+  }
+  await context?.close();
+}
+
+async function prepareStreamingPlaybackEngine(sampleRate = 0) {
+  const engine = streamingEngineState();
+  const audioGraphReady = !sampleRate
+    || (engine.context && engine.node && engine.sampleRate === sampleRate);
+  if (audioGraphReady && engine.socket) return;
+  if (engine.preparePromise) {
+    await engine.preparePromise;
+    return prepareStreamingPlaybackEngine(sampleRate);
+  }
   const preparation = (async () => {
     const AudioContextType = window.AudioContext || window.webkitAudioContext;
     let context = null;
     let node = null;
     let socket = null;
     try {
-      context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
-      engine.context = context;
-      if (typeof observeBrowserPlaybackAudioContext === 'function') {
-        observeBrowserPlaybackAudioContext(context);
+      if (!audioGraphReady) {
+        await retireStreamingAudioGraph();
+        // 'playback' asks for large output buffers; the default suits games and calls.
+        context = new AudioContextType({ sampleRate, latencyHint: 'playback' });
+        engine.context = context;
+        engine.sampleRate = sampleRate;
+        if (typeof observeBrowserPlaybackAudioContext === 'function') {
+          observeBrowserPlaybackAudioContext(context);
+        }
+        await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
+        node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+        });
+        node.connect(context.destination);
+        node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
+        node.onprocessorerror = (event) => {
+          if (engine.node !== node) return;
+          failStreamingEngine('processor', event, 'processor-error');
+        };
+        engine.node = node;
+        engine.backingCapacityFrames = initialStreamingBackingCapacities();
       }
-      await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
-      node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
-        numberOfInputs: 0,
-        numberOfOutputs: 1,
-        outputChannelCount: [2],
-      });
-      node.connect(context.destination);
-      node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
-      node.onprocessorerror = (event) => {
-        if (engine.node !== node) return;
-        failStreamingEngine('processor', event, 'processor-error');
-      };
-      engine.node = node;
-      engine.backingCapacityFrames = initialStreamingBackingCapacities();
+      if (engine.socket) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
       socket.binaryType = 'arraybuffer';
@@ -8956,7 +9524,10 @@ async function prepareStreamingPlaybackEngine() {
     } catch (error) {
       if (engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
-      if (engine.context === context) engine.context = null;
+      if (context && engine.context === context) {
+        engine.context = null;
+        engine.sampleRate = 0;
+      }
       engine.mode = 'stopped';
       const cleanupErrors = [];
       if (socket) {
@@ -9006,16 +9577,17 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     nextSequence: 0,
     metadataAccepted: false,
     continuityOptions,
+    quality: chooseStreamingQuality(track),
     backingCapacityFrames: ensureStreamingBackingCapacities()[role],
   };
   if (role === 'continuity') {
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const requestedFrames = continuityOptions?.kind === 'queued-next'
-      ? STREAMING_QUEUED_NEXT_PREPARE_FRAMES
+      ? streamingFrames(STREAMING_QUEUED_NEXT_PREPARE_SECONDS)
       : continuityOptions?.kind === 'seek'
-        ? STREAMING_SEEK_PREPARE_FRAMES
+        ? streamingFrames(STREAMING_SEEK_PREPARE_SECONDS)
       : continuityOptions?.kind === 'short-loop'
-        ? Math.max(1, (Math.round(continuityOptions.endSeconds * STREAMING_SAMPLE_RATE) - startFrame))
+        ? Math.max(1, (streamingFrames(continuityOptions.endSeconds) - startFrame))
         : capacityFrames;
     roleState.targetBufferFrames = Math.min(capacityFrames, requestedFrames);
     roleState.continuityIdentity = streamingContinuityIdentity(track, continuityOptions);
@@ -9038,8 +9610,10 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     role,
     path: track.path,
     startFrame,
-    sampleRate: STREAMING_SAMPLE_RATE,
+    sampleRate: engine.sampleRate,
     durationSeconds: Number(track.durationSeconds) || 0,
+    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs } : {}),
+    ...(roleState.quality === '320' ? { quality: '320' } : {}),
   });
   if (!accepted) {
     if (engine.roles[role] === roleState) engine.roles[role] = null;
@@ -9051,6 +9625,21 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     return null;
   }
   return roleState;
+}
+
+function probeStreamingTrackWaveform(track) {
+  if (typeof probeCachedWaveformPeaks !== 'function') return;
+  try {
+    const cachedWaveformProbe = probeCachedWaveformPeaks(
+      String(track?.path || ''),
+      streamingEngineState().generation,
+    );
+    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
+      void cachedWaveformProbe.catch(() => {});
+    }
+  } catch (_error) {
+    // Cached waveform probing is optional and must never interrupt playback.
+  }
 }
 
 async function startStreamingTrack(track, {
@@ -9065,22 +9654,32 @@ async function startStreamingTrack(track, {
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
-  const pendingPromotion = engine.pendingPromotion;
-  const promotionAllowsReplacement = !pendingPromotion
-    || (pendingPromotion.kind === 'replacement'
-      && pendingPromotion.generation === engine.generation
-      && pendingPromotion.streamId === engine.roles.current?.streamId
-      && engine.roles.current?.firstFrameNotified === true);
-  const canPrepareReplacement = autoplay
-    && engine.roles.current
-    && engine.diagnostics.firstFrameAtMs > 0
-    && engine.node
-    && engine.socket?.readyState === WebSocket.OPEN
-    && !engine.snapshot.paused
-    && promotionAllowsReplacement
-    && !engine.pendingSeek;
+  const canPrepareReplacement = () => {
+    const pendingPromotion = engine.pendingPromotion;
+    const promotionAllowsReplacement = !pendingPromotion
+      || (pendingPromotion.kind === 'replacement'
+        && pendingPromotion.generation === engine.generation
+        && pendingPromotion.streamId === engine.roles.current?.streamId
+        && engine.roles.current?.firstFrameNotified === true);
+    return autoplay
+      && engine.roles.current
+      && engine.diagnostics.firstFrameAtMs > 0
+      && engine.node
+      && engine.socket?.readyState === WebSocket.OPEN
+      && !engine.snapshot.paused
+      && promotionAllowsReplacement
+      && !engine.pendingSeek;
+  };
+  // A switch to a track's start can open at this rate; the server refuses a wrong one.
+  if (canPrepareReplacement() && !knownStreamingSampleRate(track)
+      && (startSeconds > 0 || chooseStreamingQuality(track) === '320')) {
+    await requestStreamingSampleRate(track);
+    if (engine.startRequestId !== startRequestId) return null;
+  }
   preparedReplacement: {
-    if (!canPrepareReplacement) break preparedReplacement;
+    if (!canPrepareReplacement()
+        || (knownStreamingSampleRate(track)
+          && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
     if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;
@@ -9099,14 +9698,15 @@ async function startStreamingTrack(track, {
           || engine.socket?.readyState !== WebSocket.OPEN) return null;
       if (!cushionReady) break preparedReplacement;
     }
-    const startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
+    const startFrame = streamingFrames(Math.max(0, startSeconds));
     const replacement = openStreamingRole('continuity', track, startFrame, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
+    probeStreamingTrackWaveform(track);
     replacement.targetBufferFrames = Math.min(
       streamingRoleCapacityFrames(replacement),
-      STREAMING_REPLACEMENT_PREPARE_FRAMES,
+      streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
     );
     const completion = new Promise((resolve, reject) => {
       engine.pendingSeek = {
@@ -9143,8 +9743,15 @@ async function startStreamingTrack(track, {
   if (engine.startRequestId !== startRequestId) return null;
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
+  let sampleRate = 0;
   try {
     await prepareStreamingPlaybackEngine();
+    if (typeof ensureStreamingDecoders === 'function') await ensureStreamingDecoders();
+    await requestStreamingSampleRate(track);
+    sampleRate = streamingPlaybackRate(track);
+    if (engine.startRequestId === startRequestId && !sampleRate) {
+      throw new Error('The track sample rate could not be read');
+    }
   } catch (error) {
     if (engine.startRequestId !== startRequestId) return null;
     throw error;
@@ -9179,7 +9786,15 @@ async function startStreamingTrack(track, {
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
   engine.deferredCreditFrames = { current: 0, continuity: 0 };
-  const startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
+  try {
+    await prepareStreamingPlaybackEngine(sampleRate);
+  } catch (error) {
+    if (engine.startRequestId !== startRequestId) return null;
+    throw error;
+  }
+  if (engine.startRequestId !== startRequestId
+      || engine.lifecycleEpoch !== lifecycleEpoch) return null;
+  const startFrame = streamingFrames(Math.max(0, startSeconds));
   Object.assign(engine.snapshot, {
     currentTime: Math.max(0, startSeconds),
     duration: Number(track.durationSeconds) || 0,
@@ -9187,33 +9802,21 @@ async function startStreamingTrack(track, {
     ended: false,
     src: track.src || '',
     readyState: 0,
-    sampleRate: STREAMING_SAMPLE_RATE,
+    sampleRate: engine.sampleRate,
     requestedStartFrame: startFrame,
     timelineStartFrame: startFrame,
   });
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    try {
-      const cachedWaveformProbe = probeCachedWaveformPeaks(
-        String(track?.path || ''),
-        engine.generation,
-      );
-      if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-        void cachedWaveformProbe.catch(() => {});
-      }
-    } catch (_error) {
-      // Cached waveform probing is optional and must never interrupt playback.
-    }
-  }
+  probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
     generation: engine.generation,
-    sampleRate: STREAMING_SAMPLE_RATE,
-    currentCapacityFrames: engine.limits.currentSeconds * STREAMING_SAMPLE_RATE,
-    continuityCapacityFrames: engine.limits.continuitySeconds * STREAMING_SAMPLE_RATE,
-    startupBufferFrames: STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES,
+    sampleRate: engine.sampleRate,
+    currentCapacityFrames: streamingFrames(engine.limits.currentSeconds),
+    continuityCapacityFrames: streamingFrames(engine.limits.continuitySeconds),
+    startupBufferFrames: streamingFrames(STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS),
   });
   if (!autoplay) {
     if (engine.context.state !== 'suspended') {
@@ -9328,6 +9931,7 @@ async function resumeStreamingPlayback(
   const node = engine.node;
   const lifecycleEpoch = engine.lifecycleEpoch;
   const generation = engine.generation;
+  if (!context) return false;
   await context.resume();
   if (engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
@@ -9416,7 +10020,7 @@ async function seekStreamingPlayback(seconds) {
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   const startSeconds = Math.max(0, Number(seconds) || 0);
-  const startFrame = Math.round(startSeconds * STREAMING_SAMPLE_RATE);
+  const startFrame = streamingFrames(startSeconds);
   const replacement = openStreamingRole('continuity', currentTrack, startFrame, {
     kind: 'seek', startSeconds, endSeconds: startSeconds,
   });
@@ -9447,6 +10051,19 @@ async function scheduleStreamingContinuity(track, options = {}) {
   const engine = streamingEngineState();
   if (!engine.roles.current) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
+  if (normalized.kind === 'queued-next') {
+    // Most albums share one rate, so an unknown track is opened at this rate and
+    // the server refuses it if wrong. Only a 320 kbps stream needs its rate first.
+    if (!knownStreamingSampleRate(track) && chooseStreamingQuality(track) === '320') {
+      return await requestStreamingSampleRate(track)
+        ? scheduleStreamingContinuity(track, normalized)
+        : null;
+    }
+    if (knownStreamingSampleRate(track) && streamingPlaybackRate(track) !== engine.sampleRate) {
+      leaveStreamingTrackForRateChange(track);
+      return null;
+    }
+  }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
     return engine.roles.continuity;
@@ -9477,7 +10094,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
   if (engine.roles.continuity && !closeStreamingContinuityRole('continuity-replaced')) {
     return null;
   }
-  const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
+  const startFrame = streamingFrames(normalized.startSeconds);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity) return null;
   if (normalized.kind === 'queued-next') {
@@ -9499,7 +10116,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
       active: true,
       kind: normalized.kind,
       startFrame,
-      endFrame: Math.round(normalized.endSeconds * STREAMING_SAMPLE_RATE),
+      endFrame: streamingFrames(normalized.endSeconds),
       retainedStreamId: continuity.streamId,
     });
   }
@@ -9518,8 +10135,8 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
   };
   if (!active && loop) {
     message.kind = loop.kind;
-    message.startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
-    message.endFrame = Math.round(Math.max(0, endSeconds) * STREAMING_SAMPLE_RATE);
+    message.startFrame = streamingFrames(Math.max(0, startSeconds));
+    message.endFrame = streamingFrames(Math.max(0, endSeconds));
     message.retainedStreamId = loop.streamId;
     if (continuity?.streamId === loop.streamId) {
       if (!closeStreamingContinuityRole('loop-disabled', { releaseWorklet: false })) return false;
@@ -9529,8 +10146,8 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
     engine.pendingContinuityOptions = null;
   } else if (active && continuity) {
     message.kind = loop?.kind || continuity.continuityOptions?.kind || 'long-loop';
-    message.startFrame = Math.round(Math.max(0, startSeconds) * STREAMING_SAMPLE_RATE);
-    message.endFrame = Math.round(Math.max(0, endSeconds) * STREAMING_SAMPLE_RATE);
+    message.startFrame = streamingFrames(Math.max(0, startSeconds));
+    message.endFrame = streamingFrames(Math.max(0, endSeconds));
     message.retainedStreamId = continuity.streamId;
   }
   engine.node.port.postMessage(message);
@@ -9551,9 +10168,13 @@ async function cleanupStreamingResources(reason, {
   }
   settleStreamingReplacementCushionWaiter(false);
   settlePendingStreamingCutover(new Error(`Prepared track replacement stopped: ${reason}`));
+  for (const requestId of [...(engine.sampleRateProbes?.keys() || [])]) {
+    settleStreamingSampleRateProbe(requestId, 0);
+  }
   engine.context = null;
   engine.node = null;
   engine.socket = null;
+  engine.sampleRate = 0;
   engine.roles.current = null;
   engine.roles.continuity = null;
   engine.pendingContinuityTrack = null;
@@ -9565,6 +10186,7 @@ async function cleanupStreamingResources(reason, {
   engine.waveformReadyIdentity = null;
   engine.pendingControls = [];
   engine.deferredCreditFrames = { current: 0, continuity: 0 };
+  sweepStreamingEncodedDecoders();
   if (!preserveError) {
     engine.mode = 'stopped';
     delete engine.diagnostics.lastError;
@@ -13283,6 +13905,19 @@ function selectTrackModalCurrentRelease(albumId) {
   return true;
 }
 
+// The card from this session's own edit can outlive its old key, but its name and year still
+// identify the release, so the chooser would only ask about a choice already made.
+function openLocallyEditedSplitRelease(albumKey, album, releases) {
+  if (!locallyEditedAlbumKeys.has(albumKey) || !Array.isArray(releases)) return false;
+  const matches = releases.filter((release) => (
+    String(release?.name || '') === String(album?.name || '')
+    && String(release?.year || '') === String(album?.year || '')
+  ));
+  if (matches.length !== 1) return false;
+  state.ui.trackModalIdentitySplitChoices = releases;
+  return selectTrackModalCurrentRelease(matches[0].album_id);
+}
+
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
@@ -13346,6 +13981,15 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+// This session knows its own edits, so it never needs asking which release it meant.
+// Other sessions still get the split chooser, and a removed album still returns it.
+const locallyEditedAlbumKeys = new Set();
+
+function rememberLocallyEditedAlbum(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  if (albumKey) locallyEditedAlbumKeys.add(albumKey);
+}
+
 async function refreshOpenTrackModalAfterInventoryMutation() {
   const els = getTrackModalElements();
   const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -13353,14 +13997,14 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  renderTrackModalLoadingState(openAlbum);
+  // The rows stay until fresh details replace them, so an unrelated change shows nothing.
   let refreshedAlbum = null;
   let loadError = null;
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: true,
+      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
     });
   } catch (error) {
     loadError = error;
@@ -13496,6 +14140,11 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+      if (openLocallyEditedSplitRelease(
+        albumKey,
+        albumWithPlaybackContext,
+        error.currentReleases,
+      )) return;
       if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);
@@ -13578,6 +14227,7 @@ function resolveTrackModalActionAlbum(button) {
     && Number.isSafeInteger(renderedIdentityRevision)
     && renderedIdentityRevision >= 0
     && currentIdentityRevision > renderedIdentityRevision
+    && !locallyEditedAlbumKeys.has(albumKey)
   ) {
     return { ...fallbackAlbum, resolve_lineage: true };
   }
@@ -16424,6 +17074,46 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// Watcher changes reach the tree on their own, without reloading the gallery or an open album.
+async function refreshArtistTreeAfterInventoryMutation(revision) {
+  const treeRevision = Number(state.ui.appliedArtistTreeInventoryMutationRevision);
+  if (Number.isSafeInteger(treeRevision) && treeRevision >= revision) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A search tree lists only its matches, so the next search response owns it.
+  if (String(state.view?.query || '').trim()
+    || !Array.isArray(state.view?.artists_sidebar) || !state.view.artists_sidebar.length) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A gallery request in flight owns the view; the tree waits for the next poll.
+  const viewBusy = () => Boolean(state.ui.pendingViewTransition || state.ui.activeViewRequestUrl);
+  if (viewBusy()) return;
+  const viewRevision = readViewStateRevision();
+  const treeUrl = buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' });
+  // The purpose header marks a tree-only read; a failed read is retried by the next poll.
+  const response = await fetch(treeUrl, {
+    headers: { Accept: 'application/json', 'X-Album-Haven-View-Purpose': 'artist-tree' },
+  });
+  const data = await response.json();
+  if (!response.ok || !Array.isArray(data?.artists_sidebar)) {
+    throw new Error(data?.error || 'Failed to load the artist tree.');
+  }
+  if (viewBusy() || readViewStateRevision() !== viewRevision
+    || String(state.view?.query || '').trim()) return;
+  state.view.artists_sidebar = data.artists_sidebar;
+  if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
+    state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
+  }
+  const responseRevision = Number(data.inventory_mutation_revision);
+  state.ui.appliedArtistTreeInventoryMutationRevision = Number.isSafeInteger(responseRevision)
+    ? responseRevision
+    : revision;
+  state.ui.pendingArtistTreeRefresh = false;
+  renderSidebar();
+}
+
 async function fetchGalleryViewResponse(url, signal) {
   const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
   return retryPendingGalleryViewResponse(response, url, signal);
@@ -17013,6 +17703,11 @@ async function fetchAndRender(url, push = true, options = {}) {
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && Array.isArray(payloadToApply?.artists_sidebar)) {
+      state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;
+    }
+    if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(
@@ -17059,7 +17754,12 @@ async function fetchAndRender(url, push = true, options = {}) {
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
       invalidateAllHydratedTrackModalAlbumDetails();
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
-        await refreshOpenTrackModalAfterInventoryMutation();
+        // An open album that no longer exists must not leave the applied gallery half-finished.
+        try {
+          await refreshOpenTrackModalAfterInventoryMutation();
+        } catch (modalRefreshError) {
+          console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+        }
       }
     }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -17763,6 +18463,7 @@ async function pollStatus() {
         state.ui.pendingInventoryMutationViewRefresh = true;
       }
     }
+    if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
@@ -17938,6 +18639,18 @@ async function pollStatus() {
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
           inventoryRefreshError,
+        );
+      }
+    }
+    if (state.ui.pendingArtistTreeRefresh && !busyNow && !state.busy && !hasPendingSidebarNavigation()) {
+      try {
+        await refreshArtistTreeAfterInventoryMutation(currentInventoryRevision);
+        if (!ownsStatus()) return;
+      } catch (treeRefreshError) {
+        if (!ownsStatus()) return;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the artist tree after an inventory change.',
+          treeRefreshError,
         );
       }
     }
@@ -29516,9 +30229,11 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   }
   const taskGeneration = String(normalizedTask.id || '').trim();
   const taskCandidates = sanitizeCoverLookupPossibleMatches(normalizedTask.possible_matches);
+  const snapshotOwnedByTask = coverLookupCandidateGenerationKey(normalizedSnapshot?.search_generation)
+    === coverLookupCandidateGenerationKey(taskGeneration);
   if (
     normalizedSnapshot
-    && normalizedSnapshot.search_generation !== taskGeneration
+    && !snapshotOwnedByTask
     && taskCandidates.length === 0
   ) {
     return {
@@ -29531,7 +30246,7 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   }
   if (
     normalizedSnapshot
-    && normalizedSnapshot.search_generation === taskGeneration
+    && snapshotOwnedByTask
     && (
       taskCandidates.length === 0
       || coverLookupCandidateTimestamp(normalizedSnapshot.updated_at)
@@ -34052,6 +34767,9 @@ async function confirmManualTagEdit() {
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
+    if (typeof rememberLocallyEditedAlbum === 'function') {
+      [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
+    }
     const response = await fetch('/utilities/edit-tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -35694,14 +36412,20 @@ function refreshTrackModalPlaybackState() {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -35737,14 +36461,20 @@ function refreshNonAlbumModalPlaybackState() {
   const nonAlbumModal = document.getElementById('non-album-modal');
   if (!nonAlbumModal || nonAlbumModal.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const currentTrackPath = String(state.player.current?.path || '');
-  const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = formatTrackDuration(playback.duration) || '0:00';
+  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
+  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
+  const activeCurrent = selectedTrackPath
+    ? '0:00'
+    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const activeDuration = selectedTrackPath
+    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
+    : formatTrackDuration(playback.duration) || '0:00';
 
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
+    const isActivelyPlaying = isCurrentTrack
+      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
     row.classList.toggle('album-track-table__row--current', isCurrentTrack);
@@ -41090,6 +41820,27 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 
 let playerTrackSelectionToken = 0;
 
+// A switch takes a moment to reach the listener; the click should not.
+function renderSelectedTrackState(track) {
+  if (track && typeof getPlayerElements === 'function') {
+    renderGlobalPlayerMetadata(getPlayerElements(), track);
+  }
+  if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
+  if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+}
+
+function showSelectedTrackImmediately(track, shouldAutoplay) {
+  if (!shouldAutoplay) return;
+  state.player.selectedTrack = track;
+  renderSelectedTrackState(track);
+}
+
+function clearSelectedTrack() {
+  if (!state.player.selectedTrack) return;
+  state.player.selectedTrack = null;
+  renderSelectedTrackState(state.player.current);
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
@@ -41102,17 +41853,21 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback engine is unavailable');
   }
   const selectionToken = ++playerTrackSelectionToken;
+  showSelectedTrackImmediately(track, shouldAutoplay);
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
+      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
+    clearSelectedTrack();
     throw error;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  clearSelectedTrack();
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }
@@ -41218,6 +41973,11 @@ async function handleStreamingPlaybackEnded(event = {}) {
     });
   }
   updatePlayerUi();
+  if (event.sampleRateChangeTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+    await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
+  }
 }
 
 async function handleStreamingPlaybackBoundary(event = {}) {

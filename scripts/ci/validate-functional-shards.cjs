@@ -11,7 +11,8 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 68],
+  ['gallery-search-visual-1', 32],
+  ['gallery-search-visual-2', 36],
   ['cover-providers-1', 22],
   ['cover-providers-2', 14],
   ['metadata-mutations', 16],
@@ -136,7 +137,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   const shards = Array.isArray(contract?.shards) ? contract.shards : [];
   const expectedNames = EXPECTED_SHARDS.map(([name]) => name);
   if (JSON.stringify(shards.map((shard) => shard.name)) !== JSON.stringify(expectedNames)) {
-    errors.push('functional shards must use the exact approved seven-shard order');
+    errors.push('functional shards must use the exact approved eight-shard order');
   }
   for (const [name, expectedCount] of EXPECTED_SHARDS) {
     const shard = shards.find((candidate) => candidate.name === name);

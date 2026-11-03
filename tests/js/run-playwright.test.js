@@ -3387,6 +3387,40 @@ test('functional fixture warmup bounds each projection retry to the original dea
   assert.deepEqual(requestTimeouts, [100, 10]);
 });
 
+test('functional fixture warmup rereads when the library changes during its gallery read', async () => {
+  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+  let viewAttempts = 0;
+
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot,
+    sleepFn: async () => {},
+    pollIntervalMs: 1,
+    timeoutMs: 1000,
+    fetchHttpResponseCompleteFn: async (url) => {
+      if (!url.includes('/view-data?')) {
+        return { ok: true, statusCode: 200, body: '<!doctype html>' };
+      }
+      viewAttempts += 1;
+      return viewAttempts === 1
+        ? {
+          ok: false,
+          statusCode: 409,
+          body: JSON.stringify({ ok: false, restart_required: true }),
+        }
+        : {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({
+            albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+          }),
+        };
+    },
+  });
+
+  assert.equal(warmed, true);
+  assert.equal(viewAttempts, 2);
+});
+
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
   const requests = [];
   const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');

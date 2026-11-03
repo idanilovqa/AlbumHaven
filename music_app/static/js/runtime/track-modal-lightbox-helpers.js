@@ -501,6 +501,19 @@ function selectTrackModalCurrentRelease(albumId) {
   return true;
 }
 
+// The card from this session's own edit can outlive its old key, but its name and year still
+// identify the release, so the chooser would only ask about a choice already made.
+function openLocallyEditedSplitRelease(albumKey, album, releases) {
+  if (!locallyEditedAlbumKeys.has(albumKey) || !Array.isArray(releases)) return false;
+  const matches = releases.filter((release) => (
+    String(release?.name || '') === String(album?.name || '')
+    && String(release?.year || '') === String(album?.year || '')
+  ));
+  if (matches.length !== 1) return false;
+  state.ui.trackModalIdentitySplitChoices = releases;
+  return selectTrackModalCurrentRelease(matches[0].album_id);
+}
+
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
@@ -564,6 +577,15 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
+// This session knows its own edits, so it never needs asking which release it meant.
+// Other sessions still get the split chooser, and a removed album still returns it.
+const locallyEditedAlbumKeys = new Set();
+
+function rememberLocallyEditedAlbum(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  if (albumKey) locallyEditedAlbumKeys.add(albumKey);
+}
+
 async function refreshOpenTrackModalAfterInventoryMutation() {
   const els = getTrackModalElements();
   const openAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -571,14 +593,14 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  renderTrackModalLoadingState(openAlbum);
+  // The rows stay until fresh details replace them, so an unrelated change shows nothing.
   let refreshedAlbum = null;
   let loadError = null;
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: true,
+      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
     });
   } catch (error) {
     loadError = error;
@@ -714,6 +736,11 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+      if (openLocallyEditedSplitRelease(
+        albumKey,
+        albumWithPlaybackContext,
+        error.currentReleases,
+      )) return;
       if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);
@@ -796,6 +823,7 @@ function resolveTrackModalActionAlbum(button) {
     && Number.isSafeInteger(renderedIdentityRevision)
     && renderedIdentityRevision >= 0
     && currentIdentityRevision > renderedIdentityRevision
+    && !locallyEditedAlbumKeys.has(albumKey)
   ) {
     return { ...fallbackAlbum, resolve_lineage: true };
   }

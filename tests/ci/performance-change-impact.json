@@ -121,6 +121,12 @@
     },
     {
       "paths": [
+        "music_app/routes/playback_stream_asgi.py",
+        "music_app/services/mp3_stream_map.py",
+        "music_app/services/playback_encoded.py",
+        "music_app/static/js/runtime/player-streaming-decoders.js",
+        "music_app/static/vendor/wasm-audio-decoders/flac-decoder.min.js",
+        "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
         "music_app/static/js/runtime/track-modal-lightbox-helpers.js",

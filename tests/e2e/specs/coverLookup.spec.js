@@ -901,8 +901,14 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.waitForDrawerOpen();
   await page.setViewportSize({ width: 390, height: 844 });
   const selected = notifications.at(-1);
+  // Cached candidates paint first; a save must follow the gallery response that replaces them.
+  const selectedGallery = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/utilities/cover-lookup/gallery'
+  ));
   const selectedTaskScrollTop = await coverLookupActions.openTaskById(selected.taskId);
   await coverLookupActions.waitForModalReady();
+  await (await selectedGallery).finished();
   await coverLookupActions.waitForModalResultsReady();
   await coverLookupActions.selectFirstRemoteCoverAndSave();
   await coverLookupActions.waitForDrawerOpen();
@@ -913,6 +919,10 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     await coverLookupActions.waitForTaskCoverDecodedById(taskId);
   }
 
+  // The saved card starts on the remote candidate, then settles on the local cover.
+  await expect.poll(async () => (
+    await coverLookupActions.readTaskCardEvidenceById(selected.taskId)
+  ).imageSrc).toContain('/cover?path=');
   const afterSave = await readCards();
   for (const { taskId } of notifications.slice(0, -1)) {
     expect(afterSave[taskId]).toEqual(before[taskId]);
@@ -951,7 +961,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     ]),
   ));
   const scrollBeforeDelete = await coverLookupActions.readDrawerScrollTop();
-  await coverLookupActions.clearTaskAndExpectImmediateRemoval(selected.identity.album);
+  await coverLookupActions.clearTaskAndExpectImmediateRemoval(
+    new RegExp(`^\\s*${selected.identity.album}\\s*$`, 'u'),
+  );
   expect(await coverLookupActions.readDrawerScrollTop()).toBe(scrollBeforeDelete);
   await expect(coverLookupActions.coverLookup.taskCardById(selected.taskId)).toHaveCount(0);
   for (const taskId of siblingTaskIds) {
@@ -1095,8 +1107,9 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(modal.activeLocalCover.coverPath).toBe(selectedCoverPath);
     expect(persistedSelectedRemoteCover.sha256).toBe(selectedRemoteCover.sha256);
     expect(persistedCandidateSummary?.selected).toBe(false);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
@@ -1375,6 +1388,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     const requestPromise = page.waitForRequest((request) => (
       request.method() === 'POST'
       && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
+      && request.postDataJSON()?.album?.name === SPLIT_FIXTURE.splitAlbum
     ));
     await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
     const request = await requestPromise;
@@ -1383,10 +1397,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await coverLookupActions.waitForModalResultsReady();
     await expect(selector).toHaveCount(0);
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(SPLIT_FIXTURE.splitAlbum);
-    expect(request.postDataJSON()).toMatchObject({
-      album: expect.objectContaining({ name: SPLIT_FIXTURE.splitAlbum }),
-      task_id: taskId,
-    });
+    expect(request.postDataJSON()).toMatchObject({ task_id: taskId });
     await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
     await coverLookupActions.waitForRemoteCandidateId(candidateId);
     const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);
@@ -1498,6 +1509,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
 }) => {
   test.setTimeout(180_000);
 
+  const testStartedAtMs = Date.now();
   let originalActiveCover = null;
   let selectedLocalCover = null;
   let initialUnusedCandidatePaths = [];
@@ -1602,7 +1614,14 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '')).not.toBe('');
     expect(selectedLocalCover.sourcePath).toMatch(/[\\/]Art[\\/]Front\.jpg$/i);
     expect(fs.existsSync(path.join(tempRoot, 'app-data', 'display-cover-cache'))).toBe(true);
-    expect(fs.existsSync(path.join(path.dirname(selectedLocalCover.sourcePath), '.album-haven'))).toBe(false);
+    // Earlier cases in this shard may save art here, so only this case's previews count.
+    const nestedPreviewRoot = path.join(path.dirname(selectedLocalCover.sourcePath), '.album-haven');
+    const previewsWrittenHere = fs.existsSync(nestedPreviewRoot)
+      ? fs.readdirSync(nestedPreviewRoot, { recursive: true })
+        .map((name) => path.join(nestedPreviewRoot, String(name)))
+        .filter((file) => fs.statSync(file).isFile() && fs.statSync(file).mtimeMs >= testStartedAtMs)
+      : [];
+    expect(previewsWrittenHere).toEqual([]);
   });
 
   await stepLogger.step('Save nested Front.jpg over canonical cover.jpg and verify every immediate surface', async () => {
@@ -2108,6 +2127,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     });
     expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
     expect(saved.payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await expect(coverLookupActions.coverLookup.taskCardById(generationATaskId)).toHaveCount(1);
@@ -2125,11 +2145,12 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
   });
 
   await stepLogger.step('Release B afterward and prove its terminal publication cannot replace persisted A', async () => {
-    await trackModalActions.openCoverLookup();
-    await coverLookupActions.waitForModalReady();
     await coverLookupActions.releaseLaterProviderFixture();
-    await coverLookupActions.waitForModalSearchCompleted();
-    await coverLookupActions.closeModal();
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForTaskStatusById(generationBTaskId, /^[1-9]\d* covers? found$/, {
+      timeout: 120000,
+    });
+    await coverLookupActions.closeDrawer();
 
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
@@ -2515,8 +2536,9 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await coverLookupActions.waitForModalReady();
     const reopenedUpgrade = await coverLookupActions.inspectModalComponents();
     expect(reopenedUpgrade.activeLocalCover.coverPath).toBe(upgradedAlbum.cover_path);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect((await coverLookupActions.readRemoteCandidateSummaries())
       .find((candidate) => candidate.imageSrc.includes('user-owned-same-art-improvement'))
       ?.selected).toBe(false);

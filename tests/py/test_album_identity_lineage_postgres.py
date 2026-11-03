@@ -268,3 +268,4 @@ def test_resolve_keeps_named_various_artist_and_known_artist_loose_track_albums(
         repository, _connection = _repository([candidate])
         assert repository.resolve(album_id=candidate["album_id"])["status"] == "current"
 
+

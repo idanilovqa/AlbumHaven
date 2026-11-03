@@ -462,9 +462,11 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   }
   const taskGeneration = String(normalizedTask.id || '').trim();
   const taskCandidates = sanitizeCoverLookupPossibleMatches(normalizedTask.possible_matches);
+  const snapshotOwnedByTask = coverLookupCandidateGenerationKey(normalizedSnapshot?.search_generation)
+    === coverLookupCandidateGenerationKey(taskGeneration);
   if (
     normalizedSnapshot
-    && normalizedSnapshot.search_generation !== taskGeneration
+    && !snapshotOwnedByTask
     && taskCandidates.length === 0
   ) {
     return {
@@ -477,7 +479,7 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   }
   if (
     normalizedSnapshot
-    && normalizedSnapshot.search_generation === taskGeneration
+    && snapshotOwnedByTask
     && (
       taskCandidates.length === 0
       || coverLookupCandidateTimestamp(normalizedSnapshot.updated_at)

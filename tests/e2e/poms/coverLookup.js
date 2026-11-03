@@ -610,8 +610,9 @@ export class CoverLookup extends BasePage {
         taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
         title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
         byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
-        imageSrc: image instanceof HTMLImageElement
-          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+        // A loaded image reports an absolute currentSrc; an unloaded one only its relative attribute.
+        imageSrc: image instanceof HTMLImageElement && (image.currentSrc || image.getAttribute('src'))
+          ? new URL(image.currentSrc || image.getAttribute('src'), document.baseURI).href
           : '',
       };
     });

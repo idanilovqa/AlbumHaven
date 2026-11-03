@@ -10955,7 +10955,8 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                 ],
                 "open_directory_paths": [r"D:\Music\Split Artist\Split Album\1999"],
                 "artist_relationship": "owned",
-                "preview_only": False,
+                "is_split_album": False,
+            "preview_only": False,
         }
     ]
 
@@ -11123,7 +11124,8 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             ],
                 "open_directory_paths": [r"D:\Synthetic Music\Exception Artist\Exception Album"],
                 "artist_relationship": "owned",
-                "preview_only": False,
+                "is_split_album": False,
+            "preview_only": False,
         }
     ]
     sql = str(executed[0])

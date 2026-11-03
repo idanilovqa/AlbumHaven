@@ -5,10 +5,11 @@
   "approvalGate": {
     "gate": 6,
     "status": "approved",
-    "decision": "Approve the seven static shard assignments and unmeasured relative balance units before enabling jobs."
+    "decision": "Approve the eight static shard assignments and unmeasured relative balance units before enabling jobs."
   },
   "relativeDurationBalanceUnits": {
-    "gallery-search-visual": 45,
+    "gallery-search-visual-1": 23,
+    "gallery-search-visual-2": 22,
     "cover-providers-1": 21,
     "cover-providers-2": 20,
     "metadata-mutations": 26,
@@ -18,9 +19,9 @@
   },
   "shards": [
     {
-      "name": "gallery-search-visual",
+      "name": "gallery-search-visual-1",
       "fixtureProfile": "functional-core",
-      "relativeDurationUnits": 45,
+      "relativeDurationUnits": 23,
       "suitePrerequisites": [
         "functional-core seeded before application startup",
         "approved cover pool and Joseph fixture mounted read-only",
@@ -261,7 +262,26 @@
               "test": "tests/e2e/specs/galleryCoverStability.spec.js",
               "case": "FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions",
               "area": "cover-providers"
-            },
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gallery-search-visual-2",
+      "fixtureProfile": "functional-core",
+      "relativeDurationUnits": 22,
+      "suitePrerequisites": [
+        "functional-core seeded before application startup",
+        "approved cover pool and Joseph fixture mounted read-only",
+        "visual snapshots use pinned Chrome for Testing"
+      ],
+      "invocations": [
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
             {
               "config": "playwright.config.js",
               "project": "functional",

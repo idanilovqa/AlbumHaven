@@ -168,10 +168,13 @@ export class TrackModalActions {
       'This album was split—choose the current release',
       { timeout: options.timeout || 60000 },
     );
-    await expect(this.trackModal.currentReleaseChoices).toHaveCount(expectedNames.length);
-    const titles = await this.trackModal.currentReleaseChoiceTitles.allTextContents();
-    expect(titles.map((title) => title.trim()).sort()).toEqual([...expectedNames].sort());
-    return titles;
+    // A stale session's chooser updates as later splits reach it.
+    await expect.poll(async () => (
+      await this.trackModal.currentReleaseChoiceTitles.allTextContents()
+    ).map((title) => title.trim()).sort(), {
+      timeout: options.timeout || 60000,
+    }).toEqual([...expectedNames].sort());
+    return this.trackModal.currentReleaseChoiceTitles.allTextContents();
   }
 
   async chooseCurrentRelease(albumName) {
@@ -286,8 +289,13 @@ export class TrackModalActions {
   }
 
   async waitForInteractiveSummary(options = {}) {
-    await this.waitForReady(options);
-    const summary = await this.readSummary();
+    // A library change reloads open details and briefly hides their rows, so wait it out.
+    let summary;
+    await expect.poll(async () => {
+      await this.waitForReady(options);
+      summary = await this.readSummary();
+      return summary.trackRows > 0 && summary.playButtons > 0;
+    }, { timeout: options.timeout || 60000 }).toBe(true);
     expect(summary.trackRows).toBeGreaterThan(0);
     expect(summary.playButtons).toBeGreaterThan(0);
     expect(summary.title).not.toEqual('');
@@ -443,6 +451,8 @@ export class TrackModalActions {
       timeout: options.timeout || 30000,
       intervals: [100, 250, 500],
     }).toEqual(expectedSnapshot);
+    // An inventory refresh can redraw the loading state just after the match.
+    await this.waitForReady(options);
     return this.readSummary();
   }
 

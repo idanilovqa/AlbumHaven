@@ -582,6 +582,34 @@ test('stale album hydration sends its id and renders current split choices', asy
   );
 });
 
+test('this session opens the release it split without asking which one it meant', async () => {
+  const choices = [
+    { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
+    { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
+
+  context.rememberLocallyEditedAlbum(card);
+  context.openTrackModal(card);
+  await flushMicrotasks();
+
+  assert.equal(
+    context.fetchCalls[1].url,
+    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
+  );
+});
+
 test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
   const staleRenderedAlbum = {
     album_id: 17,
@@ -1011,7 +1039,7 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
-test('inventory mutation refresh hides stale rows while canonical details load', async () => {
+test('inventory mutation refresh keeps rows until fresh details replace them', async () => {
   const stale = {
     key: 'watcher-album',
     request_key: 'watcher-album',
@@ -1036,18 +1064,20 @@ test('inventory mutation refresh hides stale rows while canonical details load',
   const elements = context.getTrackModalElements();
   elements.overlay.hidden = false;
   elements.list.innerHTML = '<li>Old title</li>';
-  context.refreshOpenTrackModalVersionState = () => {};
+  let rendered = null;
+  context.refreshOpenTrackModalVersionState = (_key, album) => { rendered = album; };
 
   const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
 
-  assert.match(elements.list.innerHTML, /track-modal-loading-row/);
-  assert.doesNotMatch(elements.list.innerHTML, /Old title/);
+  assert.doesNotMatch(elements.list.innerHTML, /track-modal-loading-row/);
+  assert.match(elements.list.innerHTML, /Old title/);
   resolveResponse({
     ok: true,
     status: 200,
     json: async () => ({ ok: true, album: fresh }),
   });
   assert.equal(await refresh, true);
+  assert.equal(rendered.tracks[0].title, 'Fresh title');
 });
 
 test('inventory mutation refresh follows a cached stale child to its merged release', async () => {

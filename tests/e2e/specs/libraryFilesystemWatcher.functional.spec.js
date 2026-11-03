@@ -496,14 +496,14 @@ test('FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity', {
     });
 
     await stepLogger.step('Expose one intact band identity and no punctuation fragment', async () => {
-      await galleryActions.goto('/?surface=albums');
-      await galleryActions.waitForGalleryReady();
-      await expect.poll(
-        () => navigationPanelActions.readSidebarArtistLabelCount(
+      // The library tree takes a new artist on its next full load, as a reload gives.
+      await expect.poll(async () => {
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
+        return navigationPanelActions.readSidebarArtistLabelCount(
           PUNCTUATION_BAND_TARGET.trackArtist,
-        ),
-        { timeout: 60000, intervals: [250, 500, 1000] },
-      ).toBe(1);
+        );
+      }, { timeout: 60000, intervals: [1000, 2000] }).toBe(1);
       expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
 
       await searchToolbarActions.search(PUNCTUATION_BAND_TARGET.trackArtist, {
@@ -1005,7 +1005,10 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         status.inventory_mutation_revision,
       );
       await appBarActions.waitForScanAndCoverRefreshIdle();
-      for (const target of FEATURED_OWNERSHIP_TARGETS) {
+      // A compilation has no owning artist row, so only the owned release can be looked up here.
+      for (const target of FEATURED_OWNERSHIP_TARGETS.filter(
+        ({ albumArtist }) => albumArtist !== 'Various Artists',
+      )) {
         await expect.poll(async () => {
           const identity = await queryPersistedAlbumIdentity({
             artist: target.albumArtist,
@@ -1019,6 +1022,9 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
 
     await stepLogger.step('Show every track performer only under Featured On with owner credit intact', async () => {
       for (const target of FEATURED_OWNERSHIP_TARGETS) {
+        // An artist view keeps its tree until the next navigation, so return to the library first.
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
         await expectFeaturedAlbumOccurrence({
           page,
           galleryActions,
@@ -1067,14 +1073,11 @@ test('FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured O
         navigationPanelActions,
         ...target,
       });
-      const observation = await galleryActions.readProductionVisibleAlbumObservation(
+      await galleryActions.readCurrentProductionVisibleAlbumObservation(
         target.artist,
-        [target.album],
+        [{ album: target.album, year: target.year }],
+        { expectedAlbumCount: 1 },
       );
-      expect(observation.albumCount).toBe(1);
-      expect(observation.renderedIdentities).toEqual([
-        { album: target.album, year: String(target.year) },
-      ]);
     });
 
     await stepLogger.step('Keep soundtrack ownership stable after application restart', async () => {

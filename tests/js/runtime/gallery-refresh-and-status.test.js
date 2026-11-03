@@ -3996,6 +3996,75 @@ test('pollStatus does not reload a foreground view already read at the advanced 
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
+function artistTreeStatus(revision) {
+  return {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: revision,
+  };
+}
+
+test('a library change refreshes only the artist tree on an artist page', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = (view, options = {}) => (
+    `/view-data?artist=${view.selected_artist || ''}&payload_tier=${options.payloadTier || ''}`
+  );
+  const artistGroups = [{ artist: 'Ben', albums: [{ key: 'ben::album' }] }];
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ben',
+    artist_groups: artistGroups,
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Ben' }, { artist: 'Beny' }],
+    inventory_mutation_revision: 13,
+  });
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
+    '/status',
+    '/view-data?artist=&payload_tier=sidebar',
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar.map((item) => item.artist), ['Ben', 'Beny']);
+  assert.equal(context.state.view.selected_artist, 'Ben');
+  assert.equal(context.state.view.artist_groups, artistGroups);
+  assert.equal(context.state.ui.appliedArtistTreeInventoryMutationRevision, 13);
+  assert.equal(calls.renderSidebar, 1);
+  assert.equal(calls.renderView.length, 0);
+});
+
+test('a library change leaves a search tree to the next search response', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: 'Ben',
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.equal(Boolean(context.state.ui.pendingArtistTreeRefresh), false);
+});
+
 test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
   const { context, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

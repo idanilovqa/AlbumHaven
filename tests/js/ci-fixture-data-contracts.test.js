@@ -161,8 +161,8 @@ function validateFunctionalShards(contract, expectedCases) {
   if (contract?.schemaVersion !== 1) errors.push('functional shard contract must use schemaVersion 1');
   if (contract?.browser !== 'chrome') errors.push('functional shards must use Chrome');
   if (contract?.workersPerInvocation !== 1) errors.push('functional shard invocations must use one worker');
-  if (!Array.isArray(contract?.shards) || contract.shards.length !== 7) {
-    errors.push('functional contract must declare exactly seven shards');
+  if (!Array.isArray(contract?.shards) || contract.shards.length !== 8) {
+    errors.push('functional contract must declare exactly eight shards');
     return errors;
   }
 
@@ -536,7 +536,7 @@ test('functional shard contract owns all 162 browser-functional cases exactly on
 
   assert.equal(expectedCases.size, 162);
   assert.deepEqual(errors, []);
-  assert.equal(contract.shards.length, 7);
+  assert.equal(contract.shards.length, 8);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
@@ -631,7 +631,7 @@ test('functional shard validation rejects duplicate, missing, and empty ownershi
         suitePrerequisites: ['fixture seed'],
         invocations: [{ config: first.config, project: first.project, workers: 1, cases: [first] }],
       },
-      ...['fifth', 'sixth', 'seventh'].map((name) => ({
+      ...['fifth', 'sixth', 'seventh', 'eighth'].map((name) => ({
         name: `${name}-shard`,
         fixtureProfile: 'functional-core',
         suitePrerequisites: ['fixture seed'],

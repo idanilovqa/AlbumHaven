@@ -5085,6 +5085,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self.server.record_musicbrainz_completed()
 
     def _serve_cover_art_archive(self, release_id: str, *, include_body: bool) -> None:
+        # Read the failure mode only after a held search is released.
+        self.server.cover_lookup_later_provider_gate.wait()
         self.server.record_cover_art_archive_request(release_id)
         spec = next(
             (item for item in self.server.cover_specs if str(item["cover_id"]) == release_id),
@@ -5151,6 +5153,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             for value in query.get(key, [])
         )
         self.server.record_cover_lookup_request("discogs_search_requests")
+        if self.server.get_cover_lookup_mode() == "failed":
+            self._send_json({"results": []}, include_body=include_body)
+            return
         self.server.wait_for_cover_lookup_later_provider(
             query_text,
             provider="discogs",

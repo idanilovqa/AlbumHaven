@@ -17059,23 +17059,25 @@ async function refreshArtistTreeAfterInventoryMutation(revision) {
     state.ui.pendingArtistTreeRefresh = false;
     return;
   }
+  // A gallery request in flight owns the view; the tree waits for the next poll.
+  const viewBusy = () => Boolean(state.ui.pendingViewTransition || state.ui.activeViewRequestUrl);
+  if (viewBusy()) return;
   const viewRevision = readViewStateRevision();
-  const response = await fetchGalleryViewResponse(buildApiUrl(
-    { ...state.view, selected_artist: '' },
-    { payloadTier: 'sidebar' },
-  ));
+  const treeUrl = buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' });
+  // The purpose header marks a tree-only read; a failed read is retried by the next poll.
+  const response = await fetch(treeUrl, {
+    headers: { Accept: 'application/json', 'X-Album-Haven-View-Purpose': 'artist-tree' },
+  });
   const data = await response.json();
   if (!response.ok || !Array.isArray(data?.artists_sidebar)) {
     throw new Error(data?.error || 'Failed to load the artist tree.');
   }
-  if (readViewStateRevision() !== viewRevision || String(state.view?.query || '').trim()) return;
-  state.view = {
-    ...state.view,
-    artists_sidebar: data.artists_sidebar,
-    ...(Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')
-      ? { show_all_artists_sidebar_link: data.show_all_artists_sidebar_link }
-      : {}),
-  };
+  if (viewBusy() || readViewStateRevision() !== viewRevision
+    || String(state.view?.query || '').trim()) return;
+  state.view.artists_sidebar = data.artists_sidebar;
+  if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
+    state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
+  }
   const responseRevision = Number(data.inventory_mutation_revision);
   state.ui.appliedArtistTreeInventoryMutationRevision = Number.isSafeInteger(responseRevision)
     ? responseRevision
@@ -17724,7 +17726,12 @@ async function fetchAndRender(url, push = true, options = {}) {
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
       invalidateAllHydratedTrackModalAlbumDetails();
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
-        await refreshOpenTrackModalAfterInventoryMutation();
+        // An open album that no longer exists must not leave the applied gallery half-finished.
+        try {
+          await refreshOpenTrackModalAfterInventoryMutation();
+        } catch (modalRefreshError) {
+          console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+        }
       }
     }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;

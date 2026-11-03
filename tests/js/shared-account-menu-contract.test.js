@@ -12,7 +12,7 @@ test('the existing Settings gear owns a shared, permission-filtered menu with pr
   assert.doesNotMatch(index, /id="settings-button"/);
   assert.doesNotMatch(index, /id="account-button"/);
   assert.doesNotMatch(index, /<a\b[^>]*href=["']\/account["']/);
-  assert.match(menu, /id='settings-button'[^%]*'data-account-menu-trigger': true/);
+  assert.match(menu, /id=menu_id_prefix ~ 'settings-button'[^%]*'data-account-menu-trigger': true/);
   assert.match(menu, /from "partials\/button\.html" import action_button/);
   assert.match(menu, /call action_button\('Settings'/);
   assert.match(menu, /'aria-haspopup': 'menu'[^%]*'aria-expanded': 'false'/);

@@ -137,6 +137,8 @@
   0%, 15% { transform: translateX(0); }
   85%, 100% { transform: translateX(min(0px, calc(100cqw - 100%))); }
 }
+/* Turning off album table motion also stops credit panning. */
+.album-track-table[data-playing-animation='disabled'] .album-track-table__secondary > span { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .album-track-table__secondary > span { animation: none; }
 }

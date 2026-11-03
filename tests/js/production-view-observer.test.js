@@ -1002,6 +1002,29 @@ test('production view observer ignores sidebar payloads and retains the latest f
   assert.equal(observer.read().pendingPayloadReadCount, 0);
 });
 
+test('a live artist-tree read keeps the artist gallery payload authoritative', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const artistRequest = request('http://127.0.0.1/view-data?surface=albums&artist=Ben&payload_tier=gallery_summary');
+  const treeRequest = {
+    ...request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar'),
+    headers: () => ({ 'x-album-haven-view-purpose': 'artist-tree' }),
+  };
+
+  page.emit('request', artistRequest);
+  page.emit('response', response(artistRequest, { payload_tier: 'full', selected_artist: 'Ben' }));
+  page.emit('requestfinished', artistRequest);
+  await flushPromises();
+  page.emit('request', treeRequest);
+  page.emit('response', response(treeRequest, { payload_tier: 'sidebar', artists_sidebar: [] }));
+  page.emit('requestfinished', treeRequest);
+  await flushPromises();
+
+  assert.equal(observer.read().latestFullPayload.selected_artist, 'Ben');
+  assert.equal(observer.read().activeRequestCount, 0);
+});
+
 test('production view observer exposes the in-flight latest full payload read for POM synchronization', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();

@@ -43,6 +43,13 @@ class PcmRing(val capacityFrames: Int) {
         bufferedFrames -= frames
     }
 
+    /** Discards buffered frames, wrapping like the worklet's buffered-seek cursor advance. */
+    fun skip(frames: Int) {
+        require(frames in 0..bufferedFrames) { "frames exceed buffered PCM" }
+        readFrame = (readFrame + frames) % capacityFrames
+        bufferedFrames -= frames
+    }
+
     fun clear() {
         readFrame = 0
         writeFrame = 0

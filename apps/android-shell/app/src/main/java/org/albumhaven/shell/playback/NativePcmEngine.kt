@@ -31,6 +31,9 @@ data class PcmEngineConfig(
         const val QUEUED_NEXT_PREPARE_SECONDS = 3.0
         const val SEEK_PREPARE_SECONDS = 0.25
         const val QUEUED_NEXT_CURRENT_CUSHION_SECONDS = 1.0
+
+        /** The Web Audio render quantum the worklet's buffered seek must back after its skip. */
+        const val RENDER_QUANTUM_FRAMES = 128
     }
 }
 
@@ -123,6 +126,9 @@ class NativePcmEngine(
     private var pendingPromotion: PendingPromotion? = null
     private var playing = false
     private var rebuffering = false
+
+    /** Streams stopped before the server answered their open: closed if it confirms, forgotten if it refuses. */
+    private val unconfirmedCloses = mutableMapOf<Long, PcmClientControl.Close>()
     private var expectContinuity = false
     private var failed = false
 
@@ -148,6 +154,8 @@ class NativePcmEngine(
         sink.flush()
         failed = false
         generation += 1
+        // The open of a newer generation drops every older stream on the server.
+        unconfirmedCloses.clear()
         timelineFrame = startFrame
         playing = playWhenReady
         if (playing) sink.play()
@@ -176,7 +184,9 @@ class NativePcmEngine(
     fun stop(reason: String) {
         if (!failed) {
             for (stream in listOfNotNull(continuity, current)) {
-                send(PcmClientControl.Close(stream.generation, stream.streamId, reason))
+                val close = PcmClientControl.Close(stream.generation, stream.streamId, reason)
+                // A refused open registers nothing, and the server rejects a close of an unknown stream.
+                if (stream.metadataAccepted) send(close) else unconfirmedCloses[stream.streamId] = close
             }
         }
         resetPlayback()
@@ -216,10 +226,37 @@ class NativePcmEngine(
             if (promotion.streamId == stream.streamId) promotion.requestedSeekFrame = frame
             return
         }
+        if (seekWithinBuffer(stream, frame)) return
         loop = null
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
         pendingSeek = PendingSeek(target.streamId, frame)
+    }
+
+    /**
+     * The web buffered-seek path (`seekStreamingPlayback` and the worklet's `commitBufferedSeek`):
+     * a playing forward seek whose target the current ring already holds skips ahead in place,
+     * keeping the prepared successor, so nothing reopens and no silence is inserted.
+     */
+    private fun seekWithinBuffer(stream: Stream, frame: Long): Boolean {
+        val delta = frame - timelineFrame
+        val eligible = playing && loop == null && pendingSeek == null &&
+            continuity?.kind == StreamKind.QUEUED_NEXT && continuityRing.bufferedFrames > 0 &&
+            delta >= 0 && delta < capacityFrames(PcmRole.CURRENT) && delta < currentRing.bufferedFrames &&
+            frame < (stream.track.durationSeconds * config.sampleRate).roundToLong()
+        if (!eligible) return false
+        // The next render quantum must be backed by current PCM or by a known-EOS successor.
+        val successorFramesNeeded = PcmEngineConfig.RENDER_QUANTUM_FRAMES - (currentRing.bufferedFrames - delta)
+        if (successorFramesNeeded > 0 &&
+            (!stream.eosReceived || continuityRing.bufferedFrames < successorFramesNeeded)
+        ) {
+            return false
+        }
+        currentRing.skip(delta.toInt())
+        timelineFrame = frame
+        refillCredit(stream)
+        events(PcmEngineEvent.Boundary(PcmBoundaryKind.SEEK, stream.streamId, stream.streamId, frame))
+        return true
     }
 
     fun onServerText(text: String) {
@@ -237,7 +274,7 @@ class NativePcmEngine(
         if (failed || event is PcmServerEvent.ProbeResult) return
         val stream = event.streamId?.let(::streamById)
         if (stream == null || event.generation != generation) {
-            staleMessages += 1
+            if (!settleUnconfirmedClose(event)) staleMessages += 1
             return
         }
         when (event) {
@@ -251,6 +288,15 @@ class NativePcmEngine(
                 fail("control-protocol-error", "Unknown active streaming control: ${event.type}")
             PcmServerEvent.ProbeResult -> Unit
         }
+    }
+
+    private fun settleUnconfirmedClose(event: PcmServerEvent): Boolean {
+        val streamId = event.streamId ?: return false
+        val close = unconfirmedCloses[streamId] ?: return false
+        if (close.generation != event.generation) return false
+        unconfirmedCloses.remove(streamId)
+        if (event is PcmServerEvent.Metadata) send(close)
+        return true
     }
 
     fun onBinary(bytes: ByteArray) {

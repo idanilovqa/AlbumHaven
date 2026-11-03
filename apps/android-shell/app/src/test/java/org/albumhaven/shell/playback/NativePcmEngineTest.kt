@@ -341,6 +341,79 @@ class NativePcmEngineTest {
     }
 
     @Test
+    fun aForwardSeekIntoBufferedPcmSkipsAheadWithoutReopening() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = PcmHarness(long, second)
+        harness.engine.start(long.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playUntil {
+            harness.engine.bufferedFrames(PcmRole.CONTINUITY) > 0 && harness.engine.bufferedFrames(PcmRole.CURRENT) > 2 * RATE
+        }
+        val opens = harness.sent<PcmClientControl.Open>().size
+        val cut = harness.sink.writtenFrames.toLong()
+        val target = harness.engine.timelineFrame + RATE + 7
+
+        harness.engine.seek(target)
+        assertEquals(target, harness.engine.timelineFrame)
+        harness.playToEnd()
+
+        assertNull(harness.failure())
+        assertEquals(opens, harness.sent<PcmClientControl.Open>().size)
+        assertEquals(emptyList<PcmClientControl.Close>(), harness.sent<PcmClientControl.Close>())
+        assertEquals(
+            listOf(Run(3, 0, cut), Run(3, target, long.frames - target), Run(2, 0, second.frames)),
+            harness.sink.runs(),
+        )
+        assertEquals(
+            listOf(PcmEngineEvent.Boundary(PcmBoundaryKind.SEEK, 1, 1, target), PcmEngineEvent.Boundary(PcmBoundaryKind.QUEUED_NEXT, 1, 2, 0)),
+            harness.emitted<PcmEngineEvent.Boundary>(),
+        )
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aBufferedSeekAcrossTheRingsWrapKeepsEveryFrameInOrder() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = PcmHarness(long, second)
+        harness.engine.start(long.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        // Past one ring capacity the read cursor sits near the end, so a two-second skip wraps.
+        harness.playUntil { harness.engine.timelineFrame >= 11L * RATE && harness.engine.bufferedFrames(PcmRole.CURRENT) > 3 * RATE }
+        val cut = harness.sink.writtenFrames.toLong()
+        val target = harness.engine.timelineFrame + 2L * RATE + 5
+
+        harness.engine.seek(target)
+        harness.playToEnd()
+
+        assertNull(harness.failure())
+        assertEquals(
+            listOf(Run(3, 0, cut), Run(3, target, long.frames - target), Run(2, 0, second.frames)),
+            harness.sink.runs(),
+        )
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aSeekBeyondBufferedPcmOrWithoutAPreparedSuccessorPreparesItsTarget() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val alone = PcmHarness(long)
+        alone.engine.start(long.pcm)
+        alone.playUntil { alone.engine.bufferedFrames(PcmRole.CURRENT) > 2 * RATE }
+        alone.engine.seek(alone.engine.timelineFrame + RATE)
+        assertEquals(PcmRole.CONTINUITY, alone.sent<PcmClientControl.Open>().last().role)
+
+        val queued = PcmHarness(long, second)
+        queued.engine.start(long.pcm)
+        queued.engine.setQueuedNext(second.pcm)
+        queued.playUntil { queued.engine.bufferedFrames(PcmRole.CONTINUITY) > 0 }
+        val farTarget = queued.engine.timelineFrame + queued.engine.bufferedFrames(PcmRole.CURRENT) + 1
+        queued.engine.seek(farTarget)
+        assertEquals(PcmClientControl.Open(1, 3, PcmRole.CONTINUITY, long.pcm, farTarget, RATE), queued.sent<PcmClientControl.Open>().last())
+        queued.playToEnd()
+        assertEquals(Run(3, farTarget, long.frames - farTarget), queued.sink.runs()[1])
+    }
+
+    @Test
     fun controlDeliveryFailureFailsTheEngine() {
         val harness = PcmHarness(first)
         harness.server.accepting = false

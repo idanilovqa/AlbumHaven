@@ -69,8 +69,8 @@ def render():
     templates = Path(__file__).resolve().parents[2] / "music_app" / "templates"
     environment = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape())
 
-    def render_template(name="index.html", *, administrator=True):
-        actions = AllowedActions(("accounts.read", "accounts.create") if administrator else ())
+    def render_template(name="index.html", *, administrator=True, extra_actions=(), **context):
+        actions = AllowedActions((("accounts.read", "accounts.create") if administrator else ()) + tuple(extra_actions))
         initial_view = {
             "gallery_scope": "local",
             "gallery_display_mode": "rows",
@@ -100,6 +100,7 @@ def render():
             listener_defaults=[],
             capability_groups=[],
             access_editor=assignment_editor(None, []),
+            **context,
         )
         return Document(html).root
 
@@ -354,3 +355,49 @@ def test_standalone_app_bar_keeps_settings_and_logout(render, template):
     assert not menu.find_all(**{"data-account-menu-admin": None})
     assert menu.one("form").attrs["action"] == "/logout"
     assert menu.one("input", name="csrf_token").attrs["value"] == "settings-csrf"
+
+
+@pytest.mark.parametrize(
+    ("template", "section"),
+    [("admin-members.html", "users"), ("admin-account-detail.html", "users"), ("admin-server.html", "server"), ("account.html", "account")],
+)
+def test_settings_navigation_selects_only_the_current_page(render, template, section):
+    document = render(template, extra_actions=("system.preview_storage.read",))
+    selected = [item.attrs["data-settings-section"] for item in document.find_all(**{"data-settings-section": None}) if item.attrs.get("aria-current") == "page"]
+    assert selected == [section]
+
+
+@pytest.mark.parametrize("template", ["admin-members.html", "admin-server.html", "account.html"])
+def test_settings_pages_share_the_gallery_header_geometry_without_desktop_library_back(render, template):
+    document = render(template, extra_actions=("system.preview_storage.read",))
+    owners = [section for section in document.find_all("section") if "settings-main" in (section.attrs.get("class") or "").split()]
+    assert len(owners) == 1, "Every Settings page uses the shared settings-main surface"
+    header = owners[0].one("header", **{"data-gallery-bar-instance": "page"})
+    back = header.one("a", **{"data-settings-parent": None})
+    assert "page-gallery-bar__back--narrow-only" in back.attrs["class"].split()
+
+
+def test_account_detail_keeps_its_desktop_back_to_users(render):
+    header = render("admin-account-detail.html").one("header", **{"data-gallery-bar-instance": "page"})
+    back = header.one("a", **{"data-settings-parent": None})
+    assert back.attrs["href"] == "/admin/members"
+    assert "page-gallery-bar__back--narrow-only" not in back.attrs["class"].split()
+
+
+def test_server_settings_compose_shared_radio_path_and_button_components(render):
+    document = render("admin-server.html", extra_actions=("system.preview_storage.read",), can_browse_server_folders=True)
+    form = document.one("form", **{"data-admin-server": None})
+    radios = form.find_all("input", type="radio")
+    assert [radio.parent.attrs["class"] for radio in radios] == ["ui-radio-option", "ui-radio-option"]
+    assert [radio.parent.one("span").text.strip() for radio in radios] == ["Album folders", "Special path"]
+    path_input = form.one("input", **{"data-preview-path": None})
+    assert path_input.parent.attrs["class"] == "ui-path-input ui-input-action"
+    browse = path_input.parent.one("button", **{"data-path-input-browse": None})
+    assert "action-button" in browse.attrs["class"].split()
+    assert "disabled" in path_input.attrs and "disabled" in browse.attrs, "The path stays disabled until Special path is chosen"
+    save = form.one("button", **{"data-preview-save": None})
+    assert {"ui-button", "ui-button--primary"} <= set(save.attrs["class"].split())
+    assert "disabled" in save.attrs
+    assert not form.find_all("progress"), "Relocation uses concise text, not a progress bar"
+    assert "Loading" not in form.text
+    assert len(document.find_all(id="app-form-modal")) == 1, "The folder picker dialog is available on direct loads"

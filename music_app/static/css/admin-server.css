@@ -1,78 +1,14 @@
-.server-settings-main {
-  width: min(100%, 920px);
-}
-
-.server-preview-settings .account-section {
-  display: grid;
-  gap: 1rem;
-}
-
-.server-setting-heading,
-.server-setting-actions,
-.server-relocation-progress {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.server-setting-heading h2,
-.server-setting-heading p {
-  margin: 0;
-}
-
-.server-setting-heading p,
-.server-storage-choice small,
-.server-relocation-progress,
-.server-setting-location {
-  color: var(--text-muted, #667085);
-}
-
-.server-storage-choices {
-  display: grid;
-  gap: .75rem;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.server-storage-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: .75rem;
-}
-
-.server-storage-choice span {
-  display: grid;
-  gap: .2rem;
-}
-
-.server-path-field {
-  max-width: 46rem;
-}
-
-.server-relocation-progress {
-  align-items: flex-start;
-  flex-direction: column;
-}
-
-.server-relocation-progress progress {
-  width: min(100%, 34rem);
-}
-
-.server-setting-actions {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
+/* Server settings compose the shared Settings section, radio, path-input, and button components. */
+.server-preview-settings .account-section { display: grid; gap: 14px; }
+.server-preview-settings .account-section > :is(h2, p) { margin-bottom: 0; }
+.server-storage-choices { max-width: 46rem; }
+.server-storage-choices .ui-radio-option { width: fit-content; min-width: 13rem; }
+.server-path-field { max-width: 46rem; margin-bottom: 0; }
+.server-preview-summary,
+.server-preview-failure { margin: 0; color: var(--muted); font-size: 12px; }
+.server-preview-failure { color: var(--red, var(--appearance-error, #ef5350)); }
+.server-setting-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
 @media (max-width: 640px) {
-  .server-setting-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .server-path-field,
-  .server-path-field input {
-    width: 100%;
-  }
+  .server-storage-choices .ui-radio-option { width: 100%; }
 }

@@ -292,8 +292,8 @@
 .utility-list-item[draggable="true"] {
   user-select: text;
 }
-/* Wide is an additive NavigationTree presentation, with the same shared identity. */
-#utility-modal .navigation-tree-item--wide {
+/* Wide is an additive NavigationTree presentation, with the same shared identity, in Settings and shared dialogs. */
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -309,12 +309,12 @@
   color: var(--text);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
-#utility-modal .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
 .problematic-virtual-spacer {
   flex: 0 0 auto;
   min-width: 0;
@@ -341,7 +341,7 @@
   background-position: bottom; background-repeat: no-repeat; background-size: 100% 1px;
 }
 @media (prefers-reduced-motion: reduce) {
-  #utility-modal .navigation-tree-item--wide, #utility-modal .utility-tab { transition: none; scroll-behavior: auto; }
+  :is(#utility-modal, #app-form-modal) .navigation-tree-item--wide, #utility-modal .utility-tab { transition: none; scroll-behavior: auto; }
 }
 @media (max-width: 900px) {
   #utility-modal[data-active-tab="appearance"] .utility-modal-body {
@@ -1360,16 +1360,6 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.confirm-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(3, 7, 18, 0.72);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 96;
-}
 #cover-lookup-delete-confirm-modal {
   z-index: 4700;
 }
@@ -1385,32 +1375,7 @@
 #tag-edit-confirm-modal {
   z-index: 125;
 }
-.confirm-modal[hidden] {
-  display: none;
-}
-.confirm-modal-dialog {
-  width: min(440px, calc(100vw - 32px));
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.36);
-  padding: 20px;
-}
-.confirm-modal-title {
-  margin: 0 0 10px;
-  font-size: 1.05rem;
-}
-.confirm-modal-text {
-  color: var(--muted);
-  line-height: 1.45;
-}
 #tag-edit-non-album-warning { margin-top: 14px; }
-.confirm-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 18px;
-}
 .confirm-modal-danger {
   border-color: rgba(239,68,68,0.45);
   background: rgba(239,68,68,0.12);
@@ -2037,9 +2002,6 @@
   background: transparent;
 }
 .library-settings-root-row { grid-template-columns: minmax(0, 1fr); }
-.library-settings-path-control { display: flex; align-items: center; min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding-right: 4px; }
-.library-settings-path-control input, .library-settings-path-control input:focus { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; box-shadow: none; outline: none; }
-.library-settings-path-control .action-button { flex: 0 0 auto; border: 0; }
 .settings-integration-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 12px; }
 .settings-scrobbling-heading { display: flex; align-items: center; gap: 32px; flex-wrap: wrap; }
 .settings-connected-status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--success, var(--accent)); }
@@ -2050,12 +2012,9 @@
 .settings-playback-statistics dl { display: grid; gap: 12px; }
 .settings-playback-statistics dl > div { display: flex; gap: 24px; justify-content: space-between; }
 .settings-playback-statistics dd { margin: 0; }
-.settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .settings-foobar-format-menu { box-sizing: border-box; width: min(280px, calc(100vw - 16px)); overflow-y: auto; }
 .settings-guide-copy { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .settings-reading-guide section + section { margin-top: 24px; }
-#app-form-modal.app-form-reading .confirm-modal-dialog { width: min(1000px, calc(100vw - 32px)); }
-#app-form-modal.app-form-reading [hidden] { display: none !important; }
 
 .settings-guide-copy { white-space: normal; }
 

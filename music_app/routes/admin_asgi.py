@@ -130,7 +130,18 @@ async def admin_server(request: Request) -> Response:
         request,
         "admin-server.html",
         allowed_actions=_allowed_actions(request),
+        can_browse_server_folders=_can_browse_server_folders(request),
     )
+
+
+def _can_browse_server_folders(request: Request) -> bool:
+    """The Server path picker uses the same bounded browse contract as Library settings."""
+    if _app_config(request).get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted":
+        return False
+    actions = allowed_actions_for_request(
+        request, ("library.filesystem.browse", "library.paths.read"),
+    ).as_payload()
+    return all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read"))
 
 
 @router.get("/admin/server/preview-storage")

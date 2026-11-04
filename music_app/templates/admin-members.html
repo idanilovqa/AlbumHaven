@@ -28,6 +28,7 @@
   <main class="settings-host settings-shell" data-settings-host>
     {% from "partials/app-bar.html" import app_bar with context %}
     {{ app_bar() }}
+    {% set settings_section = 'users' %}
     {% include "partials/admin-settings-nav.html" %}
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
@@ -93,5 +94,6 @@
     </section>
     </div>
   </main>
+  {% include "partials/app-form-modal.html" %}
 </body>
 </html>

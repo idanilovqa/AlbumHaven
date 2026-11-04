@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-artbox-and-gallery-card.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-details-components.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-track-table.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dialog-component.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}?v={{ runtime_asset_version }}">
@@ -25,6 +26,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="/static/css/admin-members.css">
   <link rel="stylesheet" href="/static/css/account.css">
+  <link rel="stylesheet" href="/static/css/admin-server.css?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery-main.css') }}?v={{ runtime_asset_version }}">
@@ -37,6 +39,8 @@
   <script src="/static/js/account.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/admin-members.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/path-input.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/admin-server.js?v={{ runtime_asset_version }}" defer></script>
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}

@@ -14,7 +14,7 @@ function load(overrides = {}) {
     showRepairAlert(){}, showToast(){}, closeTagEditorExceptionMenu(){},
     getTagEditorElements: () => ({ form: null }), console, ...overrides };
   context.window = context; vm.createContext(context);
-  for (const file of ['button-component.js','runtime/utility-loop-playback.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
+  for (const file of ['button-component.js','path-input.js','runtime/utility-loop-playback.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
     vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js',file),'utf8'),context);
   context.renderUtilityModalContent = overrides.renderUtilityModalContent || (() => {});
   return context;
@@ -236,7 +236,7 @@ test('Foobar uses shared format trigger and truthful unavailable import with lef
 
 test('root path rows keep browse and destructive remove inside one accessible input shell',()=>{
  const html=load().buildLibrarySettingsRootSection('main_library_roots','Main Library','');
- assert.match(html,/library-settings-path-control/);assert.match(html,/aria-label="Main Library path 1"/);
+ assert.match(html,/ui-path-input ui-input-action/);assert.match(html,/aria-label="Main Library path 1"/);
  assert.match(html,/data-browse-library-root="main_library_roots"/);assert.match(html,/aria-label="Choose Main Library folder 1"/);
  assert.match(html,/action-button--destructive/);assert.doesNotMatch(html,/C:\\Music|>Browse<|>Remove</);
 });

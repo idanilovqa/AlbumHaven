@@ -60,11 +60,8 @@ test('dismissing an interrupted cover lookup notice clears and rerenders it', ()
   );
 });
 
-test('split release choices use the shared Cover Lookup rebind action', () => {
-  assert.match(
-    helperSource,
-    /closest\('\[data-cover-lookup-current-release\]'\)[\s\S]*?chooseCoverLookupCurrentRelease\([\s\S]*?getAttribute\('data-cover-lookup-current-release'\)/,
-  );
+test('split release choices are no longer rendered inside Cover Lookup', () => {
+  assert.doesNotMatch(helperSource, /data-cover-lookup-current-release|chooseCoverLookupCurrentRelease/);
 });
 
 test('Album Details split choices use the current-release selector action', () => {

@@ -31,7 +31,7 @@
     {% set settings_section = 'account' %}
     {% include "partials/admin-settings-nav.html" %}
     <div class="settings-outlet" data-settings-outlet>
-    <section class="account-main">
+    <section class="settings-main account-main">
       {{ page_gallery_bar('Password', profile.username, settings_navigation=true) }}
 
       {% if changed %}
@@ -111,5 +111,6 @@
     </section>
     </div>
   </main>
+  {% include "partials/app-form-modal.html" %}
 </body>
 </html>

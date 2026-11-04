@@ -1,6 +1,7 @@
 (() => {
-  const accountMenu = document.querySelector(".shell-app-bar [data-account-menu-component]");
-  if (accountMenu) attachAccountMenu(accountMenu);
+  // Standalone Settings documents own their app-bar menu; the library runtime attaches its own.
+  const accountMenu = document.querySelector('.shell-app-bar [data-account-menu-component]');
+  if (accountMenu && !document.getElementById('app-shell') && typeof attachAccountMenu === 'function') attachAccountMenu(accountMenu);
   const ACTIVE_STATES = new Set(['queued', 'running', 'cancel_requested']);
 
   const configurationLocked = operationState => {
@@ -42,12 +43,13 @@
     const retry = form.querySelector('[data-preview-retry]');
     const status = form.querySelector('[data-preview-status]');
     const error = form.querySelector('[data-preview-error]');
-    const progress = form.querySelector('[data-preview-progress]');
     const counts = form.querySelector('[data-preview-counts]');
-    const location = form.querySelector('[data-preview-location]');
+    const browse = form.querySelector('[data-path-input-browse]');
     const failure = form.querySelector('[data-preview-failure]');
     const request = options.request || fetch;
     const confirmChange = options.confirm || window.confirm.bind(window);
+    const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
+    const canBrowse = Boolean(browse && !browse.disabled);
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
@@ -55,15 +57,22 @@
     let disposed = false;
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
+    const savedMode = () => String(state?.requested_mode || state?.mode || 'album_folders');
+    const savedPath = () => String(state?.requested_root || state?.active_root || '');
+    // Save is available only for a valid, unsaved choice: a special path always needs a folder.
+    const syncControls = () => {
+      const locked = !state || configurationLocked(state.operation_state);
+      const special = selectedMode() === 'custom';
+      const path = pathInput.value.trim();
+      pathInput.disabled = !special || locked;
+      if (browse) browse.disabled = !special || locked || !canBrowse;
+      const changed = selectedMode() !== savedMode() || (special && path !== savedPath());
+      save.disabled = locked || !changed || (special && !path);
+    };
     const syncPathControl = () => {
-      const locked = configurationLocked(state?.operation_state);
-      pathInput.disabled = selectedMode() !== 'custom' || locked;
-      pathInput.required = selectedMode() === 'custom';
-      if (selectedMode() === 'album_folders') {
-        pathInput.value = '';
-      } else if (!pathInput.value) {
-        pathInput.value = String(state?.suggested_path || '');
-      }
+      if (selectedMode() === 'album_folders') pathInput.value = '';
+      pathInput.placeholder = String(state?.suggested_path || '');
+      syncControls();
     };
 
     const schedulePoll = () => {
@@ -76,30 +85,29 @@
 
     const render = next => {
       state = next;
-      const mode = String(next.requested_mode || next.mode || 'album_folders');
+      const mode = savedMode();
       albumFolders.checked = mode === 'album_folders';
       custom.checked = mode === 'custom';
-      pathInput.value = String(next.requested_root || next.active_root || '');
+      pathInput.value = mode === 'custom' ? savedPath() : '';
       const active = ACTIVE_STATES.has(String(next.operation_state || 'idle'));
       const locked = configurationLocked(next.operation_state);
       modes.forEach(control => { control.disabled = locked; });
-      save.disabled = locked;
       cancel.hidden = !active;
       const canceled = String(next.operation_state || 'idle') === 'canceled';
       retry.hidden = !((Number(next.failed_count || 0) > 0 || canceled) && !active);
       retry.textContent = canceled ? 'Resume move' : 'Retry failed files';
-      progress.max = Math.max(1, Number(next.total_count || 0));
-      progress.value = Math.min(progress.max, Number(next.completed_count || 0));
       const inventoryCount = Number(next.inventory_count ?? next.total_count ?? 0);
       const inventoryBytes = Number(next.inventory_bytes ?? next.total_bytes ?? 0);
-      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored · ${Number(next.completed_count || 0)} of ${Number(next.total_count || 0)} moved · ${Number(next.failed_count || 0)} failed`;
+      const totalCount = Number(next.total_count || 0);
+      const movement = totalCount > 0 && (active || canceled || Number(next.failed_count || 0) > 0)
+        ? ` · ${Number(next.completed_count || 0)} of ${totalCount} moved · ${Number(next.failed_count || 0)} failed`
+        : '';
+      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}`;
+      counts.hidden = false;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);
       failure.textContent = lastFailure?.error ? `Last failure: ${lastFailure.error}` : '';
       failure.hidden = !failure.textContent;
-      location.textContent = mode === 'custom'
-        ? String(next.active_root || next.requested_root || 'Special server path')
-        : 'Album folders';
       syncPathControl();
       schedulePoll();
     };
@@ -131,9 +139,27 @@
     };
 
     modes.forEach(control => control.addEventListener('change', syncPathControl));
+    pathInput.addEventListener('input', syncControls);
+    browse?.addEventListener('click', async event => {
+      event.preventDefault?.();
+      if (browse.disabled) return;
+      try {
+        const chosen = await chooseFolder({
+          title: 'Choose server folder',
+          isCurrent: () => !disposed,
+          onError: failure => showAlert(error, failure.message),
+        });
+        if (!chosen || disposed) return;
+        pathInput.value = chosen;
+        syncControls();
+      } catch (failure) {
+        if (!disposed) showAlert(error, failure.message || 'Folder picker unavailable.');
+      }
+    });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const mode = selectedMode();
+      if (save.disabled) return;
       if (mode === 'custom' && !pathInput.value.trim()) {
         showAlert(error, 'Enter a path on the Album Haven server.');
         pathInput.focus?.();
@@ -151,7 +177,7 @@
         showAlert(status, next.unchanged ? 'Preview storage is unchanged.' : 'Preview relocation started.');
       } catch (failure) {
         showAlert(error, failure.message);
-        save.disabled = false;
+        syncControls();
       }
     });
     cancel.addEventListener('click', async () => {

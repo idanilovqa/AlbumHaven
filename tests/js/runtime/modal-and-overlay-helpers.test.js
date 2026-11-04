@@ -2085,3 +2085,35 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
 });
+
+test('gallery album menu offers Separate release for versions, not for unversioned albums', () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const context = vm.createContext({
+    console,
+    state: { view: { manual_version_links: {} } },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null), createElement: () => menu, body: { appendChild() {} } },
+    escapeHtml: (value) => String(value ?? ''),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    getAlbumIdentity: (album) => album.key,
+    getAvailableAlbumMoveActions: () => [],
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const sets = {
+    original: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    remaster: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    single: [{ key: 'single' }],
+  };
+  context.getAlbumReleaseSet = (album) => ({ releases: sets[album.key] });
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'original' });
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release: Remastered</);
+  assert.match(menu.innerHTML, /data-separate-release-key="live">Separate release: Live</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'remaster' });
+  assert.equal((menu.innerHTML.match(/separate-release"/g) || []).length, 1);
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'single' });
+  assert.doesNotMatch(menu.innerHTML, /Separate release/);
+});

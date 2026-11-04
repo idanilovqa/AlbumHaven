@@ -33,6 +33,17 @@ function showAlbumCardContextMenu(x, y, album) {
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
   const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
+  // Versions grouped under this card (or the card itself, when it is a version) can be separated.
+  const releases = albumKey && typeof getAlbumReleaseSet === 'function' ? getAlbumReleaseSet(album).releases : [];
+  const versions = releases.slice(1).filter((release) => release?.key);
+  const ownVersion = versions.find((release) => String(release.key) === albumKey);
+  const separableReleases = isMarkedVersion ? [] : (ownVersion ? [ownVersion] : versions);
+  const separateItems = separableReleases.map((release) => {
+    const label = separableReleases.length === 1
+      ? 'Separate release'
+      : `Separate release: ${release.tabLabel || release.name || 'Version'}`;
+    return `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(release.key)}">${escapeHtml(label)}</button>`;
+  });
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
     `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
@@ -42,6 +53,7 @@ function showAlbumCardContextMenu(x, y, album) {
     isMarkedVersion
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+    ...separateItems,
   ].join('');
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {

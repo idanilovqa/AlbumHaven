@@ -334,14 +334,6 @@ document.addEventListener('contextmenu', (event) => {
     );
     return;
   }
-  // Right-clicking the cover of a version offers the same "Separate release" as its tab.
-  const versionCover = event.target.closest('#track-modal-cover .track-modal-cover-shell');
-  const currentRelease = versionCover && state.modalReleaseIndex > 0 ? state.modalReleases?.[state.modalReleaseIndex] : null;
-  if (currentRelease?.key) {
-    event.preventDefault();
-    showVersionContextMenu(currentRelease.key, event.clientX, event.clientY);
-    return;
-  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();

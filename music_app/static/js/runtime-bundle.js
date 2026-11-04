@@ -11858,6 +11858,17 @@ function showAlbumCardContextMenu(x, y, album) {
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
   const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
+  // Versions grouped under this card (or the card itself, when it is a version) can be separated.
+  const releases = albumKey && typeof getAlbumReleaseSet === 'function' ? getAlbumReleaseSet(album).releases : [];
+  const versions = releases.slice(1).filter((release) => release?.key);
+  const ownVersion = versions.find((release) => String(release.key) === albumKey);
+  const separableReleases = isMarkedVersion ? [] : (ownVersion ? [ownVersion] : versions);
+  const separateItems = separableReleases.map((release) => {
+    const label = separableReleases.length === 1
+      ? 'Separate release'
+      : `Separate release: ${release.tabLabel || release.name || 'Version'}`;
+    return `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(release.key)}">${escapeHtml(label)}</button>`;
+  });
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
     `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
@@ -11867,6 +11878,7 @@ function showAlbumCardContextMenu(x, y, album) {
     isMarkedVersion
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+    ...separateItems,
   ].join('');
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {
@@ -35544,7 +35556,7 @@ function showVersionContextMenu(albumKey, x, y) {
   menu.style.top = `${y}px`;
   menu.dataset.albumKey = key;
   menu.dataset.menuKind = 'release';
-  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release">Separate release</button>';
+  menu.innerHTML = `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(key)}">Separate release</button>`;
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
@@ -45182,7 +45194,7 @@ function handleGalleryBootstrapClick(event) {
     hideAlbumCardContextMenu();
 
     if (action === 'separate-release') {
-      void separateAlbumRelease(menuAlbumKey);
+      void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);
       return;
     }
 
@@ -49341,14 +49353,6 @@ document.addEventListener('contextmenu', (event) => {
       event.clientY,
       sidebarArtist.getAttribute('data-sidebar-artist') || '',
     );
-    return;
-  }
-  // Right-clicking the cover of a version offers the same "Separate release" as its tab.
-  const versionCover = event.target.closest('#track-modal-cover .track-modal-cover-shell');
-  const currentRelease = versionCover && state.modalReleaseIndex > 0 ? state.modalReleases?.[state.modalReleaseIndex] : null;
-  if (currentRelease?.key) {
-    event.preventDefault();
-    showVersionContextMenu(currentRelease.key, event.clientX, event.clientY);
     return;
   }
   const versionTab = event.target.closest('[data-version-context-key]');

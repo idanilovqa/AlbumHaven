@@ -105,7 +105,7 @@ function handleGalleryBootstrapClick(event) {
     hideAlbumCardContextMenu();
 
     if (action === 'separate-release') {
-      void separateAlbumRelease(menuAlbumKey);
+      void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);
       return;
     }
 

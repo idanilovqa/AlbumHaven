@@ -39,6 +39,8 @@ const peaksPath = path.join(
 );
 const waveformSource = fs.readFileSync(waveformPath, 'utf8');
 const loopSource = fs.readFileSync(loopPath, 'utf8');
+const compactHelpersPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'compact-player-helpers.js');
+const compactHelpersSource = fs.readFileSync(compactHelpersPath, 'utf8');
 const peaksSource = fs.readFileSync(peaksPath, 'utf8');
 
 test('waveform peak shaping preserves silence and separates hits from quieter material', () => {
@@ -241,6 +243,7 @@ function loadRuntime(overrides = {}) {
   vm.createContext(context);
   vm.runInContext(waveformSource, context, { filename: waveformPath });
   vm.runInContext(loopSource, context, { filename: loopPath });
+  vm.runInContext(compactHelpersSource, context, { filename: compactHelpersPath });
   return { context };
 }
 

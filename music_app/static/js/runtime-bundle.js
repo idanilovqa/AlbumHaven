@@ -7522,6 +7522,23 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   shouldOpenCompactPlayerAlbum,
 };
 
+// The player's album art and album link return to where the current track
+// lives: its album, or the Loose Tracks collection it was played from.
+function openCurrentPlayerTrackSource(openOptions) {
+  const track = state.player.current;
+  const album = resolveAlbumForPlayerTrack(track);
+  if (album) {
+    if (openOptions) openTrackModal(album, openOptions);
+    else openTrackModal(album);
+    return true;
+  }
+  if (track?.looseTracksOrigin && typeof openNonAlbumModal === 'function') {
+    openNonAlbumModal({ libraryWide: track.looseTracksOrigin.libraryWide === true });
+    return true;
+  }
+  return false;
+}
+
 // END js/runtime/compact-player-helpers.js
 
 // BEGIN js/runtime/player-streaming-decoders.js
@@ -41922,23 +41939,6 @@ function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
   renderSelectedTrackState(state.player.current);
-}
-
-// The player's album art and album link return to where the current track
-// lives: its album, or the Loose Tracks collection it was played from.
-function openCurrentPlayerTrackSource(openOptions) {
-  const track = state.player.current;
-  const album = resolveAlbumForPlayerTrack(track);
-  if (album) {
-    if (openOptions) openTrackModal(album, openOptions);
-    else openTrackModal(album);
-    return true;
-  }
-  if (track?.looseTracksOrigin && typeof openNonAlbumModal === 'function') {
-    openNonAlbumModal({ libraryWide: track.looseTracksOrigin.libraryWide === true });
-    return true;
-  }
-  return false;
 }
 
 async function playTrackFromPayload(track, options = {}) {

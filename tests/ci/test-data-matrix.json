@@ -4136,7 +4136,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/albumTrackTable.spec.js",
-    "case": "ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout",
+    "case": "Album Details header actions show no edge on hover while keyboard focus keeps its outline without shifting layout",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10387,6 +10387,58 @@
     "expectedContracts": [
       "gallery-card-canonical-artist-year-identity",
       "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "sign-in progress continues on the app document without restarting or uncovering the page",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-continuity",
+      "startup-progress-first-frame-cover"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/textOnlyControls.spec.js",
+    "case": "text-only controls never paint a hover fill (parchment-pine)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "text-link-underline-only-hover",
+      "spaced-cover-lookup-subtitle",
+      "bare-album-details-header-actions",
+      "in-page-tabs-no-hover-fill"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/textOnlyControls.spec.js",
+    "case": "text-only controls never paint a hover fill (harbor-mint)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "text-link-underline-only-hover",
+      "spaced-cover-lookup-subtitle",
+      "bare-album-details-header-actions",
+      "in-page-tabs-no-hover-fill"
     ],
     "ownerApproval": "approved"
   }

@@ -385,17 +385,17 @@ test('playing album rows use the player accent color', async ({ page }) => {
   });
   await expect(table.locator('.album-track-table__row')).toHaveCSS('--album-track-accent', '#55c7ff');
 });
-test('ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
+test('Album Details header actions show no edge on hover while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
 
   const action = page.getByRole('button', { name: 'Edit album tags', exact: true });
   const restingBox = await action.boundingBox();
   expect(restingBox).not.toBeNull();
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
 
   await action.hover();
-  await expect(action).toHaveCSS('outline-width', '1px');
-  await expect(action).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
-  await expect(action).toHaveCSS('border-color', 'rgb(82, 97, 114)');
+  await expect(action).toHaveCSS('outline-style', 'none');
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
   expect(await action.boundingBox()).toEqual(restingBox);
 
   await page.mouse.move(0, 0);

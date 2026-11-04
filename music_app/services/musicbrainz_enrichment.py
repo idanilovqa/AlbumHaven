@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from music_app.services.musicbrainz_client import normalize_name
+from music_app.services.musicbrainz_client import normalize_name, release_title_key
 from music_app.services.musicbrainz_matching import candidate_names, match_artist
 
 
@@ -302,8 +302,8 @@ def _provider_outcome(result: dict[str, object]) -> dict[str, object]:
 def _album_agreement(candidate: dict[str, Any], album_titles: list[str]) -> str:
     if "release_titles" not in candidate or not album_titles:
         return "Name only"
-    remote = {normalize_name(title) for title in candidate.get("release_titles") or []}
-    local = {normalize_name(title) for title in album_titles} - {""}
+    remote = {release_title_key(title) for title in candidate.get("release_titles") or []}
+    local = {release_title_key(title) for title in album_titles} - {""}
     agreed = len(local & remote)
     return f"{agreed} of {len(local)} album{'' if len(local) == 1 else 's'} agree"
 

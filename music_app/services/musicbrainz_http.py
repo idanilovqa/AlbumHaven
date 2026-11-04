@@ -233,7 +233,7 @@ def get_json(
                 if block_reason:
                     _set_block(block_reason)
                 status_code = int(getattr(exc, "code", 0) or 0)
-                if _is_retryable_http_status(status_code) and attempt < _MAX_ATTEMPTS:
+                if _is_retryable_http_status(status_code) and attempt < _MAX_ATTEMPTS and not block_reason:
                     if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
                         return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue

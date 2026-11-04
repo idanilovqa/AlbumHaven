@@ -3,7 +3,7 @@ from __future__ import annotations
 import unicodedata
 from copy import deepcopy
 
-from music_app.services.musicbrainz_client import artist_url, normalize_name
+from music_app.services.musicbrainz_client import artist_url, normalize_name, release_title_key
 
 
 JsonDict = dict[str, object]
@@ -26,9 +26,9 @@ def candidate_names(candidate: JsonDict) -> set[str]:
 
 def _release_titles(local: JsonDict) -> set[str]:
     return {
-        normalize_name(credit.get("title"))
+        release_title_key(credit.get("title"))
         for credit in _values(local.get("release_credits"))
-        if isinstance(credit, dict) and normalize_name(credit.get("title"))
+        if isinstance(credit, dict) and release_title_key(credit.get("title"))
     }
 
 
@@ -73,9 +73,9 @@ def _evidence(local: JsonDict, candidate: JsonDict) -> tuple[int, list[str]]:
 
     local_titles = _release_titles(local)
     candidate_titles = {
-        normalize_name(title)
+        release_title_key(title)
         for title in _values(candidate.get("release_titles"))
-        if normalize_name(title)
+        if release_title_key(title)
     }
     release_match = bool(local_titles and candidate_titles and local_titles.intersection(candidate_titles))
     if local_titles and candidate_titles and not release_match:

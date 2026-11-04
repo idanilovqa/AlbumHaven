@@ -326,3 +326,23 @@ def test_get_json_classifies_timeout_and_invalid_json_without_caching(monkeypatc
     assert timeout == (None, {"status": "timeout", "cache_hit": False, "attempt": 1})
     assert invalid == (None, {"status": "invalid_response", "cache_hit": False, "attempt": 1})
     assert musicbrainz_http._URL_CACHE == {}
+
+
+def test_blocked_service_unavailable_is_not_retried_inside_the_same_call(monkeypatch):
+    _reset_transport_state(monkeypatch)
+    request_count = 0
+
+    def blocked(request, *_args, **_kwargs):
+        nonlocal request_count
+        request_count += 1
+        raise urllib.error.HTTPError(request.full_url, 503, "Unavailable", {}, BytesIO(b"Rate limit exceeded"))
+
+    monkeypatch.setattr(musicbrainz_http.urllib.request, "urlopen", blocked)
+
+    payload, metadata = musicbrainz_http.get_json(
+        "https://mirror.test/ws/2/artist/blocked", "AlbumHaven/Test", cache_failures=False,
+    )
+
+    assert payload is None
+    assert request_count == 1
+    assert metadata["blocked_reason"] == "http_blocked"

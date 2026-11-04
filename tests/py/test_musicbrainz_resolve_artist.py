@@ -117,3 +117,20 @@ def test_request_volume_per_artist_is_bounded_for_backfill_assessment():
     assert len(calls) == 5
     assert sum("/artist/?" in url for url in calls) == 1
     assert sum("/release-group" in url for url in calls) == 2
+
+
+def test_edition_suffixes_and_punctuation_do_not_hide_album_agreement():
+    from music_app.services.musicbrainz_client import release_title_key
+
+    assert release_title_key("Abbey Road (Remastered 2009)") == release_title_key("Abbey Road")
+    assert release_title_key("Once [Deluxe Edition]") == release_title_key("Once")
+    assert release_title_key("Sgt. Pepper's Lonely Hearts Club Band") == release_title_key(
+        "Sgt Pepper’s Lonely Hearts Club Band".replace("’", "'")
+    )
+    assert release_title_key("Реки времён") == release_title_key("реки времён")
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Dancefloor Mix"]})
+
+    outcome = resolve_artist(_context("Kingdom of the Night (Remastered)"), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN

@@ -27,6 +27,20 @@ def normalize_name(value: object) -> str:
     return unicodedata.normalize("NFC", _text(value)).casefold()
 
 
+_BRACKETED_SUFFIX = re.compile(r"[\(\[][^\)\]]*[\)\]]")
+_NON_WORD = re.compile(r"[^\w]+")
+
+
+def release_title_key(value: object) -> str:
+    """Compare release titles without edition suffixes or punctuation.
+
+    Local tags often carry "(Remastered)" or "[Deluxe]" where MusicBrainz
+    release-group titles do not.
+    """
+    text = _BRACKETED_SUFFIX.sub(" ", normalize_name(value))
+    return " ".join(_NON_WORD.sub(" ", text).split())
+
+
 def _valid_mbid(value: object) -> str | None:
     text = _text(value).lower()
     try:
@@ -259,7 +273,7 @@ class MusicBrainzClient:
         normalized = _valid_mbid(mbid)
         if not normalized:
             return {"classification": "invalid_request", "titles": []}
-        wanted = {normalize_name(title) for title in wanted_titles or ()} - {""}
+        wanted = {release_title_key(title) for title in wanted_titles or ()} - {""}
         titles: list[str] = []
         seen: set[str] = set()
         for page in range(max(1, int(max_pages))):
@@ -280,7 +294,7 @@ class MusicBrainzClient:
                 title = _text(group.get("title")) if isinstance(group, dict) else ""
                 if title:
                     titles.append(title)
-                    seen.add(normalize_name(title))
+                    seen.add(release_title_key(title))
             total = _integer(payload.get("release-group-count"))
             if (wanted and wanted <= seen) or (page + 1) * page_size >= total:
                 break

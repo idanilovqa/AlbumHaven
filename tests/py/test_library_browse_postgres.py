@@ -18414,8 +18414,7 @@ def _cte_body(sql: str, name: str) -> str:
 @pytest.mark.parametrize("candidate_ids_page", [True, False])
 def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_ids_page):
     """Cold Problematic Files took 30-40 s at 160k files: every request re-ran
-    path regular expressions per file and a non-ASCII year fallback that made
-    nearly every album a duplicate candidate."""
+    path regular expressions per file and sorted every file for distinct counts."""
     from music_app.services.library_browse_postgres import _problematic_files_sql
 
     sql = _problematic_files_sql(
@@ -18432,8 +18431,8 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
         assert f"library.local_track_files.{column}" in active_rows
     duplicates = _cte_body(sql, "duplicate_album_ids")
     assert "file_album_identity" in duplicates
-    # The broad non-ASCII year branch stays only for servers without casefold().
-    assert "server_version_num')::integer < 180000" in duplicates
+    # The broad non-ASCII year superset still guards reasons other branches miss.
+    assert "octet_length(file_album) <> length(file_album)" in duplicates
     for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
         assert "count(distinct" not in _cte_body(sql, cte)
     # A join on the union re-scanned every candidate per album (5 s at 9k candidates).

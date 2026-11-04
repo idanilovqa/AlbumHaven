@@ -11058,10 +11058,10 @@ def _problematic_files_sql(
         """
     duplicate_album_ids_cte = """
         duplicate_album_ids as (
-          -- Python duplicate identity is NFC + casefold. PostgreSQL 18
-          -- duplicate_identity_text applies that rule, so equal identities are
-          -- the complete SQL prefilter. Older servers only lower(), so they
-          -- keep the broad non-ASCII year fallback.
+          -- Exact NFC + casefold identities (duplicate_identity_text), plus the
+          -- broad non-ASCII year superset. Problem reasons that no other branch
+          -- prefilters still depend on it (FTC-TAGS-020 split releases); narrowing
+          -- it needs those reasons covered first.
           select distinct candidate.album_id
           from active_problem_rows candidate
           join (
@@ -11079,8 +11079,7 @@ def _problematic_files_sql(
           union
           select candidate.album_id
           from active_problem_rows candidate
-          where current_setting('server_version_num')::integer < 180000
-            and candidate.file_year in (
+          where candidate.file_year in (
               select file_year from active_problem_rows
               where octet_length(file_album) <> length(file_album)
             )

@@ -1,4 +1,4 @@
-<section class="startup-progress" data-startup-progress="{{ startup_progress_initial | default(0) }}" hidden aria-label="Loading Album Haven">
+<section class="startup-progress" data-startup-progress="{{ startup_progress_initial | default(0) }}"{% if not startup_progress_initial %} hidden{% endif %} aria-label="Loading Album Haven">
   <h1>Just a sec</h1>
   <div class="startup-progress-meter">
     <div class="progress-bar" role="progressbar" aria-label="Completed loading stages" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill"></div></div>

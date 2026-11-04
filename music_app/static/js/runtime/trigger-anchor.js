@@ -223,7 +223,12 @@ function getDismissibleForegroundSurface() {
   const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
   if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
       || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
-    return { surface: owner.surface, anchor, isBackdrop, dismiss() {
+    // On mobile a tap outside an open side panel or dropdown only closes it;
+    // it must never also select or frame the gallery album underneath.
+    const mobileOutsideTapDismisses = !modal && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout();
+    return { surface: owner.surface, anchor,
+      isBackdrop: mobileOutsideTapDismisses ? () => true : isBackdrop, dismiss() {
       if (activeTriggerSurface !== owner) return;
       owner.close();
       if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });

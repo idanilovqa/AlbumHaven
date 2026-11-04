@@ -533,6 +533,20 @@ async function run() {
       { coverLightboxGallery: false, foreground: true },
       'the player cover opens a single-cover lightbox modal',
     );
+
+    const looseTrackCalls = [];
+    context.resolveAlbumForPlayerTrack = () => null;
+    context.openNonAlbumModal = (options) => looseTrackCalls.push(options);
+    context.state.player.current = {
+      path: 'C:/Music/Начало Века/2009 - Тебя ждала (single)/loose.mp3',
+      title: 'Тебя ждала',
+      looseTracksOrigin: { libraryWide: true },
+    };
+    coverButton.click();
+    albumLink.click();
+    assert.equal(modalCalls.length, 2, 'a loose track has no album to open');
+    assert.deepEqual(JSON.parse(JSON.stringify(looseTrackCalls)), [{ libraryWide: true }, { libraryWide: true }],
+      'player art and album link reopen the Loose Tracks collection the track was played from');
   }
 }
 

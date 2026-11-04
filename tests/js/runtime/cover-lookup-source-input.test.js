@@ -50,10 +50,8 @@ test('Cover Lookup links only the album name while artist and year remain plain'
   assert.match(source, /data-open-cover-lookup-album-details="1"/);
   assert.match(source, /els\.subtitle\.innerHTML\s*=\s*buildCoverLookupAlbumSubtitleHtml\(album\)/);
 
-  const link = cssRule('.cover-lookup-modal-album-link');
-  assert.match(link, /background:\s*transparent/);
-  assert.match(link, /text-decoration-line:\s*underline/);
-  assert.match(link, /text-underline-offset:/);
+  assert.match(source, /class="ui-text-link cover-lookup-modal-album-link"/);
+  assert.match(cssRule('.cover-lookup-modal-subtitle-separator'), /white-space:\s*pre/);
 });
 
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {

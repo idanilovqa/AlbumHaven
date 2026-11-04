@@ -222,3 +222,24 @@ outline-offset: -1px !important;
 border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
 box-shadow: none !important;
 }
+/* Text link: a button that reads as inline text and is underlined only on hover/focus. */
+.ui-text-link,
+.ui-text-link:is(:hover, :active, :focus-visible):not(:disabled) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ui-text-link {
+  text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.ui-text-link:is(:hover, :focus-visible):not(:disabled) {
+  color: var(--text, currentColor);
+  text-decoration-line: underline;
+}

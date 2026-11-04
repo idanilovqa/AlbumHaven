@@ -1,7 +1,10 @@
 /* A dismissal gesture never also activates the surface underneath it. */
 (function (scope) {
   'use strict';
-  function create(resolve) {
+  // A window blur reserves the next backdrop click to only restore app focus.
+  // Switching back from another browser tab is not such a refocus: the tab was
+  // hidden, so the user's first click is already a deliberate dismissal.
+  function create(resolve, { isDocumentHidden = () => false } = {}) {
     let gesture = null;
     let suppressClick = false;
     let refocusPending = false;
@@ -63,11 +66,14 @@
       },
       pointercancel: reset,
       keydown() { refocusPending = false; reset(); },
-      blur() { reset(); refocusPending = Boolean(resolve()); },
+      blur() { reset(); refocusPending = Boolean(resolve()) && !isDocumentHidden(); },
+      visibilitychange() { if (isDocumentHidden()) refocusPending = false; },
     };
   }
   function bind(window, resolve) {
-    const handlers = create(resolve);
+    const handlers = create(resolve, {
+      isDocumentHidden: () => window.document?.visibilityState === 'hidden',
+    });
     const listeners = { ...handlers, blur(event) {
       // Restoring the opener's focus emits a descendant blur during dismissal.
       // Only loss of window focus may release the pending native-click guard.

@@ -1694,9 +1694,46 @@ test('library-home navigation does not use the no-fetch shortcut while a view re
 
   context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
 
-  assert.equal(albumsScroll.scrollTop, 4800);
+  assert.equal(albumsScroll.scrollTop, 0, 'Home always lands at the top of the gallery');
   assert.equal(calls.fetchAndRender.length, 1);
   assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+});
+
+test('library-home navigation restarts in-app navigation: closes surfaces, family selection and tree position', () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  const albumsScroll = { scrollTop: 4800 };
+  const sidebarList = { scrollTop: 0, albumHavenSidebarVirtualScrollTop: 9100 };
+  const sidebarScroll = { scrollTop: 9100 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? albumsScroll : id === 'sidebar-list' ? sidebarList : getElementById(id)
+  );
+  context.resolveSidebarScrollContainer = (list) => (list === sidebarList ? sidebarScroll : null);
+  const openSurfaces = ['track-modal', 'artist-family-panel'];
+  const dismissed = [];
+  context.getDismissibleForegroundSurface = () => (openSurfaces.length ? {
+    surface: openSurfaces[openSurfaces.length - 1],
+    dismiss() { dismissed.push(openSurfaces.pop()); },
+  } : null);
+  context.state.ui.pendingSidebarRevealArtist = 'Art Zoyd';
+  context.state.gallery.mainState = context.createGalleryMainState({
+    familyArtists: ['Art Zoyd'],
+    familySelectionExplicit: true,
+  });
+  context.state.view.selected_artist = 'Art Zoyd';
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(dismissed, ['artist-family-panel', 'track-modal']);
+  assert.equal(albumsScroll.scrollTop, 0);
+  assert.equal(sidebarScroll.scrollTop, 0);
+  assert.equal(sidebarList.albumHavenSidebarVirtualScrollTop, 0);
+  assert.equal(context.state.ui.pendingSidebarRevealArtist, '');
+  assert.deepEqual(Array.from(context.state.gallery.mainState.familyArtists), []);
+  assert.equal(context.state.gallery.mainState.familySelectionExplicit, undefined);
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+  assert.equal(calls.buildApiUrl.at(-1).all_artists_active, true);
+  assert.equal(context.state.ui.pendingSidebarAllArtistsActive, true);
 });
 
 test('handleSidebarArtistSelectionClick closes the mobile drawer before loading a selected artist', () => {

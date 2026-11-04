@@ -444,7 +444,8 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   };
   await context.hydrateDeferredNonAlbumTracks();
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
-  assert.equal(requested.length, 4);
+  assert.equal(requested.length, 3, 'another artist reuses the same library-wide Loose Tracks');
+  assert.equal(new URL(requested[1], 'http://localhost').searchParams.get('artist'), '');
 });
 
 test('current artist hydration reaches terminal state while library-wide hydration is pending', async () => {
@@ -737,8 +738,37 @@ test('library-wide Loose Tracks bypasses selected artist while artist menu retai
    non_album_tracks: [tracks[0]],
    library_non_album_tracks: tracks,
  };
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?artist=${encodeURIComponent(view.selected_artist || '')}`;
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), [],
+    'unhydrated library-wide data is pending, not a confirmed empty library');
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+  context.state.view.selected_artist = 'B';
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true, 'changing artist keeps the library scope');
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+});
+
+test('library-wide Loose Tracks keep the whole library when a search found no loose tracks', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?q=${encodeURIComponent(view.query || '')}&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    const query = new URL(url, 'http://localhost').searchParams.get('q');
+    return { ok: true, status: 200, json: async () => ({
+      library_non_album_tracks: query ? [] : [{ path: 'C:/Music/Начало Века/loose.mp3', title: 'Тебя ждала' }],
+    }) };
+  };
+  context.state.view = { query: 'lost', selected_artist: 'Art Zoyd' };
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), ['', '']);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', '']);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
 });
 
 test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {

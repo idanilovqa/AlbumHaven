@@ -109,13 +109,15 @@ test('binding uses capture and releases every listener on disposal', () => {
     assert.equal(capture, true); assert.equal(listeners.get(type), fn); listeners.delete(type);
   } };
   const dispose = bind(window, () => null);
-  assert.equal(listeners.size, 6); dispose(); assert.equal(listeners.size, 0);
+  assert.equal(listeners.size, 7); dispose(); assert.equal(listeners.size, 0);
 });
 
 
 function boundHarness() {
   const listeners = new Map();
+  const document = { visibilityState: 'visible' };
   const window = {
+    document,
     addEventListener(type, handler) { listeners.set(type, handler); },
     removeEventListener(type) { listeners.delete(type); },
   };
@@ -138,7 +140,8 @@ function boundHarness() {
     send('blur', focusedItem);
   } }; };
   openSurface();
-  return { send, window, background, dispose, closes: () => closes,
+  const setVisibility = value => { document.visibilityState = value; send('visibilitychange', document); };
+  return { send, window, background, dispose, setVisibility, closes: () => closes,
     closeSurface: () => { active = null; }, openSurface };
 }
 
@@ -174,6 +177,22 @@ test('the first backdrop click after losing window focus only restores app focus
     assert.equal(h.closes(), 1, 'the next deliberate backdrop click dismisses normally');
   } finally { h.dispose(); }
 });
+
+for (const order of ['blur-then-hidden', 'hidden-then-blur']) {
+  test(`returning from another browser tab (${order}) dismisses on the first backdrop click`, () => {
+    const h = boundHarness();
+    try {
+      if (order === 'blur-then-hidden') { h.send('blur', h.window); h.setVisibility('hidden'); }
+      else { h.setVisibility('hidden'); h.send('blur', h.window); }
+      h.setVisibility('visible');
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        const event = h.send(type);
+        assert.equal(event.stopped, true, `${type} must not reach the background`);
+      }
+      assert.equal(h.closes(), 1, 'the first click after a tab switch closes the modal');
+    } finally { h.dispose(); }
+  });
+}
 
 test('window refocus without an active surface does not reserve a later modal backdrop click', () => {
   const h = boundHarness();

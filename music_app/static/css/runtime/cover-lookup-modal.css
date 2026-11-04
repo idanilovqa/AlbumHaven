@@ -47,23 +47,9 @@
 }
 .cover-lookup-modal-album-link {
   min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
   text-align: left;
-  text-decoration-line: underline;
-  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-  cursor: pointer;
 }
-.cover-lookup-modal-album-link:hover,
-.cover-lookup-modal-album-link:focus-visible {
-  color: var(--text);
-  text-decoration-color: currentColor;
-}
+.cover-lookup-modal-subtitle-separator { white-space: pre; }
 .cover-lookup-search-action {
   display: grid;
   gap: 5px;

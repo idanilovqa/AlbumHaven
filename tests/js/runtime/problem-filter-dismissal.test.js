@@ -75,3 +75,29 @@ test('an actual modal backdrop closes the filter owner and its state without clo
   assert.equal(els.problemFilterMenu.hidden, false);
   assert.equal(els.problemFilterButton.attributes['aria-expanded'], 'true');
 });
+
+for (const mobile of [true, false]) {
+  test(`${mobile ? 'mobile' : 'desktop'}: an outside tap on a gallery album while a side panel is open ${mobile ? 'only closes the panel' : 'keeps its existing behavior'}`, () => {
+    const context = vm.createContext({ window: {}, usesMobilePageLayout: () => mobile });
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
+    const panel = element();
+    panel.contains = target => target === panel;
+    let closes = 0;
+    context.activateTriggerSurface(panel, () => { closes += 1; panel.hidden = true; });
+    const dismissal = createDismissal(() => context.getDismissibleForegroundSurface());
+    const albumCard = { className: 'album-card' };
+    const reachedAlbum = [];
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      let stopped = false;
+      dismissal[type]({ target: albumCard, pointerId: 1, isPrimary: true, button: 0, detail: 1, clientX: 5, clientY: 5,
+        preventDefault() {}, stopImmediatePropagation() { stopped = true; } });
+      if (!stopped) reachedAlbum.push(type);
+    }
+    if (mobile) {
+      assert.deepEqual(reachedAlbum, [], 'no part of the dismissing tap may select or frame the album');
+      assert.equal(closes, 1);
+    } else {
+      assert.deepEqual(reachedAlbum, ['pointerdown', 'pointerup', 'click']);
+    }
+  });
+}

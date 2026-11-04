@@ -522,7 +522,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /const scopePending = libraryWide\s*\? !hasHydratedLibraryNonAlbumTracks\(\)\s*: Boolean\(state\.view\?\.non_album_tracks_deferred\);\s*const enabled = scopePending \|\| getVisibleNonAlbumTracks\(\{ libraryWide \}\)\.length > 0;/,
   );
   assert.match(
     galleryMainInteractionsSource,

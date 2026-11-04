@@ -3955,6 +3955,29 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
 {
   const { context, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.artist_groups = [{
+    artist: 'Art Zoyd',
+    artist_display: 'Art Zoyd',
+    albums: [{ key: 'art-zoyd-1', name: 'Génération sans futur', tracks: [] }],
+  }];
+  context.state.gallery.mainState = context.createGalleryMainState({
+    sources: { main_library: false, new_arrivals: false, hoard: false },
+  });
+  virtualGrid.setGroups = () => {
+    containerEl.children = [];
+    containerEl.innerHTML = '';
+  };
+
+  context.renderArtistGroups();
+
+  assert.match(containerEl.innerHTML, /data-gallery-empty-selection/);
+  assert.match(containerEl.innerHTML, /Select at least one of the sources to see the Library/);
+  assert.doesNotMatch(containerEl.innerHTML, /Art Zoyd|Artist Family/);
+}
+
+{
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
   context.state.view.selected_artist = 'Mono';
   context.state.view.selected_artist_family_display_mode = 'chronological';
   context.state.view.primary_artist_groups = [

@@ -2673,13 +2673,15 @@ function renderArtistGroups(options = {}) {
     renderOptions,
     modeConfig.layoutConfig,
   );
-  if (
-    state.gallery.mainState.familySelectionExplicit === true
-    && state.gallery.mainState.familyArtists.length === 0
-    && virtualGrid.containerEl
-  ) {
+  const mainState = state.gallery.mainState;
+  const emptySelectionMessage = activeGallerySourceCategories(mainState).length === 0
+    ? 'Select at least one of the sources to see the Library'
+    : mainState.familySelectionExplicit === true && mainState.familyArtists.length === 0
+      ? 'Select at least one artist in Artist Family.'
+      : '';
+  if (emptySelectionMessage && virtualGrid.containerEl) {
     rebuildAlbumIndex([]);
-    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml(emptySelectionMessage);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }

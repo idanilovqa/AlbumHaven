@@ -72,6 +72,8 @@ class NativeMediaPlayer(
             .setPlaylist(playlistFor(view.items))
             .setPlayWhenReady(view.playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setPlaybackState(playbackState(view.state))
+            // No restart threshold: the web's previous never restarts the current track.
+            .setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)
         if (view.items.isNotEmpty()) {
             builder.setCurrentMediaItemIndex(view.currentIndex)
                 .setContentPositionMs(
@@ -157,10 +159,8 @@ class NativeMediaPlayer(
                     builder.addAll(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT)
             }
         }
-        // Previous restarts the item past three seconds (Media3 convention) or steps back.
-        if (SystemControl.SEEK_IN_ITEM in view.controls || SystemControl.PREVIOUS_ITEM in view.controls) {
-            builder.add(Player.COMMAND_SEEK_TO_PREVIOUS)
-        }
+        // Previous always steps back, as the web's does, and only where the web's is enabled.
+        if (SystemControl.PREVIOUS_ITEM in view.controls) builder.add(Player.COMMAND_SEEK_TO_PREVIOUS)
         return builder.build()
     }
 

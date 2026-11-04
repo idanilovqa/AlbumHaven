@@ -155,7 +155,8 @@ test('an overtaken start sends nothing and revisions keep increasing', async () 
   assert.equal(second.track, tracks[1]);
   const loads = commands(bridge, 'playback.loadQueue');
   assert.deepEqual(loads.map(load => load.payload.queueRevision), [2]);
-  assert.equal(loads[0].payload.items.length, 2);
+  assert.equal(loads[0].payload.items.length, 3);
+  assert.equal(loads[0].payload.currentIndex, 1);
 });
 
 test('native events drive the existing player facade callbacks and stale revisions are ignored', async () => {
@@ -205,7 +206,7 @@ test('transport commands name the applied revision and continuity reuses the nat
   assert.deepEqual(commands(bridge, 'playback.play').map(message => message.payload), [{ queueRevision: 1 }]);
   assert.deepEqual(commands(bridge, 'playback.seek').map(message => message.payload), [{ queueRevision: 1, positionMs: 42500 }]);
   assert.deepEqual(commands(bridge, 'playback.setLoop').map(message => message.payload),
-    [{ queueRevision: 1, startFrame: 480000, endFrame: 960000 }]);
+    [{ queueRevision: 1, startFrame: 480000, endFrame: 960000, kind: 'long-loop' }]);
   assert.deepEqual(commands(bridge, 'playback.clearLoop').map(message => message.payload), [{ queueRevision: 1 }]);
   assert.equal(commands(bridge, 'playback.stop').length, 1);
   assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
@@ -224,6 +225,10 @@ test('a changed successor reloads the queue from the heard position', async () =
   assert.equal(loads[1].payload.queueRevision, 2);
   assert.equal(loads[1].payload.positionMs, 30000);
   assert.equal(loads[1].payload.items.length, 2);
+  // Android keeps playing the same item; only the queue around it changes.
+  assert.equal(loads[1].payload.keepCurrent, true);
+  assert.equal(api.native.index, 0);
+  assert.equal(api.snapshot().currentTime, 30);
 });
 
 test('inside a native shell the web builds and sends no listen write and never releases the claim', async () => {
@@ -269,12 +274,49 @@ test('the native queue continues into the next album where the web queue would',
   await api.start(tracks[1]);
 
   const [load] = commands(bridge, 'playback.loadQueue');
-  assert.deepEqual(load.payload.items.map(item => item.title), ['Signal B', 'Signal C', 'Signal D', 'Signal E']);
+  assert.deepEqual(load.payload.items.map(item => item.title),
+    ['Signal A', 'Signal B', 'Signal C', 'Signal D', 'Signal E']);
+  // Each album is one queue group, so Android's previous and next stay inside it.
+  assert.deepEqual(load.payload.items.map(item => item.queueGroup), [0, 0, 0, 1, 1]);
+  assert.equal(load.payload.currentIndex, 1);
+  assert.equal(api.native.index, 1);
   assert.equal(api.native.items.at(-1), nextAlbum[1]);
   // The first track of the next album is already Android's successor, so nothing reloads.
-  bridge.event('playback.state', state(1, 'playing', 1000, 0));
+  bridge.event('playback.state', state(1, 'playing', 1000, 1));
   await api.continuity(tracks[2]);
   assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
+});
+
+test('the native queue starts at the album\'s first track so Android\'s previous reaches it', async () => {
+  const { api, bridge, context } = createHarness();
+  await api.start(tracks[2]);
+  const [load] = commands(bridge, 'playback.loadQueue');
+  assert.deepEqual(load.payload.items.map(item => item.title), ['Signal A', 'Signal B', 'Signal C']);
+  assert.equal(load.payload.currentIndex, 2);
+  assert.equal(load.payload.positionMs, 0);
+
+  // A long album sheds earlier tracks before following ones to fit the message budget, never the current item.
+  const album = Array.from({ length: 100 }, (_, index) => ({
+    ...tracks[0], path: `C:/Music/Long/${index}.flac`, title: 'x'.repeat(500), artist: 'y'.repeat(500),
+  }));
+  context.state.player.playbackQueue = { tracks: album, currentIndex: 90 };
+  await api.start(album[90]);
+  const long = commands(bridge, 'playback.loadQueue').at(-1).payload;
+  assert.ok(new TextEncoder().encode(JSON.stringify(long)).length <= 60 * 1024);
+  assert.equal(long.items[long.currentIndex].title, album[90].title);
+  assert.equal(api.native.items[api.native.index], album[90]);
+  assert.equal(long.items.length - 1, long.currentIndex + 9);
+  assert.ok(long.currentIndex > 0 && long.currentIndex < 90);
+  assert.equal(api.native.items.length, long.items.length);
+});
+
+test('a loop names the web\'s kind so Android replays a short loop from retained PCM', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing'));
+  await api.continuity(tracks[0], { kind: 'short-loop', startSeconds: 1.3, endSeconds: 6.3 });
+  assert.deepEqual(commands(bridge, 'playback.setLoop').map(message => message.payload),
+    [{ queueRevision: 1, startFrame: 62400, endFrame: 302400, kind: 'short-loop' }]);
 });
 
 test('held references are reused and an expired one is fetched again', async () => {
@@ -283,12 +325,12 @@ test('held references are reused and an expired one is fetched again', async () 
   await api.start(tracks[1]);
   assert.equal(fetches.length, 1);
   const loads = commands(bridge, 'playback.loadQueue');
-  assert.deepEqual(loads[1].payload.items.map(item => item.playbackRef), ['opaque-ref-1', 'opaque-ref-2']);
+  assert.deepEqual(loads[1].payload.items.map(item => item.playbackRef), ['opaque-ref-0', 'opaque-ref-1', 'opaque-ref-2']);
 
-  bridge.event('playback.referenceExpired', state(2, 'error', 0, 0));
+  bridge.event('playback.referenceExpired', state(2, 'error', 0, 1));
   await settle();
   assert.equal(fetches.length, 2);
-  assert.deepEqual(fetches[1].body.tracks.map(track => track.path), [tracks[1].path, tracks[2].path]);
+  assert.deepEqual(fetches[1].body.tracks.map(track => track.path), tracks.map(track => track.path));
 });
 
 test('a refreshed reference keeps the opaque listen key Android tells one listen by', async () => {
@@ -346,7 +388,7 @@ test('a loaded queue is remembered for the next document of the origin', async (
   const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v1'));
   assert.equal(record.clientId, handshakePayload.playback.clientId);
   assert.equal(record.queueRevision, 1);
-  assert.deepEqual(record.tracks.map(track => track.path), [tracks[1].path, tracks[2].path]);
+  assert.deepEqual(record.tracks.map(track => track.path), tracks.map(track => track.path));
 });
 
 test('a reloaded document re-attaches its UI to the queue Android kept playing', async () => {

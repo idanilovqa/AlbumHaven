@@ -68,6 +68,19 @@ class SessionMappingTest {
     }
 
     @Test
+    fun previousAndNextStopAtTheEndsOfTheItemsAlbum() {
+        val albums = items.mapIndexed { position, item -> item.copy(queueGroup = if (position < 2) 0 else 1) }
+        fun controls(index: Int) = SessionMapping.view(
+            NativePlaybackSnapshot(TEST_CLIENT_ID, NativePlaybackState.PLAYING, 4, index, 0, 120_000, items = albums),
+            origin,
+        ).controls.filter { it == SystemControl.PREVIOUS_ITEM || it == SystemControl.NEXT_ITEM }.toSet()
+
+        assertEquals(setOf(SystemControl.NEXT_ITEM), controls(0))
+        assertEquals(setOf(SystemControl.PREVIOUS_ITEM), controls(1))
+        assertEquals(emptySet<SystemControl>(), controls(2))
+    }
+
+    @Test
     fun noQueueIsAnEmptyIdlePlayer() {
         val view = SessionMapping.view(
             NativePlaybackSnapshot(TEST_CLIENT_ID, NativePlaybackState.IDLE, 0, null, 0, 0),

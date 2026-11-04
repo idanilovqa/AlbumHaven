@@ -225,17 +225,21 @@ class BridgeControllerTest {
         assertTrue(
             ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":48000}"""))),
         )
+        assertTrue(
+            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":48000,"kind":"long-loop"}"""))),
+        )
         assertTrue(ok(send(sandbox, command("playback.clearLoop", """{"queueRevision":2}"""))))
+        assertTrue(ok(send(sandbox, load(revision = 3, keepCurrent = "true"))))
         assertTrue(ok(send(sandbox, command("playback.pause"))))
         assertTrue(ok(send(sandbox, command("playback.stop"))))
-        assertTrue(ok(send(sandbox, load(revision = 3))))
+        assertTrue(ok(send(sandbox, load(revision = 4))))
         assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
     }
 
     @Test
     fun invalidPlaybackPayloadsAreRejected() {
         send(sandbox, handshake())
-        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd"}"""
+        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0}"""
         val cases = listOf(
             load(items = "[]"),
             load(items = "[" + item.replace("\"durationMs\":1000", "\"durationMs\":1000,\"path\":\"/music/a.flac\"") + "]"),
@@ -249,6 +253,11 @@ class BridgeControllerTest {
             load(items = "[" + item.replace(",\"listenKey\":\"lk1-0123abcd\"", "") + "]"),
             load(items = "[" + item.replace("lk1-0123abcd", "C:/Music/a.flac") + "]"),
             load(items = "[" + item.replace("lk1-0123abcd", "") + "]"),
+            load(items = "[" + item.replace(",\"queueGroup\":0", "") + "]"),
+            load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":-1") + "]"),
+            load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":1") + "," + item + "]"),
+            load(keepCurrent = "1"),
+            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"kind":"loop"}"""),
             load(items = "[" + List(PlaybackBridge.MAX_QUEUE_ITEMS + 1) { item }.joinToString(",") + "]"),
             load(currentIndex = 1),
             load(positionMs = "-1"),
@@ -343,15 +352,17 @@ class BridgeControllerTest {
 
     private fun load(
         revision: Int = 1,
-        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd"}]""",
+        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0}]""",
         currentIndex: Int = 0,
         positionMs: String = "0",
         loop: String = "null",
         autoplay: String = "false",
+        keepCurrent: String? = null,
     ) = command(
         "playback.loadQueue",
         """{"queueRevision":$revision,"items":$items,"currentIndex":$currentIndex,""" +
-            """"positionMs":$positionMs,"loop":$loop,"autoplay":$autoplay}""",
+            """"positionMs":$positionMs,"loop":$loop,"autoplay":$autoplay""" +
+            (keepCurrent?.let { ""","keepCurrent":$it""" } ?: "") + "}",
     )
 
     private fun ok(reply: JSONObject?): Boolean = reply!!.getJSONObject("payload").getBoolean("ok")

@@ -78,7 +78,8 @@
           "album": "Playback Ownership",
           "artworkUrl": null,
           "durationMs": 180000,
-          "trackNumber": "1"
+          "trackNumber": "1",
+          "queueGroup": 0
         },
         {
           "playbackRef": "opaque-ref-b",
@@ -88,7 +89,8 @@
           "album": "Playback Ownership",
           "artworkUrl": null,
           "durationMs": 180000,
-          "trackNumber": "2"
+          "trackNumber": "2",
+          "queueGroup": 0
         }
       ],
       "currentIndex": 0,

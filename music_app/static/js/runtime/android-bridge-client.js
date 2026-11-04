@@ -145,23 +145,31 @@ function androidNativeText(value) {
   return String(value || '').replace(/[\u0000-\u001f]/g, ' ').slice(0, ANDROID_NATIVE_TEXT_LIMIT);
 }
 
-// The tracks after `track`, continuing into the following albums exactly where the web's own queue
-// continues (`resolveNextPlaybackContextQueue`), so Android plays album to album gaplessly.
+// The album queue `track` plays in, from its first track so Android's previous reaches what the
+// web's previous does (`playCompactQueueOffset`), then the albums the web's own queue continues
+// into (`resolveNextPlaybackContextQueue`), so Android plays album to album gaplessly. Each album is
+// one `queueGroup`: Android's previous and next stay inside it, as the web's do.
 function androidNativeQueueWindow(track) {
   let queue = state.player.playbackQueue;
-  const tracks = Array.isArray(queue?.tracks) ? queue.tracks : [];
-  const start = tracks.findIndex(item => String(item?.path || '') === String(track.path));
-  const window = [track];
-  if (start < 0) return window;
-  window.push(...tracks.slice(start + 1).filter(item => item?.path));
+  const tracks = (Array.isArray(queue?.tracks) ? queue.tracks : []).filter(item => item?.path);
+  const start = tracks.findIndex(item => String(item.path) === String(track.path));
+  if (start < 0) return { items: [track], groups: [0], currentIndex: 0 };
+  const following = tracks.slice(start + 1, start + ANDROID_NATIVE_QUEUE_LIMIT);
+  // Following tracks keep their place first; earlier ones fill what the limit leaves.
+  const earlier = tracks.slice(Math.max(0, start - (ANDROID_NATIVE_QUEUE_LIMIT - 1 - following.length)), start);
+  const items = [...earlier, track, ...following];
+  const groups = items.map(() => 0);
   const albums = new Set([String(queue?.albumRef || '')]);
-  while (window.length < ANDROID_NATIVE_QUEUE_LIMIT && typeof resolveNextPlaybackContextQueue === 'function') {
+  while (items.length < ANDROID_NATIVE_QUEUE_LIMIT && typeof resolveNextPlaybackContextQueue === 'function') {
     queue = resolveNextPlaybackContextQueue(queue);
     if (!queue || albums.has(String(queue.albumRef || ''))) break;
     albums.add(String(queue.albumRef || ''));
-    window.push(...(Array.isArray(queue.tracks) ? queue.tracks : []).filter(item => item?.path));
+    const next = (Array.isArray(queue.tracks) ? queue.tracks : []).filter(item => item?.path)
+      .slice(0, ANDROID_NATIVE_QUEUE_LIMIT - items.length);
+    items.push(...next);
+    groups.push(...next.map(() => albums.size - 1));
   }
-  return window.slice(0, ANDROID_NATIVE_QUEUE_LIMIT);
+  return { items, groups, currentIndex: earlier.length };
 }
 
 function cachedAndroidNativePlaybackRef(path) {
@@ -221,10 +229,11 @@ function androidNativeListenKey(item) {
   return `lk1-${[high, low].map(half => (half >>> 0).toString(16).padStart(8, '0')).join('')}`;
 }
 
-function buildAndroidNativeQueuePayload(revision, items, refs, startSeconds, autoplay) {
+// The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
+function buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay, keepCurrent = false) {
   const payload = {
     queueRevision: revision,
-    items: items.map((item, index) => ({
+    items: window.items.map((item, index) => ({
       playbackRef: refs[index],
       listenKey: androidNativeListenKey(item),
       title: androidNativeText(item.title),
@@ -233,18 +242,28 @@ function buildAndroidNativeQueuePayload(revision, items, refs, startSeconds, aut
       artworkUrl: null,
       durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
       trackNumber: androidNativeText(item.trackNumber),
+      queueGroup: window.groups[index],
     })),
-    currentIndex: 0,
+    currentIndex: window.currentIndex,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
     loop: null,
     autoplay: Boolean(autoplay),
+    // The current item is the one Android already plays; only the queue around it changes.
+    ...(keepCurrent ? { keepCurrent: true } : {}),
   };
   const encoder = new TextEncoder();
+  let first = 0;
   while (payload.items.length > 1
       && encoder.encode(JSON.stringify(payload)).length > ANDROID_NATIVE_MESSAGE_BUDGET_BYTES) {
-    payload.items.pop();
+    if (payload.currentIndex > 0) {
+      payload.items.shift();
+      payload.currentIndex -= 1;
+      first += 1;
+    } else {
+      payload.items.pop();
+    }
   }
-  return payload;
+  return { payload, first };
 }
 
 function androidNativeCurrentRole() {
@@ -257,22 +276,26 @@ function androidNativeCurrentRole() {
   };
 }
 
-async function startAndroidNativePlaybackTrack(track, { startSeconds = 0, autoplay = true, referenceRetry = false } = {}) {
+async function startAndroidNativePlaybackTrack(track, {
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+} = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
   native.ownerIntent = Boolean(autoplay);
   const window = androidNativeQueueWindow(track);
   // A refused reference may be stale; the retry asks for fresh ones.
-  if (referenceRetry) window.forEach(item => native.refs.delete(String(item.path)));
-  const refs = await requestAndroidNativePlaybackRefs(window);
+  if (referenceRetry) window.items.forEach(item => native.refs.delete(String(item.path)));
+  const refs = await requestAndroidNativePlaybackRefs(window.items);
   if (revision !== native.revision) return null;
-  const payload = buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay);
+  const { payload, first } = buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay, keepCurrent);
   await sendAndroidBridgeCommand('playback.loadQueue', payload);
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
-  native.items = window.slice(0, payload.items.length);
+  native.items = window.items.slice(first, first + payload.items.length);
   saveAndroidNativeAttachment(revision, native.items);
-  native.index = 0;
+  native.index = payload.currentIndex;
+  // Android keeps playing the same item, so its first frame and listen are not new.
+  if (keepCurrent) return androidNativeCurrentRole();
   native.generation += 1;
   native.streamId += 1;
   native.firstFrameNotified = false;
@@ -434,20 +457,22 @@ async function scheduleAndroidNativeContinuity(track, options = {}) {
     if (String(native.items[native.index + 1]?.path || '') === String(track?.path || '')) {
       return androidNativeCurrentRole();
     }
-    // The queue changed under Android; reload it from the heard position unless that cannot help.
-    if (String(androidNativeQueueWindow(current)[1]?.path || '') !== String(track?.path || '')) {
+    // The queue changed under Android; replace the queue around the playing item unless that cannot help.
+    const window = androidNativeQueueWindow(current);
+    if (String(window.items[window.currentIndex + 1]?.path || '') !== String(track?.path || '')) {
       return androidNativeCurrentRole();
     }
     return startAndroidNativePlaybackTrack(current, {
-      startSeconds: native.snapshot.currentTime, autoplay: !native.snapshot.paused,
+      startSeconds: native.snapshot.currentTime, autoplay: !native.snapshot.paused, keepCurrent: true,
     });
   }
   const startFrame = Math.round(Math.max(0, Number(options.startSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
   const endFrame = Math.round(Math.max(0, Number(options.endSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
   if (endFrame <= startFrame) return null;
   native.loopKind = kind;
+  // The web's kind decides retained replay exactly, as its worklet's `set-loop` does.
   await sendAndroidNativeTransport('playback.setLoop', {
-    queueRevision: native.appliedRevision, startFrame, endFrame,
+    queueRevision: native.appliedRevision, startFrame, endFrame, kind,
   });
   return androidNativeCurrentRole();
 }

@@ -82,8 +82,10 @@ object SessionMapping {
                 add(SystemControl.PLAY_PAUSE)
                 add(SystemControl.STOP)
                 if (items[index].durationMs > 0) add(SystemControl.SEEK_IN_ITEM)
-                if (index > 0) add(SystemControl.PREVIOUS_ITEM)
-                if (index + 1 < items.size) add(SystemControl.NEXT_ITEM)
+                // The web's previous and next stay inside the album queue the item belongs to.
+                val group = snapshot.items[index].queueGroup
+                if (index > 0 && snapshot.items[index - 1].queueGroup == group) add(SystemControl.PREVIOUS_ITEM)
+                if (index + 1 < items.size && snapshot.items[index + 1].queueGroup == group) add(SystemControl.NEXT_ITEM)
             }
         }
         return SessionView(

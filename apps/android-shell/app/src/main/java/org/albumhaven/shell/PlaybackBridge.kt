@@ -2,6 +2,7 @@ package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.CommandResult
 import org.albumhaven.shell.playback.CommandSource
+import org.albumhaven.shell.playback.LoopKind
 import org.albumhaven.shell.playback.LoopRange48k
 import org.albumhaven.shell.playback.NativePlaybackController
 import org.albumhaven.shell.playback.NativePlaybackEvent
@@ -70,11 +71,14 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         return result(port.seek(revision, position))
     }
 
+    /** `kind` is the web's loop kind; without it the worklet's own five-second rule decides. */
     private fun setLoop(payload: JSONObject): Result {
-        if (payload.fieldNames() != setOf("queueRevision", "startFrame", "endFrame")) return invalid()
+        val fields = payload.fieldNames()
+        if (fields != SET_LOOP_KEYS && fields != SET_LOOP_KEYS + "kind") return invalid()
         val revision = positiveLong(payload.opt("queueRevision")) ?: return invalid()
         val range = loopRange(payload) ?: return invalid()
-        return result(port.setLoop(revision, range))
+        val kind = if ("kind" in fields) (payload.opt("kind") as? String)?.let(LoopKind::of) ?: return invalid() else null
+        return result(port.setLoop(revision, range.copy(kind = kind)))
     }
 
     private fun revision(payload: JSONObject): Long? =
@@ -96,11 +100,13 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
     private fun invalid(): Result = Result.Failed("invalid_payload", "Invalid playback command")
 
     private fun parseLoad(payload: JSONObject): QueueLoad? {
-        if (payload.fieldNames() != LOAD_KEYS) return null
+        val fields = payload.fieldNames()
+        if (fields != LOAD_KEYS && fields != LOAD_KEYS + "keepCurrent") return null
         val revision = positiveLong(payload.opt("queueRevision")) ?: return null
         val array = payload.opt("items") as? JSONArray ?: return null
         if (array.length() !in 1..MAX_QUEUE_ITEMS) return null
         val items = (0 until array.length()).map { parseItem(array.opt(it)) ?: return null }
+        if (items.zipWithNext().any { (before, after) -> after.queueGroup < before.queueGroup }) return null
         val currentIndex = nonNegativeLong(payload.opt("currentIndex"))?.toInt() ?: return null
         if (currentIndex !in items.indices) return null
         val position = nonNegativeLong(payload.opt("positionMs")) ?: return null
@@ -110,7 +116,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
             else -> return null
         }
         val autoplay = payload.opt("autoplay") as? Boolean ?: return null
-        return QueueLoad(revision, items, currentIndex, position, loop, autoplay)
+        val keepCurrent = if ("keepCurrent" in fields) payload.opt("keepCurrent") as? Boolean ?: return null else false
+        return QueueLoad(revision, items, currentIndex, position, loop, autoplay, keepCurrent)
     }
 
     private fun parseItem(raw: Any?): QueueItem? {
@@ -130,7 +137,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         if (duration > MAX_DURATION_MS) return null
         val trackNumber = text(item.opt("trackNumber")) ?: return null
         val listenKey = (item.opt("listenKey") as? String)?.takeIf(LISTEN_KEY::matches) ?: return null
-        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey)
+        val queueGroup = nonNegativeLong(item.opt("queueGroup"))?.takeIf { it <= MAX_QUEUE_ITEMS }?.toInt() ?: return null
+        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup)
     }
 
     private fun loopRange(json: JSONObject): LoopRange48k? {
@@ -182,8 +190,12 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         /** The web's opaque, path-free track identity, which stays the same when a reference is refreshed. */
         private val LISTEN_KEY = Regex("^[A-Za-z0-9_.-]{1,128}$")
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
-        private val ITEM_KEYS =
-            setOf("playbackRef", "listenKey", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber")
+        private val SET_LOOP_KEYS = setOf("queueRevision", "startFrame", "endFrame")
+
+        /** `queueGroup` numbers the web playback queues (albums) in order; it never decreases along the queue. */
+        private val ITEM_KEYS = setOf(
+            "playbackRef", "listenKey", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber", "queueGroup",
+        )
 
         fun snapshotJson(snapshot: NativePlaybackSnapshot): JSONObject = JSONObject()
             .put("state", snapshot.state.wire)

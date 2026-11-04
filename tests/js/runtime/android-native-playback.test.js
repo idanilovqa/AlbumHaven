@@ -72,7 +72,9 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
       const issued = refs ? refs(body) : {
         protocol: 1,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        tracks: body.tracks.map((track, index) => ({ clientKey: track.clientKey, playbackRef: `opaque-ref-${index}` })),
+        tracks: body.tracks.map((track, index) => ({
+          clientKey: track.clientKey, playbackRef: `opaque-ref-${index}`, resumeToken: `opaque-resume-${index}`,
+        })),
       };
       return { ok: true, json: async () => issued };
     },
@@ -129,6 +131,9 @@ test('a negotiated native shell routes a start through one reference batch and a
   assert.deepEqual(Object.keys(load.payload).sort(), LOAD_KEYS);
   assert.deepEqual(load.payload.items.map(item => Object.keys(item).sort()), tracks.map(() => ITEM_KEYS));
   assert.deepEqual(load.payload.items.map(item => item.playbackRef), ['opaque-ref-0', 'opaque-ref-1', 'opaque-ref-2']);
+  // Each item names its path-free resume token and the artwork the server resolves for it.
+  assert.deepEqual(load.payload.items.map(item => [item.resumeToken, item.artworkUrl]), [0, 1, 2].map(index => [
+    `opaque-resume-${index}`, `/playback/artwork/opaque-resume-${index}`]));
   assert.equal(load.payload.queueRevision, 1);
   assert.equal(load.payload.positionMs, 1500);
   assert.equal(load.payload.autoplay, true);
@@ -137,6 +142,33 @@ test('a negotiated native shell routes a start through one reference batch and a
   assert.equal(role.track, tracks[0]);
   assert.equal(api.snapshot().diagnostics.native, true);
   assert.equal(api.getAndroidNativePlaybackClientId(), handshakePayload.playback.clientId);
+});
+
+test('resume tokens reach only a resumption-capable shell and artwork needs a valid token', async () => {
+  const withoutResumption = {
+    ...handshakePayload,
+    capabilities: handshakePayload.capabilities.filter(name => name !== 'playback.resumption.v1'),
+  };
+  const older = createHarness({ respond: message => (message.name === 'bridge.handshake' ? withoutResumption : null) });
+  await older.api.start(tracks[0]);
+  const [olderLoad] = commands(older.bridge, 'playback.loadQueue');
+  assert.ok(olderLoad.payload.items.every(item => !('resumeToken' in item)));
+  assert.equal(olderLoad.payload.items[0].artworkUrl, '/playback/artwork/opaque-resume-0');
+
+  const invalid = createHarness({
+    refs: body => ({
+      protocol: 1,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      tracks: body.tracks.map((track, index) => ({
+        clientKey: track.clientKey, playbackRef: `opaque-ref-${index}`,
+        ...(index === 0 ? {} : { resumeToken: index === 1 ? '../cover?path=C:/Music' : 7 }),
+      })),
+    }),
+  });
+  await invalid.api.start(tracks[0]);
+  const [load] = commands(invalid.bridge, 'playback.loadQueue');
+  assert.deepEqual(load.payload.items.map(item => [item.artworkUrl, 'resumeToken' in item]), [
+    [null, false], [null, false], [null, false]]);
 });
 
 test('a partial reference batch never reaches the native queue', async () => {

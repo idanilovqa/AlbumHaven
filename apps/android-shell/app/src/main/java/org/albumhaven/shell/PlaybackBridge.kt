@@ -122,7 +122,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
 
     private fun parseItem(raw: Any?): QueueItem? {
         val item = raw as? JSONObject ?: return null
-        if (item.fieldNames() != ITEM_KEYS) return null
+        val fields = item.fieldNames()
+        if (fields != ITEM_KEYS && fields != ITEM_KEYS + "resumeToken") return null
         val ref = item.opt("playbackRef") as? String ?: return null
         if (ref.length !in 1..MAX_REFERENCE_CHARS || !REFERENCE.matches(ref)) return null
         val title = text(item.opt("title")) ?: return null
@@ -136,9 +137,14 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         val duration = nonNegativeLong(item.opt("durationMs")) ?: return null
         if (duration > MAX_DURATION_MS) return null
         val trackNumber = text(item.opt("trackNumber")) ?: return null
-        val listenKey = (item.opt("listenKey") as? String)?.takeIf(LISTEN_KEY::matches) ?: return null
+        val listenKey = (item.opt("listenKey") as? String)?.takeIf(QueueItem::isListenKey) ?: return null
         val queueGroup = nonNegativeLong(item.opt("queueGroup"))?.takeIf { it <= MAX_QUEUE_ITEMS }?.toInt() ?: return null
-        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup)
+        val resumeToken = if ("resumeToken" in fields) {
+            (item.opt("resumeToken") as? String)?.takeIf(QueueItem::isResumeToken) ?: return null
+        } else {
+            null
+        }
+        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken)
     }
 
     private fun loopRange(json: JSONObject): LoopRange48k? {
@@ -168,7 +174,15 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
          * re-attaches to the running queue, and Android's own controls send `initiator: "system"`.
          */
         const val MEDIA_SESSION_CAPABILITY = "playback.media_session.v1"
-        val CAPABILITIES = listOf(NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY)
+
+        /**
+         * Queue items may carry a `resumeToken`, which Android persists instead of the reference, so
+         * the system media card can resume playback after the session, the process or the device ended.
+         */
+        const val RESUMPTION_CAPABILITY = "playback.resumption.v1"
+        val CAPABILITIES = listOf(
+            NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY, RESUMPTION_CAPABILITY,
+        )
 
         private const val LOAD_QUEUE = "playback.loadQueue"
         private const val PLAY = "playback.play"
@@ -187,8 +201,6 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
         private val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
 
-        /** The web's opaque, path-free track identity, which stays the same when a reference is refreshed. */
-        private val LISTEN_KEY = Regex("^[A-Za-z0-9_.-]{1,128}$")
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
         private val SET_LOOP_KEYS = setOf("queueRevision", "startFrame", "endFrame")
 

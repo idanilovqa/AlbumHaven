@@ -11,7 +11,9 @@ import kotlin.math.roundToLong
  * One `playback.loadQueue` entry; [playbackRef] and [listenKey] are opaque and path-free. A
  * refreshed reference keeps the track's [listenKey], so it continues the same listen. Items of one
  * [queueGroup] are one web playback queue (an album): previous and next stay inside it, as the
- * web's own skips do, while a natural end continues into the next group.
+ * web's own skips do, while a natural end continues into the next group. [resumeToken] is the
+ * track's non-expiring, account-bound identity, the only handle the restorable queue keeps, from
+ * which `POST /playback/refs/resume` issues a fresh reference.
  */
 data class QueueItem(
     val playbackRef: String,
@@ -23,6 +25,7 @@ data class QueueItem(
     val trackNumber: String = "",
     val listenKey: String,
     val queueGroup: Int = 0,
+    val resumeToken: String? = null,
 ) {
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
 
@@ -36,6 +39,15 @@ data class QueueItem(
 
         /** Same bounds `PUT /playback/state` applies to mirrored track text. */
         fun isDisplayText(value: String): Boolean = value.length <= MAX_TEXT_CHARS && value.none { it.code < 32 }
+
+        /** `POST /playback/refs` resume tokens: unpadded base64url fields joined by dots. */
+        fun isResumeToken(value: String): Boolean = RESUME_TOKEN.matches(value)
+
+        /** The web's opaque, path-free track identity, which stays the same when a reference is refreshed. */
+        fun isListenKey(value: String): Boolean = LISTEN_KEY.matches(value)
+
+        private val RESUME_TOKEN = Regex("^[A-Za-z0-9_.-]{1,512}$")
+        private val LISTEN_KEY = Regex("^[A-Za-z0-9_.-]{1,128}$")
 
         /** A same-origin absolute path without query, which is all the claim mirror accepts. */
         fun isArtworkPath(value: String): Boolean =

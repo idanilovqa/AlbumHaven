@@ -6,14 +6,16 @@
       "playback.native.v1",
       "playback.queue.v1",
       "playback.loops.v1",
-      "playback.media_session.v1"
+      "playback.media_session.v1",
+      "playback.resumption.v1"
     ],
     "sandbox": [
       "sandbox.select.v1",
       "playback.native.v1",
       "playback.queue.v1",
       "playback.loops.v1",
-      "playback.media_session.v1"
+      "playback.media_session.v1",
+      "playback.resumption.v1"
     ]
   },
   "handshakeRequest": {
@@ -45,7 +47,8 @@
         "playback.native.v1",
         "playback.queue.v1",
         "playback.loops.v1",
-        "playback.media_session.v1"
+        "playback.media_session.v1",
+        "playback.resumption.v1"
       ],
       "origin": "https://sandbox2.albumhaven.org",
       "playback": {
@@ -76,10 +79,11 @@
           "title": "Signal A",
           "artist": "Android Acceptance",
           "album": "Playback Ownership",
-          "artworkUrl": null,
+          "artworkUrl": "/playback/artwork/opaque-resume-a",
           "durationMs": 180000,
           "trackNumber": "1",
-          "queueGroup": 0
+          "queueGroup": 0,
+          "resumeToken": "opaque-resume-a"
         },
         {
           "playbackRef": "opaque-ref-b",
@@ -90,7 +94,8 @@
           "artworkUrl": null,
           "durationMs": 180000,
           "trackNumber": "2",
-          "queueGroup": 0
+          "queueGroup": 0,
+          "resumeToken": "opaque-resume-b"
         }
       ],
       "currentIndex": 0,

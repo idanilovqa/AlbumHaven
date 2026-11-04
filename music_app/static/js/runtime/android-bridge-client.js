@@ -97,6 +97,10 @@ const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 // The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
 const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+// The shell persists each item's path-free resume token, so its media card can resume playback
+// after the session, the process or the device restarted (playback.resumption.v1).
+const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
+const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 
 const androidNativePlayback = {
@@ -174,11 +178,12 @@ function androidNativeQueueWindow(track) {
 
 function cachedAndroidNativePlaybackRef(path) {
   const cached = androidNativePlayback.refs.get(path);
-  return cached && cached.expiresAtMs - Date.now() > ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS ? cached.playbackRef : '';
+  return cached && cached.expiresAtMs - Date.now() > ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS ? cached : null;
 }
 
 // One bounded batch for the references not already held, immediately before the queue reaches
-// Android; a partial batch never does.
+// Android; a partial batch never does. Each entry is `{ playbackRef, resumeToken }`; the resume
+// token is null when the server issued none.
 async function requestAndroidNativePlaybackRefs(items) {
   const refs = items.map(item => cachedAndroidNativePlaybackRef(String(item.path)));
   const missing = items.map((item, index) => ({ index, path: String(item.path) })).filter(({ index }) => !refs[index]);
@@ -199,7 +204,9 @@ async function requestAndroidNativePlaybackRefs(items) {
     if (issued?.clientKey !== track.clientKey || typeof issued.playbackRef !== 'string' || !issued.playbackRef) {
       throw new Error('Playback references are unavailable.');
     }
-    return issued.playbackRef;
+    const resumeToken = typeof issued.resumeToken === 'string' && ANDROID_NATIVE_RESUME_TOKEN.test(issued.resumeToken)
+      ? issued.resumeToken : null;
+    return { playbackRef: issued.playbackRef, resumeToken };
   });
   const expiresAtMs = Date.parse(result.expiresAt);
   missing.forEach(({ index, path }, position) => {
@@ -207,7 +214,7 @@ async function requestAndroidNativePlaybackRefs(items) {
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
     cache.delete(path);
-    cache.set(path, { playbackRef: issuedRefs[position], expiresAtMs });
+    cache.set(path, { ...issuedRefs[position], expiresAtMs });
     if (cache.size > ANDROID_NATIVE_REFERENCE_CACHE_LIMIT) cache.delete(cache.keys().next().value);
   });
   return refs;
@@ -231,18 +238,21 @@ function androidNativeListenKey(item) {
 
 // The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
 function buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay, keepCurrent = false) {
+  const resumable = hasAndroidCapability(ANDROID_NATIVE_RESUMPTION_CAPABILITY);
   const payload = {
     queueRevision: revision,
     items: window.items.map((item, index) => ({
-      playbackRef: refs[index],
+      playbackRef: refs[index].playbackRef,
       listenKey: androidNativeListenKey(item),
       title: androidNativeText(item.title),
       artist: androidNativeText(item.artist),
       album: androidNativeText(item.album),
-      artworkUrl: null,
+      // The track's cover, path-free, as the server resolves it for the resume token's track.
+      artworkUrl: refs[index].resumeToken ? `/playback/artwork/${refs[index].resumeToken}` : null,
       durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
       trackNumber: androidNativeText(item.trackNumber),
       queueGroup: window.groups[index],
+      ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
     })),
     currentIndex: window.currentIndex,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),

@@ -1,5 +1,10 @@
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const PLAYBACK_SESSION_REQUEST_TIMEOUT_MS = 10000;
+// Transient now-playing and scrobble failures back off from about five seconds to at most five minutes.
+const LISTEN_WRITE_RETRY_BASE_MS = 5000;
+const LISTEN_WRITE_RETRY_MAX_MS = 300000;
+// The server's answer when this account has no Last.fm session.
+const LASTFM_UNAVAILABLE_ERROR = 'account_scoped_scrobble_unavailable';
 let measuredPlaybackDeviceId = '';
 const pendingPlaybackSessionRequests = new Set();
 
@@ -152,6 +157,63 @@ function isListenRecordedNatively() {
   return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
 }
 
+function listenWriteClockMs() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+function listenWriteRetryJitter() {
+  return Math.random();
+}
+
+/** `Retry-After` as milliseconds from now: delay-seconds or an HTTP date; null when absent or invalid. */
+function parseRetryAfterMs(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const date = text ? Date.parse(text) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function playbackSessionError(response, data) {
+  const error = new Error(data?.error || 'Playback sync failed');
+  error.status = Number(response.status) || 0;
+  error.code = String(data?.error || '');
+  error.retryAfterMs = parseRetryAfterMs(response.headers?.get?.('Retry-After'));
+  return error;
+}
+
+/**
+ * A failed now-playing or scrobble write: Last.fm not connected stops both for the listen; a
+ * network failure, timeout, 429 or 5xx is retried with backoff; any other answer is final.
+ */
+function noteListenWriteFailure(session, effect, error) {
+  if (!session) return;
+  const status = Number(error?.status) || 0;
+  if (status === 409 && error?.code === LASTFM_UNAVAILABLE_ERROR) {
+    session.lastfmUnavailable = true;
+    return;
+  }
+  const retry = (session.writeRetries ||= {})[effect] ||= { attempts: 0, at: 0, final: false };
+  if (status && status !== 429 && status < 500) {
+    retry.final = true;
+    return;
+  }
+  retry.attempts += 1;
+  const backoff = LISTEN_WRITE_RETRY_BASE_MS * 2 ** Math.min(retry.attempts - 1, 16);
+  const jittered = Math.min(LISTEN_WRITE_RETRY_MAX_MS, Math.round(backoff * (0.8 + 0.4 * listenWriteRetryJitter())));
+  retry.at = listenWriteClockMs() + (Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
+}
+
+function isListenWriteDue(session, effect) {
+  if (session?.lastfmUnavailable) return false;
+  const retry = session?.writeRetries?.[effect];
+  return !retry || (!retry.final && listenWriteClockMs() >= retry.at);
+}
+
+/** A start or resume retries a backed-off write at its next trigger. */
+function retryListenWritesNow(session) {
+  Object.values(session?.writeRetries || {}).forEach((retry) => { retry.at = 0; });
+}
+
 async function postPlaybackSession(url, payload) {
   const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
   const controller = new AbortController();
@@ -163,8 +225,8 @@ async function postPlaybackSession(url, payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, ...claim }),
     });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Playback sync failed');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.ok) throw playbackSessionError(response, data);
     return data;
   })();
   const pending = { claimToken: claim.claimToken, promise };
@@ -227,6 +289,7 @@ function maybeSendNowPlaying(track, session) {
   if (isListenRecordedNatively()) return Promise.resolve(false);
   if (session?.nowPlayingPromise) return session.nowPlayingPromise;
   if (session?.nowPlayingSent) return Promise.resolve(true);
+  if (session && !isListenWriteDue(session, 'now-playing')) return Promise.resolve(false);
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     return Promise.resolve(false);
   }
@@ -236,6 +299,7 @@ function maybeSendNowPlaying(track, session) {
     if (session) session.nowPlayingSent = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'now-playing', error);
     console.warn('[AlbumHaven][Lastfm] Failed to update now playing.', error);
     return false;
   }).finally(() => {
@@ -247,11 +311,17 @@ function maybeSendNowPlaying(track, session) {
   return nowPlayingPromise;
 }
 
+/** A now-playing that failed transiently is sent again once its backoff elapses. */
+function maybeRetryNowPlaying(session) {
+  if (!session?.writeRetries?.['now-playing']?.attempts) return Promise.resolve(false);
+  return maybeSendNowPlaying(session.track, session);
+}
+
 async function maybeScrobbleListenSession(session) {
   if (!session) return false;
   if (session.scrobblePromise) return session.scrobblePromise;
   if (session.scrobbled || !canScrobbleListenSession(session)) return false;
-  if (session.scrobblePending) return false;
+  if (session.scrobblePending || !isListenWriteDue(session, 'scrobble')) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
   session.scrobblePayload ||= {
@@ -267,6 +337,7 @@ async function maybeScrobbleListenSession(session) {
     session.scrobbled = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'scrobble', error);
     console.warn('[AlbumHaven][Lastfm] Failed to scrobble track.', error);
     return false;
   }).finally(() => {
@@ -348,6 +419,8 @@ async function finalizeListenSession(reason, options = {}) {
   }
   const scrobbleEligible = canScrobbleListenSession(session);
   if (scrobbleEligible && !session.scrobbled) {
+    // The listen's end is its last chance: a backed-off scrobble is sent once more without waiting.
+    retryListenWritesNow(session);
     await maybeScrobbleListenSession(session);
   }
   const payload = session.completionPayload || {

@@ -83,8 +83,9 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
     updatePlayerUi: () => {},
   };
   vm.createContext(context);
-  const files = ['player-streaming-engine.js', 'android-bridge-client.js',
-    ...(listen ? ['player-listen-session-helpers.js', 'playback-ownership-helpers.js'] : [])];
+  // The listen helpers name the track identity a queue item's listen key is derived from.
+  const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'player-listen-session-helpers.js',
+    ...(listen ? ['playback-ownership-helpers.js'] : [])];
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
   }
@@ -288,6 +289,22 @@ test('held references are reused and an expired one is fetched again', async () 
   await settle();
   assert.equal(fetches.length, 2);
   assert.deepEqual(fetches[1].body.tracks.map(track => track.path), [tracks[1].path, tracks[2].path]);
+});
+
+test('a refreshed reference keeps the opaque listen key Android tells one listen by', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.referenceExpired', state(1, 'error', 0, 0));
+  await settle();
+
+  const [first, retried] = commands(bridge, 'playback.loadQueue');
+  const keys = first.payload.items.map(item => item.listenKey);
+  assert.deepEqual(retried.payload.items.map(item => item.listenKey), keys);
+  assert.equal(new Set(keys).size, tracks.length);
+  assert.ok(keys.every(key => /^lk1-[0-9a-f]{16}$/.test(key)));
+  // A different source of the same path is another track, as the web's own track identity says.
+  await api.start({ ...tracks[0], src: '/track?id=other' });
+  assert.notEqual(commands(bridge, 'playback.loadQueue').at(-1).payload.items[0].listenKey, keys[0]);
 });
 
 test('a successor the rebuilt queue cannot reach never reloads Android', async () => {

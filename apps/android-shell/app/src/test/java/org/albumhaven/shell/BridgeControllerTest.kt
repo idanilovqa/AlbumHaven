@@ -235,7 +235,7 @@ class BridgeControllerTest {
     @Test
     fun invalidPlaybackPayloadsAreRejected() {
         send(sandbox, handshake())
-        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1"}"""
+        val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd"}"""
         val cases = listOf(
             load(items = "[]"),
             load(items = "[" + item.replace("\"durationMs\":1000", "\"durationMs\":1000,\"path\":\"/music/a.flac\"") + "]"),
@@ -246,6 +246,9 @@ class BridgeControllerTest {
             load(items = "[" + item.replace("1000", "1000.5") + "]"),
             load(items = "[" + item.replace(",\"trackNumber\":\"1\"", "") + "]"),
             load(items = "[" + item.replace("\"trackNumber\":\"1\"", "\"trackNumber\":1") + "]"),
+            load(items = "[" + item.replace(",\"listenKey\":\"lk1-0123abcd\"", "") + "]"),
+            load(items = "[" + item.replace("lk1-0123abcd", "C:/Music/a.flac") + "]"),
+            load(items = "[" + item.replace("lk1-0123abcd", "") + "]"),
             load(items = "[" + List(PlaybackBridge.MAX_QUEUE_ITEMS + 1) { item }.joinToString(",") + "]"),
             load(currentIndex = 1),
             load(positionMs = "-1"),
@@ -319,7 +322,7 @@ class BridgeControllerTest {
 
     @Test
     fun onlyChangesMadeBySystemControlsNameTheirInitiatorAndQueueMetadataNeverReachesTheWeb() {
-        val item = QueueItem("opaque-ref", "T", "A", "B", null, 1_000)
+        val item = QueueItem("opaque-ref", "T", "A", "B", null, 1_000, listenKey = "lk1-0123abcd")
         val snapshot = NativePlaybackSnapshot(
             playback.controller.clientId, NativePlaybackState.PAUSED, 2, 0, 500, 1_000, items = listOf(item),
         )
@@ -340,7 +343,7 @@ class BridgeControllerTest {
 
     private fun load(
         revision: Int = 1,
-        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1"}]""",
+        items: String = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd"}]""",
         currentIndex: Int = 0,
         positionMs: String = "0",
         loop: String = "null",

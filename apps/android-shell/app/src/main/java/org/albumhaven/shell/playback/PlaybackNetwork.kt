@@ -133,11 +133,12 @@ class HttpListenEffectApi(client: OkHttpClient, private val session: ShellSessio
                 val text = response.body.source().let { source ->
                     if (!source.request(MAX_RESPONSE_BYTES + 1)) source.buffer.readUtf8() else null
                 } ?: return ListenEffectResult.Unreachable
-                ListenEffectResult.Answered(response.code, scalars(JSONObject(text)))
+                // An answer without a JSON body, such as a proxy's 502 page, still names its status.
+                val data = try { scalars(JSONObject(text)) } catch (_: JSONException) { JSONObject() }
+                val retryAfter = ListenWriteOutcome.retryAfterMs(response.header("Retry-After"), System.currentTimeMillis())
+                ListenEffectResult.Answered(response.code, data, retryAfter)
             }
         } catch (_: IOException) {
-            ListenEffectResult.Unreachable
-        } catch (_: JSONException) {
             ListenEffectResult.Unreachable
         }
     }

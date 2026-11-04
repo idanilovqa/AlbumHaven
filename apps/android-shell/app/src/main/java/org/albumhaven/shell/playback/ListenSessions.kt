@@ -8,8 +8,13 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.max
 
-/** The path-free identity and display metadata a listen write names its track by. */
+/**
+ * The path-free identity and display metadata a listen write names its track by. [listenKey] is
+ * the web's opaque track identity, which decides "same track" as the browser's path does;
+ * [playbackRef] only names the track to the server and may be refreshed mid-listen.
+ */
 data class ListenTrack(
+    val listenKey: String,
     val playbackRef: String,
     val title: String,
     val artist: String,
@@ -17,16 +22,16 @@ data class ListenTrack(
     val trackNumber: String,
 )
 
-/** Sends one listen write; [done] runs later with whether the server accepted it. */
+/** Sends one listen write; [done] runs later with how the server answered it. */
 fun interface ListenWriter {
-    fun send(effect: ListenEffect, body: JSONObject, done: (accepted: Boolean) -> Unit)
+    fun send(effect: ListenEffect, body: JSONObject, done: (ListenWriteOutcome) -> Unit)
 }
 
 /**
  * The listen sessions of the native owner: the now-playing, scrobble and completion writes the
  * web listen session sends in a browser (music_app/static/js/runtime/player-listen-session-helpers.js
  * as driven by player-loop-playback.js), built from the same playback transitions with the same
- * thresholds, `rendered-pcm-v1` measurement, segments, sequences and retries. Each public method
+ * thresholds, `rendered-pcm-v1` measurement, segments, sequences and retry backoff. Each public method
  * is one of the web player's handlers; tests/fixtures/listen-sessions-v1.json holds the writes
  * both implementations must produce. Not thread-safe: the playback thread owns it.
  */
@@ -40,6 +45,10 @@ class ListenSessions(
     private val playingDurationSeconds: () -> Double,
     private val wallClockMs: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    /** The monotonic clock retry backoff is measured on, as the web's `listenWriteClockMs`. */
+    private val elapsedMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** A uniform value in [0, 1) that spreads retries, as the web's `listenWriteRetryJitter`. */
+    private val jitter: () -> Double = Math::random,
 ) {
     private var current: Session? = null
     private var selection = 0L
@@ -62,7 +71,7 @@ class ListenSessions(
         if (frames <= 0 || sampleRate <= 0) return false
         val session = measuredSession ?: run {
             val active = current ?: newSession(track).also { current = it }
-            if (active.track.playbackRef != track.playbackRef) return false
+            if (active.track.listenKey != track.listenKey) return false
             active.also { measuredSession = it }
         }
         if (session.completion != Completion.NONE) return true
@@ -82,6 +91,7 @@ class ListenSessions(
     fun begin(track: ListenTrack, positionSeconds: Double) {
         selection += 1
         val session = resume(track, positionSeconds)
+        retryWritesNow(session)
         sendNowPlaying(track, session)
     }
 
@@ -89,6 +99,7 @@ class ListenSessions(
     fun position() {
         val session = current ?: return
         session.durationSeconds = round3(playingDurationSeconds())
+        retryNowPlaying(session)
         scrobble(session)
     }
 
@@ -129,6 +140,43 @@ class ListenSessions(
         current?.let { finalize(it, "track-change", positionSeconds, durationSeconds, finishedFully = false) }
     }
 
+    /**
+     * `flushListenSessionOnUnload('pagehide')`: the owner goes away mid-play, so the listen ends
+     * with the final checkpoint the browser stages with its unload handoff. A paused listen was
+     * already checkpointed and the browser stages none for it, so the caller sends this only while playing.
+     */
+    fun unload(positionSeconds: Double, durationSeconds: Double) {
+        val session = current ?: return
+        if (session.completion == Completion.PENDING || session.completion == Completion.DONE) return
+        current = null
+        if (!canEmit()) {
+            session.completion = Completion.DONE
+            session.pausedAt = ""
+            return
+        }
+        closeSegment(session, positionSeconds)
+        session.durationSeconds = round3(if (durationSeconds > 0) durationSeconds else session.durationSeconds)
+        val endedAt = session.pausedAt.ifEmpty { iso(wallClockMs()) }
+        session.completion = Completion.PENDING
+        if (shouldPersist(session)) {
+            val body = nowPlayingBody(session.track, session)
+            measuredFields(session, advance = true, finalized = true).forEach(body::put)
+            body.put("ended_at", endedAt)
+                .put("duration_seconds", session.durationSeconds)
+                .put("total_listened_seconds", round3(session.listenedSeconds()))
+                .put("max_contiguous_seconds", round3(session.longestSegmentSeconds()))
+                .put("finished_fully", false)
+                .put("skipped", true)
+                .put("completion_reason", "pagehide")
+                .put("scrobble_eligible", canScrobble(session))
+                .put("scrobbled", session.scrobbled)
+                .put("segments", session.segmentsJson())
+            send(ListenEffect.COMPLETE, session, body) {}
+        }
+        session.completion = Completion.DONE
+        session.pausedAt = ""
+    }
+
     /** `losePlaybackOwnership`. */
     fun ownershipLost(positionSeconds: Double) {
         val session = current
@@ -143,9 +191,10 @@ class ListenSessions(
         return Session(track, newId(), iso(now), Math.floorDiv(now, 1000L))
     }
 
-    /** `resumeListenSessionPlayback`. */
+    /** `resumeListenSessionPlayback`; a refreshed reference names the same listen's track from now on. */
     private fun resume(track: ListenTrack, positionSeconds: Double): Session {
         val session = current ?: newSession(track).also { current = it }
+        if (session.track.listenKey == track.listenKey) session.track = track
         session.pausedAt = ""
         if (!session.segmentActive) {
             session.segmentActive = true
@@ -183,27 +232,69 @@ class ListenSessions(
     private fun shouldPersist(session: Session): Boolean =
         maxOf(session.listenedSeconds(), session.longestSegmentSeconds(), session.measuredTotal) > MIN_RECORDED_LISTEN_SECONDS
 
+    /** `noteListenWriteFailure`. */
+    private fun noteFailure(session: Session, effect: ListenEffect, outcome: ListenWriteOutcome) {
+        when (outcome) {
+            ListenWriteOutcome.Accepted -> Unit
+            ListenWriteOutcome.LastfmUnavailable -> session.lastfmUnavailable = true
+            ListenWriteOutcome.Refused -> session.retries.getOrPut(effect, ::Retry).final = true
+            is ListenWriteOutcome.Transient -> {
+                val retry = session.retries.getOrPut(effect, ::Retry)
+                retry.attempts += 1
+                val backoff = RETRY_BASE_MS.toDouble() * (1L shl minOf(retry.attempts - 1, 16))
+                val jittered = minOf(RETRY_MAX_MS, Math.round(backoff * (0.8 + 0.4 * jitter())))
+                retry.at = elapsedMs() + (outcome.retryAfterMs ?: jittered)
+            }
+        }
+    }
+
+    /** `isListenWriteDue`. */
+    private fun isDue(session: Session, effect: ListenEffect): Boolean {
+        if (session.lastfmUnavailable) return false
+        val retry = session.retries[effect] ?: return true
+        return !retry.final && elapsedMs() >= retry.at
+    }
+
+    /** `retryListenWritesNow`: a start or resume sends a backed-off write at its next trigger. */
+    private fun retryWritesNow(session: Session) {
+        session.retries.values.forEach { it.at = 0 }
+    }
+
+    /** `maybeRetryNowPlaying`: a now-playing that failed transiently is sent again once due. */
+    private fun retryNowPlaying(session: Session) {
+        if ((session.retries[ListenEffect.NOW_PLAYING]?.attempts ?: 0) > 0) sendNowPlaying(session.track, session)
+    }
+
+    /** Sends [body] naming the track by the listen's newest reference. */
+    private fun send(effect: ListenEffect, session: Session, body: JSONObject, done: (ListenWriteOutcome) -> Unit) {
+        writer.send(effect, body.put("playbackRef", session.track.playbackRef), done)
+    }
+
     private fun sendNowPlaying(track: ListenTrack, session: Session): Pending {
         session.nowPlayingRequest?.let { return it }
         if (session.nowPlayingSent) return Pending.settled(true)
+        if (!isDue(session, ListenEffect.NOW_PLAYING)) return Pending.settled(false)
         if (!canEmit()) return Pending.settled(false)
         val body = nowPlayingBody(track, session)
         if (track.artist.isEmpty() || track.title.isEmpty()) return Pending.settled(false)
         val request = Pending()
         session.nowPlayingRequest = request
-        writer.send(ListenEffect.NOW_PLAYING, body) { accepted ->
-            if (accepted) session.nowPlayingSent = true
+        writer.send(ListenEffect.NOW_PLAYING, body) { outcome ->
+            val accepted = outcome == ListenWriteOutcome.Accepted
+            if (accepted) session.nowPlayingSent = true else noteFailure(session, ListenEffect.NOW_PLAYING, outcome)
             if (session.nowPlayingRequest === request) session.nowPlayingRequest = null
             request.settle(accepted)
         }
         return request
     }
 
-    /** `maybeScrobbleListenSession`; a refused scrobble is sent again, unchanged, on the next trigger. */
+    /** `maybeScrobbleListenSession`; a transiently failed scrobble is sent again, unchanged, once due. */
     private fun scrobble(session: Session?): Pending {
         if (session == null) return Pending.settled(false)
         session.scrobbleRequest?.let { return it }
-        if (session.scrobbled || !canScrobble(session) || session.scrobblePending || !canEmit()) {
+        if (session.scrobbled || !canScrobble(session) || session.scrobblePending ||
+            !isDue(session, ListenEffect.SCROBBLE) || !canEmit()
+        ) {
             return Pending.settled(false)
         }
         session.scrobblePending = true
@@ -215,8 +306,9 @@ class ListenSessions(
         }
         val request = Pending()
         session.scrobbleRequest = request
-        writer.send(ListenEffect.SCROBBLE, body) { accepted ->
-            if (accepted) session.scrobbled = true
+        send(ListenEffect.SCROBBLE, session, body) { outcome ->
+            val accepted = outcome == ListenWriteOutcome.Accepted
+            if (accepted) session.scrobbled = true else noteFailure(session, ListenEffect.SCROBBLE, outcome)
             session.scrobblePending = false
             if (session.scrobbleRequest === request) session.scrobbleRequest = null
             request.settle(accepted)
@@ -240,7 +332,7 @@ class ListenSessions(
                 .put("scrobble_eligible", canScrobble(session))
                 .put("scrobbled", session.scrobbled)
                 .put("segments", session.segmentsJson())
-            writer.send(ListenEffect.COMPLETE, body) {}
+            send(ListenEffect.COMPLETE, session, body) {}
         }
     }
 
@@ -265,6 +357,8 @@ class ListenSessions(
                 return@then
             }
             val eligible = canScrobble(session)
+            // The listen's end is its last chance: a backed-off scrobble is sent once more without waiting.
+            if (eligible && !session.scrobbled) retryWritesNow(session)
             val scrobbled = if (eligible && !session.scrobbled) scrobble(session) else Pending.settled(false)
             scrobbled.then {
                 val body = session.completionBody ?: nowPlayingBody(session.track, session).also { body ->
@@ -281,8 +375,8 @@ class ListenSessions(
                         .put("segments", session.segmentsJson())
                     session.completionBody = body
                 }
-                writer.send(ListenEffect.COMPLETE, body) { accepted ->
-                    session.completion = if (accepted) Completion.DONE else Completion.FAILED
+                send(ListenEffect.COMPLETE, session, body) { outcome ->
+                    session.completion = if (outcome == ListenWriteOutcome.Accepted) Completion.DONE else Completion.FAILED
                     session.pausedAt = ""
                 }
             }
@@ -326,8 +420,15 @@ class ListenSessions(
 
     private enum class Completion { NONE, PENDING, DONE, FAILED }
 
+    /** One now-playing or scrobble write's backoff, as the web's `session.writeRetries[effect]`. */
+    private class Retry {
+        var attempts = 0
+        var at = 0L
+        var final = false
+    }
+
     private class Session(
-        val track: ListenTrack,
+        var track: ListenTrack,
         val sessionId: String,
         val startedAt: String,
         val startedAtUnix: Long,
@@ -350,6 +451,8 @@ class ListenSessions(
         var nowPlayingRequest: Pending? = null
         var completion = Completion.NONE
         var completionBody: JSONObject? = null
+        var lastfmUnavailable = false
+        val retries = mutableMapOf<ListenEffect, Retry>()
 
         fun listenedSeconds() = segments.sumOf { (start, end) -> max(0.0, end - start) }
 
@@ -392,6 +495,8 @@ class ListenSessions(
     companion object {
         const val MEASUREMENT_VERSION = "rendered-pcm-v1"
         private const val MIN_RECORDED_LISTEN_SECONDS = 10.0
+        private const val RETRY_BASE_MS = 5_000L
+        private const val RETRY_MAX_MS = 300_000L
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
         /** `Math.round(value * 1000) / 1000`. */

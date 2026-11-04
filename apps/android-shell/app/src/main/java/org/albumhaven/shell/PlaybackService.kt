@@ -80,6 +80,9 @@ class PlaybackService : MediaSessionService() {
     private var noisyRegistered = false
     private var lastSavedMs = 0L
 
+    // A retired controller may still finish its listen writes after the service is gone.
+    private var destroyed = false
+
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) apply(focusPolicy.onBecomingNoisy())
@@ -158,6 +161,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         session.release()
         player.release()
         retireController()
@@ -182,7 +186,7 @@ class PlaybackService : MediaSessionService() {
             io = playbackIo,
             listenIo = listenIo,
             clock = SystemClock::elapsedRealtime,
-            events = { event -> main.post { if (controller === created) onControllerEvent(event) } },
+            events = { event -> main.post { if (!destroyed && controller === created) onControllerEvent(event) } },
             clientId = clientId,
             warmer = OkHttpConnectionWarmer(client, shellSession, clientId),
             deviceId = listenDeviceId(),
@@ -198,10 +202,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun retireController() {
-        controller.shutdown()
-        // Pending claim releases finish on the old executors, against the old origin.
-        playbackIo.shutdown()
-        listenIo.shutdown()
+        // The old controller finishes its last listen writes and claim release on the old
+        // executors, against the old origin, without holding up the main thread.
+        val retiredPlaybackIo = playbackIo
+        val retiredListenIo = listenIo
+        controller.shutdown {
+            retiredPlaybackIo.shutdown()
+            retiredListenIo.shutdown()
+        }
         playbackIo = Executors.newSingleThreadExecutor()
         listenIo = Executors.newSingleThreadExecutor()
     }

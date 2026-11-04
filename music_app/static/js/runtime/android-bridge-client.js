@@ -205,11 +205,28 @@ async function requestAndroidNativePlaybackRefs(items) {
   return refs;
 }
 
+// The web's own track identity (`getTrackIdentity`, which decides "same track" for a listen),
+// hashed to 64 opaque bits, so Android tells a refreshed reference from another track without a path.
+function androidNativeListenKey(item) {
+  const identity = getTrackIdentity(item);
+  let high = 0xdeadbeef;
+  let low = 0x41c6ce57;
+  for (let index = 0; index < identity.length; index += 1) {
+    const code = identity.charCodeAt(index);
+    high = Math.imul(high ^ code, 2654435761);
+    low = Math.imul(low ^ code, 1597334677);
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909);
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909);
+  return `lk1-${[high, low].map(half => (half >>> 0).toString(16).padStart(8, '0')).join('')}`;
+}
+
 function buildAndroidNativeQueuePayload(revision, items, refs, startSeconds, autoplay) {
   const payload = {
     queueRevision: revision,
     items: items.map((item, index) => ({
       playbackRef: refs[index],
+      listenKey: androidNativeListenKey(item),
       title: androidNativeText(item.title),
       artist: androidNativeText(item.artist),
       album: androidNativeText(item.album),

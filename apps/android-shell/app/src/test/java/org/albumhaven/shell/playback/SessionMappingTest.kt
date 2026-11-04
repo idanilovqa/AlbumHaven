@@ -9,9 +9,9 @@ import org.junit.Test
 class SessionMappingTest {
     private val origin = "https://sandbox2.albumhaven.org"
     private val items = listOf(
-        QueueItem("ref-a", "Signal A", "Android Acceptance", "Playback Ownership", "/static/cover-a.jpg", 180_000),
-        QueueItem("ref-b", "Signal B", "Android Acceptance", "Playback Ownership", null, 120_000),
-        QueueItem("ref-c", "Signal C", "Android Acceptance", "Playback Ownership", null, 0),
+        QueueItem("ref-a", "Signal A", "Android Acceptance", "Playback Ownership", "/static/cover-a.jpg", 180_000, listenKey = "lk-a"),
+        QueueItem("ref-b", "Signal B", "Android Acceptance", "Playback Ownership", null, 120_000, listenKey = "lk-b"),
+        QueueItem("ref-c", "Signal C", "Android Acceptance", "Playback Ownership", null, 0, listenKey = "lk-c"),
     )
 
     private fun snapshot(state: NativePlaybackState, index: Int? = 1, revision: Long = 4, positionMs: Long = 2_500) =

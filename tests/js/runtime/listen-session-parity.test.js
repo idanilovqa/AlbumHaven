@@ -23,6 +23,9 @@ const settle = async () => {
 function createBrowserPlayer() {
   const writes = [];
   const failures = [];
+  // The reference each track is named by now; a `refresh` step replaces it mid-listen.
+  const refs = Object.fromEntries(Object.values(fixture.tracks).map(item => [item.path, item.playbackRef]));
+  const record = (effect, body) => writes.push(byReference({ effect, body }, refs));
   let now = fixture.startEpochMs;
   let owner = true;
   let ids = 0;
@@ -56,10 +59,15 @@ function createBrowserPlayer() {
     peekNextQueuedTrack: () => null,
     fetch: async (url, init) => {
       const effect = EFFECTS[url];
-      const failed = failures.includes(effect);
-      if (failed) failures.splice(failures.indexOf(effect), 1);
-      writes.push({ effect, body: JSON.parse(init.body) });
-      return { ok: !failed, json: async () => (failed ? { ok: false, error: 'refused' } : { ok: true }) };
+      const index = failures.findIndex(failure => failure.effect === effect);
+      const failure = index >= 0 ? failures.splice(index, 1)[0] : null;
+      record(effect, JSON.parse(init.body));
+      return {
+        ok: !failure,
+        status: failure ? failure.status : 200,
+        headers: { get: name => (name === 'Retry-After' ? failure?.retryAfter ?? null : null) },
+        json: async () => (failure ? { ok: false, error: failure.error || 'refused' } : { ok: true }),
+      };
     },
   };
   vm.createContext(context);
@@ -77,6 +85,13 @@ function createBrowserPlayer() {
     canEmitPlaybackSessionSideEffects: () => owner,
     getPlaybackClaimContext: () => ({}),
     releasePlaybackOwnership: async () => true,
+    listenWriteClockMs: () => now,
+    listenWriteRetryJitter: () => fixture.retryJitter,
+    // Android posts the completion the browser stages with its unload handoff.
+    stagePlaybackOwnershipHandoff: (completion) => {
+      if (completion) record('complete', JSON.parse(JSON.stringify(completion)));
+      return true;
+    },
   });
 
   let role = null;
@@ -142,8 +157,18 @@ function createBrowserPlayer() {
       snapshot.currentTime = step.position;
       context.losePlaybackOwnership('ownership-takeover', false);
     },
+    // Android reloads its queue with a fresh reference and starts again where it was.
+    refresh(step) {
+      refs[fixture.tracks[step.track].path] = step.playbackRef;
+      snapshot.currentTime = step.position;
+      context.beginStreamingPlayerListenSession(context.state.player.current, step.position);
+    },
+    unload(step) {
+      snapshot.currentTime = step.position;
+      context.flushListenSessionOnUnload('pagehide', { ...snapshot });
+    },
     owner(step) { owner = step.value; },
-    fail(step) { failures.push(step.effect); },
+    fail(step) { failures.push(step); },
   };
   return {
     writes,
@@ -155,12 +180,11 @@ function createBrowserPlayer() {
   };
 }
 
-/** A browser body as the server stores it from a reference: the path becomes the reference. */
-function byReference({ effect, body }) {
-  const named = Object.values(fixture.tracks).find(item => item.path === body.path);
-  assert.ok(named, `write names an unknown track: ${body.path}`);
+/** A browser body as the server stores it from a reference: the path becomes the track's reference. */
+function byReference({ effect, body }, refs) {
+  assert.ok(body.path in refs, `write names an unknown track: ${body.path}`);
   const { path: _path, cover_path: _cover, ...rest } = body;
-  return { effect, body: { ...rest, playbackRef: named.playbackRef } };
+  return { effect, body: { ...rest, playbackRef: refs[body.path] } };
 }
 
 /** Writes in order within each listen session, sessions in the order they first wrote. */
@@ -172,7 +196,7 @@ function bySession(writes) {
 async function browserWrites(scenario) {
   const player = createBrowserPlayer();
   for (const step of scenario.steps) await player.step(step);
-  return bySession(player.writes.map(byReference));
+  return bySession(player.writes);
 }
 
 for (const scenario of fixture.scenarios) {

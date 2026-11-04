@@ -7,7 +7,10 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
-/** One `playback.loadQueue` entry; [playbackRef] is opaque and path-free. */
+/**
+ * One `playback.loadQueue` entry; [playbackRef] and [listenKey] are opaque and path-free. A
+ * refreshed reference keeps the track's [listenKey], so it continues the same listen.
+ */
 data class QueueItem(
     val playbackRef: String,
     val title: String,
@@ -16,12 +19,13 @@ data class QueueItem(
     val artworkUrl: String?,
     val durationMs: Long,
     val trackNumber: String = "",
+    val listenKey: String,
 ) {
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
 
     fun claimTrack() = ClaimTrack(playbackRef, title, artist, album, artworkUrl)
 
-    fun listenTrack() = ListenTrack(playbackRef, title, artist, album, trackNumber)
+    fun listenTrack() = ListenTrack(listenKey, playbackRef, title, artist, album, trackNumber)
 
     companion object {
         private const val MAX_TEXT_CHARS = 512
@@ -139,7 +143,6 @@ class NativePlaybackController(
     private val tasks = LinkedBlockingQueue<Runnable>()
 
     @Volatile private var running = false
-    private var thread: Thread? = null
 
     private val revisionLock = Any()
     private var acceptedRevision = 0L
@@ -162,6 +165,7 @@ class NativePlaybackController(
         canEmit = { claims.owned || claims.acquiring },
         playingDurationSeconds = { (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0 },
         wallClockMs = wallClockMs,
+        elapsedMs = clock,
     )
 
     // Frames and underruns of the current item already handed to [listens].
@@ -198,6 +202,10 @@ class NativePlaybackController(
     // Ownership is kept after pause, stop and end until the listen writes for them drain.
     private var releasePending = false
     private var effectsInFlight = 0
+
+    // Set once [shutdown] stopped playback; the claim goes when the listen writes drain or this passes.
+    private var shutdownDeadlineMs: Long? = null
+    private var shutdownFinished: () -> Unit = {}
 
     private var warmEnabled = false
     private var lastWarmMs = 0L
@@ -261,23 +269,28 @@ class NativePlaybackController(
     fun start() {
         if (running) return
         running = true
-        thread = Thread({
+        Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             while (running) runOnce(IDLE_WAIT_MS)
-        }, "AlbumHavenPlayback").also { it.start() }
+        }, "AlbumHavenPlayback").start()
     }
 
-    /** Stops playback, releases the claim and the socket, then ends the playback thread. */
-    fun shutdown() {
-        post {
-            stopNow(NativePlaybackState.IDLE)
-            releasePending = false
-            claims.release()
-            closeTransport()
-            running = false
+    /**
+     * Stops playback without waiting: a listen heard mid-play ends with the web's unload checkpoint,
+     * and the claim, the socket and the playback thread go once the listen writes drain, or after
+     * [SHUTDOWN_CHECKPOINT_MS], so none is refused for a released claim. [finished] then runs on the
+     * playback thread, after the claim release has been handed to its executor.
+     */
+    fun shutdown(finished: () -> Unit = {}) = post {
+        measureListening()
+        if (wantPlay && claims.owned) {
+            listens.unload(positionMs() / 1000.0, (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0)
         }
-        thread?.join(SHUTDOWN_JOIN_MS)
-        thread = null
+        stopNow(NativePlaybackState.IDLE)
+        releasePending = false
+        warmEnabled = false
+        shutdownFinished = finished
+        shutdownDeadlineMs = clock() + SHUTDOWN_CHECKPOINT_MS
     }
 
     // ---- Playback thread ----
@@ -296,6 +309,7 @@ class NativePlaybackController(
         maybeEmitPosition()
         maybeRelease()
         maybeKeepWarm()
+        maybeFinishShutdown()
         if (written == 0 && waitMs > 0) {
             tasks.poll(waitMs, TimeUnit.MILLISECONDS)?.run()
         }
@@ -715,13 +729,24 @@ class NativePlaybackController(
         claims.release()
     }
 
+    private fun maybeFinishShutdown() {
+        val deadline = shutdownDeadlineMs ?: return
+        if (effectsInFlight > 0 && clock() < deadline) return
+        shutdownDeadlineMs = null
+        claims.release()
+        closeTransport()
+        running = false
+        shutdownFinished()
+    }
+
     /** One listen write as the owner, once a pending claim settles; [done] runs on the playback thread. */
-    private fun sendListen(effect: ListenEffect, body: JSONObject, done: (Boolean) -> Unit) {
+    private fun sendListen(effect: ListenEffect, body: JSONObject, done: (ListenWriteOutcome) -> Unit) {
         effectsInFlight += 1
         claims.awaitOwnership { outcome ->
             val token = claims.heldToken
             if (outcome != ClaimOutcome.GRANTED || token == null) {
-                done(false)
+                // Without a claim the server refuses the write, as it answers the web's with 403.
+                done(ListenWriteOutcome.Refused)
                 effectsInFlight -= 1
                 return@awaitOwnership
             }
@@ -729,7 +754,7 @@ class NativePlaybackController(
                 val result = listenApi.post(effect, clientId, token, body)
                 post {
                     // A write that follows from this one is queued before the claim may go.
-                    done(result is ListenEffectResult.Answered && result.status in 200..299 && result.data.optBoolean("ok"))
+                    done(ListenWriteOutcome.of(result))
                     effectsInFlight -= 1
                 }
             }
@@ -739,7 +764,7 @@ class NativePlaybackController(
     /** The web's `setCurrentPlayerTrack`: another track ends the listen of the one left. */
     private fun changeListenTrack(outgoing: QueueItem?, outgoingPositionMs: Long) {
         val incoming = queue.getOrNull(index)
-        if (incoming != null && listens.currentTrack?.playbackRef != incoming.playbackRef) {
+        if (incoming != null && listens.currentTrack?.listenKey != incoming.listenKey) {
             // An unknown position or duration falls back to the incoming item's, as the web's snapshot does.
             val positionMs = outgoingPositionMs.takeIf { it > 0 } ?: heldPositionMs
             val durationMs = outgoing?.durationMs?.takeIf { it > 0 } ?: incoming.durationMs
@@ -884,7 +909,8 @@ class NativePlaybackController(
         /** OkHttp keeps an idle pooled connection for five minutes. */
         const val KEEP_WARM_MS = 4L * 60 * 1000
         const val END_DRAIN_MARGIN_MS = 500L
-        private const val SHUTDOWN_JOIN_MS = 2_000L
+        /** How long a shutdown keeps the claim for the listen writes still in flight. */
+        const val SHUTDOWN_CHECKPOINT_MS = 3_000L
         private val REFUSED_CLOSE_CODES = setOf(
             PcmCloseCodes.UNAUTHENTICATED,
             PcmCloseCodes.FORBIDDEN,

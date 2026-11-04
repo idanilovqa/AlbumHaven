@@ -129,7 +129,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         val duration = nonNegativeLong(item.opt("durationMs")) ?: return null
         if (duration > MAX_DURATION_MS) return null
         val trackNumber = text(item.opt("trackNumber")) ?: return null
-        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber)
+        val listenKey = (item.opt("listenKey") as? String)?.takeIf(LISTEN_KEY::matches) ?: return null
+        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey)
     }
 
     private fun loopRange(json: JSONObject): LoopRange48k? {
@@ -177,8 +178,12 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private const val MAX_REFERENCE_CHARS = 2_048
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
         private val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
+
+        /** The web's opaque, path-free track identity, which stays the same when a reference is refreshed. */
+        private val LISTEN_KEY = Regex("^[A-Za-z0-9_.-]{1,128}$")
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
-        private val ITEM_KEYS = setOf("playbackRef", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber")
+        private val ITEM_KEYS =
+            setOf("playbackRef", "listenKey", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber")
 
         fun snapshotJson(snapshot: NativePlaybackSnapshot): JSONObject = JSONObject()
             .put("state", snapshot.state.wire)

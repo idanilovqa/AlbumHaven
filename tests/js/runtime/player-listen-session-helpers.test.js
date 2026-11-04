@@ -1089,7 +1089,7 @@ async function run() {
       fetch: async () => {
         rejectedAttempts += 1;
         if (rejectedAttempts === 1) {
-          return { ok: false, json: async () => ({ ok: false, error: 'temporary failure' }) };
+          return { ok: false, status: 503, json: async () => ({ ok: false, error: 'temporary failure' }) };
         }
         return { ok: true, json: async () => ({ ok: true }) };
       },
@@ -1102,7 +1102,10 @@ async function run() {
     await retryContext.maybeSendNowPlaying(nextTrack, retrySession, {
       boundaryIdentity: '9:91:92',
     });
-    assert.equal(rejectedAttempts, 2, 'a rejected now-playing request remains eligible for one retry');
+    assert.equal(rejectedAttempts, 1, 'a transiently failed now-playing waits for its backoff');
+    retryContext.retryListenWritesNow(retrySession);
+    assert.equal(await retryContext.maybeSendNowPlaying(nextTrack, retrySession), true);
+    assert.equal(rejectedAttempts, 2, 'a start or resume retries the backed-off now-playing once');
   }
 }
 

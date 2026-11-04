@@ -20,8 +20,8 @@ class PlaybackRestoreStoreTest {
     private val storage = MemoryStorage()
     private val store = PlaybackRestoreStore(storage)
     private val items = listOf(
-        QueueItem("opaque-ref-secret-a", "Signal A", "Android Acceptance", "Playback Ownership", "/static/a.jpg", 180_000),
-        QueueItem("opaque-ref-secret-b", "Signal B", "Android Acceptance", "Playback Ownership", null, 120_000),
+        QueueItem("opaque-ref-secret-a", "Signal A", "Android Acceptance", "Playback Ownership", "/static/a.jpg", 180_000, listenKey = "lk-a"),
+        QueueItem("opaque-ref-secret-b", "Signal B", "Android Acceptance", "Playback Ownership", null, 120_000, listenKey = "lk-b"),
     )
 
     private fun snapshot(index: Int? = 1, queue: List<QueueItem> = items) =

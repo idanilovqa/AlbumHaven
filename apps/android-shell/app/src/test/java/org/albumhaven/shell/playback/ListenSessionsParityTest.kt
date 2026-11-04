@@ -28,6 +28,7 @@ class ListenSessionsParityTest {
     private fun track(key: String): Pair<ListenTrack, Double> {
         val item = fixture.getJSONObject("tracks").getJSONObject(key)
         val track = ListenTrack(
+            item.getString("listenKey"),
             item.getString("playbackRef"),
             item.getString("title"),
             item.getString("artist"),
@@ -40,7 +41,7 @@ class ListenSessionsParityTest {
     private fun run(scenario: JSONObject): JSONArray {
         val writes = mutableListOf<JSONObject>()
         val answers = ArrayDeque<() -> Unit>()
-        val failing = mutableListOf<String>()
+        val failing = mutableListOf<JSONObject>()
         var now = fixture.getLong("startEpochMs")
         var owner = true
         var duration = 0.0
@@ -51,14 +52,25 @@ class ListenSessionsParityTest {
             deviceId = fixture.getString("deviceId"),
             originId = fixture.getString("originId"),
             writer = { effect, body, done ->
-                val refused = failing.remove(effect.wire)
+                val failure = failing.firstOrNull { it.getString("effect") == effect.wire }?.also(failing::remove)
                 writes += JSONObject().put("effect", effect.wire).put("body", JSONObject(body.toString()))
-                answers += { done(!refused) }
+                val answer = if (failure == null) {
+                    ListenEffectResult.Answered(200, JSONObject().put("ok", true))
+                } else {
+                    ListenEffectResult.Answered(
+                        failure.getInt("status"),
+                        JSONObject().put("ok", false).put("error", failure.optString("error", "refused")),
+                        ListenWriteOutcome.retryAfterMs(failure.optString("retryAfter").ifEmpty { null }, now),
+                    )
+                }
+                answers += { done(ListenWriteOutcome.of(answer)) }
             },
             canEmit = { owner },
             playingDurationSeconds = { duration },
             wallClockMs = { now },
             newId = { "00000000-0000-4000-8000-%012d".format(++ids) },
+            elapsedMs = { now },
+            jitter = { fixture.getDouble("retryJitter") },
         )
         fun select(key: String) {
             val (item, seconds) = track(key)
@@ -74,7 +86,7 @@ class ListenSessionsParityTest {
                 "select" -> {
                     val next = track(step.getString("track")).first
                     val previous = sessions.currentTrack
-                    if (previous != null && previous.playbackRef != next.playbackRef) {
+                    if (previous != null && previous.listenKey != next.listenKey) {
                         sessions.trackChange(step.getDouble("position"), step.getDouble("duration"))
                     }
                     select(step.getString("track"))
@@ -102,8 +114,16 @@ class ListenSessionsParityTest {
                     sessions.ended(duration, duration)
                 }
                 "lost" -> sessions.ownershipLost(step.getDouble("position"))
+                "refresh" -> {
+                    // As the controller applies a reloaded queue: same listen key, fresh reference, then a start.
+                    val refreshed = track(step.getString("track")).first.copy(playbackRef = step.getString("playbackRef"))
+                    playing = refreshed
+                    sessions.measureItem(refreshed)
+                    sessions.begin(refreshed, step.getDouble("position"))
+                }
+                "unload" -> sessions.unload(step.getDouble("position"), duration)
                 "owner" -> owner = step.getBoolean("value")
-                "fail" -> failing += step.getString("effect")
+                "fail" -> failing += step
                 else -> error("unknown step ${step.getString("do")}")
             }
             while (answers.isNotEmpty()) answers.removeFirst()()

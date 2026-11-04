@@ -124,12 +124,18 @@ class PlaybackNetworkTest {
     }
 
     @Test
-    fun aListenWriteWithoutAJsonAnswerIsUnreachable() {
+    fun aListenWriteWithoutAJsonAnswerKeepsItsStatusAndRetryAfter() {
         server.enqueue(MockResponse.Builder().code(502).body("<html>bad gateway</html>").build())
-        assertEquals(
-            ListenEffectResult.Unreachable,
-            HttpListenEffectApi(client, session()).post(ListenEffect.COMPLETE, TEST_CLIENT_ID, "held", JSONObject()),
-        )
+        server.enqueue(MockResponse.Builder().code(429).addHeader("Retry-After", "30").body("slow down").build())
+        val api = HttpListenEffectApi(client, session())
+
+        val gateway = api.post(ListenEffect.COMPLETE, TEST_CLIENT_ID, "held", JSONObject()) as ListenEffectResult.Answered
+        assertEquals(502, gateway.status)
+        assertEquals(0, gateway.data.length())
+        assertNull(gateway.retryAfterMs)
+        val limited = api.post(ListenEffect.SCROBBLE, TEST_CLIENT_ID, "held", JSONObject()) as ListenEffectResult.Answered
+        assertEquals(429, limited.status)
+        assertEquals(30_000L, limited.retryAfterMs)
     }
 
     @Test

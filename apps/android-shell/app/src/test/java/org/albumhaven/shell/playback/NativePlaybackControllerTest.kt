@@ -110,6 +110,7 @@ class ControllerHarness(
         artworkUrl = null,
         durationMs = track.frames * 1000 / track.sampleRate,
         trackNumber = track.tag.toString(),
+        listenKey = "lk-${track.tag}",
     )
 
     fun load(revision: Long, vararg queue: SyntheticTrack, autoplay: Boolean = true, positionMs: Long = 0) =
@@ -344,6 +345,93 @@ class NativePlaybackControllerTest {
         assertTrue(complete.getBoolean("skipped"))
         assertEquals(long.pcm.playbackRef, complete.getString("playbackRef"))
         assertEquals(1, harness.writes().count { it.first == ListenEffect.NOW_PLAYING && it.second.getString("playbackRef") == long.pcm.playbackRef })
+    }
+
+    @Test
+    fun aRefreshedReferenceContinuesTheSameListenAndLaterWritesNameIt() {
+        val long = SyntheticTrack(tag = 3, frames = 40L * RATE)
+        // The same track under a fresh reference, as a reference retry or expiry reload sends it.
+        val refreshed = SyntheticTrack(tag = 4, frames = 40L * RATE)
+        val harness = ControllerHarness(long, refreshed)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        val item = harness.item(refreshed).copy(listenKey = harness.item(long).listenKey)
+        harness.controller.loadQueue(QueueLoad(2, listOf(item), 0, harness.controller.snapshot.positionMs, null, true))
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 24 * RATE }
+        harness.controller.pause()
+        repeat(10) { harness.step() }
+
+        val writes = harness.writes()
+        assertEquals(listOf(ListenEffect.NOW_PLAYING, ListenEffect.SCROBBLE, ListenEffect.COMPLETE), writes.map { it.first })
+        assertEquals(1, writes.map { it.second.getString("session_id") }.distinct().size)
+        assertEquals(long.pcm.playbackRef, writes.first().second.getString("playbackRef"))
+        assertTrue(writes.drop(1).all { it.second.getString("playbackRef") == refreshed.pcm.playbackRef })
+        assertEquals("paused", writes.last().second.getString("completion_reason"))
+    }
+
+    @Test
+    fun aShutdownMidPlaySendsTheUnloadCheckpointBeforeReleasingTheClaim() {
+        val listenIo = ManualExecutor()
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        harness.settleListening(listenIo)
+        var finished = false
+        harness.controller.shutdown { finished = true }
+        repeat(5) { harness.step() }
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertFalse(finished)
+
+        listenIo.drain()
+        harness.step()
+        val (effect, token, body) = harness.listen.posts.last()
+        assertEquals(ListenEffect.COMPLETE, effect)
+        assertEquals("token-1", token)
+        assertEquals("pagehide", body.getString("completion_reason"))
+        assertTrue(body.getBoolean("finalized") && body.getBoolean("skipped") && !body.getBoolean("finished_fully"))
+        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertTrue(finished)
+        assertEquals(NativePlaybackState.IDLE, harness.state())
+    }
+
+    @Test
+    fun aShutdownReleasesTheClaimAfterItsBoundEvenWhenTheCheckpointIsStuck() {
+        val listenIo = ManualExecutor()
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        harness.settleListening(listenIo)
+        var finished = false
+        harness.controller.shutdown { finished = true }
+        harness.step()
+        harness.step(NativePlaybackController.SHUTDOWN_CHECKPOINT_MS - 10)
+        assertFalse(finished)
+        harness.step(10)
+        assertTrue(finished)
+        assertEquals("release:token-1", harness.claims.calls.last())
+
+        // The checkpoint is sent once, late, or lost; never twice.
+        listenIo.drain()
+        assertEquals(1, harness.listen.posts.count { it.third.optString("completion_reason") == "pagehide" })
+    }
+
+    @Test
+    fun aShutdownWhilePausedSendsNoUnloadCheckpoint() {
+        val listenIo = ManualExecutor()
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        harness.controller.pause()
+        harness.step()
+        harness.controller.shutdown()
+        harness.settleListening(listenIo)
+
+        val reasons = harness.writes().filter { it.first == ListenEffect.COMPLETE }.map { it.second.getString("completion_reason") }
+        assertEquals(listOf("paused"), reasons)
+        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
     }
 
     @Test

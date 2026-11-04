@@ -11888,11 +11888,28 @@ async function requestAndroidNativePlaybackRefs(items) {
   return refs;
 }
 
+// The web's own track identity (`getTrackIdentity`, which decides "same track" for a listen),
+// hashed to 64 opaque bits, so Android tells a refreshed reference from another track without a path.
+function androidNativeListenKey(item) {
+  const identity = getTrackIdentity(item);
+  let high = 0xdeadbeef;
+  let low = 0x41c6ce57;
+  for (let index = 0; index < identity.length; index += 1) {
+    const code = identity.charCodeAt(index);
+    high = Math.imul(high ^ code, 2654435761);
+    low = Math.imul(low ^ code, 1597334677);
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909);
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909);
+  return `lk1-${[high, low].map(half => (half >>> 0).toString(16).padStart(8, '0')).join('')}`;
+}
+
 function buildAndroidNativeQueuePayload(revision, items, refs, startSeconds, autoplay) {
   const payload = {
     queueRevision: revision,
     items: items.map((item, index) => ({
       playbackRef: refs[index],
+      listenKey: androidNativeListenKey(item),
       title: androidNativeText(item.title),
       artist: androidNativeText(item.artist),
       album: androidNativeText(item.album),
@@ -37915,6 +37932,11 @@ function restorePlayerState() {
 
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const PLAYBACK_SESSION_REQUEST_TIMEOUT_MS = 10000;
+// Transient now-playing and scrobble failures back off from about five seconds to at most five minutes.
+const LISTEN_WRITE_RETRY_BASE_MS = 5000;
+const LISTEN_WRITE_RETRY_MAX_MS = 300000;
+// The server's answer when this account has no Last.fm session.
+const LASTFM_UNAVAILABLE_ERROR = 'account_scoped_scrobble_unavailable';
 let measuredPlaybackDeviceId = '';
 const pendingPlaybackSessionRequests = new Set();
 
@@ -38067,6 +38089,63 @@ function isListenRecordedNatively() {
   return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
 }
 
+function listenWriteClockMs() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+function listenWriteRetryJitter() {
+  return Math.random();
+}
+
+/** `Retry-After` as milliseconds from now: delay-seconds or an HTTP date; null when absent or invalid. */
+function parseRetryAfterMs(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const date = text ? Date.parse(text) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function playbackSessionError(response, data) {
+  const error = new Error(data?.error || 'Playback sync failed');
+  error.status = Number(response.status) || 0;
+  error.code = String(data?.error || '');
+  error.retryAfterMs = parseRetryAfterMs(response.headers?.get?.('Retry-After'));
+  return error;
+}
+
+/**
+ * A failed now-playing or scrobble write: Last.fm not connected stops both for the listen; a
+ * network failure, timeout, 429 or 5xx is retried with backoff; any other answer is final.
+ */
+function noteListenWriteFailure(session, effect, error) {
+  if (!session) return;
+  const status = Number(error?.status) || 0;
+  if (status === 409 && error?.code === LASTFM_UNAVAILABLE_ERROR) {
+    session.lastfmUnavailable = true;
+    return;
+  }
+  const retry = (session.writeRetries ||= {})[effect] ||= { attempts: 0, at: 0, final: false };
+  if (status && status !== 429 && status < 500) {
+    retry.final = true;
+    return;
+  }
+  retry.attempts += 1;
+  const backoff = LISTEN_WRITE_RETRY_BASE_MS * 2 ** Math.min(retry.attempts - 1, 16);
+  const jittered = Math.min(LISTEN_WRITE_RETRY_MAX_MS, Math.round(backoff * (0.8 + 0.4 * listenWriteRetryJitter())));
+  retry.at = listenWriteClockMs() + (Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
+}
+
+function isListenWriteDue(session, effect) {
+  if (session?.lastfmUnavailable) return false;
+  const retry = session?.writeRetries?.[effect];
+  return !retry || (!retry.final && listenWriteClockMs() >= retry.at);
+}
+
+/** A start or resume retries a backed-off write at its next trigger. */
+function retryListenWritesNow(session) {
+  Object.values(session?.writeRetries || {}).forEach((retry) => { retry.at = 0; });
+}
+
 async function postPlaybackSession(url, payload) {
   const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
   const controller = new AbortController();
@@ -38078,8 +38157,8 @@ async function postPlaybackSession(url, payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, ...claim }),
     });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Playback sync failed');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.ok) throw playbackSessionError(response, data);
     return data;
   })();
   const pending = { claimToken: claim.claimToken, promise };
@@ -38142,6 +38221,7 @@ function maybeSendNowPlaying(track, session) {
   if (isListenRecordedNatively()) return Promise.resolve(false);
   if (session?.nowPlayingPromise) return session.nowPlayingPromise;
   if (session?.nowPlayingSent) return Promise.resolve(true);
+  if (session && !isListenWriteDue(session, 'now-playing')) return Promise.resolve(false);
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     return Promise.resolve(false);
   }
@@ -38151,6 +38231,7 @@ function maybeSendNowPlaying(track, session) {
     if (session) session.nowPlayingSent = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'now-playing', error);
     console.warn('[AlbumHaven][Lastfm] Failed to update now playing.', error);
     return false;
   }).finally(() => {
@@ -38162,11 +38243,17 @@ function maybeSendNowPlaying(track, session) {
   return nowPlayingPromise;
 }
 
+/** A now-playing that failed transiently is sent again once its backoff elapses. */
+function maybeRetryNowPlaying(session) {
+  if (!session?.writeRetries?.['now-playing']?.attempts) return Promise.resolve(false);
+  return maybeSendNowPlaying(session.track, session);
+}
+
 async function maybeScrobbleListenSession(session) {
   if (!session) return false;
   if (session.scrobblePromise) return session.scrobblePromise;
   if (session.scrobbled || !canScrobbleListenSession(session)) return false;
-  if (session.scrobblePending) return false;
+  if (session.scrobblePending || !isListenWriteDue(session, 'scrobble')) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
   session.scrobblePayload ||= {
@@ -38182,6 +38269,7 @@ async function maybeScrobbleListenSession(session) {
     session.scrobbled = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'scrobble', error);
     console.warn('[AlbumHaven][Lastfm] Failed to scrobble track.', error);
     return false;
   }).finally(() => {
@@ -38263,6 +38351,8 @@ async function finalizeListenSession(reason, options = {}) {
   }
   const scrobbleEligible = canScrobbleListenSession(session);
   if (scrobbleEligible && !session.scrobbled) {
+    // The listen's end is its last chance: a backed-off scrobble is sent once more without waiting.
+    retryListenWritesNow(session);
     await maybeScrobbleListenSession(session);
   }
   const payload = session.completionPayload || {
@@ -42810,11 +42900,11 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
   if (typeof resumeListenSessionPlayback !== 'function') return;
   const sessionPromise = resumeListenSessionPlayback(track, startSeconds);
   if (!sessionPromise || typeof sessionPromise.then !== 'function') return;
-  void sessionPromise.then((session) => (
-    typeof maybeSendNowPlaying === 'function'
-      ? maybeSendNowPlaying(track, session)
-      : null
-  ));
+  void sessionPromise.then((session) => {
+    // A start or resume may send a backed-off now-playing or scrobble at once.
+    if (typeof retryListenWritesNow === 'function') retryListenWritesNow(session);
+    return typeof maybeSendNowPlaying === 'function' ? maybeSendNowPlaying(track, session) : null;
+  });
 }
 
 let playerTrackSelectionToken = 0;
@@ -42978,6 +43068,7 @@ async function handleStreamingPlaybackPosition(event = {}) {
     state.player.listenSession.duration_seconds = Math.round(
       (Number(playback.duration) || 0) * 1000,
     ) / 1000;
+    if (typeof maybeRetryNowPlaying === 'function') void maybeRetryNowPlaying(state.player.listenSession);
     if (typeof maybeScrobbleListenSession === 'function') {
       await maybeScrobbleListenSession(state.player.listenSession);
     }

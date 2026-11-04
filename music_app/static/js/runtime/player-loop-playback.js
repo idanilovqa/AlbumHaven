@@ -304,11 +304,11 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
   if (typeof resumeListenSessionPlayback !== 'function') return;
   const sessionPromise = resumeListenSessionPlayback(track, startSeconds);
   if (!sessionPromise || typeof sessionPromise.then !== 'function') return;
-  void sessionPromise.then((session) => (
-    typeof maybeSendNowPlaying === 'function'
-      ? maybeSendNowPlaying(track, session)
-      : null
-  ));
+  void sessionPromise.then((session) => {
+    // A start or resume may send a backed-off now-playing or scrobble at once.
+    if (typeof retryListenWritesNow === 'function') retryListenWritesNow(session);
+    return typeof maybeSendNowPlaying === 'function' ? maybeSendNowPlaying(track, session) : null;
+  });
 }
 
 let playerTrackSelectionToken = 0;
@@ -472,6 +472,7 @@ async function handleStreamingPlaybackPosition(event = {}) {
     state.player.listenSession.duration_seconds = Math.round(
       (Number(playback.duration) || 0) * 1000,
     ) / 1000;
+    if (typeof maybeRetryNowPlaying === 'function') void maybeRetryNowPlaying(state.player.listenSession);
     if (typeof maybeScrobbleListenSession === 'function') {
       await maybeScrobbleListenSession(state.player.listenSession);
     }

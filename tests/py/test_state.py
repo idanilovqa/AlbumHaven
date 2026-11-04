@@ -5624,3 +5624,20 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
 
     assert rebuilt == ["rebuild", "rebuild"]
     assert len(submitted) == 1
+
+
+@pytest.mark.parametrize("setting", [None, "0", "1"])
+def test_startup_metadata_repair_is_an_explicit_operator_opt_in(monkeypatch, setting):
+    from types import SimpleNamespace
+
+    checked = []
+    monkeypatch.delenv("ALBUM_HAVEN_STARTUP_METADATA_REPAIR", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("ALBUM_HAVEN_STARTUP_METADATA_REPAIR", setting)
+    adapter = SimpleNamespace(has_outdated_file_metadata=lambda: checked.append(True) or True)
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+
+    required = state_module.file_metadata_repair_required_on_startup(SimpleNamespace(config={}))
+
+    assert required is (setting == "1")
+    assert checked == ([True] if setting == "1" else [])

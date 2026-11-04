@@ -764,8 +764,14 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
     }) };
   };
   context.state.view = { query: 'lost', selected_artist: 'Art Zoyd' };
+  // The search indicator only probes the query-scoped request.
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), ['', '']);
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 1);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false, 'the button stays enabled for the whole library');
+  // Opening Loose Tracks resolves the whole library without repeating the probe.
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), ['Art Zoyd', '']);
   assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', '']);
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from music_app.services.log_history import resolve_media_host_history_scope
 
+import os
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -76,6 +77,7 @@ _RELATION_REBUILD_PENDING = False
 _RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _WATCHER_COVER_REFRESH_MAX_ATTEMPTS = 3
+_STARTUP_METADATA_REPAIR_ENV = "ALBUM_HAVEN_STARTUP_METADATA_REPAIR"
 # An album that is still being copied in publishes a new inventory revision per
 # file. Wait for the library to settle instead of spending provider attempts.
 _WATCHER_COVER_REFRESH_SETTLE_SECONDS = 3.0
@@ -596,6 +598,11 @@ def file_metadata_repair_required_on_startup(app) -> bool:
     schedules the same background metadata repair scan the cache path runs.
     """
     if app.config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        return False
+    # A full re-read is an operator decision for a real library, so it is
+    # opt-in; test fixtures and CI never start it implicitly.
+    enabled = app.config.get(_STARTUP_METADATA_REPAIR_ENV, os.environ.get(_STARTUP_METADATA_REPAIR_ENV, ""))
+    if str(enabled or "").strip().casefold() not in {"1", "true", "yes", "on"}:
         return False
     check = getattr(select_scan_cache_adapter(app.config), "has_outdated_file_metadata", None)
     return bool(check()) if callable(check) else False

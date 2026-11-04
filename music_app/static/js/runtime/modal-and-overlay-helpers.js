@@ -257,10 +257,12 @@ function getNonAlbumMenuLabel() {
 
 // The library-wide request is the current browse scope without the open
 // artist or family selection, so every artist page shares one library result.
+// A search keeps its own view request: its loose tracks are query-scoped.
 function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
-  const url = new URL(buildApiUrl({
+  const searching = withQuery && Boolean(String(view.query || '').trim());
+  const url = new URL(buildApiUrl(searching ? view : {
     ...view,
-    query: withQuery ? view.query : '',
+    query: '',
     selected_artist: '',
     all_artists_active: true,
     related_filter_artists: [],
@@ -319,30 +321,42 @@ async function fetchNonAlbumPayload(url) {
   return payload;
 }
 
-function hydrateLibraryNonAlbumTracks() {
+function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
   const view = state.view || {};
   const scopeKey = getLibraryNonAlbumScopeKey(view);
   if (view.library_non_album_tracks_hydrated_scope === scopeKey) {
     return Promise.resolve(view.library_non_album_tracks || []);
   }
-  if (libraryNonAlbumHydrationRequest?.key === scopeKey) return libraryNonAlbumHydrationRequest.promise;
+  // A search that found no loose tracks only resolves the whole library when
+  // Loose Tracks is actually opened; the search indicator never pays for it.
+  if (!resolveLibrary && view.library_non_album_search_probe_scope === scopeKey) return Promise.resolve([]);
+  const requestKey = `${scopeKey}|${resolveLibrary ? 'library' : 'probe'}`;
+  if (libraryNonAlbumHydrationRequest?.key === requestKey) return libraryNonAlbumHydrationRequest.promise;
   const searching = Boolean(String(view.query || '').trim());
   const libraryTracks = (payload) => (Array.isArray(payload?.library_non_album_tracks)
     ? payload.library_non_album_tracks
     : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
-  const request = { key: scopeKey, promise: null };
+  const request = { key: requestKey, promise: null };
   request.promise = (async () => {
-    let tracks = libraryTracks(await fetchNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
+    const probed = view.library_non_album_search_probe_scope === scopeKey;
+    let tracks = probed ? [] : libraryTracks(await fetchNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
     const searchMatched = searching && tracks.length > 0;
-    // A search narrows Loose Tracks only when it found loose tracks; otherwise
-    // the button keeps offering the whole library's loose tracks.
+    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+      return state.view?.library_non_album_tracks || [];
+    }
     if (searching && !searchMatched) {
+      state.view.library_non_album_search_probe_scope = scopeKey;
+      if (!resolveLibrary) {
+        if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+        return [];
+      }
+      // A search narrows Loose Tracks only when it found loose tracks.
       tracks = libraryTracks(await fetchNonAlbumPayload(
         buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
       ));
-    }
-    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-      return state.view?.library_non_album_tracks || [];
+      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+        return state.view?.library_non_album_tracks || [];
+      }
     }
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
@@ -357,7 +371,9 @@ function hydrateLibraryNonAlbumTracks() {
 }
 
 async function hydrateDeferredNonAlbumTracks(options = {}) {
-  if (options.libraryWide === true) return hydrateLibraryNonAlbumTracks();
+  if (options.libraryWide === true) {
+    return hydrateLibraryNonAlbumTracks({ resolveLibrary: options.resolveLibrary === true });
+  }
   const view = state.view || {};
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
@@ -615,7 +631,7 @@ function openNonAlbumModal(options = {}) {
   document.body.classList.add('modal-open');
   attachSharedPlayer();
   if (hydrationPending) {
-    hydrateDeferredNonAlbumTracks({ libraryWide })
+    hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
         if (!els.overlay.hidden) openNonAlbumModal(options);
       })

@@ -22202,7 +22202,7 @@ async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
   return payload;
 }
 
-async function runMusicBrainzArtistMutation(item, perform) {
+async function runMusicBrainzArtistMutation(item, perform, successMessage) {
   const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
   if (ui.busy) return;
   ui.busy = true;
@@ -22210,6 +22210,7 @@ async function runMusicBrainzArtistMutation(item, perform) {
   renderProblematicFiles({ preserveProblematicTree: true });
   try {
     await perform();
+    if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
     await loadProblematicFiles(true);
     void refreshGalleryArtistMusicBrainzStatus({ force: true });
   } catch (error) {
@@ -22293,7 +22294,7 @@ function handleMusicBrainzArtistProblemEvent(event) {
   const detail = item.musicbrainz_detail || {};
   if (target?.closest?.('[data-musicbrainz-retry]')) {
     event.preventDefault();
-    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}));
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-keep-current]')) {
@@ -22301,7 +22302,7 @@ function handleMusicBrainzArtistProblemEvent(event) {
     void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
       artist_mbid: detail.artist_mbid,
       evidence_summary: 'Owner kept the currently assigned MusicBrainz artist.',
-    }, 'PUT'));
+    }, 'PUT'), 'Current MBID kept.');
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-assign]')) {
@@ -22313,7 +22314,7 @@ function handleMusicBrainzArtistProblemEvent(event) {
       evidence_summary: getMusicBrainzArtistProblemView(detail) === 'not-found'
         ? 'Owner assigned a verified MusicBrainz artist manually.'
         : 'Owner selected this MusicBrainz artist in Problematic Files.',
-    }, 'PUT'));
+    }, 'PUT'), 'MBID assigned.');
     return true;
   }
   return false;

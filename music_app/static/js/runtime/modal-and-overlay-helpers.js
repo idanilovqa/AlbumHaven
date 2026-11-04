@@ -412,15 +412,15 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   return request.promise;
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
+  const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
-    const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
-    const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
+    const problematicAlbum = problematicIndex.get(trackPath) || null;
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -485,6 +485,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
+  const problematicIndex = buildProblematicAlbumTrackPathIndex();
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       exceptionType(item) === section.exceptionType
@@ -494,7 +495,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       )
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);

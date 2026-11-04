@@ -8086,3 +8086,20 @@ test('every Problematic Files problem label shares one width', () => {
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
   assert.match(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill,\s*\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
 });
+
+test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const albums = [
+    { key: 'a', problematic_track_paths: ['x.mp3'], track_paths: ['x.mp3', 'y.mp3'] },
+    { key: 'b', track_paths: ['y.mp3', 'z.mp3'] },
+    { key: 'c', problematic_track_paths: ['z.mp3'] },
+  ];
+  const context = vm.createContext({ state: { utility: { problematicFiles: albums } }, window: {}, escapeHtml: value => value });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/utility-list-builders.js'), 'utf8'), context);
+  const index = context.buildProblematicAlbumTrackPathIndex();
+  for (const trackPath of ['x.mp3', 'y.mp3', 'z.mp3', 'missing.mp3']) {
+    assert.equal(index.get(trackPath) || null, context.getProblematicAlbumForTrackPath(trackPath), trackPath);
+  }
+});

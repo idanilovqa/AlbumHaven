@@ -5420,3 +5420,38 @@ def test_saved_cover_recomputes_the_album_details_poor_art_alert(tmp_path, size,
     album = {"key": "artist::album", "poor_art_quality": True, "tracks": [{"path": str(tmp_path / "01.flac")}]}
     payload = routes._authoritative_local_cover_album_payload(album, cover_path=cover, cover_revision="rev")
     assert payload["poor_art_quality"] is poor
+
+
+def test_asgi_cover_saves_persist_off_the_event_loop(app, monkeypatch):
+    """Cover saves once promoted, hashed and persisted on the event loop, stalling every request."""
+    import threading
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    source_path = track_path.parent / "front.jpg"
+    source_path.write_bytes(_jpeg_bytes((10, 140, 30)))
+    _seed_album_state(app.library_state, track_path)
+    loop_thread = threading.get_ident()
+    persistence_threads: list[int] = []
+
+    def record_persistence(*_args, **_kwargs):
+        persistence_threads.append(threading.get_ident())
+        raise RuntimeError("stop after recording the persistence thread")
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", record_persistence)
+    asgi_app = _make_wave_d_app(app)
+    for path, body in (
+        ("/utilities/cover-lookup/pasted-image-save",
+         {"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))}),
+        ("/utilities/cover-lookup/local-select",
+         {"album": _album_payload(track_path), "source_path": str(source_path)}),
+    ):
+        try:
+            _run_asgi_request(asgi_app, "POST", path, json_body=body)
+        except RuntimeError:
+            pass
+    assert len(persistence_threads) == 2
+    assert loop_thread not in persistence_threads

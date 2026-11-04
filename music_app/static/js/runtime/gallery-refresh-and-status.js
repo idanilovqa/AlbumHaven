@@ -204,6 +204,28 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+// The last automatic reverse prepend: a prepend must push the viewport down by
+// about its own height. When it does not, the next one re-exposes the top and
+// the chain walks the whole library backwards with no user input.
+let rootGalleryPreviousPrepend = null;
+
+function readRootGalleryUserScrollGeneration() {
+  return typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.getUserScrollIntentGeneration?.() ?? null;
+}
+
+function rootGalleryPreviousPrependStalled(scroll) {
+  const last = rootGalleryPreviousPrepend;
+  if (!last) return false;
+  if (last.userScrollGeneration !== readRootGalleryUserScrollGeneration()) {
+    rootGalleryPreviousPrepend = null;
+    return false;
+  }
+  const grown = Number(scroll.scrollHeight || 0) - last.scrollHeight;
+  return grown > 0 && Number(scroll.scrollTop || 0) - last.scrollTop < grown / 2;
+}
+
 async function loadPreviousRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -211,7 +233,8 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT
+    || rootGalleryPreviousPrependStalled(scroll)) return false;
 
   const request = {
     controller: new AbortController(),
@@ -251,6 +274,11 @@ async function loadPreviousRootGalleryPage() {
       || data.gallery_page?.previous_cursor === request.cursor) return false;
 
     const currentPage = state.view.gallery_page;
+    rootGalleryPreviousPrepend = {
+      scrollTop: Number(scroll.scrollTop || 0),
+      scrollHeight: Number(scroll.scrollHeight || 0),
+      userScrollGeneration: readRootGalleryUserScrollGeneration(),
+    };
     applyViewPayload({
       ...state.view,
       artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),

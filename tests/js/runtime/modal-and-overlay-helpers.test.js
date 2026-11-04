@@ -209,6 +209,9 @@ function loadHelper() {
     getProblematicAlbumForTrackPath() {
       return null;
     },
+    buildProblematicAlbumTrackPathIndex() {
+      return new Map();
+    },
     getCurrentGalleryPreferenceArtist() {
       return '';
     },

@@ -11678,13 +11678,14 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "active_candidate_ids as" in summary_sql
     assert "duplicate_track_ids as" not in summary_sql
     assert "duplicate_candidate_ids as" not in summary_sql
-    assert "having count(distinct source_directory) > 1" in summary_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in summary_sql
+    assert "having count(*) > 1" in summary_sql
     assert "identity_candidates.file_year = candidate.file_year" in summary_sql
     assert "select duplicate_album_ids.album_id from duplicate_album_ids" in summary_sql
     assert "candidate_album_ids as" in summary_sql
     assert "active_file_refs as" not in summary_sql
     assert "active_file_entry_scalars as" not in summary_sql
-    assert "join candidate_album_ids on candidate_album_ids.album_id = library.local_albums.id" in summary_sql
+    assert "library.local_albums.id = any(array(select album_id from candidate_album_ids))" in summary_sql
     assert "octet_length(file_album) <> length(file_album)" in summary_sql
     assert summary_sql.count("translate(") >= 4
     assert summary_sql.count("~ %(mojibake_candidate_pattern)s::text") >= 2
@@ -11792,7 +11793,7 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "local_album_membership as materialized" in candidate_sql
     assert "local_membership_sources as materialized" not in candidate_sql
     assert "{scan_cache,file_entry,local_album_membership_problem}" in candidate_sql
-    assert "physical_file_context.local_album_membership_problem is not null" in candidate_sql
+    assert "join local_album_membership membership on membership.file_id = active_problem_rows.file_id" in candidate_sql
     order_rows_sql = candidate_sql.split(
         "active_problem_rows as materialized (",
         1,
@@ -11812,12 +11813,10 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
         "active_track_order_rollup as (",
         1,
     )[1].split("candidate_album_ids as (", 1)[0]
-    assert (
-        "group by active_problem_rows.album_id, "
-        "active_problem_rows.disc_number"
-    ) in order_rollup_sql
-    assert "min(active_problem_rows.effective_track_number) <> 1" in order_rollup_sql
-    assert "count(distinct active_problem_rows.effective_track_number)" in order_rollup_sql
+    assert "select distinct album_id, disc_number, effective_track_number" in order_rollup_sql
+    assert "group by track_numbers.album_id, track_numbers.disc_number" in order_rollup_sql
+    assert "min(track_numbers.effective_track_number) <> 1" in order_rollup_sql
+    assert "count(*) <> max(track_numbers.effective_track_number)" in order_rollup_sql
     assert "incomplete_track_order" in order_rollup_sql
     assert "active_track_order_rollup.incomplete_track_order is true" in candidate_sql
 
@@ -12961,7 +12960,7 @@ def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encod
     assert "position('??'" in candidate_sql
     assert "in ('', 'unknown', 'unknown artist', 'unknown album', 'none', 'null')" in candidate_sql
     assert "library.local_track_files.scan_file_entry_is_object is true" in summary_sql
-    assert "having count(distinct source_directory) > 1" in candidate_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in candidate_sql
     assert "identity_candidates.file_year = candidate.file_year" in candidate_sql
     assert "relational_file_candidate_ids" not in candidate_sql
     assert "duplicate_track_ids" not in candidate_sql
@@ -18599,3 +18598,52 @@ def test_a_display_correction_is_a_problematic_file_until_written():
         "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
         "Track artist unreadable \u2014 using album artist", "Encoding problem"]
     assert list(_physical_file_problem_reasons({})) == []
+
+
+def _cte_body(sql: str, name: str) -> str:
+    start = sql.index(f"{name} as")
+    depth = 0
+    for index in range(sql.index("(", start), len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return sql[start:index]
+    raise AssertionError(f"unterminated CTE {name}")
+
+
+@pytest.mark.parametrize("candidate_ids_page", [True, False])
+def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_ids_page):
+    """Cold Problematic Files took 30-40 s at 160k files: every request re-ran
+    path regular expressions per file and a non-ASCII year fallback that made
+    nearly every album a duplicate candidate."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, candidate_ids_page=candidate_ids_page, path_columns=True,
+    )
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "regexp_replace" not in active_rows
+    assert "local_path_key(" not in active_rows
+    assert "duplicate_identity_text(" not in active_rows
+    for column in (
+        "scan_physical_parent", "scan_source_directory", "scan_physical_album_container",
+        "scan_path_key_present", "scan_file_album_identity",
+    ):
+        assert f"library.local_track_files.{column}" in active_rows
+    duplicates = _cte_body(sql, "duplicate_album_ids")
+    assert "file_album_identity" in duplicates
+    # The broad non-ASCII year branch stays only for servers without casefold().
+    assert "server_version_num')::integer < 180000" in duplicates
+    for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
+        assert "count(distinct" not in _cte_body(sql, cte)
+    # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
+    assert "join candidate_album_ids" not in sql
+    assert "any(array(select album_id from candidate_album_ids))" in sql
+
+
+def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migration():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(candidate_summary=True, candidate_ids_page=True)
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "scan_physical_parent" not in active_rows
+    assert "library.local_path_key(library.local_track_files.private_path) <> ''" in active_rows

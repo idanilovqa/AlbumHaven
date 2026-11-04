@@ -12324,15 +12324,15 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   return request.promise;
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
+  const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
-    const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
-    const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
+    const problematicAlbum = problematicIndex.get(trackPath) || null;
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -12397,6 +12397,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
+  const problematicIndex = buildProblematicAlbumTrackPathIndex();
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       exceptionType(item) === section.exceptionType
@@ -12406,7 +12407,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       )
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
@@ -16470,6 +16471,28 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+// The last automatic reverse prepend: a prepend must push the viewport down by
+// about its own height. When it does not, the next one re-exposes the top and
+// the chain walks the whole library backwards with no user input.
+let rootGalleryPreviousPrepend = null;
+
+function readRootGalleryUserScrollGeneration() {
+  return typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.getUserScrollIntentGeneration?.() ?? null;
+}
+
+function rootGalleryPreviousPrependStalled(scroll) {
+  const last = rootGalleryPreviousPrepend;
+  if (!last) return false;
+  if (last.userScrollGeneration !== readRootGalleryUserScrollGeneration()) {
+    rootGalleryPreviousPrepend = null;
+    return false;
+  }
+  const grown = Number(scroll.scrollHeight || 0) - last.scrollHeight;
+  return grown > 0 && Number(scroll.scrollTop || 0) - last.scrollTop < grown / 2;
+}
+
 async function loadPreviousRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -16477,7 +16500,8 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT
+    || rootGalleryPreviousPrependStalled(scroll)) return false;
 
   const request = {
     controller: new AbortController(),
@@ -16517,6 +16541,11 @@ async function loadPreviousRootGalleryPage() {
       || data.gallery_page?.previous_cursor === request.cursor) return false;
 
     const currentPage = state.view.gallery_page;
+    rootGalleryPreviousPrepend = {
+      scrollTop: Number(scroll.scrollTop || 0),
+      scrollHeight: Number(scroll.scrollHeight || 0),
+      userScrollGeneration: readRootGalleryUserScrollGeneration(),
+    };
     applyViewPayload({
       ...state.view,
       artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
@@ -19773,23 +19802,37 @@ function syncAlbumTrackCreditMotion(root) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   let frame = 0;
   let disposed = false;
+  // Only on-screen credits pan; hundreds of off-screen infinite animations
+  // (long Loose Tracks lists) kept the compositor and style engine busy.
+  const visible = new Set();
   const refresh = () => {
     frame = 0;
-    for (const row of rows) {
-      const text = row.firstElementChild;
-      const motion = resolveCompactPlayerMetadataRowMotion({
-        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
-      });
-      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
-    }
+    // Read every width before writing any class: interleaving forced one
+    // synchronous layout per row.
+    const overflowing = rows.map((row) => !reduced.matches && visible.has(row)
+      && resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth,
+      }).overflowing);
+    rows.forEach((row, index) => row.classList.toggle('is-credit-overflowing', overflowing[index]));
   };
   const schedule = () => {
     if (!disposed && !frame) frame = requestAnimationFrame(refresh);
   };
   const observer = new ResizeObserver(schedule);
+  const visibility = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target);
+        else visible.delete(entry.target);
+      }
+      schedule();
+    })
+    : null;
   for (const row of rows) {
     observer.observe(row);
     observer.observe(row.firstElementChild);
+    if (visibility) visibility.observe(row);
+    else visible.add(row);
   }
   reduced.addEventListener('change', schedule);
   document.fonts?.ready.then(schedule);
@@ -19797,6 +19840,7 @@ function syncAlbumTrackCreditMotion(root) {
     disposed = true;
     cancelAnimationFrame(frame);
     observer.disconnect();
+    visibility?.disconnect();
     reduced.removeEventListener('change', schedule);
     for (const row of rows) row.classList.remove('is-credit-overflowing');
   });
@@ -23046,6 +23090,23 @@ function getProblematicAlbumForTrackPath(trackPath) {
     (Array.isArray(album.problematic_track_paths) && album.problematic_track_paths.includes(normalized))
     || (Array.isArray(album.track_paths) && album.track_paths.includes(normalized))
   ) || null;
+}
+
+// One pass for a whole track list: per-row lookups scanned every problematic
+// album, so a long Loose Tracks list multiplied into millions of comparisons.
+// Matches getProblematicAlbumForTrackPath: the first album in list order wins.
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of state.utility.problematicFiles || []) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
 }
 
 async function openUtilityModalForTrack(trackPath) {

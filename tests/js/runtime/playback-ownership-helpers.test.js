@@ -570,6 +570,38 @@ test('server claim acquisition uses protocol v1 and keeps paths out of ownership
   );
 });
 
+test('each claim answer says afresh whether listen writes can reach Last.fm', async () => {
+  const answers = [{ available: false }, { available: true }, undefined];
+  const { context } = loadHelper({
+    fetch: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') {
+        return jsonResponse({
+          ...protocolFixture.valid.refsResponse,
+          expiresAt: '2099-10-24T00:00:00Z',
+          tracks: [{ ...protocolFixture.valid.refsResponse.tracks[0], clientKey: body.tracks[0].clientKey }],
+        });
+      }
+      const scrobbling = answers.shift();
+      return jsonResponse({
+        ...protocolFixture.valid.claimResponse,
+        expiresAt: '2099-10-23T23:00:30Z',
+        ...(scrobbling ? { scrobbling } : {}),
+      });
+    },
+  });
+
+  assert.equal(context.isScrobblingUnavailableAtClaim(), false, 'no claim says nothing');
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(context.isScrobblingUnavailableAtClaim(), true);
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal(context.isScrobblingUnavailableAtClaim(), false);
+  // A heartbeat answer that does not say leaves the writes to the server's own 409.
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal(context.state.player.ownership.activeClaim.scrobblingAvailable, null);
+  assert.equal(context.isScrobblingUnavailableAtClaim(), false);
+});
+
 test('protocol fixture rejects unsupported responses and strips untrusted path metadata', async () => {
   let statePuts = 0;
   const { context } = loadHelper({

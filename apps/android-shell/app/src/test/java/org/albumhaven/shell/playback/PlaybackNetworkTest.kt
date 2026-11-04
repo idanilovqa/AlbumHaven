@@ -47,6 +47,21 @@ class PlaybackNetworkTest {
     }
 
     @Test
+    fun acquireReadsWhetherTheClaimsListensReachLastfm() {
+        for ((answer, expected) in listOf(
+            """{"protocol":1,"claimToken":"claim-token","scrobbling":{"available":false}}""" to false,
+            """{"protocol":1,"claimToken":"claim-token","scrobbling":{"available":true}}""" to true,
+            """{"protocol":1,"claimToken":"claim-token","scrobbling":{"available":"no"}}""" to null,
+        )) {
+            server.enqueue(MockResponse.Builder().code(200).body(answer).build())
+            assertEquals(
+                ClaimResponse.Granted("claim-token", expected),
+                HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, null, track),
+            )
+        }
+    }
+
+    @Test
     fun acquireClaimsAsTheMobileSurfaceWithTheWebViewSession() {
         server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1,"claimToken":"claim-token"}""").build())
         val response = HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, null, track)

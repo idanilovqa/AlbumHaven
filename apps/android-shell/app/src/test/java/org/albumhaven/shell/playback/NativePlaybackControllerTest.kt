@@ -282,6 +282,26 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aClaimReportingScrobblingUnavailableSendsOnlyTheCompletion() {
+        val claimIo = ManualExecutor()
+        val a = SyntheticTrack(tag = 1, frames = 12L * RATE)
+        val harness = ControllerHarness(a, claimIo = claimIo)
+        harness.claims.acquireResponse = { ClaimResponse.Granted("token-1", scrobblingAvailable = false) }
+        harness.claims.renewResponse = { ClaimResponse.Granted(it, scrobblingAvailable = false) }
+        harness.load(1, a)
+        // The now-playing is built while the claim is requested and dropped once its answer arrives.
+        repeat(5) { harness.step() }
+        harness.runUntil {
+            claimIo.drain()
+            harness.state() == NativePlaybackState.ENDED
+        }
+        harness.step()
+
+        assertEquals(listOf(ListenEffect.COMPLETE), harness.writes().map { it.first })
+        assertTrue(harness.writes().single().second.getBoolean("scrobble_eligible"))
+    }
+
+    @Test
     fun theClaimIsReleasedOnlyAfterThePauseCheckpointFinishes() {
         val listenIo = ManualExecutor()
         val long = SyntheticTrack(tag = 3, frames = 30L * RATE)

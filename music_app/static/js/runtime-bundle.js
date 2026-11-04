@@ -12666,7 +12666,9 @@ function acceptPlaybackClaim(result, prepared) {
     throw new Error('Playback claim is unavailable.');
   }
   const ownership = getPlaybackOwnershipState();
-  const claim = { ...prepared, claimToken: result.claimToken, expiresAt: result.expiresAt };
+  // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
+  const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
+  const claim = { ...prepared, claimToken: result.claimToken, expiresAt: result.expiresAt, scrobblingAvailable };
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
@@ -12847,6 +12849,11 @@ function canEmitPlaybackSessionSideEffects() {
     return isAndroidNativePlaybackOwner();
   }
   return isActivePlaybackOwner();
+}
+
+/** The held claim's last answer says this account's listens cannot reach Last.fm. */
+function isScrobblingUnavailableAtClaim() {
+  return getPlaybackOwnershipState().activeClaim?.scrobblingAvailable === false;
 }
 
 function getPlaybackClaimContext() {
@@ -38115,7 +38122,8 @@ function playbackSessionError(response, data) {
 
 /**
  * A failed now-playing or scrobble write: Last.fm not connected stops both for the listen; a
- * network failure, timeout, 429 or 5xx is retried with backoff; any other answer is final.
+ * network failure, timeout, 429 or 5xx (including the server's 503 for a transient Last.fm
+ * failure) is retried with backoff; any other answer is final.
  */
 function noteListenWriteFailure(session, effect, error) {
   if (!session) return;
@@ -38135,7 +38143,14 @@ function noteListenWriteFailure(session, effect, error) {
   retry.at = listenWriteClockMs() + (Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
 }
 
+/**
+ * Whether a now-playing or scrobble write may be sent now. A listen whose claim reports that
+ * scrobbling is unavailable sends neither, as after the server's 409; its completions still go.
+ */
 function isListenWriteDue(session, effect) {
+  if (session && typeof isScrobblingUnavailableAtClaim === 'function' && isScrobblingUnavailableAtClaim()) {
+    session.lastfmUnavailable = true;
+  }
   if (session?.lastfmUnavailable) return false;
   const retry = session?.writeRetries?.[effect];
   return !retry || (!retry.final && listenWriteClockMs() >= retry.at);

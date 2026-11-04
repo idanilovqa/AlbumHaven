@@ -166,6 +166,7 @@ class NativePlaybackController(
         playingDurationSeconds = { (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0 },
         wallClockMs = wallClockMs,
         elapsedMs = clock,
+        scrobblingUnavailable = { claims.scrobblingAvailable == false },
     )
 
     // Frames and underruns of the current item already handed to [listens].
@@ -747,6 +748,12 @@ class NativePlaybackController(
             if (outcome != ClaimOutcome.GRANTED || token == null) {
                 // Without a claim the server refuses the write, as it answers the web's with 403.
                 done(ListenWriteOutcome.Refused)
+                effectsInFlight -= 1
+                return@awaitOwnership
+            }
+            if (effect != ListenEffect.COMPLETE && claims.scrobblingAvailable == false) {
+                // Built while the claim was requested; its answer says Last.fm cannot take it.
+                done(ListenWriteOutcome.LastfmUnavailable)
                 effectsInFlight -= 1
                 return@awaitOwnership
             }

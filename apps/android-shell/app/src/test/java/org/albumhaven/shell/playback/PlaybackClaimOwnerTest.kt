@@ -2,6 +2,7 @@ package org.albumhaven.shell.playback
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,6 +73,34 @@ class PlaybackClaimOwnerTest {
         now = 12_000 + PlaybackClaimOwner.LEASE_MS - 1
         owner.tick()
         assertTrue(owner.owned)
+    }
+
+    @Test
+    fun everyAcquireAndHeartbeatAnswerSaysAfreshWhetherListensReachLastfm() {
+        assertNull(owner.scrobblingAvailable)
+        api.acquireResponse = { ClaimResponse.Granted("token-1", scrobblingAvailable = false) }
+        owner.acquire(track) {}
+        drain()
+        assertEquals(false, owner.scrobblingAvailable)
+
+        api.renewResponse = { ClaimResponse.Granted(it, scrobblingAvailable = true) }
+        now = 10_000
+        owner.tick()
+        drain()
+        assertEquals(true, owner.scrobblingAvailable)
+
+        // An answer that does not say is unknown, and a claim given up knows nothing.
+        api.renewResponse = { ClaimResponse.Granted(it) }
+        now = 20_000
+        owner.tick()
+        drain()
+        assertNull(owner.scrobblingAvailable)
+        api.renewResponse = { ClaimResponse.Granted(it, scrobblingAvailable = true) }
+        now = 30_000
+        owner.tick()
+        drain()
+        owner.release()
+        assertNull(owner.scrobblingAvailable)
     }
 
     @Test

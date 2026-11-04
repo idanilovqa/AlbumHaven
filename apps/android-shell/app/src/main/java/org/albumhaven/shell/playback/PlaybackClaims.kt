@@ -12,7 +12,8 @@ data class ClaimTrack(
 )
 
 sealed interface ClaimResponse {
-    data class Granted(val claimToken: String) : ClaimResponse
+    /** [scrobblingAvailable] is the answer's `scrobbling.available`; null when it does not say. */
+    data class Granted(val claimToken: String, val scrobblingAvailable: Boolean? = null) : ClaimResponse
 
     /** Another client holds the account's playback claim (HTTP 409). */
     data object Conflict : ClaimResponse
@@ -63,6 +64,10 @@ class PlaybackClaimOwner(
     private val waiters = mutableListOf<(ClaimOutcome) -> Unit>()
 
     val owned: Boolean get() = token != null
+
+    /** Whether the held claim's latest answer says listens can reach Last.fm; null when unknown. */
+    var scrobblingAvailable: Boolean? = null
+        private set
 
     /** The held claim token, for the owner's own listen writes only; never leaves native memory. */
     val heldToken: String? get() = token
@@ -134,6 +139,7 @@ class PlaybackClaimOwner(
     private fun drop() {
         epoch += 1
         token = null
+        scrobblingAvailable = null
         acquiring = false
         renewing = false
         settle(ClaimOutcome.UNAVAILABLE)
@@ -149,6 +155,7 @@ class PlaybackClaimOwner(
         when (response) {
             is ClaimResponse.Granted -> {
                 token = response.claimToken
+                scrobblingAvailable = response.scrobblingAvailable
                 lastRenewSentMs = sentMs
                 leaseEndsMs = sentMs + LEASE_MS
                 events(ClaimEvent.Owned)
@@ -168,6 +175,7 @@ class PlaybackClaimOwner(
         when (response) {
             is ClaimResponse.Granted -> {
                 token = response.claimToken
+                scrobblingAvailable = response.scrobblingAvailable
                 leaseEndsMs = sentMs + LEASE_MS
             }
             // The server no longer recognizes this claim: another client owns playback now.

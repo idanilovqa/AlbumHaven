@@ -44,6 +44,7 @@ class ListenSessionsParityTest {
         val failing = mutableListOf<JSONObject>()
         var now = fixture.getLong("startEpochMs")
         var owner = true
+        var scrobbling: Boolean? = null
         var duration = 0.0
         var playing: ListenTrack? = null
         var paused = true
@@ -71,6 +72,7 @@ class ListenSessionsParityTest {
             newId = { "00000000-0000-4000-8000-%012d".format(++ids) },
             elapsedMs = { now },
             jitter = { fixture.getDouble("retryJitter") },
+            scrobblingUnavailable = { scrobbling == false },
         )
         fun select(key: String) {
             val (item, seconds) = track(key)
@@ -123,6 +125,7 @@ class ListenSessionsParityTest {
                 }
                 "unload" -> sessions.unload(step.getDouble("position"), duration)
                 "owner" -> owner = step.getBoolean("value")
+                "claim" -> scrobbling = step.getBoolean("scrobbling")
                 "fail" -> failing += step
                 else -> error("unknown step ${step.getString("do")}")
             }

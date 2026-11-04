@@ -183,7 +183,8 @@ function playbackSessionError(response, data) {
 
 /**
  * A failed now-playing or scrobble write: Last.fm not connected stops both for the listen; a
- * network failure, timeout, 429 or 5xx is retried with backoff; any other answer is final.
+ * network failure, timeout, 429 or 5xx (including the server's 503 for a transient Last.fm
+ * failure) is retried with backoff; any other answer is final.
  */
 function noteListenWriteFailure(session, effect, error) {
   if (!session) return;
@@ -203,7 +204,14 @@ function noteListenWriteFailure(session, effect, error) {
   retry.at = listenWriteClockMs() + (Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
 }
 
+/**
+ * Whether a now-playing or scrobble write may be sent now. A listen whose claim reports that
+ * scrobbling is unavailable sends neither, as after the server's 409; its completions still go.
+ */
 function isListenWriteDue(session, effect) {
+  if (session && typeof isScrobblingUnavailableAtClaim === 'function' && isScrobblingUnavailableAtClaim()) {
+    session.lastfmUnavailable = true;
+  }
   if (session?.lastfmUnavailable) return false;
   const retry = session?.writeRetries?.[effect];
   return !retry || (!retry.final && listenWriteClockMs() >= retry.at);

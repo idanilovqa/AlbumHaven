@@ -28,6 +28,8 @@ function createBrowserPlayer() {
   const record = (effect, body) => writes.push(byReference({ effect, body }, refs));
   let now = fixture.startEpochMs;
   let owner = true;
+  // What the latest claim answer says of Last.fm; null when it says nothing.
+  let scrobbling = null;
   let ids = 0;
   const snapshot = { currentTime: 0, duration: 0, paused: true, ended: false, src: '', mode: 'stopped' };
   const queue = { next: null };
@@ -84,6 +86,7 @@ function createBrowserPlayer() {
     getPlaybackOwnershipTabId: () => fixture.originId,
     canEmitPlaybackSessionSideEffects: () => owner,
     getPlaybackClaimContext: () => ({}),
+    isScrobblingUnavailableAtClaim: () => scrobbling === false,
     releasePlaybackOwnership: async () => true,
     listenWriteClockMs: () => now,
     listenWriteRetryJitter: () => fixture.retryJitter,
@@ -168,6 +171,8 @@ function createBrowserPlayer() {
       context.flushListenSessionOnUnload('pagehide', { ...snapshot });
     },
     owner(step) { owner = step.value; },
+    // An acquire or heartbeat answer naming `scrobbling.available`.
+    claim(step) { scrobbling = step.scrobbling; },
     fail(step) { failures.push(step); },
   };
   return {

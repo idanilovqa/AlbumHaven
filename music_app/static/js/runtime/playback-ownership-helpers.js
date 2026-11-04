@@ -240,7 +240,9 @@ function acceptPlaybackClaim(result, prepared) {
     throw new Error('Playback claim is unavailable.');
   }
   const ownership = getPlaybackOwnershipState();
-  const claim = { ...prepared, claimToken: result.claimToken, expiresAt: result.expiresAt };
+  // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
+  const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
+  const claim = { ...prepared, claimToken: result.claimToken, expiresAt: result.expiresAt, scrobblingAvailable };
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
@@ -421,6 +423,11 @@ function canEmitPlaybackSessionSideEffects() {
     return isAndroidNativePlaybackOwner();
   }
   return isActivePlaybackOwner();
+}
+
+/** The held claim's last answer says this account's listens cannot reach Last.fm. */
+function isScrobblingUnavailableAtClaim() {
+  return getPlaybackOwnershipState().activeClaim?.scrobblingAvailable === false;
 }
 
 function getPlaybackClaimContext() {

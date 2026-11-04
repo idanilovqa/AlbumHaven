@@ -49,6 +49,8 @@ class ListenSessions(
     private val elapsedMs: () -> Long = { System.nanoTime() / 1_000_000 },
     /** A uniform value in [0, 1) that spreads retries, as the web's `listenWriteRetryJitter`. */
     private val jitter: () -> Double = Math::random,
+    /** The claim's latest answer says listens cannot reach Last.fm, as the web's `isScrobblingUnavailableAtClaim`. */
+    private val scrobblingUnavailable: () -> Boolean = { false },
 ) {
     private var current: Session? = null
     private var selection = 0L
@@ -248,8 +250,9 @@ class ListenSessions(
         }
     }
 
-    /** `isListenWriteDue`. */
+    /** `isListenWriteDue`: a claim reporting scrobbling unavailable stops the listen's now-playing and scrobble. */
     private fun isDue(session: Session, effect: ListenEffect): Boolean {
+        if (scrobblingUnavailable()) session.lastfmUnavailable = true
         if (session.lastfmUnavailable) return false
         val retry = session.retries[effect] ?: return true
         return !retry.final && elapsedMs() >= retry.at

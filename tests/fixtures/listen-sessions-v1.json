@@ -1,5 +1,5 @@
 {
-  "description": "Listen writes the browser listen session (player-loop-playback.js with player-listen-session-helpers.js) and Android's ListenSessions.kt must both produce for the same playback steps. Bodies name tracks by playbackRef; the browser's path and cover_path are replaced by the reference the track has when the write is sent, exactly as the server resolves a reference back to the path; listenKey is the opaque identity Android tells one track by. A fail step answers the next write of its effect with that status, error code and Retry-After; retry backoff is measured on the step clock with retryJitter as the random value. Writes are compared in order within each listen session.",
+  "description": "Listen writes the browser listen session (player-loop-playback.js with player-listen-session-helpers.js) and Android's ListenSessions.kt must both produce for the same playback steps. Bodies name tracks by playbackRef; the browser's path and cover_path are replaced by the reference the track has when the write is sent, exactly as the server resolves a reference back to the path; listenKey is the opaque identity Android tells one track by. A claim step is an acquire or heartbeat answer naming scrobbling.available. A fail step answers the next write of its effect with that status, error code and Retry-After; retry backoff is measured on the step clock with retryJitter as the random value. Writes are compared in order within each listen session.",
   "deviceId": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
   "originId": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70",
   "startEpochMs": 1793613600000,
@@ -2869,6 +2869,470 @@
               }
             ],
             "playbackRef": "ref-b.sig"
+          }
+        }
+      ]
+    },
+    {
+      "name": "scrobbling unavailable at the claim: the listen sends no now-playing or scrobble, its completions are still sent, and a listen begun after the claim reports it available writes them again",
+      "steps": [
+        {
+          "at": 0,
+          "do": "claim",
+          "scrobbling": false
+        },
+        {
+          "at": 0,
+          "do": "select",
+          "track": "a"
+        },
+        {
+          "at": 0,
+          "do": "begin",
+          "position": 0
+        },
+        {
+          "at": 16000,
+          "do": "heard",
+          "seconds": 16
+        },
+        {
+          "at": 16000,
+          "do": "position",
+          "position": 16
+        },
+        {
+          "at": 16000,
+          "do": "pause",
+          "position": 16
+        },
+        {
+          "at": 20000,
+          "do": "claim",
+          "scrobbling": true
+        },
+        {
+          "at": 20000,
+          "do": "begin",
+          "position": 16
+        },
+        {
+          "at": 34500,
+          "do": "heard",
+          "seconds": 14.5
+        },
+        {
+          "at": 34500,
+          "do": "position",
+          "position": 30.5
+        },
+        {
+          "at": 34500,
+          "do": "advance",
+          "track": "b"
+        },
+        {
+          "at": 47500,
+          "do": "heard",
+          "seconds": 13
+        },
+        {
+          "at": 47500,
+          "do": "position",
+          "position": 13
+        },
+        {
+          "at": 58500,
+          "do": "heard",
+          "seconds": 11
+        },
+        {
+          "at": 58500,
+          "do": "ended"
+        }
+      ],
+      "writes": [
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 1,
+            "finalized": true,
+            "measured_listened_seconds": 16,
+            "max_measured_contiguous_seconds": 16,
+            "title": "Signal A",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 30.5,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "1",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:00:16.000Z",
+            "total_listened_seconds": 16,
+            "max_contiguous_seconds": 16,
+            "finished_fully": false,
+            "skipped": false,
+            "completion_reason": "paused",
+            "scrobble_eligible": true,
+            "scrobbled": false,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 16
+              }
+            ],
+            "playbackRef": "ref-a.sig"
+          }
+        },
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 2,
+            "finalized": true,
+            "measured_listened_seconds": 30.5,
+            "max_measured_contiguous_seconds": 16,
+            "title": "Signal A",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 30.5,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "1",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:00:34.500Z",
+            "total_listened_seconds": 30.5,
+            "max_contiguous_seconds": 16,
+            "finished_fully": true,
+            "skipped": false,
+            "completion_reason": "ended",
+            "scrobble_eligible": true,
+            "scrobbled": false,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 16
+              },
+              {
+                "start_seconds": 16,
+                "end_seconds": 30.5
+              }
+            ],
+            "playbackRef": "ref-a.sig"
+          }
+        },
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 0,
+            "max_measured_contiguous_seconds": 0,
+            "title": "Signal B",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 24,
+            "started_at": "2026-11-02T10:00:34.500Z",
+            "started_at_unix": 1793613634,
+            "track_number": "2",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-b.sig"
+          }
+        },
+        {
+          "effect": "scrobble",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "sequence": 1,
+            "finalized": false,
+            "measured_listened_seconds": 13,
+            "max_measured_contiguous_seconds": 13,
+            "title": "Signal B",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 24,
+            "started_at": "2026-11-02T10:00:34.500Z",
+            "started_at_unix": 1793613634,
+            "track_number": "2",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "total_listened_seconds": 0,
+            "max_contiguous_seconds": 0,
+            "playbackRef": "ref-b.sig"
+          }
+        },
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "sequence": 2,
+            "finalized": true,
+            "measured_listened_seconds": 24,
+            "max_measured_contiguous_seconds": 24,
+            "title": "Signal B",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 24,
+            "started_at": "2026-11-02T10:00:34.500Z",
+            "started_at_unix": 1793613634,
+            "track_number": "2",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:00:58.500Z",
+            "total_listened_seconds": 24,
+            "max_contiguous_seconds": 24,
+            "finished_fully": true,
+            "skipped": false,
+            "completion_reason": "ended",
+            "scrobble_eligible": true,
+            "scrobbled": true,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 24
+              }
+            ],
+            "playbackRef": "ref-b.sig"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a now-playing Last.fm could not take for now (503) is retried after its backoff, and a rate-limited one after its Retry-After",
+      "steps": [
+        {
+          "at": 0,
+          "do": "fail",
+          "effect": "now-playing",
+          "status": 503,
+          "error": "Last.fm is temporarily unavailable"
+        },
+        {
+          "at": 0,
+          "do": "select",
+          "track": "long"
+        },
+        {
+          "at": 0,
+          "do": "begin",
+          "position": 0
+        },
+        {
+          "at": 4000,
+          "do": "heard",
+          "seconds": 4
+        },
+        {
+          "at": 4000,
+          "do": "position",
+          "position": 4
+        },
+        {
+          "at": 5000,
+          "do": "heard",
+          "seconds": 1
+        },
+        {
+          "at": 5000,
+          "do": "fail",
+          "effect": "now-playing",
+          "status": 503,
+          "error": "Rate limit exceeded",
+          "retryAfter": "60"
+        },
+        {
+          "at": 5000,
+          "do": "position",
+          "position": 5
+        },
+        {
+          "at": 60000,
+          "do": "heard",
+          "seconds": 55
+        },
+        {
+          "at": 60000,
+          "do": "position",
+          "position": 60
+        },
+        {
+          "at": 65000,
+          "do": "heard",
+          "seconds": 5
+        },
+        {
+          "at": 65000,
+          "do": "position",
+          "position": 65
+        },
+        {
+          "at": 70000,
+          "do": "heard",
+          "seconds": 5
+        },
+        {
+          "at": 70000,
+          "do": "position",
+          "position": 70
+        },
+        {
+          "at": 70000,
+          "do": "pause",
+          "position": 70
+        }
+      ],
+      "writes": [
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 0,
+            "max_measured_contiguous_seconds": 0,
+            "title": "Long Form",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 900.457,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "3",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-long.sig"
+          }
+        },
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 5,
+            "max_measured_contiguous_seconds": 5,
+            "title": "Long Form",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 900.457,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "3",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-long.sig"
+          }
+        },
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 65,
+            "max_measured_contiguous_seconds": 65,
+            "title": "Long Form",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 900.457,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "3",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-long.sig"
+          }
+        },
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 1,
+            "finalized": true,
+            "measured_listened_seconds": 70,
+            "max_measured_contiguous_seconds": 70,
+            "title": "Long Form",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 900.457,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "3",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:01:10.000Z",
+            "total_listened_seconds": 70,
+            "max_contiguous_seconds": 70,
+            "finished_fully": false,
+            "skipped": false,
+            "completion_reason": "paused",
+            "scrobble_eligible": false,
+            "scrobbled": false,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 70
+              }
+            ],
+            "playbackRef": "ref-long.sig"
           }
         }
       ]

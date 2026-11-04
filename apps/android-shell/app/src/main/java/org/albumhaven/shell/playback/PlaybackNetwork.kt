@@ -78,8 +78,10 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
                     response.code == 409 -> ClaimResponse.Conflict
                     !response.isSuccessful -> ClaimResponse.Rejected(response.code)
                     else -> {
-                        val token = JSONObject(response.body.string()).optString("claimToken")
-                        if (token.isEmpty()) ClaimResponse.Rejected(response.code) else ClaimResponse.Granted(token)
+                        val answer = JSONObject(response.body.string())
+                        val token = answer.optString("claimToken")
+                        val available = answer.optJSONObject("scrobbling")?.opt("available") as? Boolean
+                        if (token.isEmpty()) ClaimResponse.Rejected(response.code) else ClaimResponse.Granted(token, available)
                     }
                 }
             }

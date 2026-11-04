@@ -5,13 +5,12 @@ const { test, expect } = require('@playwright/test');
 const repositoryRoot = path.resolve(__dirname, '../..');
 
 async function mountAnchoredCalendar(page) {
-  const template = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/partials/confirm-modals.html'), 'utf8');
-  const modal = template.slice(template.indexOf('  <div class="confirm-modal" id="app-form-modal"'));
+  const modal = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/partials/app-form-modal.html'), 'utf8');
   await page.setViewportSize({ width: 900, height: 640 });
   await page.setContent(`<!doctype html><html><body>
     <main class="shell-main-surface"><button id="period" style="position:fixed;left:160px;top:355px;height:32px">Period</button></main>
     ${modal}</body></html>`);
-  for (const stylesheet of ['runtime/base-layout.css', 'runtime/utilities.css', 'runtime/non-album-and-player.css',
+  for (const stylesheet of ['runtime/base-layout.css', 'dialog-component.css', 'runtime/utilities.css', 'runtime/non-album-and-player.css',
     'appearance-backgrounds.css', 'button-component.css', 'date-range-picker.css', 'runtime/trigger-anchor.css']) {
     await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', stylesheet) });
   }

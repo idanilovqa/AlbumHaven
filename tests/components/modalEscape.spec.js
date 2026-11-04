@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '../..');
 const primary = fs.readFileSync(path.join(root, 'music_app/templates/partials/primary-modals.html'), 'utf8');
 const tagMarkup = primary.slice(primary.indexOf('  <div class="tag-editor-modal"'), primary.indexOf('  <div class="track-modal"'));
 const confirmations = fs.readFileSync(path.join(root, 'music_app/templates/partials/confirm-modals.html'), 'utf8')
+  .replace('{% include "partials/app-form-modal.html" %}', fs.readFileSync(path.join(root, 'music_app/templates/partials/app-form-modal.html'), 'utf8'))
   .replace(/{%[^]*?%}|{{[^]*?}}/g, '');
 
 test.beforeEach(async ({ page }) => {
@@ -18,7 +19,7 @@ test.beforeEach(async ({ page }) => {
     </body></html>`,
   }));
   await page.goto('http://modal-component.test/');
-  for (const file of ['runtime/base-layout.css', 'runtime/track-modal-and-lightbox.css', 'runtime/utilities.css']) {
+  for (const file of ['runtime/base-layout.css', 'runtime/track-modal-and-lightbox.css', 'dialog-component.css', 'runtime/utilities.css']) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
   for (const file of ['markup-format-helpers.js', 'modal-and-overlay-helpers.js', 'album-artbox.js', 'utility-loaders-and-cover-lookup.js', 'tag-editor-and-optimistic-updates.js', 'track-modal-lightbox-helpers.js', 'browser-dialog-helpers.js']) {

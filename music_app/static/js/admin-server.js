@@ -49,7 +49,7 @@
     const request = options.request || fetch;
     const confirmChange = options.confirm || window.confirm.bind(window);
     const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
-    const canBrowse = Boolean(browse && !browse.disabled);
+    const canBrowse = Boolean(browse?.hasAttribute?.('data-path-input-browsable'));
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
@@ -158,13 +158,8 @@
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      const mode = selectedMode();
       if (save.disabled) return;
-      if (mode === 'custom' && !pathInput.value.trim()) {
-        showAlert(error, 'Enter a path on the Album Haven server.');
-        pathInput.focus?.();
-        return;
-      }
+      const mode = selectedMode();
       if (!confirmChange('Move generated album previews to the selected location? Covers remain available while the move runs.')) return;
       save.disabled = true;
       try {

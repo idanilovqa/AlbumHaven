@@ -10023,6 +10023,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 340px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-340px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 760px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-760px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,

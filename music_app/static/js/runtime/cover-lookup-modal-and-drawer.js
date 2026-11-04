@@ -334,15 +334,6 @@ function openCoverLookupAlbumDetails() {
   );
 }
 
-function buildCoverLookupCurrentReleaseLabel(release) {
-  return [
-    release?.album_artist || '',
-    release?.name || '',
-    release?.year || '',
-    release?.edition || '',
-  ].filter(Boolean).join(' · ');
-}
-
 function buildTrackPathSignature(album) {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   return tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('::');

@@ -1447,7 +1447,7 @@ async function ignoreAlbumVersion(albumKey) {
       renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
     }
     await fetchAndRender(buildApiUrl(state.view), false);
-    showToast('Album will no longer be counted as a version.', 'success', 2600);
+    showToast('Release separated. The rule is listed in Settings › Rules.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to ignore album version.', error);
     showToast(error.message || 'Failed to update version setting.', 'error', 3200);

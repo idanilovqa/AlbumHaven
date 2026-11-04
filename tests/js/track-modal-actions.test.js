@@ -508,5 +508,6 @@ test('TrackModal constructs the shared AlbumTrackTable in the real modal scope',
   const modal = new TrackModal(locator('page'));
   assert.ok(modal.albumTrackTable instanceof AlbumTrackTable);
   assert.equal(modal.albumTrackTable.root.description, 'page #track-modal .album-track-table');
-  assert.equal(modal.albumTrackTable.total.description, 'page #track-modal .album-track-table .album-track-table__total');
+  assert.equal(modal.albumTrackTable.total.description, 'page #track-modal .album-track-table .album-track-table__frame > .album-track-table__total');
+  assert.equal(modal.albumTrackTable.summaryLines.description, 'page #track-modal .album-track-table .album-track-table__total :scope > *');
 });

@@ -1893,6 +1893,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "runtime-bundle.js",
         "login.js",
         "password-recovery.js",
+        "path-input.js",
         "account.js",
         "admin-members.js",
         "admin-server.js",

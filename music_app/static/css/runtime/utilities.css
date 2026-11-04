@@ -1975,6 +1975,15 @@
   gap: 8px;
 }
 .utility-album-problem-labels { margin: 12px 0 20px; margin-inline-start: calc(88px + 16px); }
+/* Every Problematic Files problem label shares one width, whatever its text. */
+.utility-album-problem-labels > .utility-problem-exclusion-pill,
+.utility-track-problem-labels > .utility-problem-exclusion-pill {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  inline-size: min(100%, 16rem);
+  justify-content: flex-start;
+  text-align: left;
+}
 @media (max-width: 760px) {
   .utility-album-problem-labels { margin-inline-start: calc(84px + 16px); }
 }

@@ -1687,7 +1687,7 @@ class PostgresLibraryBrowseRepository:
                 rendered_selected_family_groups,
                 search_sidebar_artist_groups,
             )
-            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups)
+            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups, alphabetical=True)
             payload["artist_count"] = len(sidebar_groups)
             selected_family_keys = {
                 _artist_display_dedupe_key(str(group.get("artist") or "").strip())
@@ -2262,7 +2262,8 @@ class PostgresLibraryBrowseRepository:
                     artists=[exact_artist_match, *matching_sidebar_artists],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                    sidebar_groups
+                    sidebar_groups,
+                    alphabetical=True,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {
@@ -2651,7 +2652,8 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups
             )
             payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                sidebar_groups
+                sidebar_groups,
+                alphabetical=True,
             )
             payload["artist_count"] = len(sidebar_groups)
             phase_ms["sidebar"] = (
@@ -8159,8 +8161,12 @@ def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query
     return ""
 
 
-def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
+def _artists_sidebar_from_groups(
+    artist_groups: list[dict[str, object]],
+    *,
+    alphabetical: bool = False,
+) -> list[dict[str, object]]:
+    sidebar = [
         {
             "artist": str(group.get("artist") or "").strip(),
             "artist_display": _artist_tree_display_value(
@@ -8171,6 +8177,14 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
         for group in artist_groups
         if str(group.get("artist") or "").strip()
     ]
+    # Search ranks artists to choose its best match; the Artist Tree itself
+    # always keeps the library's normal alphabetical order.
+    if alphabetical:
+        sidebar.sort(key=lambda item: (
+            artist_collation_key(item["artist_display"] or item["artist"]),
+            artist_collation_key(item["artist"]),
+        ))
+    return sidebar
 
 
 def _merge_artist_groups_for_sidebar(

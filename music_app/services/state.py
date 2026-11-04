@@ -76,6 +76,20 @@ _RELATION_REBUILD_PENDING = False
 _RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _WATCHER_COVER_REFRESH_MAX_ATTEMPTS = 3
+# An album that is still being copied in publishes a new inventory revision per
+# file. Wait for the library to settle instead of spending provider attempts.
+_WATCHER_COVER_REFRESH_SETTLE_SECONDS = 3.0
+_WATCHER_COVER_REFRESH_MAX_SETTLE_RETRIES = 60
+
+
+class _WatcherCoverRefreshStale(RuntimeError):
+    """The watcher's album projection changed while its covers were refreshed."""
+
+
+def _schedule_watcher_cover_refresh_retry(delay_seconds: float, callback: Callable[[], None]) -> None:
+    timer = threading.Timer(delay_seconds, callback)
+    timer.daemon = True
+    timer.start()
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
 
 
@@ -305,7 +319,7 @@ def _drain_watcher_cover_refresh_queue(
 
             if targeted_state_while_current() is not targeted_state:
                 preserve_refresh_after_active_scan()
-                raise RuntimeError("Watcher cover refresh projection became stale.")
+                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
 
             result = refresh_cover_artwork_request(
                 get_state=targeted_state_while_current,
@@ -336,7 +350,7 @@ def _drain_watcher_cover_refresh_queue(
             )
             if targeted_state_while_current() is not targeted_state:
                 preserve_refresh_after_active_scan()
-                raise RuntimeError("Watcher cover refresh projection became stale.")
+                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
             with _CACHE_LOCK:
                 revision = int(library_state.get("inventory_mutation_revision") or 0)
             if (
@@ -354,6 +368,7 @@ def _drain_watcher_cover_refresh_queue(
                 raise RuntimeError("Watcher cover refresh provider work failed.")
             with _CACHE_LOCK:
                 library_state["_watcher_cover_refresh_attempts"] = 0
+                library_state["_watcher_cover_refresh_settle_retries"] = 0
                 attempts_by_path = library_state.setdefault(
                     "_watcher_cover_refresh_attempts_by_track_path",
                     {},
@@ -364,7 +379,29 @@ def _drain_watcher_cover_refresh_queue(
                     attempts_by_path.pop(path, None)
                     album_keys_by_path.pop(path, None)
                     tokens_by_path.pop(path, None)
-        except Exception:
+        except Exception as exc:
+            settle_retries = int(library_state.get("_watcher_cover_refresh_settle_retries") or 0)
+            if (
+                isinstance(exc, _WatcherCoverRefreshStale)
+                and settle_retries < _WATCHER_COVER_REFRESH_MAX_SETTLE_RETRIES
+            ):
+                with _CACHE_LOCK:
+                    library_state["_watcher_cover_refresh_settle_retries"] = settle_retries + 1
+                    pending = library_state.setdefault(
+                        "_watcher_cover_refresh_pending_track_paths",
+                        set(),
+                    )
+                    pending.update(
+                        path for path in track_paths
+                        if tokens_by_path.get(path) == batch_tokens_by_path.get(path)
+                    )
+                    library_state["_watcher_cover_refresh_scheduled"] = False
+                logger.info("Watcher cover refresh is waiting for the library to settle.")
+                _schedule_watcher_cover_refresh_retry(
+                    _WATCHER_COVER_REFRESH_SETTLE_SECONDS,
+                    lambda: _submit_watcher_cover_refresh(library_state, config, logger),
+                )
+                return
             with _CACHE_LOCK:
                 pending = library_state.setdefault(
                     "_watcher_cover_refresh_pending_track_paths",
@@ -549,6 +586,19 @@ def hydrate_runtime_scan_metadata_on_startup(app) -> None:
         # A scan that completed during the metadata read owns its newer timestamp.
         if not app.library_state.get("last_scan"):
             app.library_state["last_scan"] = last_scan
+
+
+def file_metadata_repair_required_on_startup(app) -> bool:
+    """Postgres keeps file entries read by older metadata readers until rescanned.
+
+    A reader fix (for example keeping track subtitles out of album editions)
+    only reaches existing albums once their files are read again, so startup
+    schedules the same background metadata repair scan the cache path runs.
+    """
+    if app.config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        return False
+    check = getattr(select_scan_cache_adapter(app.config), "has_outdated_file_metadata", None)
+    return bool(check()) if callable(check) else False
 
 
 def recover_runtime_library_persistence_on_startup(app) -> None:

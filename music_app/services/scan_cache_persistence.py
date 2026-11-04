@@ -230,6 +230,30 @@ class PostgresScanCacheAdapter:
             return 0.0
         return _float_or_zero(payload.get("last_scan"))
 
+    def has_outdated_file_metadata(self) -> bool:
+        """True when an active file entry was read by an older metadata reader."""
+        from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(
+                """
+                select exists (
+                  select 1
+                  from library.local_track_files
+                  where scan_cache_stale is false
+                    and scan_file_entry_is_object is true
+                    and metadata #> '{scan_cache,file_entry}' ? 'path'
+                    and (
+                      coalesce(metadata #>> '{scan_cache,file_entry,metadata_schema_version}', '')
+                        <> %(schema_version)s
+                      or not (metadata #> '{scan_cache,file_entry}' ? 'release_date')
+                    )
+                ) as outdated
+                """,
+                {"schema_version": str(FILE_METADATA_SCHEMA_VERSION)},
+            ))
+        return bool(_row_mapping(row).get("outdated")) if row is not None else False
+
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         try:
             return self.load_snapshot_strict(cache_path, root_identity)
@@ -7124,11 +7148,12 @@ def _mark_targeted_track_files_stale_sql() -> str:
           where library.local_track_files.id = matched_files.id
           returning library.local_track_files.track_id
         )
+        -- Loose tracks have no album, but removing them is still an inventory
+        -- change: return one row per touched album, or a null key for loose tracks.
         select distinct library.local_albums.album_key as affected_album_key
         from updated_files
         join library.local_tracks
           on library.local_tracks.id = updated_files.track_id
-        join library.local_albums
-          on library.local_albums.id = library.local_tracks.album_id
-        where library.local_albums.album_key is not null;
+        left join library.local_albums
+          on library.local_albums.id = library.local_tracks.album_id;
     """

@@ -762,9 +762,15 @@ def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
         library_state["scan_in_progress"] = True
         return {"changed": False, "failed": 0}
 
+    settle_delays = []
     monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
     monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
     monkeypatch.setattr(state_module, "refresh_cover_artwork_request", stale_during_refresh)
+    monkeypatch.setattr(
+        state_module,
+        "_schedule_watcher_cover_refresh_retry",
+        lambda delay, callback: settle_delays.append(delay) or callback(),
+    )
 
     state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
         library_state,
@@ -775,12 +781,61 @@ def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
     )
     submissions[0]()
 
+    assert settle_delays == [state_module._WATCHER_COVER_REFRESH_SETTLE_SECONDS]
     assert len(submissions) == 2
+    assert library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] == 0
     assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
     assert library_state["_watcher_cover_refresh_album_keys_by_track_path"] == {
         "track-a": {"artist::album"}
     }
     assert library_state["pending_cover_refresh_after_scan"] is True
+
+
+def test_watcher_cover_refresh_outlasts_an_album_that_is_still_being_copied(
+    config,
+    logger,
+    monkeypatch,
+):
+    library_state = {"scan_generation": 4, "cover_generation": 7, "inventory_mutation_revision": 11}
+    submissions = []
+    refreshes = []
+
+    class ExecutorStub:
+        @staticmethod
+        def submit(callback):
+            submissions.append(callback)
+
+    class RepositoryStub:
+        def __init__(self, _config):
+            pass
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path} for path in track_paths}
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return []
+
+    def refresh(**kwargs):
+        refreshes.append(kwargs)
+        # Each of the first five lookups races another copied file's commit.
+        if len(refreshes) <= 5:
+            library_state["inventory_mutation_revision"] += 1
+        return {"changed": True, "failed": 0}
+
+    monkeypatch.setattr(state_module, "_COVER_EXECUTOR", ExecutorStub())
+    monkeypatch.setattr(state_module, "PostgresLibraryBrowseRepository", RepositoryStub)
+    monkeypatch.setattr(state_module, "refresh_cover_artwork_request", refresh)
+    monkeypatch.setattr(state_module, "_schedule_watcher_cover_refresh_retry", lambda _delay, callback: callback())
+
+    state_module.queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state, config, logger, {"Новые/Album/01.flac"},
+    )
+    while submissions:
+        submissions.pop(0)()
+
+    assert len(refreshes) == 6, "the lookup runs again once the copied album settles"
+    assert library_state["_watcher_cover_refresh_pending_track_paths"] == set()
+    assert library_state["_watcher_cover_refresh_settle_retries"] == 0
 
 
 def test_watcher_cover_refresh_retries_failed_provider_work(

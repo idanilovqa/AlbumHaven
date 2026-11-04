@@ -1435,7 +1435,12 @@ def _cover_response(
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,
-                    cache_root=cache_roots[0],
+                    # Reads may span old and new storage; writes follow the policy.
+                    cache_root=(
+                        storage_policy.write_cache_root(resolved)
+                        if storage_policy is not None
+                        else cache_roots[0]
+                    ),
                     max_size=requested_size,
                     priority=request_priority,
                     **revision_options,

@@ -692,6 +692,84 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
         assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
+def test_live_outdated_file_metadata_is_detected_for_a_startup_repair_scan(watcher_repair_inventory):
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+
+    fixture = watcher_repair_inventory
+    current = {"metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "release_date": None}
+    tracks = [
+        {**fixture.entry(f"Art Zoyd/Génération sans futur/0{index}.flac", artist="Art Zoyd", album="Génération sans futur"), **current}
+        for index in (1, 2)
+    ]
+    fixture.seed(*tracks)
+    assert fixture.adapter.has_outdated_file_metadata() is False
+
+    # An entry read before the subtitle/edition fix still carries a per-track edition.
+    stale_reader = {**tracks[1], "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION - 1, "edition": "Speedy Gonzalez"}
+    fixture.seed(tracks[0], stale_reader)
+    assert fixture.adapter.has_outdated_file_metadata() is True
+
+
+@pytest.mark.parametrize("stale_track_editions", [False, True])
+def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watcher_repair_inventory, stale_track_editions):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    # The owner's two real copies: a Bandcamp copy in the main library and a
+    # Soulseek copy whose older reader stored each track subtitle as an edition.
+    main_titles = ["La Ville", "Speedy Gonzales", "Divertissement", "Trois Miniatures", "Génération Sans Futur", "Les fourmis"]
+    arrival_titles = ["La Ville", "Speedy Gonzalez", "Génération sans futur", "Divertissement", "Trois miniatures"]
+
+    def copy(root, folder, album, titles, disc_number):
+        return [
+            {**fixture.entry(f"{folder}/0{index}.flac", root=root, artist="Art Zoyd", album=album),
+             "title": title, "track_number": index, "disc_number": disc_number, "year": 1980,
+             "edition": title if stale_track_editions and root == 1 else ""}
+            for index, title in enumerate(titles, start=1)
+        ]
+
+    fixture.seed(*copy(0, "Prog 80s leftovers/1980 - Art Zoyd - Génération Sans Futur", "Génération Sans Futur", main_titles, None),
+                 *copy(1, "Art Zoyd (1980) - Génération sans futur", "Génération sans futur", arrival_titles, 1))
+    payload = PostgresLibraryBrowseRepository(fixture.config).build_problematic_files_payload()
+    duplicate_items = [
+        item for item in payload["items"]
+        if "duplicate" in " ".join(map(str, item.get("problem_reasons") or [])).casefold()
+    ]
+    assert duplicate_items, payload["items"]
+
+
+def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_inventory):
+    import shutil
+
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    loose = [
+        fixture.entry(f"Формы времени/{index:02d} - Трек.flac", artist="Начало Века", album=album, exception=exception)
+        for index, (album, exception) in enumerate((("Формы времени", "Random songs"), (None, "Custom Collection")), start=1)
+    ]
+    kept = fixture.entry("Начало Века/2009 - Тебя ждала (single)/01.flac", artist="Начало Века", album=None)
+    fixture.seed(*loose, kept)
+    folder = Path(loose[0]["path"]).parent
+    shutil.rmtree(folder)
+
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(), deleted_subtrees=(folder,), moves=(),
+    ))
+
+    assert result.revision > 0, "deleting album-less loose tracks is an inventory change"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_cache_stale from library.local_track_files order by private_path"
+        ).fetchall()
+    stale = {row["private_path"]: row["scan_cache_stale"] for row in rows}
+    assert all(stale[entry["path"]] for entry in loose)
+    assert stale[kept["path"]] is False
+
+
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])
 def test_live_targeted_publication_rechecks_health_after_inventory_lock_wait(watcher_repair_inventory, blocked_root):
     from music_app.services.library_watch_health import LibraryWatchHealthProblem, PostgresLibraryWatchHealthStore

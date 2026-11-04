@@ -8024,3 +8024,22 @@ test('watchSaveTask hydrates an open merged destination from canonical visible s
   assert.equal(context.state.modalReleases[0].tracks.length, 17);
   assert.equal(context.state.modalReleases[0].preview_only, false);
 });
+
+test('Problematic Files names tagged tracks with their number and untagged tracks by file name', () => {
+  const context = loadHelpers();
+  context.getFilenameFromPath = (value) => String(value || '').split(/[\/]/).pop();
+  assert.equal(
+    context.formatProblematicTrackLabel({ title: 'Bruit, silence - Bruit, repos', track_number: 1 }, { filename: '01 - Bruit.flac' }),
+    '01. Bruit, silence - Bruit, repos',
+  );
+  assert.equal(
+    context.formatProblematicTrackLabel({ title: 'Trio', track_number: null }, { path: 'C:/Music/Art Zoyd/03 - Trio.flac' }),
+    '03 - Trio.flac',
+  );
+  assert.equal(context.formatProblematicTrackLabel({}, { filename: '07 - Untitled.mp3' }), '07 - Untitled.mp3');
+});
+
+test('every Problematic Files problem label shares one width', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.match(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill,\s*\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
+});

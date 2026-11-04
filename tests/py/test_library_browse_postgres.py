@@ -8,6 +8,8 @@ from threading import Event, Lock
 
 import pytest
 
+from music_app.services.utils import artist_collation_key
+
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 
 
@@ -5614,9 +5616,10 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     assert [group["artist"] for group in payload["artist_groups"]] == ["Tender Forever"]
     assert payload["primary_artist_groups"] == payload["artist_groups"]
     assert [album["name"] for album in payload["artist_groups"][0]["albums"]] == ["No Snare"]
+    # The best match drives the gallery and selection; the tree stays alphabetical.
     assert payload["artists_sidebar"] == [
-        {"artist": "Tender Forever", "artist_display": "Tender Forever", "count": 1},
         {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+        {"artist": "Tender Forever", "artist_display": "Tender Forever", "count": 1},
     ]
     assert payload["search_context"] == {
         "transport": "view_data",
@@ -7705,11 +7708,10 @@ def test_postgres_selected_artist_query_context_preserves_explicit_collaboration
         "resonance-no-hill-for-a-climber"
     ]
     assert "One" not in {album["name"] for album in primary_albums}
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        collaboration_artist,
-        "The Neal Morse Band",
-        "Neal Morse",
-    ]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == sorted(
+        [collaboration_artist, "The Neal Morse Band", "Neal Morse"],
+        key=artist_collation_key,
+    )
 
 
 def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tracks():
@@ -8353,11 +8355,10 @@ def test_postgres_non_exact_best_match_sidebar_includes_projected_family(monkeyp
         "The Flower Kings",
         *family_artists,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "The Flower Kings",
-        *family_artists,
-        "Swedish Family",
-    ]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == sorted(
+        ["The Flower Kings", *family_artists, "Swedish Family"],
+        key=artist_collation_key,
+    )
     assert payload["artist_count"] == 4
     assert payload["show_all_artists_sidebar_link"] is True
 
@@ -18400,3 +18401,16 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
 
+
+
+def test_search_artist_tree_is_alphabetical_while_ranked_groups_choose_the_match():
+    from music_app.services import library_browse_postgres as browse
+
+    ranked = [{"artist": name, "albums": [{}]} for name in (
+        "Lost Frequencies", "Lostprophets", "T", "IQ", "M", "VA", "Oak", "Sia", "Ten", "ABBA",
+    )]
+    assert browse._top_search_selected_artist(ranked, query="lost") == "Lost Frequencies"
+    assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked, alphabetical=True)] == [
+        "ABBA", "IQ", "Lost Frequencies", "Lostprophets", "M", "Oak", "Sia", "T", "Ten", "VA",
+    ]
+    assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked)][:2] == ["Lost Frequencies", "Lostprophets"]

@@ -440,7 +440,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(formatProblematicTrackLabel(track, row))}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -647,6 +647,15 @@ function findVisibleAlbumByTrackPath(trackPath) {
   return flattenVisibleAlbums().find((album) => (
     Array.isArray(album?.tracks) && album.tracks.some((track) => String(track.path || '') === targetPath)
   )) || null;
+}
+
+// Tagged tracks read "NN. Title"; without title and number tags the file name
+// (which normally carries the number) identifies the track instead.
+function formatProblematicTrackLabel(track = {}, row = {}) {
+  const title = String(track.title || '').trim();
+  const number = Number.parseInt(track.track_number ?? row.track_number, 10);
+  if (title && Number.isInteger(number) && number > 0) return `${String(number).padStart(2, '0')}. ${title}`;
+  return String(row.filename || getFilenameFromPath(row.path) || title || 'Unknown file');
 }
 
 function resolveActiveQueueAlbumSnapshot(trackPath) {

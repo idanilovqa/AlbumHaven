@@ -12,7 +12,7 @@ from music_app.services.covers import (
     resolve_cover_display_variant,
 )
 from music_app.services.postgres_connections import pooled_connection
-from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
+from music_app.services.generated_preview_storage import remove_album_folder_previews
 
 
 _DISPLAY_COVER_SIZE = 480
@@ -107,10 +107,11 @@ class CoverPreviewBackfill:
             if (policy is not None and policy.write_cache_root(source_path) != previous_root
                     and previous_root not in cleanup_attempted):
                 cleanup_attempted.add(previous_root)
+                # Previews live elsewhere now; the album-folder cache is unreachable.
                 try:
-                    remove_empty_album_preview_directories(previous_root)
+                    remove_album_folder_previews(previous_root)
                 except OSError:
-                    self._logger.warning("Unable to prune old preview directories in %s", previous_root, exc_info=True)
+                    self._logger.warning("Unable to remove old preview directories in %s", previous_root, exc_info=True)
             generation_options = {}
             recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
             if recorder is not None:

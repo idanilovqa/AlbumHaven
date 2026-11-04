@@ -34,6 +34,57 @@ function buildGalleryArtistMetadataHtml(albumCount, artistMusicBrainz = null) {
   return `<span>${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span>${countryHtml}${genreHtml}`;
 }
 
+const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), loadedAt: 0, promise: null };
+
+function galleryArtistMusicBrainzStatusKey(artist) {
+  return String(artist || '').trim().toLocaleLowerCase();
+}
+
+// Owner-only repair status from the stored review projection; the shared,
+// cached Gallery payload never carries it.
+function getGalleryArtistMusicBrainzStatus(group = {}) {
+  if (group?.artist_musicbrainz_problem || group?.artist_musicbrainz_state) {
+    return { problem: group.artist_musicbrainz_problem || null, state: group.artist_musicbrainz_state || '' };
+  }
+  return galleryArtistMusicBrainzStatus.byArtist.get(galleryArtistMusicBrainzStatusKey(group?.artist)) || { problem: null, state: '' };
+}
+
+function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
+  if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
+    galleryArtistMusicBrainzStatus.byArtist.clear();
+    return Promise.resolve(false);
+  }
+  if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
+  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS) {
+    return Promise.resolve(false);
+  }
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/review', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      if (!Array.isArray(payload?.artists)) return false;
+      const next = new Map();
+      for (const row of payload.artists) {
+        const key = galleryArtistMusicBrainzStatusKey(row?.local_artist_name);
+        if (!key) continue;
+        if (row.unresolved_reason && row.problem_occurrence_id != null) {
+          next.set(key, { problem: { occurrence_id: String(row.problem_occurrence_id), label: row.unresolved_reason }, state: '' });
+        } else if (row.match_state === 'pending') {
+          next.set(key, { problem: null, state: 'pending' });
+        }
+      }
+      galleryArtistMusicBrainzStatus.byArtist = next;
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      galleryArtistMusicBrainzStatus.loadedAt = Date.now();
+      galleryArtistMusicBrainzStatus.promise = null;
+    });
+  return galleryArtistMusicBrainzStatus.promise;
+}
+
 function buildGalleryArtistStatusHtml(config = {}) {
   const problem = config.artistMusicBrainzProblem;
   if (problem?.occurrence_id && problem?.label) {

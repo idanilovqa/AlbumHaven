@@ -46,6 +46,7 @@ from music_app.services.library_browse_postgres import (
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
+from music_app.routes.musicbrainz_enrichment_asgi import project_artist_problems_into_problematic_files
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -1134,6 +1135,7 @@ def utilities_problematic_files(
             else repository.build_problematic_files_payload()
         )
         _project_missing_album_actions_for_request(request, payload)
+        project_artist_problems_into_problematic_files(request, payload)
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_albums_payload(

@@ -157,15 +157,73 @@ async def assign_artist_match(local_artist_id: int, request: Request):
     return {"assigned": True}
 
 
+def _is_current_library_owner(actor: object) -> bool:
+    library_id = getattr(actor, "current_library_id", None)
+    return (
+        getattr(actor, "account_id", None) is not None
+        and library_id is not None
+        and any(
+            relationship.library_id == library_id and relationship.is_primary_owner
+            for relationship in getattr(actor, "library_relationships", ())
+        )
+    )
+
+
 async def _require_current_library_owner(request: Request):
     actor = await current_actor_from_request(request)
-    library_id = actor.current_library_id
-    if actor.account_id is None or library_id is None or not any(
-        relationship.library_id == library_id and relationship.is_primary_owner
-        for relationship in actor.library_relationships
-    ):
+    if not _is_current_library_owner(actor):
         raise HTTPException(403, "Action not permitted.")
     return actor
+
+
+def project_artist_problems_into_problematic_files(request: Request, payload: object) -> object:
+    """Add the primary owner's unresolved artist identities as ``Artist`` rows.
+
+    Runs per request after the shared Problematic Files projection, so the
+    cached library-wide payload never carries owner-only repair details. A
+    failure leaves the existing Album and Folder rows untouched.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
+        return payload
+    service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
+    list_review = getattr(service, "list_present_artist_review", None)
+    if not callable(list_review):
+        return payload
+    try:
+        rows = list_review()
+    except Exception:
+        logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+        logger.warning("MusicBrainz artist problems were unavailable for Problematic Files.")
+        return payload
+    artist_items = [
+        _problematic_artist_item(row)
+        for row in rows if isinstance(row, Mapping)
+        and row.get("unresolved_reason") and row.get("problem_occurrence_id") is not None
+    ]
+    if artist_items:
+        # Stable sort by name keeps the existing Album/Folder order intact.
+        payload["items"] = sorted(
+            [*payload["items"], *artist_items],
+            key=lambda item: str(item.get("name") or "").lower(),
+        )
+        payload["count"] = len(payload["items"])
+    return payload
+
+
+def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:
+    name = str(row.get("local_artist_name") or "").strip() or "Unknown Artist"
+    return {
+        "key": f"musicbrainz-artist:{int(row['local_artist_id'])}",
+        "entity_kind": "artist",
+        "local_artist_id": int(row["local_artist_id"]),
+        "musicbrainz_occurrence_id": str(row["problem_occurrence_id"]),
+        "name": name,
+        "album_artist": name,
+        "problem_reasons": [str(row["unresolved_reason"])],
+        "local_album_count": row.get("local_album_count"),
+    }
 
 
 async def _request_object(request: Request) -> dict[str, object] | None:

@@ -2084,3 +2084,86 @@
     inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
     0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
 }
+
+/* MusicBrainz artist identity repair inside the existing Problematic Files detail. */
+.musicbrainz-identity-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.musicbrainz-identity-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.musicbrainz-identity-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.musicbrainz-identity-line small,
+.musicbrainz-identity-mbid,
+.musicbrainz-identity-evidence {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.musicbrainz-identity-mbid {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.musicbrainz-manual-resolution {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.musicbrainz-manual-field-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.musicbrainz-manual-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.musicbrainz-manual-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.musicbrainz-manual-helper {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.musicbrainz-manual-helper.is-error {
+  color: var(--danger, #f87171);
+}
+
+.musicbrainz-retry-status {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.musicbrainz-retry-status dt {
+  color: var(--muted);
+}
+
+.musicbrainz-retry-status dd {
+  margin: 0;
+}

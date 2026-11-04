@@ -6,6 +6,7 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -967,6 +968,7 @@ function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
 }
 
 function handleUtilityBootstrapInput(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const localPlaylistFileInput = event.target.closest('[data-local-playlist-import-file]');
   if (localPlaylistFileInput) {
     const file = Array.isArray(localPlaylistFileInput.files)
@@ -1135,6 +1137,7 @@ function handleUtilityBootstrapDragEnd() {
 }
 
 function handleUtilityBootstrapChange(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
     addCoverLookupFiles(coverLookupFiles.files || [])

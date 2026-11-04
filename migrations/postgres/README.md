@@ -275,7 +275,9 @@ Rollback first disables projection readers and writers, then removes its trigger
 functions, and projection tables in dependency order; local inventory remains the
 source of truth.
 
-Migration `0099_create_musicbrainz_artist_enrichment.sql` adds the bounded
+Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
+`0099` through `0170` are already taken by unmerged branches or recorded in the
+production ledger, so it skips them instead of colliding. It adds the bounded
 artist-only MusicBrainz canonical projection, aliases, countries, complete tag
 facts, current library-scoped matches and candidates, durable jobs, and diagnostic
 history. The display view chooses at most three official genres, preferring

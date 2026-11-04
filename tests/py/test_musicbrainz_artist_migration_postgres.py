@@ -11,7 +11,7 @@ from tests.e2e.support import isolatedPostgres
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_ROOT = REPO_ROOT / "migrations" / "postgres"
-MIGRATION_NAME = "0099_create_musicbrainz_artist_enrichment.sql"
+MIGRATION_NAME = "0171_create_musicbrainz_artist_enrichment.sql"
 MIGRATION_PATH = MIGRATIONS_ROOT / MIGRATION_NAME
 
 ARTIST_TABLES = {

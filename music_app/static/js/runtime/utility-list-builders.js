@@ -3090,6 +3090,23 @@ function getProblematicAlbumForTrackPath(trackPath) {
   ) || null;
 }
 
+// One pass for a whole track list: per-row lookups scanned every problematic
+// album, so a long Loose Tracks list multiplied into millions of comparisons.
+// Matches getProblematicAlbumForTrackPath: the first album in list order wins.
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of state.utility.problematicFiles || []) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
+}
+
 async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;

@@ -1523,3 +1523,44 @@ test('confirming local cover deletion forwards the retained path exactly once', 
   assert.equal(wasPrevented(), true);
   assert.deepEqual(paths, ['C:\\Music\\Artist\\Album\\Front.jpg']);
 });
+
+test('returning to Problematic Files from Rules reuses the loaded list without another summary request', async () => {
+  // Owner regression: PF -> Rules -> PF must never pay for the summary again.
+  const { context } = createContext({ activeTab: 'problematic-files', loaded: false, rulesLoaded: true });
+  vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+  const requests = [];
+  const summary = (complete) => ({
+    ok: true, complete, items: [{ key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: false }],
+    initial_detail: { key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: true, tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] }, operational_items: [],
+  });
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => summary(!String(url).includes('limit=')) };
+  };
+  context.scheduleBrowserAnimationFrame = callback => { callback(); return 1; };
+  context.renderUtilityModalContent = () => {};
+  context.showToast = () => {};
+  context.loadUtilityRules = () => {};
+  context.setUtilityActiveTab = nextTab => { context.state.utility.activeTab = nextTab; return nextTab; };
+  context.getTagEditorElements = () => ({});
+  context.waitForUtilityTabPaint = async () => {};
+  context.document.getElementById = () => null;
+  const clickTab = tab => context.handleUtilityBootstrapClick(createEvent({
+    '[data-utility-tab]': createElement({ 'data-utility-tab': tab }),
+  }).event);
+
+  const errors = [];
+  context.console = { ...console, error: (...args) => errors.push(args.map(String).join(' ')) };
+  await context.loadProblematicFiles(true, { render: false });
+  assert.deepEqual(errors, []);
+  const summaryRequests = () => requests.filter(url => url.startsWith('/utilities/problematic-files') && !url.includes('/detail'));
+  assert.equal(context.state.utility.loaded, true);
+  assert.equal(context.state.utility.problematicFilesComplete, true);
+  const loadedCount = summaryRequests().length;
+
+  await clickTab('rules');
+  await clickTab('problematic-files');
+
+  assert.equal(context.state.utility.activeTab, 'problematic-files');
+  assert.equal(summaryRequests().length, loadedCount, `unexpected reload: ${requests.join(', ')}`);
+});

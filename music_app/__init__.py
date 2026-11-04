@@ -67,6 +67,7 @@ def _start_library_warmup(
     hydrate_metadata=None,
     recover_persistence=None,
     metadata_repair_required=None,
+    acquire_metadata_repair_lease=None,
 ):
     stop_requested = threading.Event()
     runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
@@ -109,17 +110,39 @@ def _start_library_warmup(
                 except Exception:
                     runtime.logger.exception("Postgres file metadata repair check failed.")
                     return
-                if repair_required and not runtime.library_state.get("scan_in_progress"):
+                if not repair_required or runtime.library_state.get("scan_in_progress"):
+                    return
+                # Instances sharing one database repair it one at a time. The
+                # scan itself is idempotent: it re-reads files and upserts them.
+                lease = None
+                if acquire_metadata_repair_lease is not None:
+                    try:
+                        lease = acquire_metadata_repair_lease(runtime)
+                    except Exception:
+                        runtime.logger.exception("File metadata repair lease could not be acquired.")
+                        return
+                    if lease is None:
+                        runtime.logger.info(
+                            "Another instance is repairing stored file metadata; skipping the repair scan."
+                        )
+                        return
+                try:
                     runtime.logger.info(
                         "Stored file metadata predates the current reader; starting a background repair scan."
                     )
-                    start_refresh(
+                    started = start_refresh(
                         runtime.library_state,
                         runtime.config,
                         runtime.logger,
                         force=True,
                         scan_mode="background",
                     )
+                    while started is not False and runtime.library_state.get("scan_in_progress"):
+                        if stop_requested.wait(5.0):
+                            return
+                finally:
+                    if lease is not None:
+                        lease.release()
                 return
             hydrated = hydrate(runtime)
             if stop_requested.is_set():
@@ -443,6 +466,7 @@ def create_asgi_app():
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
+        acquire_file_metadata_repair_lease_on_startup,
         file_metadata_repair_required_on_startup,
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
@@ -547,6 +571,7 @@ def create_asgi_app():
             hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
             recover_persistence=recover_runtime_library_persistence_on_startup,
             metadata_repair_required=file_metadata_repair_required_on_startup,
+            acquire_metadata_repair_lease=acquire_file_metadata_repair_lease_on_startup,
         )
         lastfm_started = False
         welcome_worker = None

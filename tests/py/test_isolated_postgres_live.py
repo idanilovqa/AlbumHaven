@@ -692,6 +692,22 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
         assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
+def test_live_metadata_repair_lease_admits_one_instance_at_a_time(watcher_repair_inventory):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    fixture = watcher_repair_inventory
+    first = fixture.adapter.try_acquire_metadata_repair_lease()
+    second_instance = PostgresScanCacheAdapter(fixture.config, connect=isolatedPostgres._connect)
+    try:
+        assert first is not None
+        assert second_instance.try_acquire_metadata_repair_lease() is None
+    finally:
+        first.release()
+    again = second_instance.try_acquire_metadata_repair_lease()
+    assert again is not None
+    again.release()
+
+
 def test_live_outdated_file_metadata_is_detected_for_a_startup_repair_scan(watcher_repair_inventory):
     from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 

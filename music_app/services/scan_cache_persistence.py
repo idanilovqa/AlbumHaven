@@ -207,6 +207,26 @@ class ScanCacheAdapter(Protocol):
         ...
 
 
+_METADATA_REPAIR_LEASE_KEY = "album-haven:file-metadata-repair"
+
+
+class MetadataRepairLease:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def release(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            connection.execute(
+                "select pg_advisory_unlock(hashtextextended(%(key)s, 0))",
+                {"key": _METADATA_REPAIR_LEASE_KEY},
+            )
+        finally:
+            connection.close()
+
+
 class PostgresScanCacheAdapter:
     backend = PERSISTENCE_BACKEND_POSTGRES
 
@@ -229,6 +249,29 @@ class PostgresScanCacheAdapter:
         if str(payload.get("library_root_identity") or "") != str(root_identity):
             return 0.0
         return _float_or_zero(payload.get("last_scan"))
+
+    def try_acquire_metadata_repair_lease(self) -> "MetadataRepairLease | None":
+        """Hold a database-wide session lock so one instance repairs at a time.
+
+        Several app instances may share one library database. The lease lives on
+        its own connection until released (or until that process exits), so a
+        second instance sees it as held and skips its own repair scan.
+        """
+        connection = self._connect_to_database()
+        try:
+            if hasattr(connection, "autocommit"):
+                connection.autocommit = True
+            row = _first_row(connection.execute(
+                "select pg_try_advisory_lock(hashtextextended(%(key)s, 0)) as acquired",
+                {"key": _METADATA_REPAIR_LEASE_KEY},
+            ))
+            if row is not None and bool(_row_mapping(row).get("acquired")):
+                return MetadataRepairLease(connection)
+        except Exception:
+            connection.close()
+            raise
+        connection.close()
+        return None
 
     def has_outdated_file_metadata(self) -> bool:
         """True when an active file entry was read by an older metadata reader."""

@@ -1788,6 +1788,33 @@ def test_postgres_warmup_rereads_files_stored_by_an_older_metadata_reader(monkey
     expected_scan = [("scan", {"force": True, "scan_mode": "background"})] if outdated else []
     assert calls == ["relations", "check", *expected_scan]
 
+@pytest.mark.parametrize("lease_held_elsewhere", [True, False])
+def test_postgres_metadata_repair_scan_runs_once_across_instances_sharing_a_database(monkeypatch, lease_held_elsewhere):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
+    calls = []
+    lease = SimpleNamespace(release=lambda: calls.append("release"))
+    runtime = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"},
+        logger=Mock(), library_state={},
+    )
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: None,
+        lambda _runtime, **_kwargs: None,
+        lambda _state, _config, _logger, **_kwargs: calls.append("scan"),
+        lambda _url: None,
+        metadata_repair_required=lambda _runtime: True,
+        acquire_metadata_repair_lease=lambda _runtime: None if lease_held_elsewhere else lease,
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    assert calls == ([] if lease_held_elsewhere else ["scan", "release"])
+
+
 def test_lifespan_compiles_templates_without_rendering_before_first_request(monkeypatch):
     from jinja2 import DictLoader, Template
     from music_app import create_asgi_app

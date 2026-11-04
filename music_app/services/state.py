@@ -601,6 +601,12 @@ def file_metadata_repair_required_on_startup(app) -> bool:
     return bool(check()) if callable(check) else False
 
 
+def acquire_file_metadata_repair_lease_on_startup(app):
+    """Return a held repair lease, or None when another instance holds it."""
+    acquire = getattr(select_scan_cache_adapter(app.config), "try_acquire_metadata_repair_lease", None)
+    return acquire() if callable(acquire) else None
+
+
 def recover_runtime_library_persistence_on_startup(app) -> None:
     """Restore durable startup invariants without hydrating the gallery."""
     from music_app.services.tag_edit_recovery import (

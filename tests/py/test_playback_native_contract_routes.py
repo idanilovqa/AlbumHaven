@@ -15,6 +15,8 @@ from tests.py.asgi_websocket_testing import websocket_session
 
 @pytest.mark.parametrize("method,path", [
     ("POST", "/playback/refs"),
+    ("POST", "/playback/refs/resume"),
+    ("GET", "/playback/artwork/opaque.token"),
     ("GET", "/playback/state"),
     ("PUT", "/playback/state"),
     ("DELETE", "/playback/state"),
@@ -32,6 +34,7 @@ def test_native_playback_contract_requires_authentication(playback_app, method, 
 
 @pytest.mark.parametrize("method,path", [
     ("POST", "/playback/refs"),
+    ("POST", "/playback/refs/resume"),
     ("PUT", "/playback/state"),
     ("DELETE", "/playback/state"),
 ])
@@ -168,6 +171,31 @@ def test_reference_batch_requires_one_to_one_hundred_tracks(playback_app, tracks
     assert status == 400
     assert "/private/library" not in body.decode()
     assert "tracks" not in decode_json(body)
+
+
+@pytest.mark.parametrize("tracks", [None, [], [{"clientKey": "a", "resumeToken": "t"}] * 101,
+                                    [{"clientKey": "a", "resumeToken": "t", "path": "/private/library/song.flac"}],
+                                    [{"clientKey": "a", "path": "/private/library/song.flac"}]],
+                         ids=["missing", "empty", "over-limit", "extra-path", "path-instead"])
+def test_resume_exchange_accepts_only_bounded_resume_token_batches(playback_app, tracks):
+    status, _, body = run_asgi_request(
+        playback_app, "POST", "/playback/refs/resume",
+        json_body={"protocol": 1, "tracks": tracks},
+    )
+    assert status == 400
+    assert "/private/library" not in body.decode()
+
+
+@pytest.mark.parametrize("token", ["not-a-token", "a.b", "a.b.c", "x" * 600])
+def test_invalid_resume_tokens_are_refused_without_naming_anything(playback_app, token):
+    status, headers, body = run_asgi_request(playback_app, "GET", "/playback/artwork/" + token)
+    assert status == 403
+    assert token not in body.decode()
+    status, _, _ = run_asgi_request(
+        playback_app, "POST", "/playback/refs/resume",
+        json_body={"protocol": 1, "tracks": [{"clientKey": "a", "resumeToken": token}]},
+    )
+    assert status in {400, 403}
 
 
 @pytest.mark.parametrize("protocol", [None, 0, 2, True, "1"])

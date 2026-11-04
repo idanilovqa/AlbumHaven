@@ -3,12 +3,13 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.auth_asgi import _same_origin
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.auth_session_csrf import matches_session_csrf
+from music_app.services.capability_artwork import sanitized_artwork
 from music_app.services.lastfm import get_saved_lastfm_session, lastfm_scrobbling_available, scrobble_track
 from music_app.services.lastfm_sync_bridge import (
     playback_handoff_completion_fingerprint,
@@ -30,6 +31,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SCROBBLING_ACTIONS = ("integration.lastfm.now_playing", "integration.lastfm.scrobble")
+# The Android 13+ media card fills its width with the artwork; larger only costs bytes.
+_NOTIFICATION_ARTWORK_EDGE = 768
 
 
 def playback_config(request):
@@ -62,6 +65,26 @@ async def playback_refs(request: Request) -> JSONResponse:
     service = PlaybackReferenceService(playback_config(request))
     result = await playback_call(service.issue_batch, request.state.current_actor, tracks)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/playback/refs/resume")
+async def resume_playback_refs(request: Request) -> JSONResponse:
+    """Fresh references for the resume tokens a native player persisted instead of references."""
+    payload = await playback_payload(request)
+    service = PlaybackReferenceService(playback_config(request))
+    result = await playback_call(service.exchange_resume_tokens, request.state.current_actor, payload.get("tracks"))
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/playback/artwork/{resume_token}")
+async def playback_artwork(request: Request, resume_token: str) -> Response:
+    """A resume token's cover, re-encoded at media-notification size; no path in the URL or any answer."""
+    service = PlaybackReferenceService(playback_config(request))
+    path = await playback_call(service.resolve_artwork, request.state.current_actor, resume_token)
+    image = await run_in_threadpool(sanitized_artwork, path, max_edge=_NOTIFICATION_ARTWORK_EDGE, image_format="JPEG")
+    # The token names a track, not an image revision, so a changed cover shows within the hour.
+    return Response(image, media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/playback/state")

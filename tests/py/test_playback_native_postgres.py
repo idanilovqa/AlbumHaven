@@ -1769,3 +1769,182 @@ def test_now_playing_retries_only_transient_lastfm_failures(playback_inventory, 
             assert dict(headers).get("retry-after") == retry_after, name
     finally:
         claims.release(fixture.actor, client_id=client_id, claim_token=token)
+
+
+def decoded_token_fields(token):
+    encoded = token.split(".")[0]
+    return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode())
+
+
+def test_resume_tokens_are_account_bound_path_free_and_outlive_references(playback_inventory):
+    fixture = playback_inventory
+    now = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    service = reference_service(fixture, lambda: now)
+    issued = issue(service, fixture)["tracks"]
+    tokens = [item["resumeToken"] for item in issued]
+    for token in tokens:
+        fields = decoded_token_fields(token)
+        assert fields[:4] == [1, 1, fixture.actor.account_id, fixture.actor.current_library_id]
+        assert all(path not in token and Path(path).stem not in token for path in fixture.paths)
+
+    now += timedelta(days=30)
+    with pytest.raises(ValueError):
+        service.resolve(fixture.actor, issued[0]["playbackRef"])
+    exchanged = service.exchange_resume_tokens(fixture.actor, [
+        {"clientKey": "b", "resumeToken": tokens[0]}, {"clientKey": "a", "resumeToken": tokens[1]},
+    ])
+    assert [item["clientKey"] for item in exchanged["tracks"]] == ["b", "a"]
+    assert datetime.fromisoformat(exchanged["expiresAt"]) == now + timedelta(hours=24)
+    assert [str(service.resolve(fixture.actor, item["playbackRef"])) for item in exchanged["tracks"]] == [
+        fixture.paths[1], fixture.paths[0]]
+    assert all(path not in str(exchanged) for path in fixture.paths)
+
+    # A token is neither a reference nor valid for another account, library or key.
+    with pytest.raises(ValueError):
+        service.resolve(fixture.actor, tokens[0])
+    other_library = replace(fixture.actor, current_library_id=fixture.actor.current_library_id + 100000)
+    for actor in (create_member(fixture), other_library):
+        with pytest.raises(ValueError) as refused:
+            service.exchange_resume_tokens(actor, [{"clientKey": "b", "resumeToken": tokens[0]}])
+        assert refused.value.status_code == 403
+    for forged in (issued[0]["playbackRef"], tokens[0][:-1] + ("A" if tokens[0][-1] != "A" else "B")):
+        with pytest.raises(ValueError):
+            service.exchange_resume_tokens(fixture.actor, [{"clientKey": "b", "resumeToken": forged}])
+    with pytest.raises(ValueError):
+        service.exchange_resume_tokens(fixture.actor, [
+            {"clientKey": "valid", "resumeToken": tokens[1]},
+            {"clientKey": "forged", "resumeToken": issued[1]["playbackRef"]},
+        ])
+    fixture.config["hmac"] = {"secret": "rotated-test-playback-secret-at-least-32-bytes", "key_version": 2}
+    with pytest.raises(ValueError):
+        reference_service(fixture, lambda: now).exchange_resume_tokens(
+            fixture.actor, [{"clientKey": "b", "resumeToken": tokens[0]}])
+
+
+def test_resume_exchange_skips_a_removed_file_and_rechecks_membership(playback_inventory, caplog):
+    fixture = playback_inventory
+    service = reference_service(fixture, lambda: datetime.now(timezone.utc))
+    tokens = [item["resumeToken"] for item in issue(service, fixture)["tracks"]]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_track_files where private_path = %s", (fixture.paths[1],))
+    exchanged = service.exchange_resume_tokens(fixture.actor, [
+        {"clientKey": "removed", "resumeToken": tokens[0]}, {"clientKey": "kept", "resumeToken": tokens[1]},
+    ])["tracks"]
+    assert exchanged[0] == {"clientKey": "removed", "playbackRef": None}
+    assert str(service.resolve(fixture.actor, exchanged[1]["playbackRef"])) == fixture.paths[0]
+    with pytest.raises(ValueError) as missing:
+        service.resolve_artwork(fixture.actor, tokens[0])
+    assert missing.value.status_code == 404
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "delete from library.library_memberships where library_id = %s and account_id = %s",
+            (fixture.actor.current_library_id, fixture.actor.account_id),
+        )
+    with pytest.raises(ValueError) as refused:
+        service.exchange_resume_tokens(fixture.actor, [{"clientKey": "kept", "resumeToken": tokens[1]}])
+    assert refused.value.status_code == 403
+    assert all(path not in caplog.text for path in fixture.paths)
+
+
+def write_cover(path, size=(2000, 1200)):
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", size, (200, 40, 90))
+    exif = Image.Exif()
+    exif[0x010E] = "private cover description"
+    image.save(path, format="JPEG", exif=exif)
+    return path
+
+
+def set_album_cover(fixture, track_path, cover_path):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """update library.local_albums set cover_path = %s where id = (
+                 select t.album_id from library.local_track_files f join library.local_tracks t on t.id = f.track_id
+                 where f.private_path = %s)""",
+            (cover_path, track_path),
+        )
+
+
+def test_http_artwork_is_path_free_bounded_cached_and_authorized(playback_inventory, playback_app, tmp_path, caplog):
+    from io import BytesIO
+    from PIL import Image
+
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    status, _, body = run_asgi_request(playback_app, "POST", "/playback/refs", json_body={
+        "protocol": 1, "tracks": [{"clientKey": "track", "path": fixture.paths[0]}],
+    })
+    assert status == 200
+    token = decode_json(body)["tracks"][0]["resumeToken"]
+    artwork = "/playback/artwork/" + token
+
+    status, _, body = run_asgi_request(playback_app, "GET", artwork)
+    assert status == 404 and decode_json(body) == {"detail": "Invalid or unavailable playback request."}
+
+    cover = write_cover(Path(fixture.paths[0]).parent / "cover.jpg")
+    set_album_cover(fixture, fixture.paths[0], str(cover))
+    status, headers, body = run_asgi_request(playback_app, "GET", artwork)
+    assert status == 200
+    headers = dict(headers)
+    assert headers["content-type"] == "image/jpeg"
+    assert headers["cache-control"] == "private, max-age=3600"
+    assert headers["x-content-type-options"] == "nosniff"
+    with Image.open(BytesIO(body)) as image:
+        assert image.format == "JPEG" and image.size == (768, 461)
+        assert not image.getexif()
+    assert b"private cover description" not in body
+    assert all(str(cover) not in value for value in headers.values())
+
+    outside = write_cover(tmp_path / "outside-library" / "cover.jpg")
+    set_album_cover(fixture, fixture.paths[0], str(outside))
+    status, _, body = run_asgi_request(playback_app, "GET", artwork)
+    assert status == 404 and str(outside) not in body.decode()
+    set_album_cover(fixture, fixture.paths[0], str(cover))
+
+    stranger = create_member(fixture)
+    configure_native_app(playback_app, fixture, stranger)
+    status, _, body = run_asgi_request(playback_app, "GET", artwork)
+    assert status == 403 and str(cover) not in body.decode()
+    library_id = fixture.actor.current_library_id
+    configure_native_app(playback_app, fixture, replace(stranger, capability_grants=(
+        CapabilityGrant("integration.lastfm.complete", "library", library_id),)))
+    assert run_asgi_request(playback_app, "GET", artwork)[0] == 403
+    configure_native_app(playback_app, fixture, replace(stranger, capability_grants=(
+        CapabilityGrant("library.browse.read", "library", library_id),)))
+    # Browse-only artwork access still cannot use another account's token.
+    assert run_asgi_request(playback_app, "GET", artwork)[0] == 403
+    assert str(cover) not in caplog.text and str(outside) not in caplog.text
+
+
+def test_http_resume_exchange_mints_fresh_references_only_for_the_tokens_account(playback_inventory, playback_app):
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    status, _, body = run_asgi_request(playback_app, "POST", "/playback/refs", json_body={
+        "protocol": 1, "tracks": [{"clientKey": "track", "path": fixture.paths[1]}],
+    })
+    token = decode_json(body)["tracks"][0]["resumeToken"]
+    request = {"protocol": 1, "tracks": [{"clientKey": "resumed", "resumeToken": token}]}
+    status, headers, body = run_asgi_request(playback_app, "POST", "/playback/refs/resume", json_body=request)
+    assert status == 200 and dict(headers)["cache-control"] == "no-store"
+    resumed = decode_json(body)
+    assert resumed["tracks"][0]["clientKey"] == "resumed" and "resumeToken" not in resumed["tracks"][0]
+    assert fixture.paths[1] not in body.decode()
+    service = reference_service(fixture, lambda: datetime.now(timezone.utc))
+    assert str(service.resolve(fixture.actor, resumed["tracks"][0]["playbackRef"])) == fixture.paths[1]
+
+    # The exchanged reference opens a claim exactly as a web-issued one does, mirroring the artwork URL.
+    client_id = str(uuid4())
+    status, _, body = run_asgi_request(playback_app, "PUT", "/playback/state", json_body={
+        "protocol": 1, "clientId": client_id, "clientSurface": "mobile", "claimToken": None, "state": "playing",
+        "track": {"playbackRef": resumed["tracks"][0]["playbackRef"], "title": "Resumed", "artist": "Owner",
+                  "album": "Album", "artworkUrl": "/playback/artwork/" + token}})
+    assert status == 200
+    claim = decode_json(body)
+    assert run_asgi_request(playback_app, "DELETE", "/playback/state", json_body={
+        "protocol": 1, "clientId": client_id, "claimToken": claim["claimToken"]})[0] == 200
+
+    configure_native_app(playback_app, fixture, create_member(fixture))
+    status, _, body = run_asgi_request(playback_app, "POST", "/playback/refs/resume", json_body=request)
+    assert status == 403 and fixture.paths[1] not in body.decode()

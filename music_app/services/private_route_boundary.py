@@ -95,6 +95,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
     ("GET", "/playback/waveform"): "library.media.read",
     ("POST", "/playback/refs"): "library.media.read",
+    ("POST", "/playback/refs/resume"): "library.media.read",
+    ("GET", "/playback/artwork/{resume_token}"): "library.artwork.read",
     ("GET", "/playback/state"): "library.media.read",
     ("PUT", "/playback/state"): "library.media.read",
     ("DELETE", "/playback/state"): "library.media.read",

@@ -42,6 +42,9 @@
 .small-alert--info,
 .alert-label--info,
 .on-page-alert--info { --alert-edge: var(--appearance-player-accent, #55c7ff); }
+/* Library-source tones keep their source color in every alert family. */
+:root .small-alert.small-alert--tone-hoard { --alert-edge: var(--library-source-hoard, #d5a757); }
+:root .small-alert.small-alert--tone-new_arrivals { --alert-edge: var(--library-source-arrivals, #74bdb4); }
 
 /* Content alerts follow the light surface; dark alert families keep their palette. */
 :root[data-appearance-mode='light'] .on-page-alert {

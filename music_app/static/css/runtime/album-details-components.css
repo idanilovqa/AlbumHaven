@@ -15,10 +15,6 @@
 .album-details-header__tag--missing { --album-details-tag-accent: var(--appearance-error, #ef5350); }
 .album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 0; }
-.album-details-source-marker { gap: 4px; white-space: nowrap; }
-.album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.album-details-source-marker--hoard { --album-details-tag-accent: var(--library-source-hoard); }
-.album-details-source-marker--new_arrivals { --album-details-tag-accent: var(--library-source-arrivals); }
 :root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__action-icon {

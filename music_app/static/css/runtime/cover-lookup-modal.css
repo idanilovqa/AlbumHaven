@@ -183,10 +183,6 @@
   display: grid;
   gap: 8px;
 }
-.cover-lookup-current-release-choice > .cover-lookup-section-title {
-  letter-spacing: normal;
-  text-transform: none;
-}
 .cover-lookup-current-release {
   display: flex;
   align-items: center;
@@ -520,16 +516,11 @@
   outline-offset: -2px;
   box-shadow: none;
 }
+/* The lookup's suggested cover keeps a steady green frame, independent of the current selection. */
 .cover-lookup-art-card.is-suggested {
   border-color: var(--appearance-success, var(--success, #52d7aa));
-  outline-color: var(--appearance-success, var(--success, #52d7aa));
-  animation: cover-lookup-suggested-pulse 1.8s ease-in-out infinite;
-}
-@keyframes cover-lookup-suggested-pulse {
-  50% { box-shadow: 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .cover-lookup-art-card.is-suggested { animation: none; }
+  outline: 3px solid var(--appearance-success, var(--success, #52d7aa));
+  outline-offset: -2px;
 }
 .cover-lookup-art-preview {
   position: relative;
@@ -949,3 +940,5 @@
     box-shadow: none; border-color: Highlight;
   }
 }
+/* Split-release chooser: a compact NavigationTree list inside the shared dialog. */
+.cover-lookup-split-choice { display: grid; gap: 4px; max-height: min(60vh, 420px); margin-top: 12px; overflow-y: auto; }

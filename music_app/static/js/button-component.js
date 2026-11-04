@@ -23,6 +23,7 @@
     next: 'm9 6 6 6-6 6',
     refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6',
     bolt: 'm13 2-9 12h7l-1 8 10-13h-7z',
+    folder: 'M5 19l2.76-7.35a1 1 0 0 1 .93-.65H21a1 1 0 0 1 .99 1.16l-1 5.21A2 2 0 0 1 19.03 19H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v2',
   });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const validAttribute = name => /^[a-zA-Z][a-zA-Z0-9_.:-]*$/.test(name);

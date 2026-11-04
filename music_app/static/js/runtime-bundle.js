@@ -4352,12 +4352,18 @@ function buildAlertIconHtml(severity) {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
 }
 
+const SMALL_ALERT_TONES = new Set(['hoard', 'new_arrivals']);
+
 function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
+  const tone = SMALL_ALERT_TONES.has(String(config.tone || '')) ? String(config.tone) : '';
+  const toneClass = tone ? ` small-alert--tone-${tone}` : '';
+  const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
+  return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {
@@ -4537,7 +4543,14 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return `<span class="album-details-header__tag album-details-source-marker album-details-source-marker--${category}" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}<span>${marker.label}</span></span>`;
+      return buildSmallAlertHtml({
+        severity: 'info',
+        tone: category,
+        message: marker.label,
+        iconHtml: buildLibrarySourceGlyphHtml(category),
+        className: `album-details-source-marker album-details-source-marker--${category}`,
+        focusable: true,
+      });
     })
     .join('');
 }
@@ -5592,7 +5605,6 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
-      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionPath: '',
@@ -24266,13 +24278,14 @@ function buildLibrarySettingsRootSection(category, title, description) {
   const canManage = !librarySettingsReadOnlyClient() && ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
   const rows = roots.map((root, index) => `<div class="library-settings-root-row">
-    <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
-      aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
-      data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
-        attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
-        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
+    ${window.AlbumHavenPathInput.render({
+      value: root.path || '', ariaLabel: `${title} path ${index + 1}`, placeholder: `${title} folder`, disabled: !canManage, canBrowse,
+      browseLabel: `Choose ${title} folder ${index + 1}`,
+      inputAttributes: {'data-library-root-field': 'path', 'data-library-root-list': category, 'data-library-root-index': index},
+      browseAttributes: {'data-browse-library-root': category, 'data-library-root-index': index},
+      trailingHtml: window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
+        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}}),
+    })}
     </div>`).join('');
 
   return `
@@ -24353,37 +24366,11 @@ async function browseLibraryRootDraft(category, index) {
       || owner.allowedActions?.['library.filesystem.browse'] !== true || owner.allowedActions?.['library.paths.read'] !== true) return false;
   const root = getLibrarySettingsDraft()[category]?.[index];
   if (!root) return false;
-  let selected = '', disposed = false, generation = 0, navigating = false;
-  const read = async path => {
-    const response = await fetch(`/library-settings/browse?path=${encodeURIComponent(path)}`, {headers: {Accept: 'application/json'}});
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to browse folders.');
-    return data;
-  };
   try {
-    const initial = await read('');
-    if (!current() || ensureLibrarySettingsState() !== owner) return false;
-    const render = data => `<p>${escapeHtml(data.path || 'Choose a configured location')}</p><div class="settings-folder-list">${data.parent_path ? window.ButtonComponent.renderButton({label: 'Parent folder', attributes: {'data-folder-path': data.parent_path}}) : ''}${(data.entries || []).map(entry => window.ButtonComponent.renderButton({label: entry.name, attributes: {'data-folder-path': entry.path}})).join('')}</div>`;
-    const result = await showAppFormDialog({ title: 'Choose library folder', contentHtml: render(initial), submitLabel: 'Choose folder', submitEnabled: false,
-      onMount: (content, dialog) => {
-        const syncNavigation = () => {
-          content.setAttribute?.('aria-busy', String(navigating));
-          dialog?.setSubmitEnabled(Boolean(selected) && !navigating);
-        };
-        const navigate = async event => {
-          const button = event.target.closest('[data-folder-path]'); if (!button) return;
-          event.preventDefault(); const requestGeneration = ++generation;
-          selected = ''; navigating = true; syncNavigation();
-          try { const data = await read(button.getAttribute('data-folder-path'));
-            if (disposed || requestGeneration !== generation || !current()) return;
-            selected = String(data.path || ''); content.innerHTML = render(data);
-          } catch (error) { if (!disposed && requestGeneration === generation && current()) showToast(error.message, 'error'); }
-          finally { if (!disposed && requestGeneration === generation && current()) { navigating = false; syncNavigation(); } }
-        };
-        content.addEventListener('click', navigate); owner.pickerCleanup = () => content.removeEventListener('click', navigate);
-      },
-      onClose: () => { disposed = true; owner.pickerCleanup?.(); delete owner.pickerCleanup; },
-      onSubmit: () => { if (navigating) throw new Error('Wait for the folder to finish loading.'); if (!selected) throw new Error('Choose a folder first.'); return selected; },
+    const result = await window.AlbumHavenPathInput.choose({
+      title: 'Choose library folder',
+      isCurrent: () => current() && ensureLibrarySettingsState() === owner,
+      onError: error => { if (current()) showToast(error.message, 'error'); },
     });
     if (!result || !current() || ensureLibrarySettingsState() !== owner || getLibrarySettingsDraft()[category]?.[index] !== root) return false;
     root.path = result; renderUtilityModalContent(); return true;
@@ -30341,9 +30328,16 @@ function applyCoverLookupCandidateSource(candidateSource) {
     possibleMatches = previousMatches;
     retainedPreviousMatches = true;
   }
+  // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
+  // so the card shown in Notifications is always identifiable in the gallery.
+  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
+  const isSelectableSuggestion = (matches, candidateId) => Boolean(candidateId) && matches.some((candidate) => (
+    String(candidate?.id || '') === candidateId
+    && String(candidate?.art_kind || 'cover') === 'cover'
+    && !Boolean(candidate?.display_only)
+  ));
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
-    modal.suggestedRemoteId = '';
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
     const selectedOverride = overrideGeneration !== generation
       ? (retainedOverride || incomingOverride)
@@ -30366,12 +30360,14 @@ function applyCoverLookupCandidateSource(candidateSource) {
       }
     }
     modal.possibleMatches = possibleMatches;
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, bestCandidateId) ? bestCandidateId : '';
     modal.selectedRemoteId = String(selectedOverride?.id || '');
     return;
   }
   modal.possibleMatches = possibleMatches;
   if (retainedPreviousMatches) {
-    modal.suggestedRemoteId = '';
+    const previousSuggestion = String(modal.suggestedRemoteId || '');
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, previousSuggestion) ? previousSuggestion : '';
     modal.selectedRemoteId = '';
     return;
   }
@@ -30382,28 +30378,23 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
   );
-  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
-  const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
-    String(candidate?.id || '') === bestCandidateId
-    && String(candidate?.art_kind || 'cover') === 'cover'
-    && !Boolean(candidate?.display_only)
-  ));
+  const bestCandidateIsSelectable = isSelectableSuggestion(possibleMatches, bestCandidateId);
   const task = (state.coverLookup.tasks || []).find((item) => (
     String(item?.id || '') === String(modal.taskId || '')
   ));
   const hasManualChoice = modal.album?.cover_selection_origin === 'user'
     || Boolean(task && isActionedCoverLookupNotification(task))
     || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
-  modal.suggestedRemoteId = bestCandidateIsSelectable && !hasManualChoice ? bestCandidateId : '';
+  modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
   if (hasPendingNonRemoteSelection) {
     modal.selectedRemoteId = '';
     return;
   }
-  if (bestCandidateIsSelectable) {
+  // Only an unchosen cover adopts the suggestion; a manual choice keeps its own selection.
+  if (bestCandidateIsSelectable && !hasManualChoice) {
     modal.selectedRemoteId = bestCandidateId;
     return;
   }
-  modal.suggestedRemoteId = '';
   reconcileCoverLookupRemoteSelection(possibleMatches);
 }
 
@@ -30801,9 +30792,9 @@ function syncCoverLookupSelectionUi() {
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
     const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
-    const isSuggested = !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-      && !pendingLocalPath && !pendingPastedImageId
-      && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
+    const suggestedRemoteId = String(state.coverLookup.modal.suggestedRemoteId || '');
+    const isSuggested = Boolean(suggestedRemoteId)
+      && String(card.getAttribute('data-select-remote-cover') || '') === suggestedRemoteId;
     card.classList.toggle('is-active', isActive);
     card.classList.toggle('is-suggested', isSuggested);
     let check = card.querySelector('.cover-lookup-art-check');
@@ -31982,8 +31973,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
   const isSuggested = kind === 'remote'
-    && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-    && !state.coverLookup.modal.pendingLocalPath && !state.coverLookup.modal.pendingPastedImageId
+    && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
@@ -32162,6 +32152,10 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
 }
 
 function replaceCoverLookupModalMarkup(body, markup) {
+  // Identical renders must not touch the DOM: rebuilding hovered cards restarts their transitions
+  // and swallows the first click on controls such as the zoom button.
+  if (body.__coverLookupMarkup === markup && body.firstElementChild
+    && body.__coverLookupFirstElement === body.firstElementChild) return;
   const retainedCards = new Map();
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
@@ -32172,6 +32166,12 @@ function replaceCoverLookupModalMarkup(body, markup) {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
     const retained = retainedCards.get(key);
     if (!retained || typeof card.replaceWith !== 'function') return;
+    const incomingMarkup = String(card.outerHTML || '');
+    if (incomingMarkup && retained.__coverLookupCardMarkup === incomingMarkup) {
+      card.replaceWith(retained);
+      return;
+    }
+    retained.__coverLookupCardMarkup = incomingMarkup;
     const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
     const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
     const previewSource = (image) => String(
@@ -32205,6 +32205,11 @@ function replaceCoverLookupModalMarkup(body, markup) {
     }
     card.replaceWith(retained);
   });
+  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
+    if (!card.__coverLookupCardMarkup) card.__coverLookupCardMarkup = String(card.outerHTML || '');
+  });
+  body.__coverLookupMarkup = markup;
+  body.__coverLookupFirstElement = body.firstElementChild;
 }
 
 function formatCoverLookupImageCount(count) {
@@ -32350,29 +32355,6 @@ function renderCoverLookupModal() {
   const galleryLoadingMarkup = modalState.loading
     ? buildCoverLookupGalleryLoadingMarkup(modalState)
     : !hasGalleryCards ? galleryErrorMarkup : '';
-  const currentReleases = Array.isArray(modalState.currentReleases)
-    ? modalState.currentReleases : [];
-  if (currentReleases.length) {
-    els.body.innerHTML = `
-      <section class="cover-lookup-section cover-lookup-current-release-choice" role="group" aria-labelledby="cover-lookup-current-release-title">
-        <h4 class="cover-lookup-section-title" id="cover-lookup-current-release-title">This album was split—choose the current release</h4>
-        <div class="cover-lookup-current-release-list">
-          ${currentReleases.map((release) => `
-            <button class="cover-lookup-current-release" type="button" data-cover-lookup-current-release="${escapeHtml(release.album_id || '')}">
-              <span>${escapeHtml(buildCoverLookupCurrentReleaseLabel(release))}</span>
-              <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}</span>
-            </button>
-          `).join('')}
-        </div>
-      </section>`;
-    els.body.scrollTop = 0;
-    if (els.findBetter) ButtonComponent.setDisabled(els.findBetter, true);
-    if (els.saveRemote) {
-      els.saveRemote.hidden = false;
-      ButtonComponent.setDisabled(els.saveRemote, true);
-    }
-    return;
-  }
   replaceCoverLookupModalMarkup(els.body, `
     ${hasGalleryCards ? galleryErrorMarkup : ''}
     ${galleryLoadingMarkup || `
@@ -32734,7 +32716,11 @@ async function loadCoverLookupTasks(options = {}) {
       applyCoverLookupTaskUpdates(task);
     });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && tasksChanged) {
+    // Other notifications changing must not re-render or reload the open lookup.
+    const modalTaskSnapshot = (snapshots) => JSON.stringify(snapshots.find((task) => String(task?.id || '') === modalTaskId) || null);
+    const modalTaskChanged = Boolean(modalTaskId)
+      && modalTaskSnapshot(previousTaskSnapshots) !== modalTaskSnapshot(nextTaskSnapshots);
+    if (modalTaskId && tasksChanged && modalTaskChanged) {
       const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
@@ -32894,11 +32880,18 @@ function ensureCoverLookupPolling() {
         String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
         && ['pending', 'running'].includes(String(task?.status || ''))
       ));
+      // A persisted snapshot can claim "running" after its task ended. Refresh once per distinct
+      // snapshot, not on every tick, so a stale status cannot drive endless gallery reloads.
+      const stalledSnapshotToken = ['pending', 'running'].includes(String(snapshot?.status || ''))
+        ? `${state.coverLookup.modal.taskId}|${snapshot?.search_generation || ''}|${snapshot?.revision || ''}|${snapshot?.updated_at || ''}`
+        : '';
       if (
         modalOpen
         && !hasMatchingActiveTask
-        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+        && stalledSnapshotToken
+        && stalledSnapshotToken !== state.coverLookup.modal.refreshedStalledSnapshotToken
       ) {
+        state.coverLookup.modal.refreshedStalledSnapshotToken = stalledSnapshotToken;
         await refreshCoverLookupGallery(false);
       }
     } finally {
@@ -33078,9 +33071,13 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
-  if (showLoading && !state.coverLookup.modal.localInventoryLoaded) state.coverLookup.modal.loading = true;
-  state.coverLookup.modal.galleryError = '';
-  renderCoverLookupModal();
+  // Background refreshes keep the current gallery and any shown error until the response settles,
+  // so an unchanged failure stays steady instead of flashing on every refresh.
+  if (showLoading) {
+    if (!state.coverLookup.modal.localInventoryLoaded) state.coverLookup.modal.loading = true;
+    state.coverLookup.modal.galleryError = '';
+    renderCoverLookupModal();
+  }
   try {
     const response = await fetch('/utilities/cover-lookup/gallery', {
       method: 'POST',
@@ -33095,40 +33092,81 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
         && Array.isArray(data.current_releases)
         && data.current_releases.length > 1
       ) {
-        state.coverLookup.modal.currentReleases = data.current_releases;
-        state.coverLookup.modal.loading = false;
-        renderCoverLookupModal();
+        const taskId = String(state.coverLookup.modal.taskId || '');
+        const overlay = getCoverLookupModalElements().overlay;
+        const mobileSheet = Boolean(overlay && isCoverLookupMobileSheet(overlay));
+        if (taskId) coverLookupSplitReleasesByTask.set(taskId, data.current_releases);
+        closeCoverLookupModal();
+        void presentCoverLookupSplitChoice(data.current_releases, { taskId, mobileSheet });
         return;
       }
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
-    state.coverLookup.modal.currentReleases = [];
-    applyCoverLookupGalleryPayload(data);
+    state.coverLookup.modal.galleryError = '';
+      applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
     void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
   } catch (error) {
     if (!isCurrent()) return;
+    const previousError = state.coverLookup.modal.galleryError;
     state.coverLookup.modal.loading = false;
     state.coverLookup.modal.galleryError = error.message || 'Could not load cover art. Reopen to retry.';
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     renderCoverLookupModal();
-    showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    if (previousError !== state.coverLookup.modal.galleryError) {
+      showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    }
   }
 }
 
-async function chooseCoverLookupCurrentRelease(albumId) {
-  const release = (state.coverLookup.modal.currentReleases || []).find((candidate) => (
-    String(candidate?.album_id || '') === String(albumId || '')
-  ));
-  if (!release) return;
-  const taskId = state.coverLookup.modal.taskId;
-  const overlay = getCoverLookupModalElements().overlay;
-  await openCoverLookupModal(release, {
-    taskId,
-    mobileSheet: Boolean(overlay && isCoverLookupMobileSheet(overlay)),
+const coverLookupSplitReleasesByTask = new Map();
+
+function buildCoverLookupSplitReleaseItemsHtml(releases) {
+  return releases.map((release) => {
+    const album = (typeof getIndexedAlbum === 'function' && getIndexedAlbum(release.key)) || release;
+    const label = String(release.name || album.name || 'Album');
+    return window.NavigationTree.renderItem({
+      variant: 'wide',
+      action: true,
+      key: String(release.album_id || release.key || ''),
+      label,
+      subtitle: [release.album_artist, release.edition].filter(Boolean).join(' · '),
+      year: String(release.year || ''),
+      artworkHtml: buildUtilityAlbumArtbox(album, { label: `Artwork for ${label}` }),
+      count: `${Number(release.track_count || 0)} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}`,
+      attributes: { 'data-cover-lookup-split-release': String(release.album_id || '') },
+    });
+  }).join('');
+}
+
+// A notification whose album was split asks which current release it belongs to in a compact
+// dialog, then opens Cover Look Up for that release only.
+async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileSheet = false } = {}) {
+  let chosenId = '';
+  const chosen = await showAppFormDialog({
+    title: 'Choose the current release',
+    contentHtml: `<p class="confirm-modal-text">This album was split. Choose the release this notification belongs to.</p><nav class="navigation-tree cover-lookup-split-choice" aria-label="Split releases">${buildCoverLookupSplitReleaseItemsHtml(releases)}</nav>`,
+    submitLabel: 'Open Cover Look Up',
+    submitEnabled: false,
+    onMount: (content, dialog) => {
+      content.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-cover-lookup-split-release]');
+        if (!item) return;
+        event.preventDefault();
+        chosenId = item.getAttribute('data-cover-lookup-split-release') || '';
+        content.querySelectorAll('[data-cover-lookup-split-release]')
+          .forEach((node) => window.NavigationTree.setItemSelected(node, node === item));
+        dialog?.setSubmitEnabled(Boolean(chosenId));
+      });
+    },
+    onSubmit: () => chosenId,
   });
+  const release = releases.find((candidate) => String(candidate?.album_id || '') === String(chosen || ''));
+  if (!release) return false;
+  await openCoverLookupModal(release, { taskId, mobileSheet });
+  return true;
 }
 
 function restoreCoverLookupDrawerScroll() {
@@ -33151,6 +33189,11 @@ async function openCoverLookupModal(album, options = {}) {
       ? usesMobilePageLayout()
       : Number(window.innerWidth || 0) > 0 && Number(window.innerWidth) <= 900
   );
+  const knownSplit = coverLookupSplitReleasesByTask.get(String(options.taskId || ''));
+  if (knownSplit && album.identity_resolution !== 'album_split_choice') {
+    await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
+    return;
+  }
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
@@ -33187,7 +33230,6 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? cachedCandidateGeneration
@@ -33210,6 +33252,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualStatusText = '';
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.initialScrollPending = true;
+  state.coverLookup.modal.refreshedStalledSnapshotToken = '';
   state.coverLookup.modal.galleryError = '';
   state.coverLookup.modal.loading = !cachedGallery
     || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);
@@ -33258,7 +33301,6 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.possibleMatches = [];
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
   state.coverLookup.modal.candidateRevision = 0;
@@ -44420,14 +44462,6 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const candidateId = selectRemoteCoverButton.getAttribute('data-select-remote-cover') || '';
     selectRemoteCoverFromLookup(candidateId);
-    return;
-  }
-  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
-  if (currentReleaseButton) {
-    event.preventDefault();
-    void chooseCoverLookupCurrentRelease(
-      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
-    );
     return;
   }
     const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');

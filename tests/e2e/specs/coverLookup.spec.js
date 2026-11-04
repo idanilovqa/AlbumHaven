@@ -1381,16 +1381,18 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
 
     await coverLookupActions.openDrawer();
     await coverLookupActions.openTaskWithKeyboard(SPLIT_FIXTURE.album, 'Enter');
-    const selector = page.getByRole('group', {
-      name: 'This album was split—choose the current release',
-    });
+    const selector = coverLookupActions.coverLookup.splitReleaseChooser;
     await expect(selector).toBeVisible();
+    await expect(coverLookupActions.coverLookup.modal).toBeHidden();
+    await expect(coverLookupActions.coverLookup.splitReleaseChoices).toHaveCount(2);
+    await expect(coverLookupActions.coverLookup.splitReleaseOpenButton).toBeDisabled();
     const requestPromise = page.waitForRequest((request) => (
       request.method() === 'POST'
       && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
       && request.postDataJSON()?.album?.name === SPLIT_FIXTURE.splitAlbum
     ));
-    await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
+    await coverLookupActions.coverLookup.splitReleaseChoiceByTitle(SPLIT_FIXTURE.splitAlbum).click();
+    await coverLookupActions.coverLookup.splitReleaseOpenButton.click();
     const request = await requestPromise;
 
     await expect(coverLookupActions.coverLookup.modal).toBeVisible();

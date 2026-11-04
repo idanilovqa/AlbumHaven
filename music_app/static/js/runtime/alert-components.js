@@ -17,12 +17,18 @@ function buildAlertIconHtml(severity) {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
 }
 
+const SMALL_ALERT_TONES = new Set(['hoard', 'new_arrivals']);
+
 function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
+  const tone = SMALL_ALERT_TONES.has(String(config.tone || '')) ? String(config.tone) : '';
+  const toneClass = tone ? ` small-alert--tone-${tone}` : '';
+  const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
+  return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {

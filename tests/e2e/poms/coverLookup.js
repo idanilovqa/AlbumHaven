@@ -7,6 +7,9 @@ export class CoverLookup extends BasePage {
     this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
     this.mobileSheet = page.locator('#cover-lookup-modal.is-mobile-sheet');
     this.mobileBackButton = page.locator('#mobile-back-button');
+    this.splitReleaseChooser = page.getByRole('dialog', { name: 'Choose the current release' });
+    this.splitReleaseChoices = this.splitReleaseChooser.locator('[data-cover-lookup-split-release]');
+    this.splitReleaseOpenButton = this.splitReleaseChooser.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalDialog = page.locator(this.modalDialogSelector);
     this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
@@ -704,5 +707,11 @@ export class CoverLookup extends BasePage {
 
   taskOpenButtonByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskOpenButtonWithinCardSelector).first();
+  }
+
+  splitReleaseChoiceByTitle(albumName) {
+    return this.splitReleaseChoices.filter({
+      has: this.page.locator('.utility-list-item-title', { hasText: albumName }),
+    });
   }
 }

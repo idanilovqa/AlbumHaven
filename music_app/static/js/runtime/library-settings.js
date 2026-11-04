@@ -489,13 +489,14 @@ function buildLibrarySettingsRootSection(category, title, description) {
   const canManage = !librarySettingsReadOnlyClient() && ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
   const rows = roots.map((root, index) => `<div class="library-settings-root-row">
-    <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
-      aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
-      data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
-        attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
-        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
+    ${window.AlbumHavenPathInput.render({
+      value: root.path || '', ariaLabel: `${title} path ${index + 1}`, placeholder: `${title} folder`, disabled: !canManage, canBrowse,
+      browseLabel: `Choose ${title} folder ${index + 1}`,
+      inputAttributes: {'data-library-root-field': 'path', 'data-library-root-list': category, 'data-library-root-index': index},
+      browseAttributes: {'data-browse-library-root': category, 'data-library-root-index': index},
+      trailingHtml: window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
+        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}}),
+    })}
     </div>`).join('');
 
   return `
@@ -576,37 +577,11 @@ async function browseLibraryRootDraft(category, index) {
       || owner.allowedActions?.['library.filesystem.browse'] !== true || owner.allowedActions?.['library.paths.read'] !== true) return false;
   const root = getLibrarySettingsDraft()[category]?.[index];
   if (!root) return false;
-  let selected = '', disposed = false, generation = 0, navigating = false;
-  const read = async path => {
-    const response = await fetch(`/library-settings/browse?path=${encodeURIComponent(path)}`, {headers: {Accept: 'application/json'}});
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to browse folders.');
-    return data;
-  };
   try {
-    const initial = await read('');
-    if (!current() || ensureLibrarySettingsState() !== owner) return false;
-    const render = data => `<p>${escapeHtml(data.path || 'Choose a configured location')}</p><div class="settings-folder-list">${data.parent_path ? window.ButtonComponent.renderButton({label: 'Parent folder', attributes: {'data-folder-path': data.parent_path}}) : ''}${(data.entries || []).map(entry => window.ButtonComponent.renderButton({label: entry.name, attributes: {'data-folder-path': entry.path}})).join('')}</div>`;
-    const result = await showAppFormDialog({ title: 'Choose library folder', contentHtml: render(initial), submitLabel: 'Choose folder', submitEnabled: false,
-      onMount: (content, dialog) => {
-        const syncNavigation = () => {
-          content.setAttribute?.('aria-busy', String(navigating));
-          dialog?.setSubmitEnabled(Boolean(selected) && !navigating);
-        };
-        const navigate = async event => {
-          const button = event.target.closest('[data-folder-path]'); if (!button) return;
-          event.preventDefault(); const requestGeneration = ++generation;
-          selected = ''; navigating = true; syncNavigation();
-          try { const data = await read(button.getAttribute('data-folder-path'));
-            if (disposed || requestGeneration !== generation || !current()) return;
-            selected = String(data.path || ''); content.innerHTML = render(data);
-          } catch (error) { if (!disposed && requestGeneration === generation && current()) showToast(error.message, 'error'); }
-          finally { if (!disposed && requestGeneration === generation && current()) { navigating = false; syncNavigation(); } }
-        };
-        content.addEventListener('click', navigate); owner.pickerCleanup = () => content.removeEventListener('click', navigate);
-      },
-      onClose: () => { disposed = true; owner.pickerCleanup?.(); delete owner.pickerCleanup; },
-      onSubmit: () => { if (navigating) throw new Error('Wait for the folder to finish loading.'); if (!selected) throw new Error('Choose a folder first.'); return selected; },
+    const result = await window.AlbumHavenPathInput.choose({
+      title: 'Choose library folder',
+      isCurrent: () => current() && ensureLibrarySettingsState() === owner,
+      onError: error => { if (current()) showToast(error.message, 'error'); },
     });
     if (!result || !current() || ensureLibrarySettingsState() !== owner || getLibrarySettingsDraft()[category]?.[index] !== root) return false;
     root.path = result; renderUtilityModalContent(); return true;

@@ -60,7 +60,7 @@ test('Album Details renders the backend poor-art classification as a focusable S
   );
 });
 
-test('Album Details renders readable noninteractive source labels', () => {
+test('Album Details renders library sources as focusable compact alerts in the source color', () => {
   const context = loadComponents();
   const html = context.buildAlbumCoverSourceMarkersHtml({
     root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
@@ -69,6 +69,10 @@ test('Album Details renders readable noninteractive source labels', () => {
   assert.match(html, /album-details-cover-source-markers/);
   assert.match(html, /aria-label="Hoard"/);
   assert.match(html, /aria-label="New Arrivals"/);
+  assert.match(html, /small-alert small-alert--info small-alert--tone-hoard album-details-source-marker album-details-source-marker--hoard"[^>]*tabindex="0"/);
+  assert.match(html, /small-alert--tone-new_arrivals[^"]*album-details-source-marker--new_arrivals"[^>]*tabindex="0"/);
+  assert.match(html, /small-alert__icon"><svg viewBox="0 0 48 48"/, 'the alert shows the source glyph, not a generic info icon');
+  assert.match(html, /small-alert__text">Hoard</);
   assert.doesNotMatch(html, /<button|data-open-tracklist/);
   assert.equal(context.buildAlbumCoverSourceMarkersHtml({ source: 'main_library' }), '');
 });
@@ -86,6 +90,9 @@ test('Album Details source markers reuse the gallery source glyphs and obey the 
   );
   assert.match(css, /\.album-details-source-markers\s*\{[^}]*display:\s*inline-flex/s);
   assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
+  const alertCss = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
+  assert.match(alertCss, /\.small-alert--tone-hoard\s*\{\s*--alert-edge:\s*var\(--library-source-hoard/);
+  assert.match(alertCss, /\.small-alert--tone-new_arrivals\s*\{\s*--alert-edge:\s*var\(--library-source-arrivals/);
 });
 
 test('Album Details places source labels in the header and never under artwork', () => {
@@ -94,7 +101,7 @@ test('Album Details places source labels in the header and never under artwork',
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
     const html = context.buildAlbumDetailsHeaderHtml({layout, album: 'G_d’s Pee AT STATE’S END!', releaseType: 'ALBUM', sourceMarkersHtml: labels});
     assert.match(html, /album-details-header__release-type[^>]*>ALBUM/);
-    assert.match(html, /album-details-header__tag album-details-source-marker/);
+    assert.match(html, /small-alert[^"]*album-details-source-marker/);
     assert.ok(html.includes('>Hoard</span>'));
     assert.ok(html.includes('>New Arrivals</span>'));
     assert.ok(html.indexOf('>ALBUM<') < html.indexOf('>Hoard<'));

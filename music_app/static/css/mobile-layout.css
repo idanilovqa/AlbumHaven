@@ -9,6 +9,9 @@
 .page-gallery-bar h1 { margin: 0; }
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
+/* Settings headers stay pinned like the Gallery header while their outlet scrolls. */
+.settings-host .page-gallery-bar { position: sticky; top: 0; z-index: 4; background: var(--appearance-main-surface, var(--app-surface)); }
+@media (min-width: 901px) { .page-gallery-bar__back--narrow-only { display: none; } }
 /* Align desktop page actions with the title; factual subtitles have their own row. */
 @media (min-width: 901px) {
   .page-gallery-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 0; }
@@ -321,9 +324,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     grid-column: 2; grid-row: 1; align-self: center; gap: 4px; margin: 0;
   }
   .mobile-page-header .gallery-bar__context:has(> .album-details-cover-source-markers:not([hidden])) > .gallery-bar__summary { grid-column: 1 / -1; }
-  .mobile-page-header .album-details-source-marker > span { display: none; }
   .album-details-cover-source-markers[hidden] { display: none; }
-  .album-details-cover-source-markers .album-details-source-marker svg { width: 14px; height: 14px; }
   .mobile-album-overview__rail > #mobile-back-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
   .mobile-album-overview__rail > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: auto; container-type: normal; contain-intrinsic-size: none; }
@@ -679,7 +680,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 #utility-modal[data-active-tab="integrations"] .confirm-modal-actions { gap: 10px; }
 [data-reload-library-settings] { margin-right: auto; }
 .library-settings-root-row { gap: 10px; }
-.library-settings-path-control { gap: 8px; }
+.ui-path-input { gap: 8px; }
 @media (max-width: 900px) {
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"]) .utility-sidebar { max-height: none; border: 0; }
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"]) .utility-list { display: flex; flex-direction: column; overflow: visible; padding: 0; gap: 10px; }

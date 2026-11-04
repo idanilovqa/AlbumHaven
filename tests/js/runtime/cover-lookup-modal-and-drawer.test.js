@@ -218,7 +218,7 @@ require('node:test')('local Cover Lookup cards retain their loaded preview as th
   assert.match(card, /data-cover-preview-src="[^"]*size=480[^"]*"/);
 });
 
-require('node:test')('only the active automatic suggestion receives suggested styling', () => {
+require('node:test')('the suggested cover keeps its frame after a different manual choice', () => {
   const context = loadHelper({ escapeHtml: value => String(value ?? '') });
   context.state.coverLookup.modal = {
     selectedRemoteId: 'suggested-cover',
@@ -233,12 +233,15 @@ require('node:test')('only the active automatic suggestion receives suggested st
   assert.match(suggested, /cover-lookup-art-card is-active is-suggested/);
 
   context.state.coverLookup.modal.remoteSelectionOverrideGeneration = 'manual-choice';
+  context.state.coverLookup.modal.selectedRemoteId = 'other-cover';
   const manuallySelected = context.buildCoverLookupCard({
     id: 'suggested-cover',
     source: 'discogs',
     url: 'https://images.example/suggested.jpg',
   }, 'remote');
-  assert.doesNotMatch(manuallySelected, /is-suggested/);
+  assert.match(manuallySelected, /cover-lookup-art-card\s+is-suggested/);
+  assert.doesNotMatch(manuallySelected, /is-active|cover-lookup-art-check/, 'the suggestion is framed, never checkmarked');
+  assert.doesNotMatch(context.buildCoverLookupCard({ id: 'other-cover', source: 'discogs', url: 'https://images.example/other.jpg' }, 'remote'), /is-suggested/);
 });
 
 require('node:test')('Neural Code keeps its automatic local cover selected while marking the remote suggestion', () => {
@@ -285,20 +288,23 @@ require('node:test')('Neural Code keeps its automatic local cover selected while
 
   context.state.coverLookup.modal.pendingPastedImageId = 'pending-image';
   context.syncCoverLookupSelectionUi();
-  assert.equal(classes.has('is-suggested'), false);
-  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
+  assert.equal(classes.has('is-suggested'), true, 'a different pending choice never removes the suggestion frame');
+  assert.match(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
   context.state.coverLookup.modal.pendingPastedImageId = '';
   task.notification_action_taken = true;
   context.applyCoverLookupCandidateSource(source);
 
-  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
-  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, remote.id);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
+  assert.match(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
+  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-active\b|cover-lookup-art-check/);
   assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
   context.syncCoverLookupSelectionUi();
-  assert.equal(classes.has('is-suggested'), false);
+  assert.equal(classes.has('is-suggested'), true);
+  assert.equal(classes.has('is-active'), false);
 });
 
-require('node:test')('a user-owned local cover suppresses remote suggestion before the current search is actioned', () => {
+require('node:test')('a user-owned local cover keeps its selection while the remote suggestion stays framed', () => {
   const { context } = createDrawerHarness();
   Object.assign(context.state.coverLookup.modal, {
     album: { cover_selection_origin: 'user' },
@@ -309,7 +315,7 @@ require('node:test')('a user-owned local cover suppresses remote suggestion befo
     generation: 'later-search', status: 'completed', bestCandidateId: 'remote',
     candidates: [{ id: 'remote', url: 'https://images.example/remote.jpg' }],
   });
-  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'remote');
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 });
 
@@ -7723,3 +7729,61 @@ for (const [kind, accepted] of [['local', false], ['remote', false], ['local', t
     if (!accepted) assert.equal(restored.at(-1)[0].key, album.key);
   });
 }
+
+require('node:test')('an unchanged Cover Lookup render leaves the gallery DOM untouched', () => {
+  const context = loadHelper();
+  let writes = 0;
+  const body = {
+    firstElementChild: null,
+    querySelectorAll: () => [],
+    set innerHTML(value) { writes += 1; this.firstElementChild = { markup: value }; },
+  };
+  context.replaceCoverLookupModalMarkup(body, '<section>LOCAL · 2 images</section>');
+  context.replaceCoverLookupModalMarkup(body, '<section>LOCAL · 2 images</section>');
+  assert.equal(writes, 1, 'polling with unchanged content must not rebuild hovered cards');
+  context.replaceCoverLookupModalMarkup(body, '<section>LOCAL · 3 images</section>');
+  assert.equal(writes, 2);
+  body.firstElementChild = { replacedElsewhere: true };
+  context.replaceCoverLookupModalMarkup(body, '<section>LOCAL · 3 images</section>');
+  assert.equal(writes, 3, 'markup replaced by another owner is rendered again');
+});
+
+require('node:test')('a retained Cover Lookup card with unchanged markup keeps its own children', () => {
+  const context = loadHelper();
+  const card = (key, markup) => ({
+    outerHTML: markup,
+    childNodes: [{ incoming: key }],
+    getAttribute: () => key,
+    querySelector: () => null,
+    replaceWith(next) { this.replacedWith = next; },
+    replaceChildren() { throw new Error('unchanged card children must not be replaced'); },
+  });
+  const zoomHovered = card('remote:neural', '<div data-cover-lookup-item-key="remote:neural">same</div>');
+  zoomHovered.__coverLookupCardMarkup = zoomHovered.outerHTML;
+  const incoming = card('remote:neural', zoomHovered.outerHTML);
+  let phase = 'before';
+  const body = {
+    firstElementChild: null,
+    querySelectorAll: () => (phase === 'before' ? [zoomHovered] : [incoming]),
+    set innerHTML(value) { phase = 'after'; this.firstElementChild = { value }; },
+  };
+  context.replaceCoverLookupModalMarkup(body, '<section>changed heading</section>');
+  assert.equal(incoming.replacedWith, zoomHovered, 'the hovered card node itself is kept in place');
+});
+
+require('node:test')('a background gallery refresh keeps an existing error steady until it settles', async () => {
+  const rendered = [];
+  const context = loadHelper({
+    fetch: async () => ({ ok: false, json: async () => ({ ok: false, error: 'Album root could not be resolved' }) }),
+    showToast: () => {},
+  });
+  Object.assign(context.state.coverLookup.modal, {
+    album: { key: 'последнее-испытание' },
+    taskId: 'task-1',
+    galleryError: 'Album root could not be resolved',
+    localInventoryLoaded: true,
+  });
+  context.renderCoverLookupModal = () => rendered.push(context.state.coverLookup.modal.galleryError);
+  await context.refreshCoverLookupGallery(false);
+  assert.deepEqual(rendered, ['Album root could not be resolved'], 'the alert never disappears and reappears');
+});

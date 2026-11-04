@@ -20,7 +20,7 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
   assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
   assert.match(adminNavigation, /<form[^>]*method="post"[^>]*action="\/logout">[\s\S]*name="csrf_token"[\s\S]*navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)[\s\S]*<\/form>/);
-  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
+  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section == 'users'/);
   assert.match(navigationMacro, /set tag = 'button' if action else 'a'/);
   assert.match(navigationMacro, /if action %}type="submit"/);
   assert.match(navigationMacro, /if selected %} aria-current="{{ 'page' if settings else 'true' }}"/);
@@ -76,7 +76,7 @@ test('Account identity selector belongs to its account content, not duplicate mo
   const source = readProjectFile('tests', 'e2e', 'phase7', 'poms', 'authPages.js');
   const assignment = source.match(/this\.signedInIdentity\s*=\s*([^;]+);/)?.[1];
   assert.equal(assignment, `page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
-  assert.match(accountTemplate, /<section class="account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
+  assert.match(accountTemplate, /<section class="settings-main account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
   // No first()/nth()/visibility fallback: duplicate identities within the owning
   // account surface must still fail Playwright's strict locator assertions.
   assert.doesNotMatch(assignment, /first\(|nth\(|:visible|filter\(/);

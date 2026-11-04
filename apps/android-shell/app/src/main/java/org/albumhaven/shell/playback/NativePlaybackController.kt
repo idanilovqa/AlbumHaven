@@ -720,13 +720,13 @@ class NativePlaybackController(
 
     /**
      * The web's previous and next (`playCompactQueueOffset`): the neighbouring item of the same
-     * queue group, with no restart of the current item and no step past the group's ends.
+     * queue group, with no restart of the current item and no step past the group's ends. Like the
+     * web's, a skip always plays, also from a paused, ended or failed player.
      */
     private fun step(direction: Int) {
         val target = index + direction
         val reason = if (direction > 0) CurrentItemReason.NEXT else CurrentItemReason.PREVIOUS
         if (target !in queue.indices || index !in queue.indices || queue[target].queueGroup != queue[index].queueGroup) return
-        val playing = wantPlay
         val replacing = canReplace()
         measureListening()
         val outgoing = queue.getOrNull(index)
@@ -741,12 +741,8 @@ class NativePlaybackController(
         emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
         if (replacing && replaceWhilePlaying()) return
         if (replacing) unload("replacement")
-        if (playing) {
-            wantPlay = false
-            requestPlay()
-        } else {
-            setState(NativePlaybackState.PAUSED)
-        }
+        wantPlay = false
+        requestPlay()
     }
 
     private fun applyLoop(range: LoopRange48k?) {

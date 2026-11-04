@@ -820,12 +820,33 @@ class NativePlaybackControllerTest {
         val next = harness.events.filterIsInstance<NativePlaybackEvent.CurrentItem>().last()
         assertEquals(Triple(CurrentItemReason.NEXT, 1, CommandSource.SYSTEM), Triple(next.reason, next.snapshot.currentIndex, next.source))
         assertEquals(listOf(long.pcm.playbackRef, second.pcm.playbackRef), next.snapshot.items.map { it.playbackRef })
+        // Like the web's skip, a system skip while paused starts the neighbour.
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
 
+        harness.controller.pause()
+        harness.step()
+        val webPause = harness.events.filterIsInstance<NativePlaybackEvent.State>().last()
         harness.controller.play(1)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
-        val resumed = harness.events.filterIsInstance<NativePlaybackEvent.State>()
-            .dropWhile { it !== paused }.drop(1)
-        assertTrue(resumed.isNotEmpty() && resumed.all { it.source == CommandSource.WEB })
+        val resumed = harness.events.filterIsInstance<NativePlaybackEvent.State>().dropWhile { it !== webPause }
+        assertTrue(resumed.size > 1 && resumed.all { it.source == CommandSource.WEB })
+    }
+
+    @Test
+    fun aSkipWhilePausedOrEndedStartsPlayingTheNeighbour() {
+        val harness = ControllerHarness(first, second)
+        harness.load(1, first, second, autoplay = false)
+        harness.step()
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(1, harness.controller.snapshot.currentIndex)
+        assertEquals(listOf("acquire:null"), harness.claims.calls.take(1))
+
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        harness.controller.previous(1, CommandSource.SYSTEM)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(0, harness.controller.snapshot.currentIndex)
     }
 
     @Test

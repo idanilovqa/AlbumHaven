@@ -3266,7 +3266,7 @@ function getMusicBrainzArtistProblemView(detail = {}) {
   if (reason === 'musicbrainz_artist_not_found') return 'not-found';
   if (reason === 'musicbrainz_artist_ambiguous') return 'multiple';
   if (reason === 'musicbrainz_artist_metadata_conflict' || reason === 'musicbrainz_manual_review_required') return 'conflict';
-  if (reason === 'musicbrainz_mirror_replication_pending') return 'pending';
+  if (reason === 'musicbrainz_mirror_replication_pending' || reason === 'musicbrainz_matched_entity_unavailable') return 'pending';
   return 'provider';
 }
 

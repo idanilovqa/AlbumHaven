@@ -3477,6 +3477,22 @@ class PostgresLibraryBrowseRepository:
                 row = cursor.fetchone() if hasattr(cursor, "fetchone") else None
         return str(_row_mapping(row).get("artist_name") or "").strip() if row else ""
 
+    def canonical_gallery_artist_names(self, artist_names: Iterable[object]) -> dict[str, str]:
+        """Map local artist names to the canonical artist the Gallery groups them under."""
+        relation_alias_maps = self._load_relation_alias_maps()
+        aliases = (
+            {}
+            if relation_alias_maps.get("projection_stale_reason")
+            else _root_browse_alias_to_canonical(relation_alias_maps["alias_to_canonical"])
+        )
+        normalized_aliases = _normalized_artist_aliases(aliases)
+        return {
+            str(name): _canonical_artist_name(
+                name, aliases, normalized_alias_to_canonical=normalized_aliases,
+            )
+            for name in artist_names
+        }
+
     def _load_relation_alias_maps(self, *, connection: Any | None = None) -> dict[str, object]:
         from music_app.services.relation_projection_postgres import (
             relation_projection_stale_reason,

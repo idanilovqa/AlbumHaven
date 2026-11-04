@@ -63,7 +63,7 @@ def test_search_match_uses_candidate_release_groups_against_local_albums():
     assert outcome["artist"]["mbid"] == GERMAN
     browsed = [url for url in calls if "/release-group" in url]
     assert len(browsed) == 2, "only name-matching candidates need release-group evidence"
-    assert not any(OTHER in url for url in browsed)
+    assert not any(OTHER in url for url in calls), "non-matching candidates cost no requests"
 
 
 def test_ambiguous_candidates_carry_local_album_agreement_and_display_facts():
@@ -80,7 +80,7 @@ def test_ambiguous_candidates_carry_local_album_agreement_and_display_facts():
     assert by_mbid[GERMAN]["disambiguation"] == "German hard rock band"
     assert by_mbid[GERMAN]["artist_kind"] == "Group"
     assert by_mbid[GERMAN]["country_code"] == "DE"
-    assert by_mbid[OTHER]["evidence_summary"] == "Name only"
+    assert OTHER not in by_mbid, "a candidate whose name never agrees is not a reviewable choice"
 
 
 def test_release_group_browse_failure_is_a_provider_outcome_not_a_mismatch():
@@ -105,3 +105,15 @@ def test_release_group_browse_is_bounded_and_stops_once_local_titles_are_found()
                             search=[{"id": GERMAN, "name": "Axxis", "score": 100}])
     resolve_artist(_context("Kingdom of the Night"), client=client)
     assert len([url for url in calls if "/release-group" in url]) == 1
+
+
+def test_request_volume_per_artist_is_bounded_for_backfill_assessment():
+    # One search page, then one lookup and one release-group page per
+    # name-matching candidate: Axxis with two same-name candidates costs 5.
+    client, calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Dancefloor Mix"]})
+
+    resolve_artist(_context("Kingdom of the Night"), client=client)
+
+    assert len(calls) == 5
+    assert sum("/artist/?" in url for url in calls) == 1
+    assert sum("/release-group" in url for url in calls) == 2

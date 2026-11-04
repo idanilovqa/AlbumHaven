@@ -616,18 +616,27 @@ def _row_mapping(row: object) -> dict[str, object]:
     return {}
 
 
-_PROBLEM_LABEL_SQL = """
-  case problem.reason_code
-    when 'musicbrainz_artist_not_found' then 'MBID: Not found'
-    when 'musicbrainz_artist_ambiguous' then 'MBID: Multiple matches'
-    when 'musicbrainz_artist_metadata_conflict' then 'MBID: Metadata conflict'
-    when 'musicbrainz_manual_review_required' then 'MBID: Metadata conflict'
-    when 'musicbrainz_mirror_replication_pending' then 'MusicBrainz: Metadata pending'
-    when 'musicbrainz_provider_retry_exhausted' then 'MusicBrainz: Provider unavailable'
-    when 'musicbrainz_matched_entity_unavailable' then 'MusicBrainz: Provider unavailable'
-    else null
-  end
-"""
+# Approved Delivery 1 issue copy. ``MBID:`` is reserved for identity results;
+# ``MusicBrainz:`` names provider or processing state.
+PROBLEM_LABELS = {
+    "musicbrainz_artist_not_found": "MBID: Not found",
+    "musicbrainz_artist_ambiguous": "MBID: Multiple matches",
+    "musicbrainz_artist_metadata_conflict": "MBID: Metadata conflict",
+    "musicbrainz_mirror_replication_pending": "MusicBrainz: Metadata pending",
+    "musicbrainz_provider_retry_exhausted": "MusicBrainz: Provider unavailable",
+}
+# Provisional: the owner has not approved labels for these reasons yet.
+PROVISIONAL_PROBLEM_LABELS = {
+    "musicbrainz_manual_review_required": "MBID: Metadata conflict",
+    # A matched entity that stops resolving is mirror catch-up; the prior match is kept.
+    "musicbrainz_matched_entity_unavailable": "MusicBrainz: Metadata pending",
+}
+
+
+def _problem_label_sql() -> str:
+    labels = {**PROBLEM_LABELS, **PROVISIONAL_PROBLEM_LABELS}
+    cases = " ".join(f"when '{reason}' then '{label}'" for reason, label in labels.items())
+    return f"case problem.reason_code {cases} else null end"
 
 
 def _artist_review_sql(*, single_artist: bool) -> str:
@@ -655,7 +664,7 @@ def _artist_review_sql(*, single_artist: bool) -> str:
           coalesce(matches.confidence, 0) as confidence,
           left(coalesce(problem.safe_display_context, matches.evidence_summary,
                         'Awaiting MusicBrainz review.'), 2048) as evidence_summary,
-          {_PROBLEM_LABEL_SQL} as unresolved_reason,
+          {_problem_label_sql()} as unresolved_reason,
           problem.id as problem_occurrence_id,
           problem.reason_code as problem_reason_code,
           albums.album_count as local_album_count,

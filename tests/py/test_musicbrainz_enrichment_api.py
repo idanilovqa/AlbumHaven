@@ -134,3 +134,40 @@ def test_builder_uses_the_configured_mirror_and_never_negative_caches():
 
     assert api._client.base_url == "http://localhost:5050/ws/2"
     assert api._client.get_json.keywords == {"cache_failures": False}
+
+
+def test_review_rows_carry_the_canonical_gallery_artist_for_alias_combined_groups():
+    class ReviewRepository(FakeRepository):
+        def list_present_artist_review(self):
+            return [
+                {"local_artist_name": "Kipelov", "unresolved_reason": "MBID: Not found"},
+                {"local_artist_name": "Ария", "unresolved_reason": None},
+            ]
+
+    calls = []
+
+    def canonical(names):
+        calls.append(list(names))
+        return {"Kipelov": "Кипелов"}
+
+    api = MusicBrainzEnrichmentApiService(
+        ReviewRepository(), FakeClient(), gallery_artist_names=canonical, now=lambda: NOW,
+    )
+
+    rows = api.list_present_artist_review()
+
+    assert calls == [["Kipelov", "Ария"]]
+    assert [row["gallery_artist"] for row in rows] == ["Кипелов", "Ария"]
+
+
+def test_canonical_gallery_artist_names_use_the_root_gallery_alias_map(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository.__new__(PostgresLibraryBrowseRepository)
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Kipelov": "Кипелов", "kipelov band": "Кипелов"},
+    }, raising=False)
+
+    assert repository.canonical_gallery_artist_names(["Kipelov", "Kipelov Band", "Angra"]) == {
+        "Kipelov": "Кипелов", "Kipelov Band": "Кипелов", "Angra": "Angra",
+    }

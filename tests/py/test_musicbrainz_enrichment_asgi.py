@@ -42,6 +42,7 @@ SAFE_ARTIST = {
     "last_checked_at": "2026-11-04T12:00:00+00:00",
     "last_attempt_at": None,
     "next_attempt_at": None,
+    "gallery_artist": "Änglagård",
 }
 SAFE_CANDIDATE = {
     "artist_mbid": ARTIST_MBID,

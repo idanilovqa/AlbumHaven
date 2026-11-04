@@ -238,19 +238,21 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
                 "evidence_summary": "All bounded search pages completed.",
             }
         candidates = []
+        local_key = normalize_name(local_name)
         for candidate in search.get("candidates") or []:
+            # Only a candidate whose name or alias agrees can ever be selected,
+            # so others cost no lookup or release-group requests.
+            if local_key not in candidate_names(candidate):
+                continue
             lookup = client.lookup_artist(candidate.get("mbid"), discovered_by_search=True)
             if lookup.get("classification") != "matched":
                 return _provider_outcome(lookup)
             artist = dict(lookup["artist"])
             artist["score"] = candidate.get("score", 0)
-            # Release-group evidence is only fetched where the name already
-            # agrees; other candidates can never become the selected match.
-            if normalize_name(local_name) in candidate_names(artist):
-                browse = client.browse_release_group_titles(artist["mbid"], wanted_titles=album_titles)
-                if browse.get("classification") != "complete":
-                    return _provider_outcome(browse)
-                artist["release_titles"] = browse.get("titles") or []
+            browse = client.browse_release_group_titles(artist["mbid"], wanted_titles=album_titles)
+            if browse.get("classification") != "complete":
+                return _provider_outcome(browse)
+            artist["release_titles"] = browse.get("titles") or []
             candidates.append(artist)
 
     match = match_artist(local, candidates)

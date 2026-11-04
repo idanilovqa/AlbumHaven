@@ -35,6 +35,7 @@ _ARTIST_FIELDS = (
     "last_checked_at",
     "last_attempt_at",
     "next_attempt_at",
+    "gallery_artist",
 )
 _CANDIDATE_FIELDS = (
     "artist_mbid",

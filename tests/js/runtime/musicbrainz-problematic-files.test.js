@@ -252,3 +252,19 @@ test('non-owners never request repair status', async () => {
   assert.equal(await context.refreshGalleryArtistMusicBrainzStatus({ force: true }), false);
   assert.deepEqual(requests, []);
 });
+
+test('alias-combined gallery groups receive status by canonical identity, problems winning', async () => {
+  const { context } = loadGalleryStatus({ artists: [
+    { local_artist_name: 'Kipelov', gallery_artist: 'Кипелов', unresolved_reason: null,
+      problem_occurrence_id: null, match_state: 'pending' },
+    { local_artist_name: 'Kipelov Band', gallery_artist: 'Кипелов', unresolved_reason: 'MBID: Not found',
+      problem_occurrence_id: 31, match_state: 'not_found' },
+  ] });
+
+  await context.refreshGalleryArtistMusicBrainzStatus();
+
+  const status = context.getGalleryArtistMusicBrainzStatus({ artist: 'Кипелов' });
+  assert.equal(status.problem.occurrence_id, '31');
+  assert.equal(context.getGalleryArtistMusicBrainzStatus({ artist: 'Kipelov' }).problem, null,
+    'the local alias name is not a Gallery group');
+});

@@ -26,15 +26,29 @@ class MusicBrainzEnrichmentApiService:
         repository,
         client,
         *,
+        gallery_artist_names: Callable[[list[str]], Mapping[str, str]] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._repository = repository
         self._client = client
+        self._gallery_artist_names = gallery_artist_names
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._scheduler = MusicBrainzEnrichmentScheduler(repository, now=self._now)
 
     def list_present_artist_review(self) -> list[dict[str, object]]:
-        return self._repository.list_present_artist_review()
+        """Review rows, each tagged with the canonical Gallery artist it renders under.
+
+        Alias-combined Gallery groups use the canonical name, so state must be
+        attached by that identity rather than by the local artist name.
+        """
+        rows = self._repository.list_present_artist_review()
+        names = [str(row.get("local_artist_name") or "") for row in rows]
+        canonical: Mapping[str, str] = {}
+        if self._gallery_artist_names is not None and names:
+            canonical = self._gallery_artist_names(names)
+        for row, name in zip(rows, names):
+            row["gallery_artist"] = canonical.get(name) or name
+        return rows
 
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         return self._repository.get_artist_problem(local_artist_id=local_artist_id)
@@ -102,10 +116,13 @@ class MusicBrainzEnrichmentApiService:
 
 
 def build_musicbrainz_enrichment_api_service(config: Mapping[str, object]) -> MusicBrainzEnrichmentApiService:
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
     return MusicBrainzEnrichmentApiService(
         MusicBrainzEnrichmentPostgresRepository(config),
         MusicBrainzClient(
             base_url=str(config.get("MUSICBRAINZ_BASE_URL") or ""),
             user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
         ),
+        gallery_artist_names=PostgresLibraryBrowseRepository(config).canonical_gallery_artist_names,
     )

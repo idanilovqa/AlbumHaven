@@ -38,7 +38,8 @@ const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
 const galleryArtistMusicBrainzStatus = { byArtist: new Map(), loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
-  return String(artist || '').trim().toLocaleLowerCase();
+  return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
 // Owner-only repair status from the stored review projection; the shared,
@@ -65,8 +66,9 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       if (!Array.isArray(payload?.artists)) return false;
       const next = new Map();
       for (const row of payload.artists) {
-        const key = galleryArtistMusicBrainzStatusKey(row?.local_artist_name);
-        if (!key) continue;
+        // Keyed by the canonical Gallery artist, so alias-combined groups match.
+        const key = galleryArtistMusicBrainzStatusKey(row?.gallery_artist || row?.local_artist_name);
+        if (!key || next.get(key)?.problem) continue;
         if (row.unresolved_reason && row.problem_occurrence_id != null) {
           next.set(key, { problem: { occurrence_id: String(row.problem_occurrence_id), label: row.unresolved_reason }, state: '' });
         } else if (row.match_state === 'pending') {

@@ -9,7 +9,9 @@ import kotlin.math.roundToLong
 
 /**
  * One `playback.loadQueue` entry; [playbackRef] and [listenKey] are opaque and path-free. A
- * refreshed reference keeps the track's [listenKey], so it continues the same listen.
+ * refreshed reference keeps the track's [listenKey], so it continues the same listen. Items of one
+ * [queueGroup] are one web playback queue (an album): previous and next stay inside it, as the
+ * web's own skips do, while a natural end continues into the next group.
  */
 data class QueueItem(
     val playbackRef: String,
@@ -20,6 +22,7 @@ data class QueueItem(
     val durationMs: Long,
     val trackNumber: String = "",
     val listenKey: String,
+    val queueGroup: Int = 0,
 ) {
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
 
@@ -41,10 +44,27 @@ data class QueueItem(
     }
 }
 
-/** A loop range on the bridge's fixed 48 kHz media timeline. */
-data class LoopRange48k(val startFrame: Long, val endFrame: Long) {
+/** The web's loop kinds (`dispatchActiveStreamingLoop`). */
+enum class LoopKind(val wire: String) {
+    SHORT("short-loop"),
+    LONG("long-loop"),
+    WHOLE_TRACK("whole-track-repeat"),
+    ;
+
+    companion object {
+        fun of(wire: String): LoopKind? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/** A loop range on the bridge's fixed 48 kHz media timeline; [kind] is the web's when it names one. */
+data class LoopRange48k(val startFrame: Long, val endFrame: Long, val kind: LoopKind? = null) {
     fun toTrackFrames(sampleRate: Int): Pair<Long, Long> =
         convert(startFrame, sampleRate) to convert(endFrame, sampleRate)
+
+    /** Replayed from retained PCM: the web's kind, or the worklet's own rule of at most five seconds. */
+    val short: Boolean
+        get() = kind?.let { it == LoopKind.SHORT }
+            ?: (endFrame - startFrame <= PcmEngineConfig.SHORT_LOOP_MAX_SECONDS.toLong() * BRIDGE_RATE)
 
     private fun convert(frame: Long, sampleRate: Int): Long =
         if (sampleRate == BRIDGE_RATE) frame else (frame.toDouble() * sampleRate / BRIDGE_RATE).roundToLong()
@@ -54,6 +74,10 @@ data class LoopRange48k(val startFrame: Long, val endFrame: Long) {
     }
 }
 
+/**
+ * [keepCurrent] says the current item is the one already playing: only the queue around it
+ * changes, as when the web's queue changes under the playing track.
+ */
 data class QueueLoad(
     val queueRevision: Long,
     val items: List<QueueItem>,
@@ -61,6 +85,7 @@ data class QueueLoad(
     val positionMs: Long,
     val loop: LoopRange48k?,
     val autoplay: Boolean,
+    val keepCurrent: Boolean = false,
 )
 
 enum class NativePlaybackState(val wire: String) {
@@ -220,6 +245,9 @@ class NativePlaybackController(
     /** Accepted frame where a queued successor took over; [advanced] has not applied it yet. */
     private var boundaryFrame: Long? = null
 
+    /** While a replacement waits for the outgoing cushion: when the web would start afresh instead. */
+    private var replacementDeadlineMs: Long? = null
+
     // ---- Commands (any thread) ----
 
     fun loadQueue(load: QueueLoad): CommandResult {
@@ -304,6 +332,7 @@ class NativePlaybackController(
             task = tasks.poll()
         }
         claims.tick()
+        maybeAbandonReplacement()
         // A stream may buffer while the claim is requested; only an owner is heard.
         val written = if (loaded && claims.owned) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
         maybeFinishDrainedQueue()
@@ -341,12 +370,15 @@ class NativePlaybackController(
     }
 
     private fun applyLoad(load: QueueLoad) {
+        if (load.keepCurrent && keepCurrent(load)) return
         measureListening()
         val outgoing = queue.getOrNull(index)
         val outgoingPositionMs = positionMs()
-        unload("replacement")
+        val replacing = load.autoplay && load.loop == null && canReplace()
+        if (replacing) detachMeasurement() else unload("replacement")
         resetItemMeasurement()
-        wantPlay = false
+        // A replacement keeps the outgoing track playing until the new start has its cushion.
+        wantPlay = replacing
         queue = load.items
         revision = load.queueRevision
         index = load.currentIndex
@@ -355,12 +387,74 @@ class NativePlaybackController(
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
+        if (replacing && replaceWhilePlaying()) return
+        if (replacing) {
+            unload("replacement")
+            wantPlay = false
+        }
         if (load.autoplay) {
             requestPlay()
         } else {
             retireClaim()
             setState(NativePlaybackState.PAUSED)
         }
+    }
+
+    /** The web keeps playing a track whose queue changed under it; only the queue around it is replaced. */
+    private fun keepCurrent(load: QueueLoad): Boolean {
+        val playingItem = queue.getOrNull(index) ?: return false
+        val incoming = load.items[load.currentIndex]
+        val current = engine?.takeIf { loaded } ?: return false
+        if (incoming.listenKey != playingItem.listenKey || current.replacing) return false
+        queue = load.items
+        revision = load.queueRevision
+        index = load.currentIndex
+        claims.updateTrack(incoming.claimTrack())
+        val successor = queue.getOrNull(index + 1)?.pcmTrack()
+        // A successor prepared for the old queue is not heard yet; what plays next must be the one this queue names.
+        if (current.preparedSuccessor.let { it != null && it != successor }) current.setQueuedNext(null)
+        current.setQueuedNext(successor)
+        emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
+        return true
+    }
+
+    /** `startStreamingTrack`'s `canPrepareReplacement`: playing, heard, and no seek or replacement pending. */
+    private fun canReplace(): Boolean =
+        wantPlay && loaded && claims.owned && state == NativePlaybackState.PLAYING && loop == null &&
+            engine?.replacing == false
+
+    /**
+     * Prepares the current item as the web's track replacement: the outgoing audio plays on until
+     * the new start has its cushion. False when it must start afresh: another native rate, or the
+     * engine refused.
+     */
+    private fun replaceWhilePlaying(): Boolean {
+        val current = engine ?: return false
+        val output = sink ?: return false
+        val item = queue.getOrNull(index) ?: return false
+        if ((rates[item.playbackRef] ?: output.sampleRate) != output.sampleRate) return false
+        val successor = queue.getOrNull(index + 1)?.pcmTrack()
+        if (!current.replace(item.pcmTrack(), msToFrames(heldPositionMs, output.sampleRate), successor)) return false
+        replacementDeadlineMs = if (current.outgoingCushionReady) null else clock() + REPLACEMENT_CUSHION_WAIT_MS
+        claims.updateTrack(item.claimTrack())
+        // The new start is not heard yet, so it reports loading until its first frame.
+        setState(NativePlaybackState.LOADING)
+        listens.begin(item.listenTrack(), heldPositionMs / 1000.0)
+        return true
+    }
+
+    /** `waitForStreamingReplacementCushion`: without the outgoing cushion within a second, start afresh. */
+    private fun maybeAbandonReplacement() {
+        val deadline = replacementDeadlineMs ?: return
+        val current = engine
+        if (current == null || !loaded || !current.replacing || current.outgoingCushionReady) {
+            replacementDeadlineMs = null
+            return
+        }
+        if (clock() < deadline) return
+        replacementDeadlineMs = null
+        unload("replacement")
+        startEngineAt(index, heldPositionMs)
     }
 
     private fun requestPlay() {
@@ -461,6 +555,11 @@ class NativePlaybackController(
                 }
                 PcmBoundaryKind.SEEK -> emit { NativePlaybackEvent.Position(it) }
                 PcmBoundaryKind.LOOP -> emit { NativePlaybackEvent.LoopWrapped(it) }
+                PcmBoundaryKind.REPLACEMENT -> {
+                    // Nothing of the new start is written yet: its listen counts from this frame.
+                    replacementDeadlineMs = null
+                    startMeasuring()
+                }
             }
             is PcmEngineEvent.Ended -> {
                 val output = sink
@@ -575,6 +674,8 @@ class NativePlaybackController(
         if (state == NativePlaybackState.IDLE || state == NativePlaybackState.ENDED) return
         measureListening()
         if (loaded) heldPositionMs = positionMs()
+        // A replacement never cuts over after Pause: the outgoing audio stops and the new start waits.
+        if (engine?.replacing == true) unload("replacement-paused")
         if (wantPlay) listens.pause(heldPositionMs / 1000.0)
         wantPlay = false
         engine?.takeIf { loaded }?.pause()
@@ -617,23 +718,29 @@ class NativePlaybackController(
         emit { NativePlaybackEvent.Position(it) }
     }
 
+    /**
+     * The web's previous and next (`playCompactQueueOffset`): the neighbouring item of the same
+     * queue group, with no restart of the current item and no step past the group's ends.
+     */
     private fun step(direction: Int) {
-        if (queue.isEmpty()) return
         val target = index + direction
         val reason = if (direction > 0) CurrentItemReason.NEXT else CurrentItemReason.PREVIOUS
-        if (target >= queue.size) return
+        if (target !in queue.indices || index !in queue.indices || queue[target].queueGroup != queue[index].queueGroup) return
         val playing = wantPlay
+        val replacing = canReplace()
         measureListening()
         val outgoing = queue.getOrNull(index)
         val outgoingPositionMs = positionMs()
-        unload("replacement")
-        index = target.coerceAtLeast(0)
+        if (replacing) detachMeasurement() else unload("replacement")
+        index = target
         heldPositionMs = 0
         resetItemMeasurement()
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         queue[index].let { claims.updateTrack(it.claimTrack()) }
         emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
+        if (replacing && replaceWhilePlaying()) return
+        if (replacing) unload("replacement")
         if (playing) {
             wantPlay = false
             requestPlay()
@@ -651,17 +758,23 @@ class NativePlaybackController(
 
     private fun applyEngineLoop(current: NativePcmEngine, range: LoopRange48k, rate: Int) {
         val (start, end) = range.toTrackFrames(rate)
-        if (end > start) current.setLoop(start, end)
+        if (end > start) current.setLoop(start, end, range.short)
     }
 
     private fun unload(reason: String) {
+        detachMeasurement()
+        replacementDeadlineMs = null
+        if (loaded) engine?.stop(reason)
+        loaded = false
+        pendingRateChange = false
+    }
+
+    /** Stops measuring the outgoing item; the engine keeps playing it while a replacement prepares. */
+    private fun detachMeasurement() {
         if (measuring) itemHeardBase = itemRenderedFrames()
         measuring = false
         boundaryFrame = null
         endDrainUntilMs = null
-        if (loaded) engine?.stop(reason)
-        loaded = false
-        pendingRateChange = false
     }
 
     // ---- Socket ----
@@ -878,7 +991,7 @@ class NativePlaybackController(
     private fun positionMs(): Long {
         val current = engine
         val output = sink
-        if (!loaded || current == null || output == null) return heldPositionMs
+        if (!loaded || current == null || output == null || current.replacing) return heldPositionMs
         val frames = (current.timelineFrame - output.pendingFrames()).coerceAtLeast(0)
         return frames * 1000 / output.sampleRate
     }
@@ -916,6 +1029,8 @@ class NativePlaybackController(
         /** OkHttp keeps an idle pooled connection for five minutes. */
         const val KEEP_WARM_MS = 4L * 60 * 1000
         const val END_DRAIN_MARGIN_MS = 500L
+        /** `STREAMING_REPLACEMENT_CUSHION_WAIT_MS`. */
+        const val REPLACEMENT_CUSHION_WAIT_MS = 1_000L
         /** How long a shutdown keeps the claim for the listen writes still in flight. */
         const val SHUTDOWN_CHECKPOINT_MS = 3_000L
         private val REFUSED_CLOSE_CODES = setOf(

@@ -422,4 +422,75 @@ class NativePcmEngineTest {
         assertEquals("control-send-error", harness.failure()?.code)
         assertNull(harness.engine.currentStreamId)
     }
+
+    @Test
+    fun aReplacementIsRefusedWhereTheWebStartsAfresh() {
+        val harness = PcmHarness(first, second)
+        harness.engine.start(first.pcm)
+        // Nothing heard yet.
+        assertTrue(!harness.engine.replace(second.pcm, 0, null))
+        harness.playUntil { harness.engine.timelineFrame > 0 }
+        harness.engine.pause()
+        assertTrue(!harness.engine.replace(second.pcm, 0, null))
+        harness.engine.play()
+        assertTrue(harness.engine.replace(second.pcm, 0, null))
+        // A second replacement while one prepares.
+        assertTrue(!harness.engine.replace(first.pcm, 0, null))
+    }
+
+    @Test
+    fun theOutgoingTrackKeepsAtMostTwoSecondsWhileItIsReplaced() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = PcmHarness(long, second)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.engine.timelineFrame > RATE && harness.engine.bufferedFrames(PcmRole.CURRENT) > 8 * RATE }
+        harness.server.decoding = false
+        assertTrue(harness.engine.replace(second.pcm, RATE.toLong(), null))
+        harness.deliver()
+        val creditsBefore = harness.sent<PcmClientControl.Credit>().count { it.streamId == 1L }
+        harness.playUntil { harness.engine.bufferedFrames(PcmRole.CURRENT) < RATE * 3 / 2 }
+        // Above two seconds buffered the outgoing decoder is not credited again.
+        val outgoing = harness.sent<PcmClientControl.Credit>().filter { it.streamId == 1L }.drop(creditsBefore)
+        assertTrue(outgoing.sumOf { it.frames } <= 2 * RATE)
+        assertTrue(harness.engine.replacing)
+    }
+
+    @Test
+    fun aSeekDuringAReplacementPreparesTheNewTrackAtTheSeekFrame() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = PcmHarness(long, second)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.engine.timelineFrame > RATE && harness.engine.bufferedFrames(PcmRole.CURRENT) > 4 * RATE }
+        harness.server.decoding = false
+        assertTrue(harness.engine.replace(second.pcm, 0, null))
+        harness.deliver()
+        harness.engine.seek(5_000)
+        harness.server.decoding = true
+        harness.server.decodeAll()
+        harness.playToEnd()
+
+        assertEquals(PcmClientControl.Close(1, 2, "seek-replaced"), harness.sent<PcmClientControl.Close>().single())
+        val runs = harness.sink.runs()
+        assertEquals(listOf(3, 2), runs.map { it.tag })
+        assertEquals(Run(2, 5_000, second.frames - 5_000), runs[1])
+        assertEquals(PcmBoundaryKind.REPLACEMENT, harness.emitted<PcmEngineEvent.Boundary>().single().kind)
+    }
+
+    @Test
+    fun aReplacementAtAnotherRateAsksForAFreshStartAndKeepsTheOutgoingTrack() {
+        val other = SyntheticTrack(tag = 4, frames = RATE.toLong(), sampleRate = 44_100)
+        val harness = PcmHarness(first, other)
+        harness.engine.start(first.pcm)
+        harness.playUntil { harness.engine.timelineFrame > 0 }
+        assertTrue(harness.engine.replace(other.pcm, 960, null))
+        harness.deliver()
+
+        assertEquals(
+            listOf(PcmEngineEvent.StartRateRequired(other.pcm, 960, 44_100)),
+            harness.emitted<PcmEngineEvent.StartRateRequired>(),
+        )
+        assertNull(harness.failure())
+        assertTrue(!harness.engine.replacing)
+        assertEquals(1L, harness.engine.currentStreamId)
+    }
 }

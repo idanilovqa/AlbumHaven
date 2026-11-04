@@ -50,6 +50,20 @@ class PcmRing(val capacityFrames: Int) {
         bufferedFrames -= frames
     }
 
+    /** Copies [frames] buffered frames starting [offsetFrames] after [readFrame] into [target] at [targetFrame]. */
+    fun copyTo(offsetFrames: Int, frames: Int, target: FloatArray, targetFrame: Int) {
+        require(offsetFrames >= 0 && frames >= 0 && offsetFrames + frames <= bufferedFrames) {
+            "frames exceed buffered PCM"
+        }
+        var copied = 0
+        while (copied < frames) {
+            val source = (readFrame + offsetFrames + copied) % capacityFrames
+            val run = minOf(frames - copied, capacityFrames - source)
+            System.arraycopy(samples, source * CHANNELS, target, (targetFrame + copied) * CHANNELS, run * CHANNELS)
+            copied += run
+        }
+    }
+
     fun clear() {
         readFrame = 0
         writeFrame = 0

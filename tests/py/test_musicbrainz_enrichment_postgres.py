@@ -478,7 +478,8 @@ def test_complete_present_artist_review_is_library_scoped_bounded_and_safe():
 
     result = repository_for(connection).list_present_artist_review()
 
-    assert result == rows
+    assert [{key: row[key] for key in expected} for row, expected in zip(result, rows)] == rows
+    assert all(row["problem_occurrence_id"] is None for row in result)
     sql = normalized_sql(connection)
     assert "from app.bootstrap_owners" in sql
     assert "join library.libraries" in sql
@@ -535,6 +536,14 @@ def test_review_projection_whitelists_fields_even_if_driver_row_contains_secrets
         "evidence_summary",
         "unresolved_reason",
         "musicbrainz_url",
+        "disambiguation",
+        "artist_kind",
+        "problem_occurrence_id",
+        "problem_reason_code",
+        "local_album_count",
+        "last_checked_at",
+        "last_attempt_at",
+        "next_attempt_at",
     }
     assert "private_path" not in repr(row)
     assert "secret" not in repr(row)

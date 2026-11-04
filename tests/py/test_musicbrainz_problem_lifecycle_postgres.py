@@ -129,6 +129,18 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
         assert [row["reason_code"] for row in rows] == ["musicbrainz_artist_ambiguous"]
         assert rows[0]["candidate_count"] == 1
 
+    detail = repository.get_artist_problem(local_artist_id=artist_id)
+    assert detail["unresolved_reason"] == "MBID: Multiple matches"
+    assert detail["problem_reason_code"] == "musicbrainz_artist_ambiguous"
+    assert detail["problem_occurrence_id"] is not None
+    assert detail["local_album_count"] == 1
+    assert [candidate["artist_mbid"] for candidate in detail["candidates"]] == [GERMAN]
+    assert detail["candidates"][0]["disambiguation"] == "German hard rock band"
+    assert detail["candidates"][0]["country"] == "DE"
+    assert detail["candidates"][0]["musicbrainz_url"] == f"https://musicbrainz.org/artist/{GERMAN}"
+    [review] = repository.list_present_artist_review()
+    assert review["problem_occurrence_id"] == detail["problem_occurrence_id"]
+
     # A provider failure during a retry never replaces a durable identity problem.
     repository.enqueue_artist(local_artist_id=artist_id, reason="authorized_retry", observed_at=NOW)
     job = repository.claim_due_job(worker_id="worker-a", now=NOW + timedelta(minutes=2),
@@ -157,6 +169,12 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
         rows = _problems(connection, artist_id)
         assert _active(connection, artist_id) == []
         assert rows[-1]["resolution_source"] == "manual_match"
+
+    detail = repository.get_artist_problem(local_artist_id=artist_id)
+    assert detail["match_state"] == "matched"
+    assert detail["unresolved_reason"] is None
+    assert detail["artist_mbid"] == GERMAN
+    assert detail["country"] == "DE"
 
     # Later automatic outcomes cannot reopen a problem over the manual decision.
     repository.record_automatic_outcome(
@@ -188,6 +206,20 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
             """,
             (library_id,),
         ).fetchone()["id"]
+        album_id = connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, metadata)
+            values (%s, %s, 'lifecycle-sheet-music', 'Sheet Music', '{}'::jsonb) returning id
+            """,
+            (library_id, artist_id),
+        ).fetchone()["id"]
+        connection.execute(
+            """
+            insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata)
+            values (%s, %s, %s, 'lifecycle-10cc-track', 'Track', '{}'::jsonb)
+            """,
+            (library_id, album_id, artist_id),
+        )
     repository = MusicBrainzEnrichmentPostgresRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
         connect=lambda _url: isolatedPostgres._connect(setup_url),
@@ -203,6 +235,10 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
     with isolatedPostgres._connect(setup_url) as connection:
         assert _active(connection, artist_id) == ["musicbrainz_mirror_replication_pending"]
 
+    pending = repository.get_artist_problem(local_artist_id=artist_id)
+    assert pending["unresolved_reason"] == "MusicBrainz: Metadata pending"
+    assert pending["next_attempt_at"] is not None
+
     job = repository.claim_due_job(worker_id="worker-b", now=NOW + timedelta(minutes=2),
                                    lease_duration=timedelta(minutes=5))
     repository.complete_job(
@@ -215,3 +251,7 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
         assert _active(connection, artist_id) == ["musicbrainz_provider_retry_exhausted"]
         assert [row["resolution_source"] for row in rows if row["lifecycle_state"] == "resolved"] == ["reclassified"]
         assert all(row["has_job"] for row in rows)
+    unavailable = repository.get_artist_problem(local_artist_id=artist_id)
+    assert unavailable["unresolved_reason"] == "MusicBrainz: Provider unavailable"
+    assert unavailable["last_attempt_at"] is not None
+    assert unavailable["next_attempt_at"] is None

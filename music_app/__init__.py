@@ -433,6 +433,9 @@ def create_asgi_app():
         start_background_refresh_for_state,
     )
     from music_app.services.musicbrainz_enrichment import MusicBrainzEnrichmentScheduler
+    from music_app.services.musicbrainz_enrichment_api import (
+        build_musicbrainz_enrichment_api_service,
+    )
     from music_app.services.musicbrainz_enrichment_postgres import (
         MusicBrainzEnrichmentPostgresRepository,
     )
@@ -544,6 +547,7 @@ def create_asgi_app():
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
         _app.state.musicbrainz_enrichment_worker = None
+        _app.state.musicbrainz_enrichment_api_service = None
 
         async def shutdown_resources() -> None:
             _app.state.library_warmup_thread.request_stop()
@@ -620,6 +624,9 @@ def create_asgi_app():
                 )
                 runtime.config["_MUSICBRAINZ_ENRICHMENT_SCHEDULER"] = (
                     enrichment_scheduler
+                )
+                _app.state.musicbrainz_enrichment_api_service = (
+                    build_musicbrainz_enrichment_api_service(runtime.config)
                 )
                 schedule_startup_backfill(enrichment_scheduler)
             start_musicbrainz_enrichment_worker(_app)

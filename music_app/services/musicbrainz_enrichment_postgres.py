@@ -27,6 +27,25 @@ _REVIEW_FIELDS = (
     "evidence_summary",
     "unresolved_reason",
     "musicbrainz_url",
+    "disambiguation",
+    "artist_kind",
+    "problem_occurrence_id",
+    "problem_reason_code",
+    "local_album_count",
+    "last_checked_at",
+    "last_attempt_at",
+    "next_attempt_at",
+)
+_CANDIDATE_REVIEW_FIELDS = (
+    "artist_mbid",
+    "canonical_name",
+    "native_name",
+    "disambiguation",
+    "artist_kind",
+    "country",
+    "confidence",
+    "evidence_summary",
+    "musicbrainz_url",
 )
 
 
@@ -513,74 +532,20 @@ class MusicBrainzEnrichmentPostgresRepository:
         return _integer(row.get("stored_tag_count"))
 
     def list_present_artist_review(self) -> list[dict[str, object]]:
-        sql = _active_library_cte() + """
-            select
-              artists.id as local_artist_id,
-              artists.name as local_artist_name,
-              coalesce(matches.state, 'pending') as match_state,
-              matches.artist_mbid::text as artist_mbid,
-              remote.canonical_name,
-              remote.preferred_native_name as native_name,
-              coalesce(country.country_name, country.country_code) as country,
-              coalesce(genres.names, array[]::text[]) as genres,
-              coalesce(matches.confidence, 0) as confidence,
-              left(coalesce(matches.evidence_summary, 'Awaiting MusicBrainz review.'), 2048)
-                as evidence_summary,
-              case problem.reason_code
-                when 'musicbrainz_artist_not_found' then 'MBID: Not found'
-                when 'musicbrainz_artist_ambiguous' then 'MBID: Multiple matches'
-                when 'musicbrainz_artist_metadata_conflict' then 'MBID: Metadata conflict'
-                when 'musicbrainz_mirror_replication_pending' then 'MBID: Mirror catch-up pending'
-                when 'musicbrainz_provider_retry_exhausted' then 'MBID: Provider unavailable'
-                when 'musicbrainz_manual_review_required' then 'MBID: Manual review required'
-                when 'musicbrainz_matched_entity_unavailable' then 'MBID: Matched artist unavailable'
-                else null
-              end as unresolved_reason,
-              case when matches.artist_mbid is not null
-                then 'https://musicbrainz.org/artist/' || matches.artist_mbid::text
-                else null
-              end as musicbrainz_url
-            from active_library
-            join library.local_artists artists
-              on artists.library_id = active_library.library_id
-            left join library.local_artist_musicbrainz_matches matches
-              on matches.library_id = active_library.library_id
-             and matches.local_artist_id = artists.id
-            left join integration.musicbrainz_artists remote
-              on remote.mbid = matches.artist_mbid
-            left join lateral (
-              select countries.country_name, countries.country_code
-              from integration.musicbrainz_artist_countries countries
-              where countries.artist_mbid = matches.artist_mbid
-              order by countries.country_code
-              limit 1
-            ) country on true
-            left join lateral (
-              select array_agg(display.tag_name order by display.display_rank) as names
-              from integration.musicbrainz_artist_display_genres display
-              where display.artist_mbid = matches.artist_mbid
-            ) genres on true
-            left join lateral (
-              select problems.reason_code
-              from library.metadata_enrichment_problems problems
-              where problems.library_id = active_library.library_id
-                and problems.local_artist_id = artists.id
-                and problems.target_kind = 'artist'
-                and problems.lifecycle_state = 'active'
-              order by problems.last_observed_at desc, problems.id desc
-              limit 1
-            ) problem on true
-            where exists (
-              select 1
-              from library.local_tracks tracks
-              where tracks.library_id = active_library.library_id
-                and tracks.artist_id = artists.id
-            )
-            order by lower(artists.name), artists.id;
-        """
         with self._connect(self._database_url) as connection:
-            rows = connection.execute(sql, {}).fetchall()
+            rows = connection.execute(_artist_review_sql(single_artist=False), {}).fetchall()
         return [_review_row(row) for row in rows]
+
+    def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
+        params = {"local_artist_id": _positive_id(local_artist_id)}
+        with self._connect(self._database_url) as connection:
+            row = connection.execute(_artist_review_sql(single_artist=True), params).fetchone()
+            if not row:
+                return None
+            candidates = connection.execute(_artist_candidates_sql(), params).fetchall()
+        result = _review_row(row)
+        result["candidates"] = [_candidate_review_row(candidate) for candidate in candidates]
+        return result
 
     def _execute_one(self, sql: str, params: dict[str, object]) -> dict[str, object]:
         with self._connect(self._database_url) as connection:
@@ -649,6 +614,149 @@ def _row_mapping(row: object) -> dict[str, object]:
     if hasattr(row, "keys"):
         return {str(key): row[key] for key in row.keys()}
     return {}
+
+
+_PROBLEM_LABEL_SQL = """
+  case problem.reason_code
+    when 'musicbrainz_artist_not_found' then 'MBID: Not found'
+    when 'musicbrainz_artist_ambiguous' then 'MBID: Multiple matches'
+    when 'musicbrainz_artist_metadata_conflict' then 'MBID: Metadata conflict'
+    when 'musicbrainz_manual_review_required' then 'MBID: Metadata conflict'
+    when 'musicbrainz_mirror_replication_pending' then 'MusicBrainz: Metadata pending'
+    when 'musicbrainz_provider_retry_exhausted' then 'MusicBrainz: Provider unavailable'
+    when 'musicbrainz_matched_entity_unavailable' then 'MusicBrainz: Provider unavailable'
+    else null
+  end
+"""
+
+
+def _artist_review_sql(*, single_artist: bool) -> str:
+    """Stored-projection review rows for present artists in the current library.
+
+    ``pending`` is reported only while a first lookup is queued or running.
+    """
+    artist_filter = "and artists.id = %(local_artist_id)s" if single_artist else ""
+    return _active_library_cte() + f"""
+        select
+          artists.id as local_artist_id,
+          artists.name as local_artist_name,
+          case
+            when matches.state is not null then matches.state
+            when job.state in ('queued', 'leased') then 'pending'
+            else 'unmatched'
+          end as match_state,
+          matches.artist_mbid::text as artist_mbid,
+          remote.canonical_name,
+          remote.preferred_native_name as native_name,
+          remote.disambiguation,
+          remote.artist_kind,
+          coalesce(country.country_name, country.country_code) as country,
+          coalesce(genres.names, array[]::text[]) as genres,
+          coalesce(matches.confidence, 0) as confidence,
+          left(coalesce(problem.safe_display_context, matches.evidence_summary,
+                        'Awaiting MusicBrainz review.'), 2048) as evidence_summary,
+          {_PROBLEM_LABEL_SQL} as unresolved_reason,
+          problem.id as problem_occurrence_id,
+          problem.reason_code as problem_reason_code,
+          albums.album_count as local_album_count,
+          matches.last_observed_at as last_checked_at,
+          job.provider_observed_at as last_attempt_at,
+          case when job.state in ('queued', 'retry_wait') then job.next_attempt_at end
+            as next_attempt_at,
+          case when matches.artist_mbid is not null
+            then 'https://musicbrainz.org/artist/' || matches.artist_mbid::text
+            else null
+          end as musicbrainz_url
+        from active_library
+        join library.local_artists artists
+          on artists.library_id = active_library.library_id
+         {artist_filter}
+        left join library.local_artist_musicbrainz_matches matches
+          on matches.library_id = active_library.library_id
+         and matches.local_artist_id = artists.id
+        left join integration.musicbrainz_artists remote
+          on remote.mbid = matches.artist_mbid
+        left join lateral (
+          select
+            (array_agg(countries.country_code order by countries.country_code))[1] as country_code,
+            (array_agg(countries.country_name order by countries.country_code))[1] as country_name
+          from integration.musicbrainz_artist_countries countries
+          where countries.artist_mbid = matches.artist_mbid
+        ) country on true
+        left join lateral (
+          select array_agg(display.tag_name order by display.display_rank) as names
+          from integration.musicbrainz_artist_display_genres display
+          where display.artist_mbid = matches.artist_mbid
+        ) genres on true
+        left join lateral (
+          select problems.id, problems.reason_code, problems.safe_display_context
+          from library.metadata_enrichment_problems problems
+          where problems.library_id = active_library.library_id
+            and problems.local_artist_id = artists.id
+            and problems.target_kind = 'artist'
+            and problems.lifecycle_state = 'active'
+          order by problems.last_observed_at desc, problems.id desc
+          limit 1
+        ) problem on true
+        left join lateral (
+          select jobs.state, jobs.next_attempt_at, jobs.provider_observed_at
+          from ops.metadata_enrichment_jobs jobs
+          where jobs.library_id = active_library.library_id
+            and jobs.local_artist_id = artists.id
+            and jobs.target_kind = 'artist'
+          order by jobs.updated_at desc, jobs.id desc
+          limit 1
+        ) job on true
+        left join lateral (
+          select count(*)::integer as album_count
+          from library.local_albums local_albums
+          where local_albums.library_id = active_library.library_id
+            and local_albums.artist_id = artists.id
+        ) albums on true
+        where exists (
+          select 1
+          from library.local_tracks tracks
+          where tracks.library_id = active_library.library_id
+            and tracks.artist_id = artists.id
+        )
+        order by lower(artists.name), artists.id;
+    """
+
+
+def _artist_candidates_sql() -> str:
+    return _active_library_cte() + """
+        select
+          candidates.artist_mbid::text as artist_mbid,
+          remote.canonical_name,
+          remote.preferred_native_name as native_name,
+          remote.disambiguation,
+          remote.artist_kind,
+          coalesce(country.country_name, country.country_code) as country,
+          candidates.candidate_score as confidence,
+          candidates.evidence_summary,
+          'https://musicbrainz.org/artist/' || candidates.artist_mbid::text as musicbrainz_url
+        from active_library
+        join library.local_artist_musicbrainz_candidates candidates
+          on candidates.library_id = active_library.library_id
+         and candidates.local_artist_id = %(local_artist_id)s
+        join integration.musicbrainz_artists remote
+          on remote.mbid = candidates.artist_mbid
+        left join lateral (
+          select
+            (array_agg(countries.country_code order by countries.country_code))[1] as country_code,
+            (array_agg(countries.country_name order by countries.country_code))[1] as country_name
+          from integration.musicbrainz_artist_countries countries
+          where countries.artist_mbid = candidates.artist_mbid
+        ) country on true
+        order by candidates.candidate_score desc, remote.canonical_name, candidates.artist_mbid;
+    """
+
+
+def _candidate_review_row(row: object) -> dict[str, object]:
+    source = _row_mapping(row)
+    result = {field: source.get(field) for field in _CANDIDATE_REVIEW_FIELDS}
+    result["evidence_summary"] = _bounded_text(result.get("evidence_summary"), 2048)
+    return result
 
 
 def _review_row(row: object) -> dict[str, object]:

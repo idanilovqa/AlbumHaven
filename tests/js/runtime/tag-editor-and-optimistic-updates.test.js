@@ -232,7 +232,6 @@ test('album editions render the same keyboard tab component as Home', () => {
     { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
   ];
   context.state.modalReleaseIndex = 1;
-  context.renderVersionContextMenu = () => {};
   const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
   context.renderTrackModalTabs({ tabs });
   assert.equal(tabs.hidden, false);
@@ -4906,4 +4905,42 @@ test('Album Details passes exact explicit bonus and main durations to final summ
     { path: 'bonus-title.flac', title: 'Bonus', duration_seconds: 180 },
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
+});
+
+test('every version after the original offers Separate release through the shared album menu', async () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const calls = [];
+  const context = loadHelper([], {
+    escapeHtml: value => String(value),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    ensureAlbumCardContextMenu: () => menu,
+    hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
+  });
+  const buttons = [{ dataset: {} }, { dataset: {} }, { dataset: {} }];
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original' },
+    { key: 'remaster', tabLabel: 'Remastered' },
+    { key: 'duplicate', tabLabel: 'Duplicate' },
+  ];
+  context.state.modalReleaseIndex = 0;
+  const tablist = { querySelectorAll: () => buttons, querySelector: () => null, addEventListener() {} };
+  context.mountInPageTabs = () => {};
+  context.renderTrackModalTabs({ tabs: { hidden: true, innerHTML: '', querySelector: () => tablist } });
+  assert.deepEqual(buttons.map((button) => button.dataset.versionContextKey), [undefined, 'remaster', 'duplicate']);
+
+  context.showVersionContextMenu('remaster', 40, 60);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.albumKey, 'remaster');
+  assert.match(menu.innerHTML, /class="album-card-context-menu-item" data-album-card-action="separate-release">Separate release</);
+  context.hideVersionContextMenu();
+  assert.equal(menu.hidden, true);
+
+  context.ignoreAlbumVersion = async (key) => calls.push(['ignore', key]);
+  context.unmarkAlbumVersion = async (key) => calls.push(['unmark', key]);
+  context.state.view.manual_version_links = { linked: 'original' };
+  await context.separateAlbumRelease('remaster');
+  await context.separateAlbumRelease('linked');
+  assert.deepEqual(calls, [['ignore', 'remaster'], ['unmark', 'linked']], 'automatic versions become a version rule; manual links are unmarked');
 });

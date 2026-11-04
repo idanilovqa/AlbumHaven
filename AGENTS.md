@@ -48,6 +48,39 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory component reuse
+
+This rule outranks convenience and applies to every agent, chat, and change.
+
+- Before writing any UI element (button, link, input, path or folder picker,
+  radio, checkbox, switch, select, menu, tab, header, footer, alert, dialog,
+  tree or list item, table, card, badge), search this repository for the
+  component that already owns it and use that component. If the owner names a
+  page with "a header", "five buttons", "an input" or any other element, each
+  named element is a lookup, not something to build.
+- Current owners: `partials/button.html` and `static/js/button-component.js`
+  (Button, ActionButton, icons); `partials/form-controls.html` and
+  `static/js/path-input.js` (RadioOption, PathInput with folder browse);
+  `partials/gallery-bar.html` / `page-gallery-bar.html` (every page header);
+  `components/on-page-alert.html` and `runtime/alert-components.js`
+  (OnPageAlert, SmallAlert with severity or library-source tone, AlertLabel);
+  `partials/app-form-modal.html`, `css/dialog-component.css` and
+  `showAppFormDialog` (dialogs); `navigation-tree.js` (tree and list items,
+  including the wide artwork variant); `album-card-context-menu` (context
+  menus); `runtime/compact-data-table.js` and `runtime/album-track-table.js`
+  (tables); `runtime/in-page-tabs.js` (tabs).
+- Extend the owning component (a variant, option, tone, or slot) when it does
+  not fit. Never copy its markup or CSS into a page, never restyle it from a
+  page stylesheet, and never add a parallel "page" version. A component owns
+  its own shape and states; it must render correctly on every page that loads
+  its stylesheet.
+- Wire components the same way on every host: a Settings page must work when
+  loaded directly and when opened inside the library document.
+- Prefer deleting a page-local copy over keeping it. Keep files small and
+  focused; split by ownership instead of growing a page file.
+- A review that finds a page-local substitute for an existing component is a
+  blocking finding.
+
 ## Mandatory search regression gate
 
 - Immediately run `npm run test:search-regressions` after changing search

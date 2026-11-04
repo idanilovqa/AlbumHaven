@@ -50,6 +50,7 @@ const initialAppearance = () => ({
   docked_compact_player_regular_style: false,
   album_details_layout: 'classic_bar',
   album_playing_row_animation: 'enabled',
+  library_source_indicators: { card_colors: false, hover_outline_colors: false, icons: true },
   alert_family: 'ember',
   loop_control_style: 'capsule',
   interaction_overrides: interactionOverrides(),

@@ -342,7 +342,9 @@ def hydrate_library_state_from_disk(
     strict_scan_cache_load: bool = False,
     record_file_error: Callable[..., None] | None = None,
 ) -> bool:
-    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+    shared_browse = config.get("SHARED_LIBRARY_BROWSE_ONLY") is True
+    if shared_browse:
+        # Shared UI processes may consume the snapshot, never repair or publish it.
         validate_cache = False
         ensure_relations = False
         strict_scan_cache_load = True
@@ -375,11 +377,12 @@ def hydrate_library_state_from_disk(
         config["CACHE_PATH"],
         root_identity,
     )
-    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True and file_cache and (
-        not relation_projection_structure_complete(relation_views)
+    if shared_browse and (
+        disk_error or not file_cache
+        or not relation_projection_structure_complete(relation_views)
         or not relation_views.get("artists")
     ):
-        raise RuntimeError("Shared browsing requires an existing complete relation projection")
+        raise RuntimeError("Shared browsing requires an existing complete library snapshot")
     exception_overrides_loader = load_exception_overrides
     exception_overrides = exception_overrides_loader(config) if exception_overrides_loader is not None else {}
     if disk_error:
@@ -485,7 +488,7 @@ def hydrate_library_state_from_disk(
     if ensure_relations and ensure_relation_views is not None and _relations_missing(library_state):
         ensure_relation_views(library_state, config)
     library_browse_selection = select_runtime_persistence_adapter("library_browse", config)
-    should_queue_file_prewarm = library_browse_selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES
+    should_queue_file_prewarm = not shared_browse and library_browse_selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES
     if (
         should_queue_file_prewarm
         and queue_problematic_albums_prewarm is not None

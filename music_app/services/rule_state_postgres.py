@@ -208,10 +208,10 @@ class RuleStatePostgresAdapter:
                 if not normalized:
                     connection.execute(_delete_table_rows_sql("exception_overrides"))
                     return
-                for track_key, exception_type in sorted(normalized.items()):
+                for track_key, override_payload in sorted(normalized.items()):
                     connection.execute(
                         _upsert_exception_override_sql(),
-                        (track_key, _jsonb({"exception_type": exception_type})),
+                        (track_key, _jsonb(override_payload)),
                     )
                 connection.execute(
                     _delete_exception_overrides_except_sql(),
@@ -228,10 +228,10 @@ class RuleStatePostgresAdapter:
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
-                for track_key, exception_type in sorted(normalized.items()):
+                for track_key, override_payload in sorted(normalized.items()):
                     connection.execute(
                         _upsert_exception_override_sql(),
-                        (track_key, _jsonb({"exception_type": exception_type})),
+                        (track_key, _jsonb(override_payload)),
                     )
 
     def _load_rows(self, sql: str) -> list[object]:
@@ -353,12 +353,32 @@ def _exception_type_from_payload(row_payload: Mapping[str, object]) -> str:
     return normalize_exception_value(fallback)
 
 
-def _normalize_exception_overrides(values: Mapping[object, object] | None) -> dict[str, str]:
-    normalized: dict[str, str] = {}
+def _normalize_exception_overrides(
+    values: Mapping[object, object] | None,
+) -> dict[str, dict[str, str]]:
+    normalized: dict[str, dict[str, str]] = {}
     for track_key, exception_value in (values or {}).items():
         normalized_track_key = _text(track_key)
         if normalized_track_key:
-            normalized[normalized_track_key] = normalize_exception_value(exception_value)
+            if isinstance(exception_value, Mapping):
+                exception_type = normalize_exception_value(
+                    exception_value.get("exception_type")
+                )
+                custom_collection_name = _text(
+                    exception_value.get("custom_collection_name")
+                )
+                normalized_payload = {
+                    "exception_type": exception_type,
+                    "custom_collection_name": (
+                        custom_collection_name
+                        if exception_type == "Custom Collection"
+                        else ""
+                    ),
+                }
+            else:
+                exception_type = normalize_exception_value(exception_value)
+                normalized_payload = {"exception_type": exception_type}
+            normalized[normalized_track_key] = normalized_payload
     return normalized
 
 

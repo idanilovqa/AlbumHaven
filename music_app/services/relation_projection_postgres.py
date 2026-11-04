@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from threading import Lock
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from threading import Event, Thread
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 from music_app.services.artist_family_postgres import (
@@ -28,16 +31,23 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     Jsonb = None
 
 
-RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v10"
+RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v11"
 RELATION_PROJECTION_METADATA_KEY = "relation_projection"
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _PROJECTION_READY_MAX_ATTEMPTS = 3
 _ARTIST_SEARCH_PROJECTION_ROWS_KEY = "_artist_search_projection_rows"
+_COOPERATIVE_YIELD_INTERVAL = 256
+_BACKGROUND_COOPERATIVE_SLEEP_SECONDS = 0.002
 
 
 def _raise_if_projection_cancelled(cancel_requested: object | None) -> None:
     if cancel_requested is not None and cancel_requested.is_set():
         raise InterruptedError("Relation projection readiness was cancelled.")
+
+
+def _cooperate_with_foreground(cancel_requested: object) -> None:
+    _raise_if_projection_cancelled(cancel_requested)
+    sleep(_BACKGROUND_COOPERATIVE_SLEEP_SECONDS)
 
 
 @contextmanager
@@ -97,6 +107,254 @@ def relation_projection_structure_complete(relation_views: object) -> bool:
     return all(isinstance(relation_views.get(key), Mapping) for key in required_mappings) and all(
         isinstance(relation_views.get(key), list) for key in required_lists
     )
+
+
+class TargetedRelationPatchUnsupported(RuntimeError):
+    pass
+
+
+def _relation_value_contains_artist(value: object, artist_keys: set[str]) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in artist_keys
+    if isinstance(value, Mapping):
+        return any(
+            _relation_value_contains_artist(item, artist_keys)
+            for pair in value.items()
+            for item in pair
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(
+            _relation_value_contains_artist(item, artist_keys) for item in value
+        )
+    return False
+
+
+def _affected_alias_groups_are_trivial(
+    alias_to_canonical: object,
+    canonical_to_aliases: object,
+    artist_keys: set[str],
+) -> bool:
+    if not isinstance(alias_to_canonical, Mapping) or not isinstance(
+        canonical_to_aliases,
+        Mapping,
+    ):
+        return False
+    for alias, canonical in alias_to_canonical.items():
+        alias_key = str(alias or "").strip().casefold()
+        canonical_key = str(canonical or "").strip().casefold()
+        if (alias_key in artist_keys or canonical_key in artist_keys) and (
+            alias_key != canonical_key
+        ):
+            return False
+    for canonical, aliases in canonical_to_aliases.items():
+        canonical_key = str(canonical or "").strip().casefold()
+        alias_keys = {
+            str(alias or "").strip().casefold()
+            for alias in (aliases if isinstance(aliases, (list, tuple, set)) else [])
+            if str(alias or "").strip()
+        }
+        if canonical_key in artist_keys or alias_keys & artist_keys:
+            if canonical_key not in artist_keys or any(
+                alias_key != canonical_key for alias_key in alias_keys
+            ):
+                return False
+    return True
+
+
+def _mapping_values_contain_artist(value: object, artist_keys: set[str]) -> bool:
+    return isinstance(value, Mapping) and any(
+        _relation_value_contains_artist(item, artist_keys) for item in value.values()
+    )
+
+
+def _affected_folder_relations_are_empty(
+    folder_related: object,
+    artist_keys: set[str],
+) -> bool:
+    if not isinstance(folder_related, Mapping):
+        return False
+    for artist, related in folder_related.items():
+        artist_key = str(artist or "").strip().casefold()
+        related_values = related if isinstance(related, (list, tuple, set, frozenset)) else []
+        if artist_key in artist_keys and any(related_values):
+            return False
+        if artist_key not in artist_keys and _relation_value_contains_artist(
+            related_values,
+            artist_keys,
+        ):
+            return False
+    return True
+
+
+def patch_structural_relation_views(
+    relation_views: Mapping[str, object],
+    *,
+    affected_rows: list[object],
+    source_artist_names: set[str],
+    destination_artist_names: set[str],
+    source_album_vacated: bool = False,
+) -> dict[str, object]:
+    if not relation_projection_structure_complete(relation_views):
+        raise TargetedRelationPatchUnsupported("Relation projection is incomplete.")
+
+    affected_names = {
+        str(name or "").strip().casefold()
+        for name in source_artist_names | destination_artist_names
+        if str(name or "").strip()
+    }
+    if not _affected_alias_groups_are_trivial(
+        relation_views.get("alias_to_canonical"),
+        relation_views.get("canonical_to_aliases"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in a nontrivial alias group."
+        )
+    if _mapping_values_contain_artist(
+        relation_views.get("family_to_artists"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in family_to_artists."
+        )
+    if not _affected_folder_relations_are_empty(
+        relation_views.get("folder_related"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in folder_related."
+        )
+    if _relation_value_contains_artist(
+        relation_views.get("sidebar_families"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in sidebar_families."
+        )
+
+    referenced_names = {
+        str(row.get(field) or "").strip()
+        for row in affected_rows
+        if isinstance(row, Mapping)
+        for field in (
+            "owner_artist_name",
+            "album_artist",
+            "member_artist_name",
+            "artist_name",
+        )
+        if str(row.get(field) or "").strip()
+    }
+    referenced_keys = {name.casefold() for name in referenced_names}
+    source_names_by_key = {
+        str(name or "").strip().casefold(): str(name or "").strip()
+        for name in source_artist_names
+        if str(name or "").strip()
+    }
+    destination_names_by_key = {
+        str(name or "").strip().casefold(): str(name or "").strip()
+        for name in destination_artist_names
+        if str(name or "").strip()
+    }
+    if not set(destination_names_by_key).issubset(referenced_keys):
+        raise TargetedRelationPatchUnsupported(
+            "Destination artist facts are incomplete."
+        )
+
+    sidebar_entries = relation_views.get("artists_sidebar", [])
+    if any(not isinstance(entry, Mapping) for entry in sidebar_entries):
+        raise TargetedRelationPatchUnsupported("Artist sidebar entries are incomplete.")
+    current_counts = {
+        str(entry.get("artist") or "").strip().casefold(): int(
+            entry.get("count") or 0
+        )
+        for entry in sidebar_entries
+        if str(entry.get("artist") or "").strip()
+    }
+    updated_counts = {
+        key: current_counts.get(key, 0)
+        - int(
+            source_album_vacated
+            and key in source_names_by_key
+            and key not in destination_names_by_key
+        )
+        + int(key in destination_names_by_key and key not in source_names_by_key)
+        for key in affected_names
+    }
+    patched = dict(relation_views)
+    artists = {
+        str(name or "").strip()
+        for name in relation_views.get("artists", [])
+        if str(name or "").strip()
+        and str(name or "").strip().casefold() not in affected_names
+    }
+    artists.update(
+        destination_names_by_key.get(
+            normalized_name,
+            source_names_by_key.get(normalized_name, normalized_name),
+        )
+        for normalized_name, count in updated_counts.items()
+        if count > 0
+    )
+    patched["artists"] = sorted(artists, key=str.casefold)
+
+    patched_sidebar = [
+        {"artist": str(entry.get("artist") or "").strip(), "count": int(entry.get("count") or 0)}
+        for entry in sidebar_entries
+        if str(entry.get("artist") or "").strip()
+        and str(entry.get("artist") or "").strip().casefold() not in affected_names
+    ]
+    patched_sidebar.extend(
+        {
+            "artist": destination_names_by_key.get(
+                normalized_name,
+                source_names_by_key.get(normalized_name, normalized_name),
+            ),
+            "count": count,
+        }
+        for normalized_name, count in updated_counts.items()
+        if count > 0
+    )
+    patched["artists_sidebar"] = sorted(
+        patched_sidebar,
+        key=lambda entry: str(entry["artist"]).casefold(),
+    )
+    patched_folder_related = {
+        str(artist): set(related)
+        for artist, related in relation_views.get("folder_related", {}).items()
+        if str(artist or "").strip().casefold() not in affected_names
+    }
+    patched_alias_to_canonical = {
+        str(alias): str(canonical)
+        for alias, canonical in relation_views.get("alias_to_canonical", {}).items()
+        if str(alias or "").strip().casefold() not in affected_names
+        and str(canonical or "").strip().casefold() not in affected_names
+    }
+    patched_canonical_to_aliases = {
+        str(canonical): list(aliases)
+        for canonical, aliases in relation_views.get(
+            "canonical_to_aliases", {}
+        ).items()
+        if str(canonical or "").strip().casefold() not in affected_names
+        and not {
+            str(alias or "").strip().casefold()
+            for alias in aliases
+            if str(alias or "").strip()
+        } & affected_names
+    }
+    for normalized_name, count in updated_counts.items():
+        if count <= 0:
+            continue
+        display_name = destination_names_by_key.get(
+            normalized_name,
+            source_names_by_key.get(normalized_name, normalized_name),
+        )
+        patched_alias_to_canonical[display_name] = display_name
+        patched_canonical_to_aliases[display_name] = [display_name]
+        patched_folder_related[display_name] = set()
+    patched["alias_to_canonical"] = patched_alias_to_canonical
+    patched["canonical_to_aliases"] = patched_canonical_to_aliases
+    patched["folder_related"] = patched_folder_related
+    return patched
 
 
 def relation_projection_stale_reason(scan_cache: object) -> str:
@@ -167,9 +425,16 @@ def relation_projection_readiness_stale_reason(scan_cache: object) -> str:
     )
 
 
-def relation_source_fingerprint(rows: list[object]) -> str:
-    facts = sorted(
-        {
+def relation_source_fingerprint(
+    rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
+) -> str:
+    facts = set()
+    for row_index, row in enumerate(rows):
+        if cooperate is not None and row_index % _COOPERATIVE_YIELD_INTERVAL == 0:
+            cooperate()
+        facts.add(
             (
                 _int_value(row, "album_id"),
                 _int_value(row, "owner_artist_id"),
@@ -183,23 +448,26 @@ def relation_source_fingerprint(rows: list[object]) -> str:
                 _text_value(row, "relation_evidence_kind"),
                 _int_value(row, "track_file_id"),
                 _text_value(row, "library_root_id"),
+                _text_value(row, "root_kind"),
                 _text_value(row, "root_path"),
                 _text_value(row, "relative_path"),
                 _text_value(row, "private_path"),
             )
-            for row in rows
-        }
-    )
-    payload = json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+        )
+    payload = json.dumps(sorted(facts), ensure_ascii=False, separators=(",", ":"))
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def build_relation_views_from_postgres_rows(
     config: Mapping[str, object],
     rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     del config
-    return build_postgres_relation_views(rows)
+    if cooperate is None:
+        return build_postgres_relation_views(rows)
+    return build_postgres_relation_views(rows, cooperate=cooperate)
 
 
 def build_ready_relation_projection_metadata(
@@ -230,7 +498,50 @@ def build_ready_relation_projection_metadata(
     return metadata
 
 
+_RELATION_REPAIRS_LOCK = Lock()
+_RELATION_REPAIRS: dict[str, Future] = {}
+
+
 def ensure_relation_projection_ready(
+    config: Mapping[str, object],
+    *,
+    logger: object | None = None,
+    connect: Callable[[str], Any] | None = None,
+    cancel_requested: object | None = None,
+) -> dict[str, object]:
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+    if not database_url:
+        raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for relation projection readiness.")
+    _raise_if_projection_cancelled(cancel_requested)
+    with _RELATION_REPAIRS_LOCK:
+        future = _RELATION_REPAIRS.get(database_url)
+        owns_repair = future is None
+        if owns_repair:
+            future = Future()
+            _RELATION_REPAIRS[database_url] = future
+    if not owns_repair:
+        while True:
+            _raise_if_projection_cancelled(cancel_requested)
+            try:
+                return future.result(timeout=0.1)
+            except FutureTimeoutError:
+                if future.done():
+                    raise
+    try:
+        result = _ensure_relation_projection_ready(
+            config, logger=logger, connect=connect, cancel_requested=cancel_requested,
+        )
+        future.set_result(result)
+        return result
+    except BaseException as error:
+        future.set_exception(error)
+        raise
+    finally:
+        with _RELATION_REPAIRS_LOCK:
+            _RELATION_REPAIRS.pop(database_url, None)
+
+
+def _ensure_relation_projection_ready(
     config: Mapping[str, object],
     *,
     logger: object | None = None,
@@ -296,12 +607,25 @@ def ensure_relation_projection_ready(
                 source_row_count = len(rows)
                 _raise_if_projection_cancelled(cancel_requested)
                 phase_started_at = perf_counter()
-                source_fingerprint = relation_source_fingerprint(rows)
+                if cancel_requested is None:
+                    source_fingerprint = relation_source_fingerprint(rows)
+                else:
+                    source_fingerprint = relation_source_fingerprint(
+                        rows,
+                        cooperate=lambda: _cooperate_with_foreground(cancel_requested),
+                    )
                 phase_timings_ms["fingerprint"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
                 phase_started_at = perf_counter()
-                relation_views = build_relation_views_from_postgres_rows(config, rows)
+                if cancel_requested is None:
+                    relation_views = build_relation_views_from_postgres_rows(config, rows)
+                else:
+                    relation_views = build_relation_views_from_postgres_rows(
+                        config,
+                        rows,
+                        cooperate=lambda: _cooperate_with_foreground(cancel_requested),
+                    )
                 phase_timings_ms["pure_build"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
@@ -316,6 +640,9 @@ def ensure_relation_projection_ready(
             retry_with_current_sources = False
             with connector(database_url) as connection:
                 with _cancel_active_connection_on_request(connection, cancel_requested):
+                    # Inventory writers lock library metadata before replacing family
+                    # rows. Join that publication order only after source building.
+                    connection.execute(inventory_publication_advisory_lock_sql())
                     connection.execute(relation_projection_advisory_lock_sql())
                     locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
                     locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
@@ -485,6 +812,48 @@ def replace_artist_search_projection_in_transaction(
     return replacement_count
 
 
+def patch_artist_search_projection_in_transaction(
+    connection: Any,
+    relation_views: Mapping[str, object],
+    *,
+    affected_artist_names: set[str],
+    metadata: Mapping[str, object],
+    relations_last_built: float,
+) -> int:
+    affected_normalized_keys = sorted({
+        normalized_key
+        for artist_name in affected_artist_names
+        if (normalized_key := local_inventory_identity_key(artist_name))
+    })
+    if not affected_normalized_keys:
+        raise ValueError("Artist-search projection patch requires at least one affected identity.")
+    if len(affected_normalized_keys) > 256:
+        raise ValueError("Artist-search projection patch accepts at most 256 affected identities.")
+    affected_key_set = set(affected_normalized_keys)
+    rows = [
+        row
+        for row in _artist_search_projection_rows(relation_views)
+        if row["normalized_artist_key"] in affected_key_set
+    ]
+    builder_version = str(metadata.get("builder_version") or "").strip()
+    source_fingerprint = str(metadata.get("source_fingerprint") or "").strip()
+    if not builder_version or not source_fingerprint:
+        raise RuntimeError("Ready projection metadata is required for search publication.")
+    result = _first_row(
+        connection.execute(
+            _patch_artist_search_projection_sql(),
+            {
+                "affected_normalized_keys": affected_normalized_keys,
+                "rows": _jsonb(rows),
+                "builder_version": builder_version,
+                "source_fingerprint": source_fingerprint,
+                "relations_last_built": relations_last_built,
+            },
+        )
+    )
+    return int(_row_mapping(result).get("patch_row_count") or 0)
+
+
 def _artist_search_projection_rows(
     relation_views: Mapping[str, object],
 ) -> list[dict[str, str]]:
@@ -539,6 +908,8 @@ def _projection_result(
         "builder_version": str(metadata.get("builder_version") or RELATION_PROJECTION_BUILDER_VERSION),
         "startup_rebuilt": bool(startup_rebuilt),
         "rebuild_reason": str(reason),
+        "last_rebuild_reason": str(metadata.get("rebuild_reason") or ""),
+        "last_rebuild_timestamp": str(metadata.get("build_timestamp") or ""),
         "duration_ms": round(max(float(duration_ms), 0.0), 2),
         "relation_views": dict(relation_views or {}),
     }
@@ -765,6 +1136,18 @@ def _replace_artist_search_projection_sql() -> str:
     """
 
 
+def _patch_artist_search_projection_sql() -> str:
+    return """
+        select library.patch_local_artist_search_projection(
+          %(affected_normalized_keys)s::text[],
+          %(rows)s::jsonb,
+          %(builder_version)s::text,
+          %(source_fingerprint)s::text,
+          %(relations_last_built)s::double precision
+        ) as patch_row_count;
+    """
+
+
 def _merge_failed_projection_status_sql() -> str:
     return """
         with bootstrap_context as (
@@ -792,6 +1175,78 @@ def _merge_failed_projection_status_sql() -> str:
     """
 
 
+def load_relation_alias_source_rows_sql() -> str:
+    """Keep album membership and locations separate instead of multiplying them."""
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ), live_files as materialized (
+          select tracks.album_id, files.library_root_id::text as library_root_id,
+                 roots.root_kind::text as root_kind, roots.root_path,
+                 min(files.relative_path) as relative_path,
+                 min(files.private_path) as private_path
+          from bootstrap_context
+          join library.local_tracks as tracks
+            on tracks.library_id = bootstrap_context.library_id
+          join library.local_track_files as files
+            on files.track_id = tracks.id
+           and files.scan_cache_stale is false
+          join library.library_roots as roots
+            on roots.id = files.library_root_id
+           and roots.library_id = bootstrap_context.library_id
+          where tracks.album_id is not null
+          group by
+            tracks.album_id,
+            files.library_root_id,
+            roots.root_kind,
+            roots.root_path,
+            regexp_replace(
+              replace(btrim(coalesce(files.relative_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            ),
+            regexp_replace(
+              replace(btrim(coalesce(files.private_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            )
+        ), album_facts as materialized (
+          select albums.id as album_id, albums.library_id,
+                 owner.name as owner_artist_name,
+                 coalesce(nullif(albums.metadata ->> 'album_artist', ''), owner.name) as album_artist
+          from bootstrap_context
+          join library.local_albums as albums
+            on albums.library_id = bootstrap_context.library_id
+          join (select distinct album_id from live_files) as live_albums
+            on live_albums.album_id = albums.id
+          left join library.local_artists as owner on owner.id = albums.artist_id
+        )
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               member.name as member_artist_name,
+               null::text as library_root_id, null::text as root_kind,
+               null::text as root_path, null::text as relative_path, null::text as private_path
+        from album_facts
+        left join library.local_album_featured_artists as membership
+          on membership.library_id = album_facts.library_id
+         and membership.album_id = album_facts.album_id
+        left join library.local_artists as member on member.id = membership.artist_id
+        union all
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               null::text as member_artist_name,
+               live_files.library_root_id, live_files.root_kind, live_files.root_path,
+               live_files.relative_path, live_files.private_path
+        from album_facts
+        join live_files on live_files.album_id = album_facts.album_id;
+    """
+
+
 def load_relation_source_rows_sql() -> str:
     return """
         with bootstrap_context as (
@@ -804,86 +1259,147 @@ def load_relation_source_rows_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        album_track_artist_summary as (
+        live_files as not materialized (
           select
             library.local_tracks.library_id,
             library.local_tracks.album_id,
-            min(library.local_tracks.artist_id) as sole_track_artist_id
-          from library.local_tracks
-          join bootstrap_context
-            on bootstrap_context.library_id = library.local_tracks.library_id
+            library.local_tracks.artist_id as track_artist_id,
+            library.local_track_files.id as track_file_id,
+            library.local_track_files.library_root_id,
+            library.library_roots.root_kind,
+            library.library_roots.root_path,
+            library.local_track_files.relative_path,
+            library.local_track_files.private_path
+          from bootstrap_context
+          join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
            and library.local_track_files.scan_cache_stale is false
+          join library.library_roots
+            on library.library_roots.id = library.local_track_files.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id
           where library.local_tracks.album_id is not null
+        ),
+        relation_locations as materialized (
+          select
+            live_files.library_id,
+            live_files.album_id,
+            min(live_files.track_file_id) as track_file_id,
+            live_files.library_root_id,
+            live_files.root_kind,
+            live_files.root_path,
+            min(live_files.relative_path) as relative_path,
+            min(live_files.private_path) as private_path
+          from live_files
           group by
-            library.local_tracks.library_id,
-            library.local_tracks.album_id
-          having count(*) = count(library.local_tracks.artist_id)
-             and count(distinct library.local_tracks.artist_id) = 1
+            live_files.library_id,
+            live_files.album_id,
+            live_files.library_root_id,
+            live_files.root_kind,
+            live_files.root_path,
+            regexp_replace(
+              replace(btrim(coalesce(live_files.relative_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            ),
+            regexp_replace(
+              replace(btrim(coalesce(live_files.private_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            )
+        ),
+        album_track_artist_summary as (
+          select
+            live_files.library_id,
+            live_files.album_id,
+            case
+              when count(*) = count(live_files.track_artist_id)
+               and count(distinct live_files.track_artist_id) = 1
+              then min(live_files.track_artist_id)
+            end as sole_track_artist_id
+          from live_files
+          group by live_files.library_id, live_files.album_id
+        ),
+        album_facts as materialized (
+          select
+            library.local_albums.id as album_id,
+            library.local_albums.library_id,
+            owner_artist.id as owner_artist_id,
+            owner_artist.name as owner_artist_name,
+            coalesce(
+              nullif(library.local_albums.metadata ->> 'album_artist', ''),
+              owner_artist.name
+            ) as album_artist,
+            lower(btrim(coalesce(
+              library.local_albums.metadata ->> 'is_compilation',
+              'false'
+            ))) in ('true', 't', 'yes', 'y', 'on', '1') as album_is_compilation,
+            library.local_albums.metadata,
+            album_track_artist_summary.sole_track_artist_id
+          from album_track_artist_summary
+          join library.local_albums
+            on library.local_albums.library_id = album_track_artist_summary.library_id
+           and library.local_albums.id = album_track_artist_summary.album_id
+          left join library.local_artists as owner_artist
+            on owner_artist.id = library.local_albums.artist_id
         )
         select
-          library.local_albums.id as album_id,
-          owner_artist.id as owner_artist_id,
-          owner_artist.name as owner_artist_name,
-          coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''), owner_artist.name) as album_artist,
-          lower(btrim(coalesce(
-            library.local_albums.metadata ->> 'is_compilation',
-            'false'
-          ))) in ('true', 't', 'yes', 'y', 'on', '1') as album_is_compilation,
-          member_artist.id as member_artist_id,
-          member_artist.name as member_artist_name,
-          library.local_album_featured_artists.featured_kind,
-          coalesce(
-            album_track_artist_summary.sole_track_artist_id = member_artist.id,
-            false
-          ) as member_artist_is_album_wide_track_artist,
+          album_facts.album_id,
+          album_facts.owner_artist_id,
+          album_facts.owner_artist_name,
+          album_facts.album_artist,
+          album_facts.album_is_compilation,
+          null as member_artist_id,
+          null as member_artist_name,
+          null as featured_kind,
+          false as member_artist_is_album_wide_track_artist,
           coalesce(
             case
               when regexp_replace(
-                     replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                      '/+$',
                      ''
                    ) ~ '(^|/)(soundtracks?|ost)$'
                 or regexp_replace(
-                     replace(lower(btrim(coalesce(library.local_track_files.relative_path, ''))), chr(92), '/'),
+                replace(lower(btrim(coalesce(relation_locations.relative_path, ''))), chr(92), '/'),
                      '^/+',
                      ''
                    ) ~ '^(soundtracks?|ost)(/|$)'
                 or (
-                     nullif(btrim(coalesce(library.local_track_files.relative_path, '')), '') is null
+                nullif(btrim(coalesce(relation_locations.relative_path, '')), '') is null
                  and regexp_replace(
-                       replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                        '/+$',
                        ''
                      ) <> ''
                  and left(
                        replace(
-                         lower(btrim(coalesce(library.local_track_files.private_path, ''))),
+                    lower(btrim(coalesce(relation_locations.private_path, ''))),
                          chr(92),
                          '/'
                        ),
                        char_length(
                          regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          )
                        ) + 1
                      ) = regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          ) || '/'
                  and substring(
                        replace(
-                         lower(btrim(coalesce(library.local_track_files.private_path, ''))),
+                    lower(btrim(coalesce(relation_locations.private_path, ''))),
                          chr(92),
                          '/'
                        )
                        from char_length(
                          regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          )
@@ -892,41 +1408,61 @@ def load_relation_source_rows_sql() -> str:
                    )
               then 'soundtrack_root'
             end,
-            nullif(library.local_album_featured_artists.metadata ->> 'relation_evidence_kind', ''),
-            nullif(library.local_albums.metadata ->> 'relation_evidence_kind', ''),
+            nullif(album_facts.metadata ->> 'relation_evidence_kind', ''),
             ''
           ) as relation_evidence_kind,
-          library.local_track_files.id as track_file_id,
-          library.local_track_files.library_root_id,
-          library.library_roots.root_path,
-          library.local_track_files.relative_path,
-          library.local_track_files.private_path as private_path
-        from library.local_albums
-        join bootstrap_context on bootstrap_context.library_id = library.local_albums.library_id
-        left join album_track_artist_summary
-          on album_track_artist_summary.library_id = library.local_albums.library_id
-         and album_track_artist_summary.album_id = library.local_albums.id
-        left join library.local_artists as owner_artist
-          on owner_artist.id = library.local_albums.artist_id
-        left join library.local_album_featured_artists
-          on library.local_album_featured_artists.library_id = library.local_albums.library_id
-         and library.local_album_featured_artists.album_id = library.local_albums.id
+          relation_locations.track_file_id,
+          relation_locations.library_root_id,
+          relation_locations.root_kind,
+          relation_locations.root_path,
+          relation_locations.relative_path,
+          relation_locations.private_path
+        from album_facts
+        join relation_locations
+          on relation_locations.library_id = album_facts.library_id
+         and relation_locations.album_id = album_facts.album_id
+        union all
+        select
+          album_facts.album_id,
+          album_facts.owner_artist_id,
+          album_facts.owner_artist_name,
+          album_facts.album_artist,
+          album_facts.album_is_compilation,
+          member_artist.id as member_artist_id,
+          member_artist.name as member_artist_name,
+          library.local_album_featured_artists.featured_kind,
+          coalesce(
+            album_facts.sole_track_artist_id = member_artist.id,
+            false
+          ) as member_artist_is_album_wide_track_artist,
+          coalesce(
+            nullif(
+              library.local_album_featured_artists.metadata ->> 'relation_evidence_kind',
+              ''
+            ),
+            nullif(album_facts.metadata ->> 'relation_evidence_kind', ''),
+            ''
+          ) as relation_evidence_kind,
+          relation_locations.track_file_id,
+          relation_locations.library_root_id,
+          relation_locations.root_kind,
+          relation_locations.root_path,
+          relation_locations.relative_path,
+          relation_locations.private_path
+        from album_facts
+        join library.local_album_featured_artists
+          on library.local_album_featured_artists.library_id = album_facts.library_id
+         and library.local_album_featured_artists.album_id = album_facts.album_id
         left join library.local_artists as member_artist
           on member_artist.id = library.local_album_featured_artists.artist_id
-        join library.local_tracks
-          on library.local_tracks.library_id = library.local_albums.library_id
-         and library.local_tracks.album_id = library.local_albums.id
-        join library.local_track_files
-          on library.local_track_files.track_id = library.local_tracks.id
-         and library.local_track_files.scan_cache_stale is false
-        join library.library_roots
-          on library.library_roots.id = library.local_track_files.library_root_id
-         and library.library_roots.library_id = bootstrap_context.library_id
-        order by
-          library.local_albums.id,
-          member_artist.id nulls first,
-          library.local_track_files.id nulls first;
+        join relation_locations
+          on relation_locations.library_id = album_facts.library_id
+         and relation_locations.album_id = album_facts.album_id;
     """
+
+
+def inventory_publication_advisory_lock_sql() -> str:
+    return "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
 
 
 def relation_projection_advisory_lock_sql() -> str:

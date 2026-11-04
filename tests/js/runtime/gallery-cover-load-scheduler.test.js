@@ -99,8 +99,8 @@ function createPreemptibleScheduler(cache, options = {}) {
   };
 }
 
-test('production default starts two visible covers and waits for a settlement before the third', async () => {
-  const gates = [deferred(), deferred(), deferred()];
+test('production default starts six visible covers and waits for a settlement before the seventh', async () => {
+  const gates = Array.from({ length: 7 }, () => deferred());
   const starts = [];
   const cache = {
     normalizeProductionUrl: normalizer,
@@ -113,17 +113,18 @@ test('production default starts two visible covers and waits for a settlement be
     async prefetch(url) { return { cached: true, productionUrl: url }; },
   };
   const { scheduler } = createScheduler(cache);
-  const pending = ['a', 'b', 'c'].map((url) => (
+  const urls = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const pending = urls.map((url) => (
     scheduler.enqueue(url, { priority: 'visible', image: { id: url } })
   ));
 
   try {
     await Promise.resolve();
-    assert.deepEqual(starts, ['a', 'b']);
+    assert.deepEqual(starts, urls.slice(0, 6));
 
     gates[0].resolve();
-    await waitUntil(() => starts.length === 3);
-    assert.deepEqual(starts, ['a', 'b', 'c']);
+    await waitUntil(() => starts.length === 7);
+    assert.deepEqual(starts, urls);
   } finally {
     gates.forEach((gate) => gate.resolve());
     await Promise.all(pending);

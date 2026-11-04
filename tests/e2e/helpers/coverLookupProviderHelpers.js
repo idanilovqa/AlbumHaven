@@ -61,6 +61,14 @@ export async function setCoverLookupProviderMode(testInfo, mode) {
   return readJsonResponse(response, `Cover lookup fixture mode ${mode}`);
 }
 
+export async function setOwnedLegacyCoverRepairProvider(testInfo, target) {
+  const response = await fetch(coverLookupFixtureEndpoint(testInfo, '/cover-lookup-fixture/control'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'set-owned-legacy-repair', artist: target.artist, album: target.album }),
+  });
+  return readJsonResponse(response, 'Owned legacy cover repair provider');
+}
+
 export async function setCoverLookupProviderLatency(testInfo, delaySeconds) {
   const endpoint = coverLookupFixtureEndpoint(testInfo, '/cover-lookup-fixture/control');
   const response = await fetch(endpoint, {

@@ -1510,14 +1510,49 @@
   grid-template-columns: minmax(260px, 380px) minmax(0, 1fr);
   overflow: hidden;
 }
+.tag-editor-track-pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
 .tag-editor-track-list {
   min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 10px;
-  border-right: 1px solid var(--border);
+}
+.tag-editor-track-footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+.tag-editor-folder-load {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  color: var(--muted);
+  cursor: pointer;
+}
+.tag-editor-folder-load:is(:hover, :focus-visible) { color: var(--text); }
+.tag-editor-folder-load:disabled { cursor: wait; opacity: 0.5; }
+.tag-editor-folder-load svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .tag-editor-track {
   position: relative;
@@ -1636,6 +1671,14 @@
   gap: 10px;
   min-height: 58px;
 }
+.tag-editor-folder-path {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .tag-editor-artwork img,
 .tag-editor-artwork-placeholder {
   width: 52px;
@@ -1654,6 +1697,9 @@
   font-weight: 800;
   text-align: center;
 }
+.tag-editor-artwork-placeholder .album-artbox__missing-mark {
+  width: 62%;
+}
 .tag-editor-form label {
   display: flex;
   flex-direction: column;
@@ -1663,6 +1709,79 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+.tag-editor-form label[hidden] { display: none; }
+.tag-editor-form label[data-custom-collection-name-field][hidden] {
+  display: flex;
+  visibility: hidden;
+  pointer-events: none;
+}
+.tag-editor-exception-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+#tag-editor-modal .tag-editor-exception-field input,
+#tag-editor-modal .tag-editor-exception-field input:focus {
+  border-color: var(--border);
+  box-shadow: none;
+  background: rgba(255,255,255,0.03);
+  transition: none;
+}
+.tag-editor-exception-menu {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 116;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  background: var(--panel);
+  box-shadow: 0 10px 22px rgba(0,0,0,0.28);
+  animation: none;
+  transition: none;
+}
+.tag-editor-exception-menu[data-placement="above"] { border-radius: 8px 8px 0 0; }
+.tag-editor-exception-menu[hidden] { display: none; }
+.tag-editor-exception-menu [role="option"] {
+  display: block;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: none;
+}
+.tag-editor-exception-menu [role="option"]:is(:hover, :focus-visible) {
+  outline: 0;
+  background: var(--dropdown-item-hover-background, rgba(255,255,255,0.08));
+}
+.tag-editor-exception-menu [role="option"][aria-selected="true"] {
+  color: var(--text);
+  background: rgba(255,255,255,0.08);
+}
+.tag-editor-exception-field:has(.tag-editor-exception-menu[data-placement="below"]) input[aria-expanded="true"] {
+  border-radius: 10px 10px 0 0;
+  border-color: var(--border);
+  box-shadow: none;
+}
+.tag-editor-exception-field:has(.tag-editor-exception-menu[data-placement="above"]) input[aria-expanded="true"] {
+  border-radius: 0 0 10px 10px;
+  border-color: var(--border);
+  box-shadow: none;
 }
 .tag-editor-auto-number {
   border-radius: 8px;
@@ -1774,7 +1893,7 @@
     grid-template-columns: minmax(0, 1fr);
     overflow-y: auto;
   }
-  .tag-editor-track-list {
+  .tag-editor-track-pane {
     max-height: 40vh;
     border-right: 0;
     border-bottom: 1px solid var(--border);

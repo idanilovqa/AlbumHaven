@@ -17,15 +17,20 @@ export function normalizeAlbum(album) {
   };
 }
 
+export function effectiveArtistGroups(view) {
+  const artistGroups = Array.isArray(view?.artist_groups) ? view.artist_groups : [];
+  if (artistGroups.length) {
+    return artistGroups;
+  }
+  return [
+    ...(Array.isArray(view?.primary_artist_groups) ? view.primary_artist_groups : []),
+    ...(Array.isArray(view?.family_artist_groups) ? view.family_artist_groups : []),
+  ];
+}
+
 export async function readArtistRendererInventory(page, galleryActions, artist) {
   const view = await readRuntimeView(page);
-  const artistGroups = Array.isArray(view.artist_groups) ? view.artist_groups : [];
-  const effectiveGroups = artistGroups.length
-    ? artistGroups
-    : [
-      ...(Array.isArray(view.primary_artist_groups) ? view.primary_artist_groups : []),
-      ...(Array.isArray(view.family_artist_groups) ? view.family_artist_groups : []),
-    ];
+  const effectiveGroups = effectiveArtistGroups(view);
   const logical = effectiveGroups.flatMap((group) => (
     (group?.albums || []).map((album) => ({
       ...normalizeAlbum(album),

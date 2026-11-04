@@ -12,10 +12,14 @@ function createContext({
   sidebarHandled = false,
   drawerHandled = false,
   searchMouseDownHandled = false,
+  longPressClickConsumed = false,
 } = {}) {
   const listeners = {};
   const calls = [];
   const context = {
+    consumeArtistTreeLongPressClick() {
+      return longPressClickConsumed;
+    },
     document: {
       addEventListener(name, callback) {
         listeners[name] = callback;
@@ -65,6 +69,14 @@ function createContext({
   vm.runInContext(handlerSource, context, { filename: handlerPath });
   return { calls, listeners };
 }
+
+test('document click stops after consuming artist tree long-press synthetic click', () => {
+  const { calls, listeners } = createContext({ longPressClickConsumed: true });
+
+  listeners.click({ defaultPrevented: false, target: {} });
+
+  assert.deepEqual(calls, []);
+});
 
 test('document click stops after a handled search interaction', () => {
   const { calls, listeners } = createContext({ searchClickHandled: true });

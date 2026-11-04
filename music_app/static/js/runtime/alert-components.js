@@ -38,7 +38,8 @@ function buildSmallAlertHtml(config = {}) {
   if (interactive) {
     return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
   }
-  return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}">${content}</span>`;
+  const focusable = config.focusable === true ? ' tabindex="0"' : '';
+  return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {

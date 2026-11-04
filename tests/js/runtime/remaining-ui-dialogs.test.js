@@ -76,7 +76,7 @@ test('failed notification retry and clear remain separate actions that do not ac
   }
 });
 
-test('cover lookup notifications use navigation cards, state labels, and shared compact actions', () => {
+test('cover lookup notifications use self-contained cards, state labels, and shared compact actions', () => {
   const markup = read('music_app/templates/index.html');
   const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
   const css = read('music_app/static/css/runtime/cover-lookup-drawer-and-related.css');
@@ -93,7 +93,8 @@ test('cover lookup notifications use navigation cards, state labels, and shared 
  assert.match(close, /m5 5 10 10M15 5 5 15/);
   assert.doesNotMatch(clear, /<span>Clear finished<\/span>/);
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
-  assert.match(drawer, /cover-lookup-task-card navigation-tree-item/);
+  assert.match(drawer, /cover-lookup-task-card \$\{taskStateClass\}/);
+  assert.doesNotMatch(drawer, /cover-lookup-task-card navigation-tree-item/);
   assert.match(drawer, /taskStateClass = status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
   assert.match(drawer, /cover-lookup-task-status-label \$\{taskStateClass\}/);
   assert.match(drawer, /ui-button--icon[^>]*cover-lookup-task-retry[^>]*aria-label="Retry lookup"[^]*?<svg/);
@@ -106,6 +107,8 @@ test('cover lookup notifications use navigation cards, state labels, and shared 
   assert.doesNotMatch(css, /\.cover-lookup-drawer-button\.has-active-lookups\s*\{[^}]*border-color:[^;}]*appearance-accent/s);
   assert.match(css, /\.cover-lookup-drawer-badge\s*\{[^}]*background:\s*var\(--appearance-info,\s*#64a8ff\)/s);
   assert.match(css, /\.cover-lookup-task-card:hover[^}]*background:\s*var\(--appearance-item-hover/s);
+  assert.match(css, /\.cover-lookup-task-card\s*\{[^}]*min-height:\s*66px[^}]*border-color:\s*var\(--appearance-line/s);
+  assert.match(css, /\.cover-lookup-drawer-body\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
   assert.match(css, /\.cover-lookup-task-open:hover[^}]*background:\s*transparent/s);
   assert.match(css, /\.cover-lookup-task-card\.is-running[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-info/s);
   assert.match(css, /\.cover-lookup-task-card\.is-completed[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-success/s);

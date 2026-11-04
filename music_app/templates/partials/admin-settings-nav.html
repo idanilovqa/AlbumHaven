@@ -8,6 +8,7 @@
   </div>
   <nav>
     {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section != 'account', '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}
+    {% if navigation_actions.allows('system.preview_storage.read') %}{{ navigation_tree_item('Server', '/admin/server', 'server', settings_section == 'server', '⚙', attributes={'data-settings-section': 'server'}) }}{% endif %}
     {{ navigation_tree_item('My account', '/account', 'account', settings_section == 'account', '◇', attributes={'data-settings-section': 'account'}) }}
     <form class="settings-logout" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

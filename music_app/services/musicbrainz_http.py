@@ -9,9 +9,15 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
+from music_app.services.cover_provider_deadline import (
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
+
 _MIN_REQUEST_INTERVAL_SECONDS = 1.05
 _MAX_ATTEMPTS = 3
 _SUCCESS_CACHE_TTL_SECONDS = 60 * 60 * 6
+_MISS_CACHE_TTL_SECONDS = 60 * 15
 _BLOCK_COOLDOWN_SECONDS = 60 * 15
 
 _REQUEST_LOCK = threading.Lock()
@@ -20,6 +26,7 @@ _CACHE_LOCK = threading.Lock()
 _NEXT_ALLOWED_AT_MONOTONIC = 0.0
 _BLOCKED_UNTIL = 0.0
 _BLOCK_REASON = ""
+_CACHE_MISS = object()
 _URL_CACHE: dict[str, dict[str, object]] = {}
 
 
@@ -35,23 +42,24 @@ def _get_cached_value(url: str, accept: str) -> object | None:
         if not isinstance(entry, dict):
             return None
         updated_at = float(entry.get("updated_at") or 0.0)
-        if not updated_at or now - updated_at > _SUCCESS_CACHE_TTL_SECONDS:
+        ok = bool(entry.get("ok"))
+        ttl = _SUCCESS_CACHE_TTL_SECONDS if ok else _MISS_CACHE_TTL_SECONDS
+        if not updated_at or now - updated_at > ttl:
             _URL_CACHE.pop(cache_key, None)
             return None
         payload = entry.get("payload")
-        if isinstance(payload, dict):
+        if ok and isinstance(payload, dict):
             return dict(payload)
-        _URL_CACHE.pop(cache_key, None)
-        return None
+        return _CACHE_MISS
 
 
-def _set_cached_value(url: str, accept: str, payload: dict) -> None:
+def _set_cached_value(url: str, accept: str, payload: dict | None) -> None:
     cache_key = _cache_key(url, accept)
     with _CACHE_LOCK:
         _URL_CACHE[cache_key] = {
             "updated_at": time.time(),
-            "ok": True,
-            "payload": dict(payload),
+            "ok": isinstance(payload, dict),
+            "payload": dict(payload) if isinstance(payload, dict) else None,
         }
 
 
@@ -78,13 +86,29 @@ def _mark_request_complete() -> None:
         _NEXT_ALLOWED_AT_MONOTONIC = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
 
 
-def _wait_for_slot() -> None:
+def _wait_for_delay(delay: float, should_cancel: Callable[[], bool] | None = None) -> bool:
+    if not automatic_cover_budget_active():
+        time.sleep(delay)
+        return True
+    end = time.monotonic() + delay
+    while True:
+        if callable(should_cancel) and should_cancel():
+            return False
+        remaining = remaining_automatic_cover_seconds(float("inf"))
+        delay = end - time.monotonic()
+        if delay <= 0:
+            return True
+        time.sleep(min(delay, remaining, 0.05))
+
+
+def _wait_for_slot(should_cancel: Callable[[], bool] | None = None) -> bool:
     while True:
         with _STATE_LOCK:
             delay = max(0.0, _NEXT_ALLOWED_AT_MONOTONIC - time.monotonic())
         if delay <= 0:
-            return
-        time.sleep(delay)
+            return True
+        if not _wait_for_delay(delay, should_cancel):
+            return False
 
 
 def _block_reason_from_http_error(status_code: int, body: bytes) -> str:
@@ -127,11 +151,26 @@ def get_json(
     timeout: float = 15.0,
     context: str = "",
     should_cancel: Callable[[], bool] | None = None,
+    cache_failures: bool = True,
 ) -> tuple[dict | None, dict[str, object]]:
+    """Fetch MusicBrainz JSON through the shared rate-limited transport.
+
+    ``cache_failures=False`` is for identity enrichment, where a direct-entity
+    404 can be temporary mirror catch-up and must be retried rather than
+    remembered as a miss.
+    """
     del context
+
+    def failed(metadata: dict[str, object]) -> tuple[None, dict[str, object]]:
+        if cache_failures:
+            _set_cached_value(url, accept, None)
+        return None, metadata
+
     if callable(should_cancel) and should_cancel():
         return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
     cached = _get_cached_value(url, accept)
+    if cached is _CACHE_MISS and cache_failures:
+        return None, {"status": "cached_miss", "cache_hit": True}
     if isinstance(cached, dict):
         return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
@@ -139,17 +178,19 @@ def get_json(
         if callable(should_cancel) and should_cancel():
             return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
         cached = _get_cached_value(url, accept)
+        if cached is _CACHE_MISS and cache_failures:
+            return None, {"status": "cached_miss", "cache_hit": True}
         if isinstance(cached, dict):
             return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
         blocked, retry_after_seconds, blocked_reason = _blocked_state()
         if blocked:
-            return None, {
+            return failed({
                 "status": "blocked",
                 "cache_hit": False,
                 "retry_after_seconds": round(retry_after_seconds, 2),
                 "blocked_reason": blocked_reason,
-            }
+            })
 
         headers = {
             "User-Agent": user_agent,
@@ -162,12 +203,15 @@ def get_json(
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
-            _wait_for_slot()
+            slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
+            if slot_ready is False:
+                return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             request = urllib.request.Request(url, headers=headers)
+            request_timeout = remaining_automatic_cover_seconds(float(timeout or 15.0))
             try:
-                with urllib.request.urlopen(request, timeout=float(timeout or 15.0)) as response:
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
@@ -175,7 +219,7 @@ def get_json(
                 if isinstance(payload, dict):
                     _set_cached_value(url, accept, payload)
                     return payload, {"status": "network", "http_status": 200, "cache_hit": False, "attempt": attempt}
-                return None, {"status": "invalid_response", "cache_hit": False, "attempt": attempt}
+                return failed({"status": "invalid_response", "cache_hit": False, "attempt": attempt})
             except urllib.error.HTTPError as exc:
                 body = b""
                 try:
@@ -190,8 +234,10 @@ def get_json(
                     _set_block(block_reason)
                 status_code = int(getattr(exc, "code", 0) or 0)
                 if _is_retryable_http_status(status_code) and attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
+                remaining_automatic_cover_seconds(float("inf"))
                 metadata = {
                     "status": f"http_{status_code}",
                     "http_status": status_code,
@@ -200,7 +246,7 @@ def get_json(
                 }
                 if block_reason:
                     metadata["blocked_reason"] = block_reason
-                return None, metadata
+                return failed(metadata)
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as exc:
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
@@ -208,16 +254,18 @@ def get_json(
                 block_reason = _block_reason_from_exception(getattr(exc, "reason", exc))
                 if block_reason:
                     _set_block(block_reason)
-                    return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
+                    return failed({"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason})
                 if attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
+                remaining_automatic_cover_seconds(float("inf"))
                 reason = getattr(exc, "reason", exc)
                 status = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "connection_error"
-                return None, {"status": status, "cache_hit": False, "attempt": attempt}
+                return failed({"status": status, "cache_hit": False, "attempt": attempt})
             except (json.JSONDecodeError, UnicodeDecodeError):
                 _mark_request_complete()
-                return None, {"status": "invalid_response", "cache_hit": False, "attempt": attempt}
+                return failed({"status": "invalid_response", "cache_hit": False, "attempt": attempt})
             except Exception as exc:
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
@@ -225,13 +273,15 @@ def get_json(
                 block_reason = _block_reason_from_exception(exc)
                 if block_reason:
                     _set_block(block_reason)
-                    return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
+                    return failed({"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason})
                 if attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
-                return None, {"status": type(exc).__name__, "cache_hit": False, "attempt": attempt}
+                remaining_automatic_cover_seconds(float("inf"))
+                return failed({"status": type(exc).__name__, "cache_hit": False, "attempt": attempt})
 
-    return None, {"status": "exhausted", "cache_hit": False}
+    return failed({"status": "exhausted", "cache_hit": False})
 
 
 def default_user_agent(app_name: str, app_version: str, contact_email: str) -> str:

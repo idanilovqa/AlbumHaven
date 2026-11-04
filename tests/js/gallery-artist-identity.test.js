@@ -20,6 +20,7 @@ function locatorPage({ names = [null], contextName = '', contextKind = 'single-a
     }
     or(other) { return new Locator([...new Set([...this.nodes, ...other.nodes])]); }
     first() { return new Locator(this.nodes.slice(0, 1)); }
+    getByRole() { return new Locator([]); }
     locator(selector) {
       if (selector === 'xpath=following::*[@id="artist-groups"][1]') {
         return new Locator(this.nodes.some(node => node === bar) ? [gallery] : []);

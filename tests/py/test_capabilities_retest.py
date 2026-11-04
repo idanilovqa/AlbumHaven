@@ -163,6 +163,129 @@ def test_pool_reuses_transport_but_returns_a_separate_checkout_for_each_request(
     assert all(pool.closed for pool in pools)
 
 
+def test_pool_lease_observer_reports_acquired_and_released(monkeypatch):
+    events = []
+    now = 0.0
+
+    class FakeCheckout:
+        def __enter__(self):
+            nonlocal now
+            now += 0.004
+            return object()
+
+        def __exit__(self, *_args):
+            nonlocal now
+            now += 0.002
+            return None
+
+    class FakePool:
+        def __init__(self, **_kwargs):
+            pass
+
+        def connection(self):
+            return FakeCheckout()
+
+        def get_stats(self):
+            return {"pool_size": 4, "pool_available": 3, "requests_waiting": 0}
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", FakePool)
+    monkeypatch.setattr(postgres_connections, "perf_counter", lambda: now, raising=False)
+
+    with postgres_connections.pooled_connection(
+        "postgresql://shared",
+        workload="default",
+        lease_observer=events.append,
+    ):
+        now += 0.008
+
+    assert [event["event"] for event in events] == ["acquired", "released"]
+    assert events[0]["wait_ms"] == pytest.approx(4.0)
+    assert events[1]["held_ms"] == pytest.approx(10.0)
+    assert events[0]["pool_size"] == 4
+    postgres_connections.close_pools()
+
+
+def test_pool_lease_observer_reports_timeout_and_reraises(monkeypatch):
+    events = []
+
+    class FakePoolTimeout(Exception):
+        pass
+
+    class FakePool:
+        def __init__(self, **_kwargs):
+            pass
+
+        def connection(self):
+            raise FakePoolTimeout("busy")
+
+        def get_stats(self):
+            return {"pool_size": 4, "pool_available": 0, "requests_waiting": 1}
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", FakePool)
+    monkeypatch.setattr(postgres_connections, "PoolTimeout", FakePoolTimeout, raising=False)
+
+    with pytest.raises(FakePoolTimeout, match="busy"):
+        with postgres_connections.pooled_connection(
+            "postgresql://shared",
+            workload="default",
+            lease_observer=events.append,
+        ):
+            pass
+
+    assert [event["event"] for event in events] == ["timeout"]
+    assert events[0]["requests_waiting"] == 1
+    postgres_connections.close_pools()
+
+
+def test_pool_lease_observer_does_not_misclassify_application_timeout(monkeypatch):
+    events = []
+
+    class FakePoolTimeout(Exception):
+        pass
+
+    class FakeCheckout:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return None
+
+    class FakePool:
+        def __init__(self, **_kwargs):
+            pass
+
+        def connection(self):
+            return FakeCheckout()
+
+        def get_stats(self):
+            return {"pool_size": 4, "pool_available": 3, "requests_waiting": 0}
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", FakePool)
+    monkeypatch.setattr(postgres_connections, "PoolTimeout", FakePoolTimeout)
+
+    with pytest.raises(FakePoolTimeout, match="application failure"):
+        with postgres_connections.pooled_connection(
+            "postgresql://shared",
+            lease_observer=events.append,
+        ):
+            raise FakePoolTimeout("application failure")
+
+    assert [event["event"] for event in events] == ["acquired", "released"]
+    postgres_connections.close_pools()
+
+
 def test_pool_isolates_browse_capacity_from_authentication(monkeypatch):
     pools = []
 

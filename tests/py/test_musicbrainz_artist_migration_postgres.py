@@ -11,7 +11,7 @@ from tests.e2e.support import isolatedPostgres
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_ROOT = REPO_ROOT / "migrations" / "postgres"
-MIGRATION_NAME = "0087_create_musicbrainz_artist_enrichment.sql"
+MIGRATION_NAME = "0099_create_musicbrainz_artist_enrichment.sql"
 MIGRATION_PATH = MIGRATIONS_ROOT / MIGRATION_NAME
 
 ARTIST_TABLES = {
@@ -88,7 +88,7 @@ def test_delivery_1_migration_is_next_and_lexically_ordered():
 
     assert MIGRATION_NAME in names
     assert names[-1] == MIGRATION_NAME
-    assert names[names.index(MIGRATION_NAME) - 1].startswith("0086_")
+    assert names[names.index(MIGRATION_NAME) - 1].startswith("0098_")
 
 
 def test_migration_creates_only_the_required_artist_foundation_and_display_projection():

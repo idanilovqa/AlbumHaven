@@ -8,7 +8,10 @@ async function readInventory(names, missingKeyIndex = -1, options = { expectedAr
   const { GalleryActions } = await import('../e2e/actions/galleryActions.js');
   const headings = names.map((textContent, index) => ({
     textContent,
-    closest: () => index === missingKeyIndex ? null : { getAttribute: () => `artist:${index}` },
+    closest: () => index === missingKeyIndex ? null : {
+      getAttribute: () => `artist:${index}`,
+      querySelectorAll: () => [],
+    },
   }));
   const actions = new GalleryActions({
     artistHeadingSelector: '.artist-name',

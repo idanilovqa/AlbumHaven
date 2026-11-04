@@ -6,6 +6,7 @@ from typing import Any
 from music_app.services.album_cover_candidate_publisher import (
     sanitize_persisted_candidate_snapshot,
 )
+from music_app.services.postgres_connections import pooled_connection as _pooled_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -47,6 +48,7 @@ class AlbumCoverCandidateSnapshotRepository:
         connect: Callable[[str], Any] | None = None,
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+        self._use_shared_connection_pool = connect is None
         self._connect = connect or _connect
 
     def get_for_album_context(self, *, album_id: int) -> dict[str, object] | None:
@@ -163,6 +165,8 @@ class AlbumCoverCandidateSnapshotRepository:
             raise RuntimeError(
                 "ALBUM_HAVEN_APP_DATABASE_URL is required for cover candidate snapshots."
             )
+        if self._use_shared_connection_pool:
+            return _pooled_connection(self._database_url, workload="default")
         return self._connect(self._database_url)
 
 

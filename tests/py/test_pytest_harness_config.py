@@ -24,6 +24,7 @@ PYTEST_ROOT_ENV = "ALBUM_HAVEN_PYTEST_ROOT"
 @pytest.mark.skipif(os.name != "nt", reason="Windows extended path syntax")
 def test_path_ownership_normalizes_windows_extended_prefixes():
     is_path_within = runpy.run_path(str(PROBE_PATH))["_is_path_within"]
+    same_path = pytest_harness._same_path
 
     assert is_path_within(
         Path(r"\\?\D:\album-haven\pytest-root\appdata"),
@@ -36,6 +37,14 @@ def test_path_ownership_normalizes_windows_extended_prefixes():
     assert not is_path_within(
         Path(r"\\?\UNC\server\share\pytest-root-sibling\appdata"),
         Path(r"\\server\share\pytest-root"),
+    )
+    assert same_path(
+        Path(r"\\?\D:\album-haven\pytest-root"),
+        Path(r"D:\album-haven\pytest-root"),
+    )
+    assert not same_path(
+        Path(r"\\?\D:\album-haven\pytest-root-sibling"),
+        Path(r"D:\album-haven\pytest-root"),
     )
 
 

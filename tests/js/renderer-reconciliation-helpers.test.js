@@ -57,3 +57,18 @@ test('normalizeAlbum retains a compact preview count without representative trac
 
   assert.equal(normalized.trackCount, 13);
 });
+
+test('effectiveArtistGroups falls back to split selected-artist groups', async () => {
+  const { effectiveArtistGroups } = await import(helperUrl);
+  const primary = [{ artist: 'Ария', albums: [{ name: 'Primary album' }] }];
+  const family = [{ artist: 'Family', albums: [{ name: 'Family album' }] }];
+
+  assert.deepEqual(
+    effectiveArtistGroups({
+      artist_groups: [],
+      primary_artist_groups: primary,
+      family_artist_groups: family,
+    }),
+    [...primary, ...family],
+  );
+});

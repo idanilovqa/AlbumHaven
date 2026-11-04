@@ -631,7 +631,7 @@ export class ScanPage extends BasePage {
         };
         const currentPhaseTitles = Array.from(document.querySelectorAll(selectors.currentPhaseSelector))
           .filter(visible)
-          .map((phase) => String(phase.textContent || '').trim());
+          .map((phase) => String(phase.querySelector('strong')?.textContent || '').trim());
         currentPhaseTitles.forEach(appendTitle);
         const loaderCopy = [
           String(document.querySelector(selectors.titleSelector)?.textContent || '').trim(),

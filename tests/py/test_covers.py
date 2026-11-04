@@ -53,6 +53,54 @@ def test_display_cover_variant_root_is_shared_beside_album_media(tmp_path):
     )
 
 
+def test_display_cover_variant_roots_follow_relocation_target_before_source(tmp_path):
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = tmp_path / "Artist" / "Album" / "cover.jpg"
+    custom_root = tmp_path / "Generated Previews"
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="album_folders",
+            requested_mode="custom",
+            requested_root=custom_root,
+            operation_state="running",
+        )
+    )
+
+    assert covers_module.display_cover_variant_cache_roots(
+        source_path, storage_policy=policy
+    ) == (
+        custom_root / "v1",
+        source_path.parent / ".album-haven",
+    )
+    assert covers_module.display_cover_variant_cache_root(
+        source_path, storage_policy=policy
+    ) == custom_root / "v1"
+
+
+def test_display_cover_variant_roots_keep_legacy_data_cache_as_read_fallback(tmp_path):
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = tmp_path / "Artist" / "Album" / "cover.jpg"
+    data_dir = tmp_path / "Data"
+    policy = PreviewStoragePolicy(PreviewStorageSnapshot())
+
+    assert covers_module.display_cover_variant_cache_roots(
+        source_path,
+        data_dir=data_dir,
+        storage_policy=policy,
+    ) == (
+        source_path.parent / ".album-haven",
+        data_dir / "display-cover-cache",
+    )
+
+
 def test_five_blocked_foreground_variants_cannot_starve_reserved_interactive_lane(
     tmp_path,
     monkeypatch,
@@ -179,6 +227,29 @@ def test_resolve_cover_display_variant_waits_for_cold_variant_then_reuses_it_wit
     )
 
     assert resolved_variant == resolved_cached_variant
+
+
+def test_resolve_cover_display_variant_records_only_published_variant(tmp_path):
+    source_path = tmp_path / "cover-source.jpg"
+    PILImage.new("RGB", (1200, 1200), color="purple").save(
+        source_path, format="JPEG"
+    )
+    cache_root = tmp_path / "cache"
+    recorded = []
+
+    def record_published(recorded_source, published_path):
+        assert published_path.is_file()
+        assert not published_path.with_suffix(f"{published_path.suffix}.tmp").exists()
+        recorded.append((recorded_source, published_path))
+
+    result = covers_module.resolve_cover_display_variant(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        on_published=record_published,
+    )
+
+    assert recorded == [(source_path, result)]
 
 
 def test_find_existing_cover_display_variant_probes_exact_cache_without_queueing_generation(
@@ -635,13 +706,22 @@ def test_queue_cover_display_variant_generation_defers_rendering_to_background_q
     cache_root = tmp_path / "cache"
     queued_calls: list[dict[str, object]] = []
     queued = threading.Event()
+    recorder = object()
 
-    def fake_queue(source_path_arg, *, variant_base_path, normalized_size, priority="background"):
+    def fake_queue(
+        source_path_arg,
+        *,
+        variant_base_path,
+        normalized_size,
+        priority="background",
+        on_published=None,
+    ):
         queued_calls.append({
             "source_path": Path(source_path_arg),
             "variant_base_path": Path(variant_base_path),
             "normalized_size": normalized_size,
             "priority": priority,
+            "on_published": on_published,
         })
         queued.set()
 
@@ -651,6 +731,7 @@ def test_queue_cover_display_variant_generation_defers_rendering_to_background_q
         source_path,
         cache_root=cache_root,
         max_size=480,
+        on_published=recorder,
     )
 
     assert queued.wait(timeout=2)
@@ -665,6 +746,7 @@ def test_queue_cover_display_variant_generation_defers_rendering_to_background_q
         "variant_base_path": expected_variant_base,
         "normalized_size": 480,
         "priority": "background",
+        "on_published": recorder,
     }]
     assert covers_module._find_existing_cover_variant(expected_variant_base) is None
 
@@ -1490,3 +1572,69 @@ def test_executor_rejection_settles_and_clears_current_cover_work(tmp_path, monk
     assert shared_result is not None
     assert shared_result.result(timeout=2) is None
     assert str(variant_base) not in covers_module._COVER_VARIANT_PREWARM_INFLIGHT
+
+
+def test_revision_addressed_cover_variant_reuses_local_cache_without_source_probe(tmp_path, monkeypatch):
+    source_path = tmp_path / "offline-library" / "cover.jpg"
+    cache_root = tmp_path / "local-display-cache"
+    revision = "a" * 64
+    variant_base = covers_module.build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    )
+    cached_variant = variant_base.with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"cached-preview")
+
+    monkeypatch.setattr(
+        covers_module,
+        "_image_dimensions_signature",
+        lambda _path: pytest.fail("a revision-addressed cache hit must not probe the source image"),
+    )
+
+    assert covers_module.find_existing_cover_display_variant(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ) == cached_variant
+
+
+def test_revision_addressed_cover_prewarm_skips_cached_variant_without_source_probe(tmp_path, monkeypatch):
+    source_path = tmp_path / "offline-library" / "cover.jpg"
+    cache_root = tmp_path / "local-display-cache"
+    revision = "c" * 64
+    cached_variant = covers_module.build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"cached-preview")
+
+    monkeypatch.setattr(
+        covers_module,
+        "_image_dimensions_signature",
+        lambda _path: pytest.fail("prewarm must not probe a cached revision's source image"),
+    )
+    monkeypatch.setattr(
+        covers_module,
+        "_queue_cover_variant_generation",
+        lambda *_args, **_kwargs: pytest.fail("prewarm must not queue a cached revision"),
+    )
+
+    covers_module.queue_cover_display_variant_generation(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    )
+
+
+def test_cover_variant_revision_accepts_only_content_hashes():
+    assert covers_module.normalize_cover_variant_revision("A" * 64) == "a" * 64
+    assert covers_module.normalize_cover_variant_revision("process-session-token") == ""
+    assert covers_module.normalize_cover_variant_revision("1234567890") == ""

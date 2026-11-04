@@ -26,6 +26,22 @@ function responsiveLayoutSignature(snapshot) {
   });
 }
 
+export function responsiveGalleryLayoutMeetsFillContract(snapshot) {
+  const fullRowRightGaps = Array.isArray(snapshot?.fullRowRightGaps)
+    ? snapshot.fullRowRightGaps
+    : [];
+  const cardWidths = Array.isArray(snapshot?.cardWidths) ? snapshot.cardWidths : [];
+  return Number(snapshot?.columnCount) > 0
+    && fullRowRightGaps.length > 0
+    && fullRowRightGaps.every((gap) => Math.abs(Number(gap)) <= GEOMETRY_TOLERANCE_PX)
+    && cardWidths.length > 0
+    && Math.max(...cardWidths) - Math.min(...cardWidths) <= GEOMETRY_TOLERANCE_PX
+    && snapshot.cardsInsideGallery === true
+    && snapshot.galleryHasHorizontalOverflow === false
+    && snapshot.documentHasHorizontalOverflow === false
+    && snapshot.rating?.attached === true;
+}
+
 export async function readResponsiveGalleryLayout(galleryPage, options = {}) {
   const artistName = String(options.artistName || '').trim();
   const ratedAlbumName = String(options.ratedAlbumName || '').trim();
@@ -159,7 +175,8 @@ export async function waitForResponsiveGalleryLayout(galleryPage, options = {}) 
   await expect.poll(async () => {
     latestSnapshot = await readResponsiveGalleryLayout(galleryPage, options);
     const signature = responsiveLayoutSignature(latestSnapshot);
-    const settled = latestSnapshot.rating.attached && signature === previousSignature;
+    const settled = responsiveGalleryLayoutMeetsFillContract(latestSnapshot)
+      && signature === previousSignature;
     previousSignature = signature;
     return settled;
   }, {

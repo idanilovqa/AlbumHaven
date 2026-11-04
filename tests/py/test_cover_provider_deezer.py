@@ -5,6 +5,59 @@ import urllib.parse
 from music_app.services.cover_provider_candidates import CoverCandidate, build_lookup_matches_from_candidates
 
 
+def test_automatic_deezer_issues_at_most_two_album_queries():
+    from music_app.services import cover_provider_deezer as deezer
+
+    calls = []
+    result = deezer.search_deezer_cover(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        http_get_json=lambda url, *_args, **_kwargs: calls.append(url) or {"data": []},
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Normalized Artist", "Album", None, 2001),
+        ],
+        match_score=lambda **_kwargs: 0.0,
+        parse_year=lambda _value: 2001,
+        select_largest_candidate=lambda **_kwargs: None,
+    )
+
+    assert result is None
+    assert len(calls) == 2
+    assert "Normalized" in urllib.parse.unquote(calls[1])
+
+
+def test_automatic_deezer_probes_the_provider_supplied_artwork_url():
+    from music_app.services import cover_provider_deezer as deezer
+
+    supplied_url = "https://e-cdns-images.dzcdn.net/images/cover/ABC/1000x1000-000000-80-0-0.jpg"
+    probed_urls = []
+
+    def select_candidate(**kwargs):
+        for score, url, _metadata in kwargs["matches"]:
+            probed_urls.append(url)
+            if url == supplied_url:
+                return CoverCandidate(source="deezer", url=url, score=score)
+        return None
+
+    result = deezer.search_deezer_cover(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=1,
+        http_get_json=lambda *_args, **_kwargs: {"data": [{
+            "title": "Album", "artist": {"name": "Artist"},
+            "release_date": "2001-01-01", "cover_xl": supplied_url,
+        }]},
+        build_query_variants=lambda *_args: [("Artist", "Album", None, 2001)],
+        match_score=lambda **_kwargs: 1.0,
+        parse_year=lambda _value: 2001,
+        select_largest_candidate=select_candidate,
+    )
+
+    assert result is not None
+    assert result.url == supplied_url
+    assert probed_urls == [supplied_url]
+
+
 def test_candidate_urls_upgrade_cover_medium_and_dedupe_originals():
     from music_app.services import cover_provider_deezer as deezer
 

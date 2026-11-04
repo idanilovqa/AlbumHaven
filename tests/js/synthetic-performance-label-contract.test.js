@@ -2,8 +2,40 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
+
+test('Problematic Files report distinguishes hard failures from grace and missing measurements', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildProblematicFilesFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRulesFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start);
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildProblematicFilesFocusedLocalSummaryCards`,
+  );
+  for (const [milliseconds, status, label] of [
+    [0, 'target-met', 'TARGET MET'],
+    [1000, 'target-met', 'TARGET MET'],
+    [1001, 'grace-used', 'GRACE USED'],
+    [1200, 'grace-used', 'GRACE USED'],
+    [1201, 'hard-fail', 'HARD FAIL'],
+    [6482, 'hard-fail', 'HARD FAIL'],
+  ]) {
+    const card = buildSummary([], {
+      problematicFilesApiMs: milliseconds,
+      readinessPerformanceStatus: status,
+      readinessGraceUsed: milliseconds > 1000,
+    })[0];
+    assert.equal(card.value, `${milliseconds} ms`);
+    assert.ok(card.note.startsWith(label), `${milliseconds} ms: ${card.note}`);
+  }
+  for (const value of [undefined, null, NaN]) {
+    const card = buildSummary([], { problematicFilesApiMs: value })[0];
+    assert.equal(card.value, 'Not recorded');
+    assert.doesNotMatch(card.note, /TARGET MET|GRACE USED/);
+  }
+});
 
 function repositoryPath(...segments) {
   return path.join(repositoryRoot, ...segments);
@@ -12,6 +44,28 @@ function repositoryPath(...segments) {
 function readRepositoryFile(...segments) {
   return fs.readFileSync(repositoryPath(...segments), 'utf8');
 }
+
+test('search report displays the measured readiness timing and identifies missing evidence', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildSearchBrowseFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRootAlbumBrowseFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start, 'Search summary builder must exist');
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildSearchBrowseFocusedLocalSummaryCards`,
+  );
+
+  for (const [metrics, expected] of [
+    [{ searchReadyMs: 462 }, '462 ms'],
+    [{ searchReadyMs: 462.6 }, '463 ms'],
+    [{ searchReadyMs: 0 }, '0 ms'],
+    [{}, 'Not recorded'],
+    [{ searchReadyMs: null }, 'Not recorded'],
+    [{ searchReadyMs: NaN }, 'Not recorded'],
+  ]) {
+    const card = buildSummary([], metrics).find(item => item.label === 'Search UI Ready');
+    assert.equal(card?.value, expected);
+  }
+});
 
 test('synthetic performance helpers and benchmark tests use dataset-accurate filenames', () => {
   const expectedAbsent = [
@@ -100,4 +154,34 @@ test('Problematic Files report copy matches the approved readiness ceiling', () 
   assert.ok(summaryBuilder, 'Problematic Files summary builder should remain present');
   assert.match(summaryBuilder[0], /1200 ms hard ceiling/u);
   assert.doesNotMatch(summaryBuilder[0], /1400 ms hard ceiling/u);
+});
+
+
+test('search report distinguishes populated readiness from query commitment without fallback evidence', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildSearchBrowseFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRootAlbumBrowseFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start);
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildSearchBrowseFocusedLocalSummaryCards`,
+  );
+  for (const [metrics, expected] of [
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: 950 }, '950 ms'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: 0 }, '0 ms'],
+    [{ searchReadyMs: 80 }, 'Not recorded'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: null }, 'Not recorded'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: NaN }, 'Not recorded'],
+  ]) {
+    const cards = buildSummary([], metrics);
+    assert.equal(cards.find(card => card.label === 'Populated Search Ready')?.value, expected);
+    assert.equal(cards.find(card => card.label === 'Search UI Ready')?.value, '80 ms');
+  }
+});
+
+test('populated search readiness is required by the report and uses the unchanged search ceiling', () => {
+  const fixtures = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const report = fixtures.slice(fixtures.indexOf('searchBrowseFocusedLocalReport:'), fixtures.indexOf('rootAlbumBrowseFocusedLocalReport:'));
+  assert.ok(report.includes("'search-browse.searchPopulatedReadyMs'"));
+  const times = JSON.parse(readRepositoryFile('tests', 'ci', 'performance-times.json'));
+  assert.deepEqual(times['search-browse.searchPopulatedReadyMs'], times['search-browse.searchBrowseReadyMs']);
 });

@@ -7,6 +7,7 @@ from threading import Event, Thread, current_thread
 
 import pytest
 
+import music_app.services.cover_lookup_tasks as task_service
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 from music_app.services.cover_lookup_tasks import (
     _merge_cover_lookup_task_with_notification,
@@ -77,6 +78,416 @@ def test_cover_lookup_tasks_tests_do_not_use_flask_fixture_or_app_context():
 
     assert "tests.py." + "flask_fixtures" not in source
     assert "app." + "app_context(" not in source
+
+
+def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
+    from music_app.services import cover_lookup_tasks as task_service
+
+    task = {
+        "id": "completed-task",
+        "status": "completed",
+        "artist": "Artist",
+        "album": "Album",
+        "year": 2001,
+        "progress": 100,
+        "progress_label": "Completed",
+        "message": "Found covers",
+        "result_kind": "candidates-found",
+        "notification_action_taken": False,
+        "notification_completed_at": "2026-10-17T18:00:00+00:00",
+        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+        "job_contract": {"provider_state": "q" * 200_000},
+        "phase_timings_ms": {"lookup": 123},
+        "possible_matches": [
+            {"id": "front", "art_kind": "cover", "debug": "x" * 200_000},
+            {"id": "booklet", "art_kind": "other", "debug": "y" * 200_000},
+        ],
+        "album_payload": {
+            "album_id": 41,
+            "key": "artist::album",
+            "name": "Album",
+            "album_artist": "Artist",
+            "year": 2001,
+            "cover_path": "C:/Music/Artist/Album/cover.jpg",
+            "tracks": [
+                {
+                    "path": "C:/Music/Artist/Album/01.flac",
+                    "title": "Track",
+                    "embedded_art": "z" * 200_000,
+                },
+            ],
+            "gallery_groups": ["unused-heavy-detail" * 10_000],
+        },
+    }
+
+    summary = task_service.summarize_cover_lookup_task_for_list(task)
+
+    assert summary["id"] == "completed-task"
+    assert summary["status"] == "completed"
+    assert summary["possible_match_count"] == 1
+    assert "possible_matches" not in summary
+    assert "track_paths" not in summary
+    assert "job_contract" not in summary
+    assert "phase_timings_ms" not in summary
+    assert summary["album_payload"] == {
+        "album_id": 41,
+        "key": "artist::album",
+        "name": "Album",
+        "album_artist": "Artist",
+        "year": 2001,
+        "cover_path": "C:/Music/Artist/Album/cover.jpg",
+    }
+    assert "tracks" not in summary["album_payload"]
+    assert "01.flac" not in json.dumps(summary)
+    assert len(json.dumps(summary).encode("utf-8")) < 4_096
+
+
+def test_task_list_uses_compact_persisted_summaries(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summaries",
+        lambda config: [
+            {
+                "id": "compact-persisted-task",
+                "status": "completed",
+                "album": "Compact Album",
+                "possible_match_count": 8,
+                "notification_action_taken": False,
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notifications",
+        lambda config: (_ for _ in ()).throw(
+            AssertionError("task lists must not load full persisted notification payloads")
+        ),
+    )
+
+    assert task_service.list_cover_lookup_task_summaries(config={}) == [
+        {
+            "id": "compact-persisted-task",
+            "status": "completed",
+            "album": "Compact Album",
+            "possible_match_count": 8,
+            "notification_action_taken": False,
+        }
+    ]
+
+
+def test_task_list_terminalizes_stale_persisted_running_task(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    stale_task = {
+        "id": "orphaned-task",
+        "status": "running",
+        "artist": "Perelandra",
+        "album": "Eden",
+        "progress": 45,
+        "updated_at": "2020-01-01T00:00:00+00:00",
+        "album_payload": {"key": "perelandra::eden"},
+    }
+    persisted = []
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summaries",
+        lambda config: [stale_task],
+    )
+    monkeypatch.setattr(
+        task_service,
+        "upsert_cover_lookup_notification",
+        lambda config, task, *, persistence_revision: persisted.append(
+            (task, persistence_revision)
+        ),
+    )
+
+    summaries = task_service.list_cover_lookup_task_summaries(config={})
+
+    assert summaries[0]["status"] == "failed"
+    assert summaries[0]["result_kind"] == "interrupted"
+    assert summaries[0]["progress_label"] == "Interrupted"
+    assert "stopped before it could finish" in summaries[0]["message"].casefold()
+    assert persisted[0][0]["id"] == "orphaned-task"
+    assert persisted[0][0]["notification_action_taken"] is False
+
+
+def test_notification_count_reconciles_stale_persisted_tasks(monkeypatch):
+    persisted = {"status": "running"}
+    reconciliations = []
+
+    def reconcile(_config, *, stale_before, completed_at):
+        reconciliations.append((stale_before, completed_at))
+        persisted["status"] = "failed"
+        return {"orphaned-task"}
+
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        reconcile,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda _config: {
+            "total_count": 1,
+            "active_count": int(persisted["status"] == "running"),
+            "finished_count": int(persisted["status"] == "failed"),
+        },
+    )
+
+    assert task_service.count_cover_lookup_task_notifications(config={}) == {
+        "total_count": 1,
+        "active_count": 0,
+        "finished_count": 1,
+    }
+    task_service.count_cover_lookup_task_notifications(config={})
+    assert len(reconciliations) == 1
+
+
+def test_notification_page_reconciles_stale_persisted_tasks(monkeypatch):
+    persisted = {
+        "id": "orphaned-task",
+        "status": "running",
+        "updated_at": "2020-01-01T00:00:00+00:00",
+    }
+
+    def reconcile(_config, *, stale_before, completed_at):
+        persisted.update(
+            status="failed",
+            result_kind="interrupted",
+            progress_label="Interrupted",
+            finished_at=completed_at.isoformat(),
+        )
+        return {"orphaned-task"}
+
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        reconcile,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summary_page",
+        lambda _config, **_kwargs: {
+            "items": [dict(persisted)],
+            "next_cursor": None,
+            "counts": {"total_count": 1, "active_count": 0, "finished_count": 1},
+        },
+    )
+
+    page = task_service.load_cover_lookup_task_summary_page(
+        config={}, limit=50, cursor=None, active_only=False
+    )
+
+    assert page["items"][0]["status"] == "failed"
+    assert page["items"][0]["result_kind"] == "interrupted"
+
+
+def test_notification_reconciliation_interrupts_stale_live_worker(monkeypatch, config):
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        created_at="2020-01-01T00:00:00+00:00",
+        started_at="2020-01-01T00:00:00+00:00",
+        updated_at="2020-01-01T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        lambda *_args, **_kwargs: set(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda _config: {"total_count": 1, "active_count": 0, "finished_count": 1},
+    )
+
+    task_service.count_cover_lookup_task_notifications(config=config)
+
+    assert cancel_event.is_set()
+    assert cover_lookup_result(task_id)["status"] == "failed"
+    assert cover_lookup_result(task_id)["result_kind"] == "interrupted"
+
+
+def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    worker_future = Future()
+    task_service.register_cover_lookup_future(task_id, worker_future, config=config)
+
+    worker_future.set_exception(RuntimeError("worker stopped"))
+
+    task = cover_lookup_result(task_id)
+    assert cancel_event.is_set()
+    assert task["status"] == "failed"
+    assert task["result_kind"] == "interrupted"
+    assert task["progress_label"] == "Interrupted"
+
+
+def test_failed_future_does_not_resurrect_cleared_terminal_task(monkeypatch):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "delete_cover_lookup_notifications",
+        lambda *_args, **_kwargs: set(),
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    worker_future = Future()
+    task_service.register_cover_lookup_future(task_id, worker_future)
+    update_cover_lookup_task(task_id, status="failed")
+    assert clear_completed_cover_lookup_tasks([task_id]) == 1
+
+    worker_future.set_exception(RuntimeError("late worker failure"))
+
+    assert cover_lookup_result(task_id) == {}
+
+
+def test_notification_reconciliation_keeps_recent_candidate_worker_alive(
+    monkeypatch, config
+):
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        started_at="2020-01-01T00:00:00+00:00",
+        candidate_updated_at="2999-01-01T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        lambda *_args, **_kwargs: set(),
+    )
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda _config: {"total_count": 1, "active_count": 1, "finished_count": 0},
+    )
+
+    task_service.count_cover_lookup_task_notifications(config=config)
+
+    assert not cancel_event.is_set()
+    assert cover_lookup_result(task_id)["status"] == "running"
+
+
+def test_notification_reconciliation_uses_newest_activity_timestamp(
+    monkeypatch, config
+):
+    task_id, cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        candidate_updated_at="2020-01-01T00:00:00+00:00",
+        updated_at="2999-01-01T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        lambda *_args, **_kwargs: set(),
+    )
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda _config: {"total_count": 1, "active_count": 1, "finished_count": 0},
+    )
+
+    task_service.count_cover_lookup_task_notifications(config=config)
+
+    assert not cancel_event.is_set()
+    assert cover_lookup_result(task_id)["status"] == "running"
+
+
+def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(task_id, status="completed")
+
+    update_cover_lookup_task(
+        task_id,
+        status="running",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "running"
+    assert task["updated_at"]
+
+
+def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatch):
+    monkeypatch.setattr(
+        task_service,
+        "_save_cover_lookup_notification_task",
+        lambda *_args, **_kwargs: None,
+    )
+    task_id, _cancel_event = create_cover_lookup_task(
+        {"album_artist": "Perelandra", "name": "Eden"}, set()
+    )
+    update_cover_lookup_task(
+        task_id,
+        status="failed",
+        result_kind="interrupted",
+        message="Cover art lookup stopped before it could finish.",
+    )
+
+    update_cover_lookup_task(
+        task_id,
+        status="completed",
+        result_kind="possible-matches",
+        message="Late worker completion.",
+    )
+
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "failed"
+    assert task["result_kind"] == "interrupted"
+    assert task["message"] == "Cover art lookup stopped before it could finish."
 
 
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():
@@ -474,6 +885,35 @@ def test_persisted_running_snapshot_does_not_reappear_after_runtime_reset(config
     reset_cover_lookup_runtime_state()
 
     assert list_cover_lookup_tasks(config=config) == []
+
+
+def test_remote_save_transition_replaces_persisted_completed_lookup(config, monkeypatch):
+    persisted_tasks = _install_fake_notification_adapter(monkeypatch, config)
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    task_id, _ = create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="completed",
+        progress=100,
+        possible_matches=[{"id": "candidate-1", "url": "https://images.example/cover.jpg"}],
+        job_contract=build_cover_lookup_job_contract("candidate_lookup"),
+    )
+
+    update_cover_lookup_task(
+        task_id,
+        config=config,
+        status="running",
+        progress=92,
+        progress_label="Saving selected cover art...",
+        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+    )
+
+    persisted = next(task for task in persisted_tasks if task["id"] == task_id)
+    assert persisted["status"] == "running"
+    assert persisted["job_contract"]["job_kind"] == "save_remote_selection"
 
 
 def test_candidate_lookup_finalizer_cannot_overwrite_successful_remote_save(config, monkeypatch):
@@ -966,3 +1406,68 @@ def test_canceled_task_rejects_late_provider_completion(config):
     payload = cover_lookup_result(task_id)
     assert payload["status"] == "canceled"
     assert payload["possible_matches"] == []
+
+
+def test_bounded_notification_reads_delegate_to_postgres_adapter(monkeypatch):
+    from music_app.services import cover_lookup_notifications as notification_service
+
+    calls = []
+
+    class FakeAdapter:
+        def count_notifications(self):
+            calls.append(("count",))
+            return {"total_count": 8, "active_count": 2, "finished_count": 6}
+
+        def load_notification_summary_page(self, *, limit, cursor, active_only):
+            calls.append(("page", limit, cursor, active_only))
+            return {
+                "items": [{"id": "task-8"}],
+                "next_cursor": "next",
+                "counts": {"total_count": 8, "active_count": 2, "finished_count": 6},
+            }
+
+    monkeypatch.setattr(
+        notification_service,
+        "_cover_lookup_notifications_adapter",
+        lambda _config: FakeAdapter(),
+    )
+
+    assert notification_service.count_cover_lookup_notifications({})["total_count"] == 8
+    page = notification_service.load_cover_lookup_notification_summary_page(
+        {}, limit=20, cursor="cursor", active_only=True
+    )
+    assert page["items"] == [{"id": "task-8"}]
+    assert calls == [("count",), ("page", 20, "cursor", True)]
+
+
+def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    counts = {"total_count": 4, "active_count": 1, "finished_count": 3}
+    page = {"items": [{"id": "task-4"}], "next_cursor": None, "counts": counts}
+    monkeypatch.setattr(
+        task_service,
+        "interrupt_stale_cover_lookup_notifications",
+        lambda *_args, **_kwargs: set(),
+    )
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda config: counts if config == {"key": "value"} else None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summary_page",
+        lambda config, *, limit, cursor, active_only: page
+        if (config, limit, cursor, active_only) == ({"key": "value"}, 50, None, False)
+        else None,
+        raising=False,
+    )
+
+    assert task_service.count_cover_lookup_task_notifications(
+        config={"key": "value"}
+    ) == counts
+    assert task_service.load_cover_lookup_task_summary_page(
+        config={"key": "value"}, limit=50, cursor=None, active_only=False
+    ) == page

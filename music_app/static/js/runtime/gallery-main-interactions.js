@@ -443,6 +443,10 @@ function updateGalleryMainControls() {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
   });
+  document.querySelectorAll('[data-gallery-featured-on]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
+    button.disabled = false;
+  });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
   });
@@ -458,7 +462,9 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = getVisibleNonAlbumTracks().length > 0;
+    const enabled = Boolean(button.dataset.libraryWide === '1' && state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
+      libraryWide: button.dataset.libraryWide === '1',
+    }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   });
@@ -562,6 +568,10 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
+  const isSearch = Boolean(String(state.view.query || '').trim());
+  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
+    closeGalleryMainSurface(false);
+  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -617,7 +627,8 @@ function updateGalleryMainChrome() {
       summary.hidden = false;
       summary.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
     }
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (isSearch) oldInfo?.remove();
+    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -667,19 +678,20 @@ function transitionGalleryMain(action) {
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: previousView === nextState.view });
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
       hydrationCategories,
-    }), { omitSidebar: true });
+    }), { omitSidebar: false });
     void fetchAndRender(hydrationUrl, false, {
       preserveScroll: true,
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
-      preserveSidebarState: true,
+      preserveSidebarState: false,
+      fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
       skipPendingViewTransition: true,
     });
@@ -687,6 +699,7 @@ function transitionGalleryMain(action) {
 }
 
 function openGalleryArtistInfo(anchor) {
+  if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
@@ -716,6 +729,8 @@ function handleGalleryMainClick(event) {
   }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
+  const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
+  if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -735,11 +750,22 @@ function handleGalleryMainClick(event) {
   const familyAnchor = event.target.closest?.('[data-gallery-bar-action="artist-family"]');
   if (familyAnchor) { event.preventDefault(); openGalleryMainSurface('artist-family', familyAnchor, document.getElementById('artist-family-panel')); return true; }
   const typeAnchor = event.target.closest?.('[data-gallery-bar-action="album-types"]');
-  if (typeAnchor) { event.preventDefault(); openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu')); return true; }
+  if (typeAnchor) {
+    event.preventDefault();
+    openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
+    if (state.view?.non_album_tracks_deferred && typeof hydrateDeferredNonAlbumTracks === 'function') {
+      void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
+        console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+      });
+    }
+    return true;
+  }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') openNonAlbumModal();
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
+      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+    }
     return true;
   }
   if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }

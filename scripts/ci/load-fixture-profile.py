@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any, Callable, Iterator, Mapping
@@ -60,6 +61,7 @@ _MIGRATION_OWNED_TABLES = frozenset(
         ("app", "client_surface_classes"),
         ("app", "deployment_mode_rules"),
         ("app", "e2e_problematic_file_fixture_seeds"),
+        ("app", "generated_preview_storage"),
         ("ops", "schema_migrations"),
     }
 )
@@ -641,6 +643,7 @@ def index_fixture_staging(connection: Any) -> None:
         "create index fixture_stage_track_album_ref_idx on fixture_stage ((record->>'albumRef')) where table_name='local_tracks'",
         "create index fixture_stage_track_artist_ref_idx on fixture_stage ((record->>'artistRef')) where table_name='local_tracks'",
         "create index fixture_stage_file_track_ref_idx on fixture_stage ((coalesce(record->>'trackRef',record->>'logicalKey'))) where table_name='local_track_files'",
+        "create index fixture_stage_file_raw_track_ref_idx on fixture_stage ((record->>'trackRef')) where table_name='local_track_files'",
         "create index fixture_stage_family_artist_ref_idx on fixture_stage ((record->>'artistRef')) where table_name='local_artist_family_links'",
         "create index fixture_stage_family_related_ref_idx on fixture_stage ((record->>'relatedArtistRef')) where table_name='local_artist_family_links'",
         "create index fixture_stage_featured_album_ref_idx on fixture_stage ((record->>'albumRef')) where table_name='local_album_featured_artists'",
@@ -1590,9 +1593,16 @@ def product_projection_statements(profile: str) -> tuple[str, ...]:
         "with owner_account as (insert into app.accounts (display_name, account_kind, username_display, username_normalized, contact_email, contact_email_normalized, metadata) select 'CI Fixture Owner', 'bootstrap_owner', 'ci-fixture-owner', 'ci-fixture-owner', 'ci-fixture-owner@example.test', 'ci-fixture-owner@example.test', jsonb_build_object('source','cloud_fixture','profile',profile) from fixture_context returning id), bootstrap_owner as (insert into app.bootstrap_owners (account_id, owner_key, metadata) select id, 'local-bootstrap-owner', jsonb_build_object('source','cloud_fixture') from owner_account returning account_id) insert into library.libraries (owner_account_id, name, library_kind, metadata) select b.account_id, 'Local Library', 'local', jsonb_build_object('source','cloud_fixture','profile',c.profile,'scan_cache',jsonb_build_object('library_root_identity',c.root_identity,'last_scan',1.0,'relation_views','{}'::jsonb,'relations_last_built',0.0)) from bootstrap_owner b cross join fixture_context c",
         "insert into library.library_roots (library_id, root_path, root_kind, metadata) select l.id, c.media_root, 'main_library', jsonb_build_object('source','cloud_fixture','root_id',c.root_settings#>>'{main_library_roots,0,id}','category','main_library','category_key','main_library_roots') from library.libraries l cross join fixture_context c where l.metadata->>'profile'=c.profile",
         "insert into library.library_root_settings (library_id, layout_mode, root_categories, settings_payload) select l.id, 'artist', jsonb_build_object(c.media_root,jsonb_build_object('root_id',c.root_settings#>>'{main_library_roots,0,id}','category','main_library','category_key','main_library_roots')), c.root_settings from library.libraries l cross join fixture_context c where l.metadata->>'profile'=c.profile",
+        "analyze fixture_context, library.libraries, library.library_roots",
         "insert into library.local_artists (library_id, artist_key, name, sort_name, metadata) select l.id, s.record->>'productArtistKey', s.record->>'name', nullif(s.record->>'sortName',''), coalesce(s.record->'metadata','{}'::jsonb) || jsonb_build_object('fixture_artist_key',s.record->>'artistKey','fixture_product_artist_key',s.record->>'productArtistKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile where s.table_name='local_artists' union all select distinct l.id, s.record->>'productArtistKey', s.record->>'artist', s.record->>'artist', jsonb_build_object('source','cloud_scan_fixture','fixture_artist_key','scan-artist-' || md5(s.record->>'artist'),'fixture_product_artist_key',s.record->>'productArtistKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile where s.table_name='scan-file-index'",
+        "create index fixture_loader_local_artists_key_idx on library.local_artists ((metadata->>'fixture_artist_key'), library_id)",
+        "analyze library.local_artists",
         "insert into library.local_albums (library_id, artist_id, album_key, title, release_year, cover_path, metadata) select l.id, a.id, a.artist_key || '::' || (s.record->>'productTitleKey'), s.record->>'title', nullif(s.record->>'releaseYear','')::integer, nullif(s.record->>'absoluteCoverPath',''), coalesce(s.record->'metadata','{}'::jsonb) || jsonb_build_object('fixture_album_key',s.record->>'albumKey','fixture_product_title_key',s.record->>'productTitleKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile join library.local_artists a on a.library_id=l.id and a.metadata->>'fixture_artist_key'=s.record->>'artistRef' where s.table_name='local_albums' union all select distinct l.id, a.id, a.artist_key || '::' || (s.record->>'productTitleKey'), s.record->>'album', nullif(s.record->>'year','')::integer, null, jsonb_build_object('source','cloud_scan_fixture','fixture_album_key','scan-album-' || md5((s.record->>'artist') || chr(31) || (s.record->>'album')),'fixture_product_title_key',s.record->>'productTitleKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile join library.local_artists a on a.library_id=l.id and a.metadata->>'fixture_artist_key'='scan-artist-' || md5(s.record->>'artist') where s.table_name='scan-file-index'",
+        "create index fixture_loader_local_albums_key_idx on library.local_albums ((metadata->>'fixture_album_key'), library_id)",
+        "analyze library.local_albums",
         "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number, track_number, duration_seconds, metadata) select l.id, al.id, ar.id, file.record->>'absolutePrivatePath', s.record->>'title', nullif(s.record->>'discNumber','')::integer, nullif(s.record->>'trackNumber','')::integer, nullif(s.record->>'durationSeconds','')::numeric, coalesce(s.record->'metadata','{}'::jsonb) || jsonb_build_object('fixture_track_key',s.record->>'trackKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile join library.local_albums al on al.library_id=l.id and al.metadata->>'fixture_album_key'=s.record->>'albumRef' join library.local_artists ar on ar.library_id=l.id and ar.metadata->>'fixture_artist_key'=s.record->>'artistRef' join fixture_stage file on file.table_name='local_track_files' and file.record->>'trackRef'=s.record->>'trackKey' where s.table_name='local_tracks' union all select l.id, al.id, ar.id, s.record->>'absolutePrivatePath', s.record->>'title', nullif(s.record->>'discNumber','')::integer, nullif(s.record->>'trackNumber','')::integer, null, jsonb_build_object('source','cloud_scan_fixture','fixture_track_key',s.record->>'logicalKey') from fixture_stage s cross join fixture_context c join library.libraries l on l.metadata->>'profile'=c.profile join library.local_artists ar on ar.library_id=l.id and ar.metadata->>'fixture_artist_key'='scan-artist-' || md5(s.record->>'artist') join library.local_albums al on al.library_id=l.id and al.metadata->>'fixture_album_key'='scan-album-' || md5((s.record->>'artist') || chr(31) || (s.record->>'album')) where s.table_name='scan-file-index'",
+        "create index fixture_loader_local_tracks_key_idx on library.local_tracks ((metadata->>'fixture_track_key'), library_id)",
+        "analyze library.local_tracks",
         """
         insert into library.local_track_files
           (track_id, library_root_id, private_path, relative_path, file_size_bytes, modified_at, metadata)
@@ -1678,6 +1688,9 @@ def product_projection_statements(profile: str) -> tuple[str, ...]:
         "select setval(pg_get_serial_sequence('library.local_albums','id'), greatest(coalesce((select max(id) from library.local_albums),1),1), exists(select 1 from library.local_albums))",
         "select setval(pg_get_serial_sequence('library.local_tracks','id'), greatest(coalesce((select max(id) from library.local_tracks),1),1), exists(select 1 from library.local_tracks))",
         "select setval(pg_get_serial_sequence('library.local_track_files','id'), greatest(coalesce((select max(id) from library.local_track_files),1),1), exists(select 1 from library.local_track_files))",
+        "drop index library.fixture_loader_local_artists_key_idx",
+        "drop index library.fixture_loader_local_albums_key_idx",
+        "drop index library.fixture_loader_local_tracks_key_idx",
         "analyze app.album_ratings, library.libraries, library.library_roots, library.library_root_settings, library.local_artists, library.local_albums, library.local_tracks, library.local_track_files, library.local_artist_family_links, library.local_album_featured_artists, library.local_album_cover_candidate_snapshots, library.ignored_versions, library.ignored_repairs, library.exception_overrides",
     )
     return statements
@@ -2160,14 +2173,46 @@ def validate_projected_scan_discovery_absence(
         raise ValueError("scan discovery rows exist before incremental scan")
 
 
+def validate_synthetic_scale(profile: str, definition: dict, preset: str | None) -> None:
+    if not preset:
+        return
+    if preset != "production-calibration":
+        raise ValueError(f"Unknown synthetic scale preset: {preset}")
+    if profile != "synthetic-large-library":
+        return
+    expected = {"artists": 6_345, "albums": 14_673, "tracks": 159_547, "trackFiles": 159_547}
+    counts = definition.get("counts", {})
+    actual = {key: counts.get(key) for key in expected}
+    if actual != expected:
+        raise ValueError(f"production-calibration fixture counts must equal {expected}; got {actual}")
+
+
+def prepare_relation_projection(database_url: str) -> None:
+    """Publish normal product relationships before a persisted-startup benchmark."""
+    validate_database_url(database_url)
+    repository_root = str(Path(__file__).resolve().parents[2])
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+    result = ensure_relation_projection_ready({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    if not result.get("ready"):
+        raise RuntimeError("Fixture relation projection did not become ready")
+    print(json.dumps({"fixture_relation_projection": "ready", "preparation_ms": result.get("duration_ms")}))
+
+
 def load_fixture_profile(
     *,
     fixture_root: Path,
     profile: str,
     database_url: str,
     replace_existing: bool = False,
+    synthetic_scale_preset: str | None = None,
+    relation_projection: str = "missing",
     connect: Callable[[str], Any] = psycopg.connect,
 ) -> None:
+    if relation_projection not in {"missing", "ready"}:
+        raise ValueError("relation_projection must be missing or ready")
     fixture_root = fixture_root.resolve()
     manifest_path = fixture_root / "manifest.json"
     try:
@@ -2175,6 +2220,7 @@ def load_fixture_profile(
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("fixture manifest is invalid JSON") from exc
     definition = validate_manifest_profile(manifest, profile)
+    validate_synthetic_scale(profile, definition, synthetic_scale_preset)
     validate_auxiliary_contract(fixture_root, profile, definition)
     validate_database_url(database_url)
     seed_path = (fixture_root / str(definition["databaseSeed"])).resolve()
@@ -2261,6 +2307,8 @@ def load_fixture_profile(
                 definition["counts"],
                 definition["namedScenarioAssertions"],
             )
+    if relation_projection == "ready":
+        prepare_relation_projection(database_url)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -2286,6 +2334,18 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Transactionally reset normal application tables before loading the fixture.",
     )
+    parser.add_argument(
+        "--synthetic-scale-preset",
+        choices=["production-calibration"],
+        default=os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET") or None,
+        help="Require calibrated synthetic manifest counts before database loading.",
+    )
+    parser.add_argument(
+        "--relation-projection",
+        choices=["missing", "ready"],
+        default=os.environ.get("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", "missing"),
+        help="Prepare saved product relationships before startup; missing preserves recovery coverage.",
+    )
     return parser.parse_args()
 
 
@@ -2296,6 +2356,8 @@ def main() -> int:
         profile=args.profile,
         database_url=args.database_url,
         replace_existing=args.replace_existing,
+        synthetic_scale_preset=args.synthetic_scale_preset,
+        relation_projection=args.relation_projection,
     )
     return 0
 

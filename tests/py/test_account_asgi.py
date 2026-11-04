@@ -145,8 +145,21 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert "Windows browser" in body
     assert 'action="/logout"' in body
     assert "Sign Out" in body
+    assert 'href="/admin/server"' not in body
     assert session not in body
     assert body.count('minlength="8"') == 2
+
+
+def test_bootstrap_owner_sees_server_settings_navigation():
+    app, _service = _app(is_bootstrap_owner=True)
+
+    status, _headers, body = _request(
+        app, "GET", "/account", session=_session()
+    )
+
+    assert status == 200
+    assert 'href="/admin/server"' in body
+    assert "Server" in body
     assert '/static/js/account.js?v=account-runtime-digest' in body
     assert '/static/js/settings-navigation.js?v=account-runtime-digest' in body
 

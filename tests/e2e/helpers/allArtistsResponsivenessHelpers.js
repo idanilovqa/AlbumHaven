@@ -195,7 +195,10 @@ export async function measureStartupSidebarHydration(galleryActions, navigationP
     fullSidebarMsPromise,
     fullCountSynchronizedMsPromise,
   ]);
-  const fullSidebarCount = await navigationPanelActions.readSidebarArtistCount();
+  const fullSidebarArtistNames = await navigationPanelActions.readHydratedSidebarArtistNames();
+  const fullSidebarCount = fullSidebarArtistNames.length;
+  const continuationBoundaryIndex = Math.max(50, previewSidebarCount);
+  const firstContinuationArtist = String(fullSidebarArtistNames[continuationBoundaryIndex] || '').trim();
   const fullVisibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
   const firstAlbumsReadinessBefore = await galleryActions.readInitialAllArtistsReadinessSnapshot();
   const firstAlbumsMs = await measureActionTime(
@@ -217,6 +220,8 @@ export async function measureStartupSidebarHydration(galleryActions, navigationP
     previewVisibleAllArtistsCount,
     fullSidebarMs,
     fullSidebarCount,
+    continuationBoundaryIndex,
+    firstContinuationArtist,
     fullCountSynchronizedMs,
     fullVisibleAllArtistsCount,
     firstAlbumsMs,

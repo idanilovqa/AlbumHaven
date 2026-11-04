@@ -30,6 +30,48 @@ export async function collectJsonResponsesDuringAction(page, matchesResponse, ac
   return Promise.all(responseJsonPromises);
 }
 
+export async function collectResponseTrafficDuringAction(page, matchesResource, action) {
+  const requests = [];
+  const observedRequests = new Set();
+  const responseBodyPromises = [];
+  const collectRequest = (request) => {
+    if (matchesResource(request)) {
+      observedRequests.add(request);
+      requests.push(request.url());
+    }
+  };
+  const collectResponse = (response) => {
+    if (!observedRequests.has(response.request()) || !matchesResource(response)) return;
+    responseBodyPromises.push((async () => ({
+      bodyBytes: (await response.body()).byteLength,
+      status: response.status(),
+      url: response.url(),
+    }))());
+  };
+
+  page.on('request', collectRequest);
+  page.on('response', collectResponse);
+  let result;
+  let actionError = null;
+  try {
+    result = await action();
+  } catch (error) {
+    actionError = error;
+  } finally {
+    page.off('request', collectRequest);
+    page.off('response', collectResponse);
+  }
+  if (actionError) {
+    await Promise.allSettled(responseBodyPromises);
+    throw actionError;
+  }
+  return {
+    requests,
+    responses: await Promise.all(responseBodyPromises),
+    result,
+  };
+}
+
 export function isRootAlbumsViewDataResponse(response) {
   const url = new URL(response.url());
   return url.pathname === '/view-data'
@@ -181,6 +223,48 @@ export async function measureActionTime(action, readyCheck = null) {
     await readyCheck();
   }
   return Date.now() - startedAt;
+}
+
+export async function measureInteractionToPaint(page, action, readyCheck = null) {
+  // parity-check: allow-read-only-measurement-evaluate -- observe timing without changing application or window state
+  const measurement = await page.evaluateHandle(() => {
+    const samples = [];
+    const observer = typeof PerformanceObserver === 'function'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')
+      ? new PerformanceObserver((list) => samples.push(...list.getEntries().map((entry) => entry.duration)))
+      : null;
+    observer?.observe({ type: 'longtask', buffered: false });
+    return {
+      observer,
+      samples,
+      startedAt: performance.now(),
+    };
+  });
+  try {
+    await action();
+    if (readyCheck) await readyCheck();
+    // parity-check: allow-read-only-measurement-evaluate -- finish timing after two paint opportunities
+    return await measurement.evaluate(sample => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const longTasks = [
+          ...sample.samples,
+          ...(sample.observer?.takeRecords() || []).map(entry => entry.duration),
+        ];
+        resolve({
+          durationMs: performance.now() - sample.startedAt,
+          longTaskCount: longTasks.length,
+          maxLongTaskMs: Math.max(0, ...longTasks),
+        });
+      }));
+    }));
+  } finally {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- release only this measurement's observer
+      await measurement.evaluate(sample => sample.observer?.disconnect());
+    } finally {
+      await measurement.dispose();
+    }
+  }
 }
 
 export async function samplePeakMemory(page, options = {}) {

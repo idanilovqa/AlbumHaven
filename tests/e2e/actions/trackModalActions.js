@@ -609,12 +609,19 @@ export class TrackModalActions {
   }
 
   async openCoverLookup(options = {}) {
+    await this.prepareCoverLookup(options);
+    await this.activateCoverLookup(options);
+  }
+
+  async prepareCoverLookup(options = {}) {
+    if (options.touch) return;
+    await this.trackModal.artbox.hover();
+    await expect(this.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+  }
+
+  async activateCoverLookup(options = {}) {
     if (options.touch) await this.trackModal.coverLookupButton.tap();
-    else {
-      await this.trackModal.artbox.hover();
-      await expect(this.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
-      await this.trackModal.coverLookupButton.click();
-    }
+    else await this.trackModal.coverLookupButton.click();
   }
 
   async openCoverLookupAndReadRequestOrder() {

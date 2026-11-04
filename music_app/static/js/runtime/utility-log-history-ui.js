@@ -130,7 +130,14 @@ async function downloadUtilityLogHistory() {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
   anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {

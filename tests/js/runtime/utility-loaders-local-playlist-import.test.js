@@ -24,7 +24,9 @@ function createContext(overrides = {}) {
   };
   const context = {
     Date, Intl, URLSearchParams,
+    document: { getElementById: () => null },
     getUtilityModalElements: () => ({ overlay: { hidden: true } }),
+    buildMissingAlbumMarkHtml: () => '',
     renderUtilityLogHistory() {},
     FormData: class FormData {
       constructor() {
@@ -161,6 +163,9 @@ test('tag editor selection render preserves live track buttons during a pointer 
     overlay: {},
     list,
     form: {
+      querySelector() {
+        return null;
+      },
       querySelectorAll() {
         return [];
       },

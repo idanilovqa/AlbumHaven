@@ -349,12 +349,98 @@ function buildSelectedArtistFocusedLocalSummaryCards(_checkpoints, metricsPayloa
   ];
 }
 
+function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    {
+      label: 'Modal Visible',
+      value: `${Math.round(Number(metricsPayload?.modalVisibleMs || 0))} ms`,
+      note: 'Album Details action to interactive Cover Lookup modal',
+    },
+    {
+      label: 'Candidate Ready',
+      value: `${Math.round(Number(metricsPayload?.candidateReadyMs || 0))} ms`,
+      note: 'Cover Lookup action to decoded provider candidate',
+    },
+    {
+      label: 'Selection Feedback',
+      value: `${Math.round(Number(metricsPayload?.candidateSelectionMs || 0))} ms`,
+      note: String(metricsPayload?.selectedCandidateSource || 'unknown source'),
+    },
+    {
+      label: 'Save Accepted',
+      value: `${Math.round(Number(metricsPayload?.saveAcceptedMs || 0))} ms`,
+      note: 'Save action to accepted response and closed modal',
+    },
+  ];
+}
+
+function buildNotificationHistoryLocalSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Drawer Open', metricsPayload?.drawerOpenMs, 'First 50-row page'],
+    ['Slowest Page', metricsPayload?.paginationMaximumMs, 'Cursor pagination maximum'],
+    ['Post-History Search', metricsPayload?.searchGalleryReadyMs, 'Search and decoded gallery'],
+    ['Post-History Tree', metricsPayload?.treeGalleryReadyMs, 'Direct Artist Tree selection'],
+    ['Notification Cover Lookup', metricsPayload?.coverLookupModalReadyMs, 'Correct task modal'],
+    ['Post-History Gallery Scroll', metricsPayload?.galleryScrollMs, 'Native wheel response'],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note,
+  }));
+}
+
+function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Slowest Editor Open', metricsPayload?.tagEditorOpenMs, 'Maximum across four Edit Tags opens'],
+    ['Search Gallery', metricsPayload?.searchGalleryReadyMs, 'Post-edit exact-artist search'],
+    ['Tree Highlight', metricsPayload?.treeHighlightMs, 'Post-edit Artist Tree selection'],
+    ['Tree Gallery', metricsPayload?.treeGalleryReadyMs, 'Selected-artist visible gallery'],
+    ['Album Details', metricsPayload?.albumDetailsOpenMs, 'Selected album track table'],
+    ['Artist Jump', metricsPayload?.artistJumpAlignedMs, 'Root gallery direct jump'],
+    ['Root Pagination', metricsPayload?.rootContinuationCommittedMs, 'Next page committed'],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note,
+  }));
+}
+
+function buildAlbumTitleSearchSummaryCards(_checkpoints, metricsPayload) {
+  return [{
+    label: 'Album Visible',
+    value: Number.isFinite(metricsPayload?.albumVisibleMs)
+      ? `${Math.round(metricsPayload.albumVisibleMs)} ms`
+      : 'Not recorded',
+    note: String(metricsPayload?.album || 'Exact album-title search'),
+  }];
+}
+
+function buildTrackTitleSearchSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Album Visible', metricsPayload?.albumVisibleMs, metricsPayload?.album],
+    ['Matching Track', metricsPayload?.matchingTrackVisibleMs, metricsPayload?.track],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note: String(note || ''),
+  }));
+}
+
 function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
   return [
     {
+      label: 'Populated Search Ready',
+      value: Number.isFinite(metricsPayload?.searchPopulatedReadyMs)
+        ? `${Math.round(metricsPayload.searchPopulatedReadyMs)} ms`
+        : 'Not recorded',
+      note: 'Matching album and decoded visible covers',
+    },
+    {
       label: 'Search UI Ready',
-      value: `${Math.round(Number(metricsPayload?.searchBrowseApiMs || 0))} ms`,
-      note: 'Visible search into filtered gallery',
+      value: Number.isFinite(metricsPayload?.searchReadyMs)
+        ? `${Math.round(metricsPayload.searchReadyMs)} ms`
+        : 'Not recorded',
+      note: 'Query commitment; populated readiness measured separately',
     },
     {
       label: 'Query',
@@ -425,13 +511,20 @@ function buildAppOpenAllArtistsFocusedLocalSummaryCards(_checkpoints, metricsPay
 }
 
 function buildProblematicFilesFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
+  const measuredMs = metricsPayload?.problematicFilesApiMs;
+  const recorded = typeof measuredMs === 'number' && Number.isFinite(measuredMs) && measuredMs >= 0;
+  const readinessNotes = {
+    'target-met': 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+    'grace-used': 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling',
+    'hard-fail': 'HARD FAIL — exceeds 1200 ms hard ceiling or has invalid timing evidence',
+  };
   return [
     {
       label: 'Problematic Files UI Ready',
-      value: `${Math.round(Number(metricsPayload?.problematicFilesApiMs || 0))} ms`,
-      note: metricsPayload?.readinessGraceUsed
-        ? 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling'
-        : 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+      value: recorded ? `${Math.round(measuredMs)} ms` : 'Not recorded',
+      note: recorded
+        ? readinessNotes[metricsPayload?.readinessPerformanceStatus] || 'Timing classification not recorded'
+        : 'Timing evidence not recorded',
     },
     {
       label: 'Problematic Items',
@@ -1026,8 +1119,106 @@ export const test = base.extend({
       intro: 'This synthetic performance report captures the visible selected-artist UI flow through the selected library_browse repository after choosing a concrete artist from the root sidebar. It is a focused seam checkpoint inside the broader synthetic performance suite.',
       buildSummaryCards: buildSelectedArtistFocusedLocalSummaryCards,
       expectedTimingMetricIds: [
+        'selected-artist.albumDetailsShellMs',
+        'selected-artist.albumDetailsCoverMs',
         'selected-artist.selectedArtistApiMs',
+        'selected-artist.tagEditorFocusMs',
+        'selected-artist.tagEditorTypingMs',
+        'selected-artist.tagEditorCancelMs',
+        'selected-artist.notificationDrawerOpenMs',
+        'selected-artist.notificationDrawerCloseMs',
+        'selected-artist.galleryReturnMs',
         'selected-artist.albumDetailsOpenMs',
+      ],
+    });
+  },
+
+  coverLookupLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'cover-lookup-local',
+      reportId: 'coverLookupLocal',
+      caseId: 'FTC-COVERS-019P',
+      title: 'Cover Lookup Interaction Benchmark',
+      intro: 'This synthetic performance report measures modal visibility, decoded candidate readiness, selection feedback, and Save acceptance through the production Cover Lookup path.',
+      buildSummaryCards: buildCoverLookupLocalSummaryCards,
+      expectedTimingMetricIds: [
+        'cover-lookup.modalVisibleMs',
+        'cover-lookup.candidateReadyMs',
+        'cover-lookup.candidateSelectionMs',
+        'cover-lookup.saveAcceptedMs',
+      ],
+    });
+  },
+
+  notificationHistoryLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'notification-history-local',
+      reportId: 'notificationHistoryLocal',
+      caseId: 'FTC-NOTIFICATIONS-001P',
+      title: 'Notification History Performance Benchmark',
+      intro: 'This synthetic performance report measures a 528-row PostgreSQL notification history, bounded virtualization, retained memory and DOM, and same-session interaction responsiveness.',
+      buildSummaryCards: buildNotificationHistoryLocalSummaryCards,
+      expectedTimingMetricIds: [
+        'notification-history.drawerOpenMs',
+        'notification-history.paginationMs',
+        'notification-history.searchGalleryReadyMs',
+        'notification-history.treeGalleryReadyMs',
+        'notification-history.coverLookupModalReadyMs',
+        'notification-history.galleryScrollMs',
+        'notification-history.coverLookupShellMs',
+        'notification-history.coverLookupContentMs',
+        'notification-history.coverLookupDecodedArtMs',
+      ],
+    });
+  },
+
+  editTagsPostEditLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'edit-tags-post-edit-local',
+      reportId: 'editTagsPostEditLocal',
+      caseId: 'FTC-TAGS-026P',
+      title: 'Repeated Edit Tags And Post-Edit Navigation Benchmark',
+      intro: 'This synthetic performance report records four Edit Tags opens, three terminal tag saves, retained renderer state, clean notification dismissal, and same-session navigation against the complete library fixture.',
+      buildSummaryCards: buildEditTagsPostEditSummaryCards,
+      expectedTimingMetricIds: [
+        'edit-tags-post-edit.tagEditorOpenMs',
+        'edit-tags-post-edit.searchGalleryReadyMs',
+        'edit-tags-post-edit.treeHighlightMs',
+        'edit-tags-post-edit.treeGalleryReadyMs',
+        'edit-tags-post-edit.albumDetailsOpenMs',
+        'edit-tags-post-edit.albumDetailsShellMs',
+        'edit-tags-post-edit.albumDetailsCoverMs',
+        'edit-tags-post-edit.artistJumpAlignedMs',
+        'edit-tags-post-edit.rootContinuationCommittedMs',
+      ],
+    });
+  },
+
+  albumTitleSearchLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'album-title-search-local',
+      reportId: 'albumTitleSearchLocal',
+      caseId: 'FTC-SEARCH-NAV-029P',
+      title: 'Album Title Search Benchmark',
+      intro: 'This synthetic performance report measures search submission to the correct visible album card against the complete library fixture.',
+      buildSummaryCards: buildAlbumTitleSearchSummaryCards,
+      expectedTimingMetricIds: ['album-title-search.albumVisibleMs'],
+    });
+  },
+
+  trackTitleSearchLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'track-title-search-local',
+      reportId: 'trackTitleSearchLocal',
+      caseId: 'FTC-SEARCH-NAV-030P',
+      title: 'Track Title Search And Highlight Benchmark',
+      intro: 'This synthetic performance report measures track search to the correct visible album, then Album Details activation to the visible highlighted matching track row.',
+      buildSummaryCards: buildTrackTitleSearchSummaryCards,
+      expectedTimingMetricIds: [
+        'track-title-search.albumVisibleMs',
+        'track-title-search.albumDetailsShellMs',
+        'track-title-search.albumDetailsCoverMs',
+        'track-title-search.matchingTrackVisibleMs',
       ],
     });
   },
@@ -1040,7 +1231,7 @@ export const test = base.extend({
       title: 'Visible Search Browse Benchmark',
       intro: 'This synthetic performance report captures the visible search UI flow through the selected library_browse repository after choosing a query from the root sidebar. It is a focused seam checkpoint inside the broader synthetic performance suite.',
       buildSummaryCards: buildSearchBrowseFocusedLocalSummaryCards,
-      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs'],
+      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs', 'search-browse.searchPopulatedReadyMs'],
     });
   },
 

@@ -1608,6 +1608,104 @@ def test_loopback_http_cookie_exception_and_nonloopback_http_rejection(auth_asgi
     assert status == 400 and login.calls == []
 
 
+@pytest.mark.parametrize(
+    ("client", "host"),
+    [("127.0.0.1", "localhost:5003"), ("127.0.0.1", "127.0.0.1:5003"), ("::1", "[::1]:5003")],
+)
+def test_direct_loopback_login_with_trusted_proxy_configuration(auth_asgi, client, host):
+    app, preauth, login = _app(
+        auth_asgi, outcome=LoginOutcome.SUCCESS, proxies=("127.0.0.0/8", "::1/128")
+    )
+    status, headers, _ = _request(app, "GET", scheme="http", client=client, host=host)
+    assert status == 200
+    assert all("Secure" in cookie for cookie in _set_cookies(headers))
+
+    status, headers, _ = _request(
+        app, "POST", form=_valid_form(),
+        headers=_valid_headers(origin=f"http://{host}"),
+        scheme="http", client=client, host=host,
+    )
+    assert status == 303
+    assert preauth.consumed == [CSRF]
+    assert login.calls[0]["source_class"] == "loopback"
+    assert login.calls[0]["source_key"] == client
+    cookies = _set_cookies(headers)
+    assert any(cookie.startswith(SESSION_COOKIE + "=" + SESSION) for cookie in cookies)
+    assert all("Secure" in cookie for cookie in cookies)
+
+
+@pytest.mark.parametrize("forwarding", [
+    {"forwarded": "for=203.0.113.9;proto=http"},
+    {"forwarded": ""},
+    {"x-forwarded-for": "203.0.113.9"},
+    {"x-forwarded-for": ""},
+    {"x-forwarded-host": "localhost:5003"},
+    {"x-forwarded-proto": "http"},
+    {"x-forwarded-proto": ""},
+    {"x-forwarded-port": "5003"},
+])
+def test_forwarded_http_cannot_claim_direct_loopback_login(auth_asgi, forwarding):
+    app, preauth, login = _app(auth_asgi, proxies=("127.0.0.0/8",))
+    for method in ("GET", "POST"):
+        status, _, _ = _request(
+            app, method, form=_valid_form() if method == "POST" else None,
+            headers={**_valid_headers(origin="http://localhost:5003"), **forwarding},
+            scheme="http", host="localhost:5003",
+        )
+        assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5004", "http://127.0.0.1:5003", "https://evil.test"])
+def test_direct_loopback_login_rejects_cross_origin_with_trusted_proxy_configuration(auth_asgi, origin):
+    app, preauth, login = _app(auth_asgi, proxies=("127.0.0.0/8",))
+    status, _, _ = _request(
+        app, "POST", form=_valid_form(), headers=_valid_headers(origin=origin),
+        scheme="http", host="localhost:5003",
+    )
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
+
+
+@pytest.mark.parametrize("forwarding", [{}, {"x-forwarded-proto": "http"}])
+def test_public_http_login_remains_rejected_with_trusted_loopback_proxy(auth_asgi, forwarding):
+    app, preauth, login = _app(auth_asgi, proxies=("127.0.0.0/8",))
+    status, _, _ = _request(
+        app, "POST", form=_valid_form(),
+        headers={**_valid_headers(origin="http://music.test"), **forwarding},
+        scheme="http", host="music.test",
+    )
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
+
+
+def test_forwarded_https_cannot_claim_direct_loopback_origin(auth_asgi):
+    app, preauth, login = _app(auth_asgi, proxies=("127.0.0.0/8",))
+    status, _, _ = _request(
+        app, "POST", form=_valid_form(),
+        headers={**_valid_headers(origin="http://localhost:5003"), "x-forwarded-proto": "https"},
+        scheme="http", host="localhost:5003",
+    )
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
+
+
+def test_remote_peer_cannot_claim_direct_loopback_login(auth_asgi):
+    app, preauth, login = _app(auth_asgi, proxies=("127.0.0.0/8",))
+    status, _, _ = _request(
+        app, "POST", form=_valid_form(),
+        headers=_valid_headers(origin="http://localhost:5003"),
+        scheme="http", host="localhost:5003", client="203.0.113.9",
+    )
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
+
+
 def test_trusted_proxy_https_controls_secure_cookie_and_forwarded_source(auth_asgi):
     app, _, login = _app(
         auth_asgi,

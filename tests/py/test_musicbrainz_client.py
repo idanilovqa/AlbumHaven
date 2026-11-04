@@ -226,3 +226,10 @@ def test_display_genres_uses_zero_vote_fallback_only_when_no_positive_genre_exis
     assert api.select_display_genres([
         {"name": "Noise", "normalized_name": "noise", "vote_count": -1},
     ]) == ["Genre unavailable"]
+
+
+def test_default_client_transport_never_negative_caches_identity_lookups():
+    from music_app.services import musicbrainz_client, musicbrainz_http
+
+    assert musicbrainz_client.default_get_json.func is musicbrainz_http.get_json
+    assert musicbrainz_client.default_get_json.keywords == {"cache_failures": False}

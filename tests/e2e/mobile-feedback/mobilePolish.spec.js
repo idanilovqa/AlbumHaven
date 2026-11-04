@@ -46,9 +46,12 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
   const phone = new MobilePolishPage(page);
   for (const palette of ['black', 'paper', 'parchment-pine']) {
     await phone.usePalette(palette);
+    const galleryHeader = await phone.readGalleryHeaderGeometry();
+    await snapshot(`62-gallery-header-reference-${palette}`);
     await app.openSettings();
     await app.selectUtility('loops');
     await phone.openUsers();
+    await phone.expectAdminHeaderMatches(galleryHeader);
     await phone.expectBarAligned(phone.accountBar);
     await phone.expectResponsiveUsers();
     await phone.expectPrimaryActionContrast();
@@ -83,6 +86,7 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
     await expect(app.galleryContextName).toHaveText('Rendref');
     await expect(app.utilitiesPage).not.toBeVisible();
     await expect(phone.accountHost).not.toBeVisible();
+    await phone.expectGalleryHeaderMatches(galleryHeader);
   }
 });
 

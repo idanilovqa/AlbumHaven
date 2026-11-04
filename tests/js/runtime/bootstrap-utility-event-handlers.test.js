@@ -38,6 +38,20 @@ const utilityLoadersPath = path.join(
   'utility-loaders-and-cover-lookup.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('opening the notification drawer retains accepted tasks during persistence lag', () => {
+  assert.match(
+    helperSource,
+    /state\.coverLookup\.drawerOpen = !state\.coverLookup\.drawerOpen;[\s\S]*?loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\);/,
+  );
+});
+
+test('cancel refresh retains the task until its terminal state is persisted', () => {
+  assert.match(
+    helperSource,
+    /\.finally\(\(\) => loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\)\);/,
+  );
+});
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(
@@ -159,6 +173,7 @@ function createContext(stateOverrides = {}) {
     },
     clearBrowserTimeout() {},
     closeRepairConfirmModal() {},
+    closeTagEditorExceptionMenu() {},
     closeUtilityModal() {},
     closeUtilityLoopSettingMenu() {},
     openMobileUtilityDetail() {},
@@ -209,6 +224,7 @@ function createContext(stateOverrides = {}) {
     },
     openRepairConfirmModal() {},
     openTagEditor() {},
+    openTagEditorExceptionMenu() {},
     openUtilityLogHistoryTab() {},
     openUtilityModal() {},
     persistPlayerAppearance() {},
@@ -228,6 +244,7 @@ function createContext(stateOverrides = {}) {
       if (typeof callback === 'function') callback();
       return 1;
     },
+    selectTagEditorExceptionOption() {},
     selectTagEditorTrack() {},
     setTagEditorSelectedPaths() {},
     showToast() {},
@@ -265,6 +282,60 @@ test('clicking the filter search input dismisses only the dropdown without consu
   assert.equal(wasPrevented(), false);
   assert.equal(context.document.activeElement, event.target);
   assert.equal(context.state.utility.selectedProblemFilters, selected);
+});
+
+test('Cover Lookup hydrates the clicked album before opening its gallery', async () => {
+  const { context } = createContext();
+  const hydratedAlbum = {
+    key: 'revelations-of-divine-love',
+    tracks: [{ path: 'C:\\Music\\Revelations of Divine Love\\01 Track.mp3' }],
+  };
+  const button = createElement({ 'data-open-track-modal-cover-lookup': '1' });
+  const click = createEvent({ '[data-open-track-modal-cover-lookup="1"]': button });
+  let openedAlbum = null;
+  context.resolveTrackModalActionAlbum = () => {
+    assert.fail('Cover Lookup must not use the compact synchronous resolver');
+  };
+  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
+    assert.equal(candidate, button);
+    return hydratedAlbum;
+  };
+  context.openCoverLookupModal = (album) => {
+    openedAlbum = album;
+  };
+
+  await context.handleUtilityBootstrapClick(click.event);
+
+  assert.equal(click.wasPrevented(), true);
+  assert.strictEqual(openedAlbum, hydratedAlbum);
+});
+
+test('Fast Cover Search hydrates its album and passes its clicked control to immediate busy feedback', async () => {
+  const { context } = createContext();
+  const album = {
+    key: 'sola-scriptura',
+    tracks: [{ path: 'C:\\Music\\Sola Scriptura\\01 Track.flac' }],
+  };
+  const button = createElement({ 'data-track-modal-fast-cover-fetch': '1' });
+  const click = createEvent({ '[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]': button });
+  let startCall = null;
+  context.resolveTrackModalActionAlbum = () => {
+    assert.fail('Fast Cover Search must not use the compact synchronous resolver');
+  };
+  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
+    assert.equal(candidate, button);
+    return album;
+  };
+  context.startCoverLookupForAlbum = (candidate, options) => {
+    startCall = { candidate, options };
+  };
+
+  await context.handleUtilityBootstrapClick(click.event);
+
+  assert.equal(click.wasPrevented(), true);
+  assert.equal(startCall.candidate, album);
+  assert.equal(startCall.options.backgroundOnly, true);
+  assert.equal(startCall.options.triggerButton, button);
 });
 
 for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {
@@ -371,15 +442,19 @@ test('failure alert Log History link passes its exact entry to the authoritative
   const { context } = createContext({
     selectedLogHistoryId: 'older-entry',
   });
-  let hidden = false;
+  const transitions = [];
   let opened = false;
-  context.hideRepairAlert = () => { hidden = true; };
-  context.openUtilityLogHistoryTab = entryId => { opened = entryId; };
+  context.closeTagEditor = () => { transitions.push('close-editor'); };
+  context.hideRepairAlert = () => { transitions.push('hide-alert'); };
+  context.openUtilityLogHistoryTab = entryId => {
+    transitions.push('open-history');
+    opened = entryId;
+  };
 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.equal(hidden, true);
+  assert.deepEqual(transitions, ['close-editor', 'hide-alert', 'open-history']);
   assert.equal(opened, 'tag-edit-failure-42');
   assert.equal(context.state.utility.selectedLogHistoryId, 'older-entry', 'the controller accepts selection after its scoped request');
 });

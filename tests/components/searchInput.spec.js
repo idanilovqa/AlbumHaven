@@ -112,7 +112,7 @@ for (const filter of [false, true]) {
     if (filter) {
       await expect(button).toHaveCSS('background-color', 'rgb(41, 43, 47)');
     } else {
-      expect(await button.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(idleButtonBackground);
+      await expect(button).not.toHaveCSS('background-color', idleButtonBackground);
     }
     await expect(control).toHaveCSS('outline-style', 'none');
     await page.keyboard.press('Shift+Tab');

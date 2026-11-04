@@ -279,7 +279,8 @@ export async function collectRootBrowseStartupAuthorityEvidence(page, action) {
   const bootstrapPayloadPromises = [];
   const collectResponse = (response) => {
     if (isRootAlbumsViewDataResponse(response)
-      && !new URL(response.url()).searchParams.has('gallery_cursor')) {
+      && !new URL(response.url()).searchParams.has('gallery_cursor')
+      && response.ok()) {
       rootBrowsePayloadPromises.push(response.json());
     }
     if (isRootAlbumsDocumentResponse(response)) {

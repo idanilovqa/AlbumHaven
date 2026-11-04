@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "screen",
+  "slug": "loose-tracks-collections",
+  "version": "v001",
+  "status": "approved",
+  "title": "Library exceptions and Custom Collections",
+  "source": {
+    "kind": "local_mockup",
+    "path": "mockup.html",
+    "promptPath": "prompt.md",
+    "currentAppScreenshots": [
+      "references/current-exception-editor.png",
+      "references/current-mixed-folder.png"
+    ]
+  },
+  "approvals": [
+    {
+      "date": "2026-10-07",
+      "actor": "user",
+      "scope": "Behavior approved with UI amendment: existing collapsible Loose Tracks subsections and shared table; no separate pills or panels."
+    }
+  ],
+  "requests": [],
+  "history": [
+    {
+      "actor": "agent",
+      "event": "status_changed",
+      "from": "draft",
+      "to": "in_review"
+    },
+    {
+      "date": "2026-10-07",
+      "actor": "user",
+      "event": "approved_with_amendments"
+    }
+  ]
+}

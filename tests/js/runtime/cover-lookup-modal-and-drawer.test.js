@@ -76,6 +76,56 @@ require('node:test')('completed lookup counts covers while retaining every other
   }
 });
 
+require('node:test')('notification thumbnails defer loading and decoding', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/notification-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album', album_payload: {},
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
+  );
+});
+
+require('node:test')('cover lookup hover icon loads only when requested', () => {
+  const hoverIcon = { dataset: { src: '/static/images/cover-lookup-notification-icon.png' }, src: '' };
+  const listeners = {};
+  const button = {
+    addEventListener: (name, callback) => { listeners[name] = callback; },
+    querySelector: () => hoverIcon,
+  };
+  loadHelper({ document: { getElementById: () => button } });
+
+  assert.deepEqual(Object.keys(listeners).sort(), ['focus', 'mouseenter']);
+  listeners.mouseenter();
+
+  assert.equal(hoverIcon.src, '/static/images/cover-lookup-notification-icon.png');
+  assert.equal('src' in hoverIcon.dataset, false);
+});
+
+require('node:test')('interrupted notification stops looking active and remains retryable', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [{
+    id: 'interrupted-task',
+    status: 'failed',
+    result_kind: 'interrupted',
+    artist: 'Perelandra',
+    album: 'Eden',
+    album_payload: { key: 'perelandra::eden' },
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, />Lookup interrupted</);
+  assert.match(bodyElement.innerHTML, /data-retry-cover-lookup-task="interrupted-task"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
+});
+
 require('node:test')('polling preserves a pressed task before selection exists and resumes after release', () => {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };
@@ -184,7 +234,13 @@ function createDrawerHarness(overrides = {}) {
   };
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };
-  const buttonElement = { classList: { toggle: () => {} } };
+  const buttonClasses = new Set();
+  const buttonElement = {
+    classList: {
+      toggle: (name, enabled) => enabled ? buttonClasses.add(name) : buttonClasses.delete(name),
+      contains: (name) => buttonClasses.has(name),
+    },
+  };
   const clearElement = {
     hidden: false,
     disabled: false,
@@ -230,11 +286,405 @@ function createDrawerHarness(overrides = {}) {
   return {
     context,
     bodyElement,
+    badgeElement,
     clearElement,
     intervalCalls,
     clearedIntervals,
   };
 }
+
+;(async () => {
+  const task = {
+    id: 'stable-task',
+    status: 'running',
+    artist: 'Artist',
+    album: 'Album',
+    progress: 25,
+    possible_matches: [{ id: 'candidate-1', art_kind: 'cover' }],
+  };
+  const { context } = createDrawerHarness({
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, tasks: [task] }) }),
+  });
+  let drawerRenderCount = 0;
+  context.renderCoverLookupDrawer = () => {
+    drawerRenderCount += 1;
+  };
+
+  await context.loadCoverLookupTasks({ toast: false });
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(drawerRenderCount, 1, 'an unchanged poll must not rebuild the notification drawer');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+require('node:test')('notification startup loads authoritative counts without loading history', async () => {
+  const requestedUrls = [];
+  const { context, badgeElement } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          total_count: 528,
+          active_count: 2,
+          finished_count: 526,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.drawerOpen = false;
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+
+  assert.deepEqual(requestedUrls, ['/utilities/cover-lookup/tasks/counts']);
+  assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
+  assert.equal(badgeElement.textContent, '528');
+  assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('stale notification counts cannot hide a locally accepted lookup', () => {
+  const { context, badgeElement } = createDrawerHarness();
+  const buttonElement = context.document.getElementById('cover-lookup-drawer-button');
+  context.state.coverLookup.notificationCounts = {
+    total_count: 0,
+    active_count: 0,
+    finished_count: 0,
+  };
+  context.state.coverLookup.tasks = [{ id: 'accepted-task', status: 'pending' }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.equal(badgeElement.textContent, '1');
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(buttonElement.classList.contains('has-active-lookups'), true);
+});
+
+require('node:test')('drawer page loads 50 summaries and retains its next cursor', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'newest', status: 'completed' }],
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50');
+  assert.equal(context.state.coverLookup.tasks[0].id, 'newest');
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
+require('node:test')('first-page refresh retains its next cursor for drawer pagination', async () => {
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        tasks: [{ id: 'newest', status: 'completed' }],
+        next_cursor: 'page-two',
+        total_count: 528,
+        active_count: 0,
+        finished_count: 528,
+      }),
+    }),
+  });
+
+  await context.loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
+require('node:test')('active-only polling merges updates without replacing loaded history', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'active', status: 'running', progress: 25 }],
+          next_cursor: null,
+          total_count: 2,
+          active_count: 1,
+          finished_count: 1,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [{ id: 'history', status: 'completed' }];
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50&active_only=true');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, task => task.id),
+    ['active', 'history'],
+  );
+});
+
+require('node:test')('active-only polling refreshes the modal when partial candidates advance', async () => {
+  let galleryRefreshes = 0;
+  let pollCount = 0;
+  const { context } = createDrawerHarness({
+    fetch: async () => {
+      pollCount += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{
+            id: 'active',
+            status: 'running',
+            progress: 62,
+            possible_match_count: 1,
+            candidate_updated_at: pollCount === 1
+              ? '2026-10-23T13:07:20.000Z'
+              : '2026-10-23T13:07:23.563Z',
+          }],
+          next_cursor: null,
+          total_count: 1,
+          active_count: 1,
+          finished_count: 0,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.modal.taskId = 'active';
+  context.state.coverLookup.modal.candidateSnapshot = {
+    search_generation: 'active',
+    updated_at: '2026-10-23T13:07:20.000Z',
+    candidates: [{ id: 'existing', art_kind: 'cover' }],
+  };
+  context.refreshCoverLookupGallery = async () => { galleryRefreshes += 1; };
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(galleryRefreshes, 1);
+});
+
+require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 1,
+            active_count: 0,
+            finished_count: 1,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'finished', status: 'completed' }],
+          next_cursor: null,
+          total_count: 1,
+          active_count: 0,
+          finished_count: 1,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'finished', status: 'running' },
+    { id: 'history', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'completed');
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['finished', 'history']);
+});
+
+require('node:test')('notification history prefetches within two visible drawer heights', async () => {
+  let fetchCount = 0;
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: async () => {
+      fetchCount += 1;
+      return {
+        ok: true,
+        json: async () => ({ ok: true, tasks: [], next_cursor: null }),
+      };
+    },
+  });
+  Object.assign(bodyElement, { scrollTop: 800, clientHeight: 500, scrollHeight: 2_000 });
+  Object.assign(context.state.coverLookup, {
+    tasks: [{ id: 'newest', status: 'completed' }],
+    tasksNextCursor: 'page-two',
+  });
+
+  await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+
+  assert.equal(fetchCount, 1);
+});
+
+require('node:test')('notification history mounts no more than 60 cards with two spacers', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  bodyElement.scrollTop = 0;
+  bodyElement.clientHeight = 600;
+  context.state.coverLookup.tasks = Array.from({ length: 528 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+    artist: `Artist ${index}`,
+    album: `Album ${index}`,
+  }));
+
+  for (const scrollTop of [0, 12_000, 38_000]) {
+    bodyElement.scrollTop = scrollTop;
+    context.renderCoverLookupDrawer({ preserveInteraction: false });
+    assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-card /g) || []).length, 60);
+    assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-spacer"/g) || []).length, 2);
+  }
+});
+
+require('node:test')('closing the notification drawer unmounts cards while retaining task summaries', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  Object.assign(context.state.coverLookup, {
+    drawerOpen: true,
+    tasks: [{ id: 'completed-task', status: 'completed', artist: 'Artist', album: 'Album' }],
+  });
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /class="cover-lookup-task-card /);
+
+  context.state.coverLookup.drawerOpen = false;
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+
+  assert.equal(bodyElement.innerHTML, '');
+  assert.equal(context.state.coverLookup.tasks.length, 1);
+});
+
+require('node:test')('approaching drawer end serializes the next page request', async () => {
+  let resolveRequest;
+  let fetchCount = 0;
+  const response = {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      tasks: [{ id: 'older', status: 'completed' }],
+      next_cursor: null,
+      total_count: 51,
+      active_count: 0,
+      finished_count: 51,
+    }),
+  };
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: () => {
+      fetchCount += 1;
+      return new Promise((resolve) => {
+        resolveRequest = () => resolve(response);
+      });
+    },
+  });
+  Object.assign(bodyElement, { scrollTop: 500, clientHeight: 500, scrollHeight: 1_100 });
+  Object.assign(context.state.coverLookup, {
+    tasks: [{ id: 'newest', status: 'completed' }],
+    tasksNextCursor: 'page-two',
+  });
+
+  const first = context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+  const overlapping = context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+  assert.equal(fetchCount, 1);
+  resolveRequest();
+  await Promise.all([first, overlapping]);
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['newest', 'older']);
+});
+
+;(async () => {
+  let resolveFirstRequest;
+  let fetchCount = 0;
+  const response = { ok: true, json: async () => ({ ok: true, tasks: [] }) };
+  const { context } = createDrawerHarness({
+    fetch: () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return new Promise((resolve) => {
+          resolveFirstRequest = resolve;
+        });
+      }
+      return Promise.resolve(response);
+    },
+  });
+
+  const firstLoad = context.loadCoverLookupTasksForPolling({ toast: false });
+  const overlappingLoad = context.loadCoverLookupTasksForPolling({ toast: false });
+  assert.equal(fetchCount, 1, 'polling must not start a second task-list request while one is in flight');
+  resolveFirstRequest(response);
+  await Promise.all([firstLoad, overlappingLoad]);
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+  assert.equal(fetchCount, 2, 'polling resumes after the prior request settles');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+require('node:test')('closing cover lookup releases hidden candidate images and polling state', () => {
+  class TestButton {}
+  const overlay = { hidden: false };
+  const modalBody = { innerHTML: '<img src="https://images.example/large-cover.jpg">' };
+  const saveButton = new TestButton();
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { remove() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-modal-body': modalBody,
+        'cover-lookup-save-remote-button': saveButton,
+        'track-modal': { hidden: true },
+        'utility-modal': { hidden: true },
+      }[id] || null),
+    },
+  });
+  Object.assign(context.state.coverLookup.modal, {
+    album: { name: 'Large album' },
+    taskId: 'completed-task',
+    localCovers: [{ path: 'C:/Music/cover.jpg' }],
+    otherArt: [{ path: 'C:/Music/booklet.jpg' }],
+    possibleMatches: [{ id: 'remote-cover', url: 'https://images.example/large-cover.jpg' }],
+    candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
+  });
+  context.state.coverLookup.tasks = [];
+
+  context.closeCoverLookupModal();
+
+  assert.equal(overlay.hidden, true);
+  assert.equal(modalBody.innerHTML, '');
+  assert.equal(context.state.coverLookup.modal.album, null);
+  assert.equal(context.state.coverLookup.modal.taskId, '');
+  assert.equal(context.state.coverLookup.modal.localCovers.length, 0);
+  assert.equal(context.state.coverLookup.modal.otherArt.length, 0);
+  assert.equal(context.state.coverLookup.modal.possibleMatches.length, 0);
+  assert.equal(context.state.coverLookup.modal.candidateSnapshot, null);
+});
 
 (async () => {
   for (const clearAll of [false, true]) {
@@ -600,6 +1050,9 @@ function createDrawerHarness(overrides = {}) {
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   const fetchCalls = [];
+  let taskReloads = 0;
+  let galleryReloads = 0;
+  let appliedGallery = null;
   const context = loadHelper({
     HTMLButtonElement: TestButton,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
@@ -639,13 +1092,21 @@ function createDrawerHarness(overrides = {}) {
   };
   context.renderCoverLookupModal = () => {};
   context.ensureCoverLookupPolling = () => {};
-  context.loadCoverLookupTasks = async () => {};
-  context.refreshCoverLookupGallery = async () => {};
+  context.loadCoverLookupTasks = async () => { taskReloads += 1; };
+  context.refreshCoverLookupGallery = async () => { galleryReloads += 1; };
+  context.applyCoverLookupGalleryPayload = (gallery) => { appliedGallery = gallery; };
 
   await context.openCoverLookupModal(secondAlbum, { taskId: 'flaming-row-lookup' });
+  assert.equal(taskReloads, 0, 'opening the modal must not load notification history');
+  assert.equal(galleryReloads, 1, 'opening the modal must load its gallery');
+  taskReloads = 0;
+  galleryReloads = 0;
   await context.startCoverLookupForAlbum(secondAlbum);
 
   assert.equal(fetchCalls.length, 1);
+  assert.equal(taskReloads, 0, 'start response already contains the queued task');
+  assert.equal(galleryReloads, 0, 'starting a lookup must retain the gallery already loaded by the open modal');
+  assert.equal(appliedGallery, null);
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],
@@ -725,7 +1186,7 @@ function createDrawerHarness(overrides = {}) {
       ok: true,
       json: async () => ({
         ok: true,
-        tasks: [{ id: 'task-1', status: 'failed' }],
+        tasks: [{ id: 'task-1', status: 'completed', result_kind: 'cover-updated' }],
       }),
     }),
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks.map((task) => ({ ...task, notification_action_taken: true })),
@@ -742,13 +1203,20 @@ function createDrawerHarness(overrides = {}) {
       }[id] || { hidden: true }),
     },
   });
-  context.state.coverLookup.drawerOpen = true;
+  context.state.coverLookup.drawerOpen = false;
   context.state.coverLookup.modal = { taskId: '' };
 
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.match(bodyElement.innerHTML, /Lookup failed/);
+  assert.equal(bodyElement.innerHTML, '');
+  context.state.coverLookup.drawerOpen = true;
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
+  assert.match(bodyElement.innerHTML, />Art chosen<\/span>/);
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(badgeElement.textContent, '1');
+  assert.equal(clearElement.disabled, false);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -1356,6 +1824,7 @@ function createDrawerHarness(overrides = {}) {
 ;(async () => {
   const intervalCalls = [];
   const requestUrls = [];
+  let resolveTaskPoll;
   const context = loadHelper({
     window: {
       setInterval(callback, delay) {
@@ -1369,8 +1838,8 @@ function createDrawerHarness(overrides = {}) {
     },
     fetch: async (url) => {
       requestUrls.push(url);
-      if (url === '/utilities/cover-lookup/tasks') {
-        return { ok: true, json: async () => ({ ok: true, tasks: [] }) };
+      if (url.startsWith('/utilities/cover-lookup/tasks?')) {
+        return new Promise((resolve) => { resolveTaskPoll = resolve; });
       }
       if (url === '/utilities/cover-lookup/gallery/mark-seen') {
         return { ok: true, json: async () => ({ ok: true }) };
@@ -1412,13 +1881,16 @@ function createDrawerHarness(overrides = {}) {
   await context.refreshCoverLookupGallery(false);
   context.ensureCoverLookupPolling();
   assert.equal(intervalCalls.length, 1);
-  await Promise.resolve(intervalCalls[0].callback());
-  await Promise.resolve();
+  assert.equal(intervalCalls[0].delay, 100);
+  const firstTick = intervalCalls[0].callback();
+  const overlappingTick = intervalCalls[0].callback();
+  resolveTaskPoll({ ok: true, json: async () => ({ ok: true, tasks: [] }) });
+  await Promise.all([firstTick, overlappingTick]);
 
   assert.equal(
     requestUrls.filter((url) => url === '/utilities/cover-lookup/gallery').length,
     2,
-    'a running automatic snapshot must keep refreshing the open gallery without a task',
+    'overlapping timer callbacks must share one running-snapshot gallery refresh',
   );
 })().catch((error) => {
   console.error(error);
@@ -1432,9 +1904,10 @@ function createDrawerHarness(overrides = {}) {
     tracks: [{ path: 'C:/music/Saved/01.flac' }],
   };
   const fetchCalls = [];
+  const toastCalls = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
-    showToast: () => {},
+    showToast: (...args) => toastCalls.push(args),
   });
   context.state.coverLookup.modal = {
     album,
@@ -1466,6 +1939,7 @@ function createDrawerHarness(overrides = {}) {
     candidate_id: 'saved-candidate',
     snapshot_generation: 'saved-generation',
   });
+  assert.deepEqual(toastCalls, []);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2537,7 +3011,7 @@ function createDrawerHarness(overrides = {}) {
   };
   const context = loadHelper({
     fetch: async (url) => {
-      if (url === '/utilities/cover-lookup/tasks') {
+      if (url === '/utilities/cover-lookup/tasks?limit=50') {
         return {
           ok: true,
           json: async () => ({ ok: true, tasks: [completedTask] }),
@@ -2966,7 +3440,7 @@ function createDrawerHarness(overrides = {}) {
   context.renderCoverLookupDrawer();
 
   assert.equal(badgeElement.hidden, false);
-  assert.equal(badgeElement.textContent, '2');
+  assert.equal(badgeElement.textContent, '3');
   assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', true]);
 
   context.state.coverLookup.tasks = [
@@ -2982,9 +3456,9 @@ function createDrawerHarness(overrides = {}) {
 
   context.renderCoverLookupDrawer();
 
-  assert.equal(badgeElement.hidden, true);
-  assert.equal(badgeElement.textContent, '');
-  assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', false]);
+  assert.equal(badgeElement.hidden, false);
+  assert.equal(badgeElement.textContent, '1');
+  assert.deepEqual(buttonToggleCalls.at(-1), ['has-active-lookups', true]);
 }
 
 ;(async () => {
@@ -3160,3 +3634,165 @@ for (const [label, values] of [
     assert.equal(context.state.coverLookup.modal.album.cover_revision, values.albumRevision);
   });
 }
+
+require('node:test')('publishing album artwork advances the cover mutation revision', () => {
+  const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
+  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const context = loadHelper({
+    state: {
+      ui: {},
+      coverLookup: { modal: { album: original, pastedImages: [], localCovers: [], otherArt: [] } },
+    },
+    getAlbumTrackPaths: (album) => (album?.tracks || []).map((track) => track.path),
+    getUpdatedAlbumForTrackPaths: (albums) => albums[0],
+    patchVisibleAlbumsByTrackPath() {},
+    refreshRenderedAlbumCoverOnly() {},
+    updateTrackModalIfStillShowingAlbum() {},
+  });
+
+  context.refreshCoverLookupAlbumArtwork(original, [updated]);
+
+  assert.equal(context.state.ui.albumCoverMutationRevision, 1);
+});
+
+require('node:test')('visible service cover previews receive eager browser priority', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const candidate = {
+    id: 'service-candidate',
+    source: 'spotify',
+    album: 'Provider fixture',
+    thumbnail_url: 'https://images.example/thumbnail.jpg',
+  };
+
+  const visible = context.buildCoverLookupCard(candidate, 'remote', true);
+  const deferred = context.buildCoverLookupCard(candidate, 'remote', false);
+
+  assert.match(visible, /loading="eager" fetchpriority="high"/);
+  assert.match(deferred, /loading="lazy" fetchpriority="low"/);
+  const deferredImage = deferred.match(/<img class="cover-lookup-art-preview-image"[^>]*>/)?.[0] || '';
+  assert.match(deferredImage, /data-cover-lookup-deferred-src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages\.example%2Fthumbnail\.jpg/);
+  assert.doesNotMatch(deferredImage, /\ssrc=/);
+});
+
+require('node:test')('UUID generation formatting retains a progressive remote override', () => {
+  const context = loadHelper();
+  const generation = '699803380ccd46e0b1fe89fc61de666a';
+  context.state.coverLookup.modal = {
+    candidateGeneration: generation,
+    remoteSelectionOverrideGeneration: generation,
+    remoteSelectionOverrideCandidateId: 'user-choice',
+    remoteSelectionOverrideUrl: 'https://images.example/user-choice.jpg',
+    selectedRemoteId: 'user-choice',
+    pendingLocalPath: '',
+    pendingPastedImageId: '',
+    activeLocalSelectionPath: '',
+    localCovers: [],
+  };
+
+  context.applyCoverLookupCandidateSource({
+    generation: '69980338-0ccd-46e0-b1fe-89fc61de666a',
+    bestCandidateId: 'later-best',
+    candidates: [
+      { id: 'later-best', url: 'https://images.example/later-best.jpg', art_kind: 'cover' },
+      { id: 'user-choice', url: 'https://images.example/user-choice.jpg', art_kind: 'cover' },
+    ],
+  });
+
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'user-choice');
+});
+
+require('node:test')('deferred previews start after the prioritized preview loads and paints', () => {
+  const context = loadHelper();
+  const callbacks = [];
+  const listeners = {};
+  const priorityImage = {
+    complete: false,
+    addEventListener: (name, callback) => { listeners[name] = callback; },
+  };
+  const attributes = { 'data-cover-lookup-deferred-src': '/covers/deferred.jpg' };
+  const deferredImage = {
+    src: '',
+    getAttribute: name => attributes[name] || '',
+    removeAttribute: name => { delete attributes[name]; },
+  };
+  const root = {
+    querySelector: () => priorityImage,
+    querySelectorAll: () => [deferredImage],
+  };
+  context.window.requestAnimationFrame = callback => { callbacks.push(callback); };
+
+  context.scheduleDeferredCoverLookupPreviews(root);
+  assert.equal(deferredImage.src, '');
+  listeners.load();
+  callbacks.shift()();
+  assert.equal(deferredImage.src, '');
+  callbacks.shift()();
+  assert.equal(deferredImage.src, '/covers/deferred.jpg');
+  assert.equal(attributes['data-cover-lookup-deferred-src'], undefined);
+});
+
+require('node:test')('deferred previews have a bounded fallback when the prioritized preview stalls', () => {
+  const context = loadHelper();
+  const frames = [];
+  const timeouts = [];
+  const priorityImage = {
+    complete: false,
+    addEventListener() {},
+  };
+  const attributes = { 'data-cover-lookup-deferred-src': '/covers/deferred.jpg' };
+  const deferredImage = {
+    src: '',
+    getAttribute: name => attributes[name] || '',
+    removeAttribute: name => { delete attributes[name]; },
+  };
+  const root = {
+    querySelector: () => priorityImage,
+    querySelectorAll: () => [deferredImage],
+  };
+  context.window.requestAnimationFrame = callback => { frames.push(callback); };
+  context.window.setTimeout = (callback, delay) => {
+    timeouts.push({ callback, delay });
+    return timeouts.length;
+  };
+
+  context.scheduleDeferredCoverLookupPreviews(root);
+  assert.equal(timeouts.length, 1);
+  assert.equal(timeouts[0].delay, 500);
+  timeouts[0].callback();
+  frames.shift()();
+  frames.shift()();
+
+  assert.equal(deferredImage.src, '/covers/deferred.jpg');
+});
+
+require('node:test')('only the first service cover preview receives eager browser priority', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: false,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: Array.from({ length: 4 }, (_value, index) => ({
+      id: `service-${index + 1}`,
+      source: 'spotify',
+      album: 'Provider fixture',
+      thumbnail_url: `https://images.example/service-${index + 1}.jpg`,
+    })),
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
+  assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
+});

@@ -301,6 +301,27 @@ def resolve_configured_media_path(
         if configured_root_paths is not None
         else iter_library_root_paths(config)
     )
+    if candidate.is_absolute():
+        try:
+            resolved_candidate = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return None
+        for root in root_paths:
+            try:
+                resolved_candidate.relative_to(root)
+            except ValueError:
+                continue
+            return (
+                resolved_candidate
+                if _path_matches_requirements(
+                    resolved_candidate,
+                    require_file=require_file,
+                    require_exists=require_exists,
+                )
+                else None
+            )
+        return None
+
     for root in root_paths:
         resolved = _resolve_candidate_under_root(
             root=root,
@@ -535,16 +556,33 @@ def _resolve_candidate_under_root(
         resolved.relative_to(root)
     except Exception:
         return None
+    return (
+        resolved
+        if _path_matches_requirements(
+            resolved,
+            require_file=require_file,
+            require_exists=require_exists,
+        )
+        else None
+    )
+
+
+def _path_matches_requirements(
+    resolved: Path,
+    *,
+    require_file: bool,
+    require_exists: bool,
+) -> bool:
     try:
-        if require_exists and not resolved.exists():
-            return None
-        if require_file and (not resolved.exists() or not resolved.is_file()):
-            return None
-        if not require_file and require_exists and not resolved.is_dir():
-            return None
+        if (require_exists or require_file) and not resolved.exists():
+            return False
+        if require_file:
+            return resolved.is_file()
+        if require_exists:
+            return resolved.is_dir()
     except OSError:
-        return None
-    return resolved
+        return False
+    return True
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:

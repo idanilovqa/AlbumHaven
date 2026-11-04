@@ -6,6 +6,23 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
+  if (folderLoadButton) {
+    event.preventDefault();
+    void loadTagEditorFolderFiles();
+    return;
+  }
+
+  const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
+  if (exceptionOption) {
+    event.preventDefault();
+    selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+    return;
+  }
+  const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
+  if (exceptionInput) openTagEditorExceptionMenu();
+  else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
+
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -26,6 +43,7 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
+    closeTagEditor();
     hideRepairAlert();
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
@@ -705,14 +723,21 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    openCoverLookupModal(resolveTrackModalActionAlbum(trackModalCoverLookupButton));
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    if (album) openCoverLookupModal(album);
     return;
   }
 
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), { backgroundOnly: true });
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalFetchCoverButton);
+    if (album) {
+      startCoverLookupForAlbum(album, {
+        backgroundOnly: true,
+        triggerButton: trackModalFetchCoverButton,
+      });
+    }
     return;
   }
 
@@ -721,7 +746,7 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
     ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false });
+    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
     renderCoverLookupDrawer();
     return;
   }
@@ -795,7 +820,7 @@ async function handleUtilityBootstrapClick(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-    }).finally(() => loadCoverLookupTasks({ toast: false }));
+    }).finally(() => loadCoverLookupTasks({ toast: false, mergeFirstPage: true }));
     return;
   }
 
@@ -990,7 +1015,14 @@ function handleUtilityBootstrapInput(event) {
       ...(state.tagEditor.values[path] || {}),
       [field]: input.value,
     };
+    if (field === 'exception_type' && !isCustomCollectionException(input.value)) {
+      state.tagEditor.values[path].custom_collection_name = '';
+    }
   });
+  if (field === 'exception_type' && typeof syncTagEditorCollectionFields === 'function') {
+    syncTagEditorCollectionFields(selectedPaths);
+    openTagEditorExceptionMenu();
+  }
   syncTagEditorPendingChanges();
 }
 
@@ -1247,6 +1279,34 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
+  const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
+  if (exceptionInput || exceptionOption) {
+    const menu = document.getElementById('tag-editor-exception-menu');
+    if (event.key === 'Escape' && menu && !menu.hidden) {
+      event.preventDefault();
+      closeTagEditorExceptionMenu({ restoreFocus: true });
+      return true;
+    }
+    if (event.key === 'Enter' && exceptionOption) {
+      event.preventDefault();
+      selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      if (!menu || menu.hidden) openTagEditorExceptionMenu();
+      const options = Array.from(menu?.querySelectorAll?.('[data-tag-editor-exception-option]') || []);
+      if (!options.length) return true;
+      const current = options.indexOf(exceptionOption);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? options.length - 1
+          : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+            : (current + (event.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
+      options[next].focus();
+      return true;
+    }
   }
   const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
   if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {

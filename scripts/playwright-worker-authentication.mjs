@@ -25,8 +25,11 @@ export function createWorkerAuthentication({
       const page = await context.newPage();
       try {
         await authenticate(page);
-      } catch {
-        throw new Error('Production E2E worker authentication failed.');
+      } catch (error) {
+        throw new Error(
+          `Production E2E worker authentication failed: ${String(error?.message || error)}`,
+          { cause: error },
+        );
       }
       const state = await context.storageState();
       const cookies = state.cookies.filter((cookie) => SESSION_COOKIE_NAMES.includes(cookie.name));

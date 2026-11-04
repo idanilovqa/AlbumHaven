@@ -1,5 +1,104 @@
 \set ON_ERROR_STOP on
 
+begin;
+
+with
+fixture_context as materialized (
+  select convert_from(
+    decode(:'fixture_root_b64', 'base64'),
+    'UTF8'
+  ) as root_path
+),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
+fixture_root as (
+  insert into library.library_roots (
+    library_id,
+    root_path,
+    root_kind,
+    is_active,
+    metadata
+  )
+  select
+    bootstrap_context.library_id,
+    fixture_context.root_path,
+    'main_library',
+    true,
+    jsonb_build_object(
+      'source', 'e2e_fixture',
+      'root_id', 'edit-tags-writable-root',
+      'category', 'main_library',
+      'category_key', 'main_library_roots',
+      'layout_mode', 'artist'
+    )
+  from bootstrap_context
+  cross join fixture_context
+  on conflict (library_id, root_path) do update
+  set
+    root_kind = excluded.root_kind,
+    is_active = true,
+    updated_at = now(),
+    metadata = library.library_roots.metadata || excluded.metadata
+  returning library.library_roots.id
+)
+update library.library_root_settings
+set
+  root_categories = coalesce(
+    library.library_root_settings.root_categories,
+    '{}'::jsonb
+  ) || jsonb_build_object(
+    fixture_context.root_path,
+    jsonb_build_object(
+      'root_id', 'edit-tags-writable-root',
+      'category', 'main_library',
+      'category_key', 'main_library_roots'
+    )
+  ),
+  settings_payload = jsonb_set(
+    library.library_root_settings.settings_payload,
+    '{main_library_roots}',
+    case
+      when exists (
+        select 1
+        from jsonb_array_elements(
+          coalesce(
+            library.library_root_settings.settings_payload
+              -> 'main_library_roots',
+            '[]'::jsonb
+          )
+        ) as configured_root
+        where configured_root ->> 'path' = fixture_context.root_path
+      )
+      then library.library_root_settings.settings_payload
+        -> 'main_library_roots'
+      else coalesce(
+        library.library_root_settings.settings_payload
+          -> 'main_library_roots',
+        '[]'::jsonb
+      ) || jsonb_build_array(
+        jsonb_build_object(
+          'id', 'edit-tags-writable-root',
+          'path', fixture_context.root_path,
+          'layout_mode', 'artist'
+        )
+      )
+    end,
+    true
+  ),
+  updated_at = now()
+from bootstrap_context
+cross join fixture_context
+cross join fixture_root
+where library.library_root_settings.library_id = bootstrap_context.library_id;
+
 with
 fixture_rows as materialized (
   select *
@@ -8,12 +107,122 @@ fixture_rows as materialized (
   ) as fixture(
     filename text,
     private_path text,
+    artist text,
+    album_artist text,
+    album text,
     track_number integer,
     year integer,
     release_date text,
     file_size_bytes bigint,
     modified_at_epoch double precision
   )
+),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+),
+duplicate_track_files as materialized (
+  select duplicate_file.id, duplicate_file.track_id
+  from fixture_rows
+  cross join bootstrap_context
+  join library.local_track_files as retained_file
+    on retained_file.private_path = fixture_rows.private_path
+  join library.local_tracks as retained_track
+    on retained_track.id = retained_file.track_id
+   and retained_track.library_id = bootstrap_context.library_id
+   and retained_track.title =
+      'Студийная запись ' || fixture_rows.track_number::text
+  join library.local_track_files as duplicate_file
+    on duplicate_file.id <> retained_file.id
+   and right(
+     replace(duplicate_file.private_path, chr(92), '/'),
+     length(fixture_rows.filename) + 1
+   ) = '/' || fixture_rows.filename
+  join library.local_tracks as duplicate_track
+    on duplicate_track.id = duplicate_file.track_id
+   and duplicate_track.library_id = bootstrap_context.library_id
+   and duplicate_track.title = retained_track.title
+)
+delete from library.local_track_files
+using duplicate_track_files
+where library.local_track_files.id = duplicate_track_files.id;
+
+with
+fixture_rows as materialized (
+  select *
+  from jsonb_to_recordset(
+    convert_from(decode(:'fixture_b64', 'base64'), 'UTF8')::jsonb
+  ) as fixture(
+    filename text,
+    private_path text,
+    artist text,
+    album_artist text,
+    album text,
+    track_number integer,
+    year integer,
+    release_date text,
+    file_size_bytes bigint,
+    modified_at_epoch double precision
+  )
+),
+bootstrap_context as materialized (
+  select library.libraries.id as library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1
+)
+delete from library.local_tracks
+using fixture_rows, bootstrap_context
+where library.local_tracks.library_id = bootstrap_context.library_id
+  and library.local_tracks.title =
+    'Студийная запись ' || fixture_rows.track_number::text
+  and not exists (
+    select 1
+    from library.local_track_files
+    where library.local_track_files.track_id = library.local_tracks.id
+  );
+
+with
+fixture_rows as materialized (
+  select *
+  from jsonb_to_recordset(
+    convert_from(decode(:'fixture_b64', 'base64'), 'UTF8')::jsonb
+  ) as fixture(
+    filename text,
+    private_path text,
+    artist text,
+    album_artist text,
+    album text,
+    track_number integer,
+    year integer,
+    release_date text,
+    file_size_bytes bigint,
+    modified_at_epoch double precision
+  )
+),
+fixture_context as materialized (
+  select convert_from(
+    decode(:'fixture_root_b64', 'base64'),
+    'UTF8'
+  ) as root_path
+),
+fixture_root as materialized (
+  select library.library_roots.id
+  from library.library_roots
+  cross join fixture_context
+  where library.library_roots.root_path = fixture_context.root_path
+    and library.library_roots.is_active
+  limit 1
 ),
 target_album as materialized (
   select
@@ -39,17 +248,127 @@ target_album as materialized (
     library.local_albums.id
   limit 1
 ),
+upserted_typo_artist as (
+  insert into library.local_artists (
+    library_id,
+    artist_key,
+    name,
+    sort_name,
+    metadata
+  )
+  select
+    target_album.library_id,
+    lower('Ovderhead'::text),
+    'Ovderhead',
+    lower('Ovderhead'::text),
+    jsonb_build_object('source', 'runtime_scan_cache')
+  from target_album
+  where exists (
+    select 1
+    from fixture_rows
+    where fixture_rows.album = 'Telepathic Minds'
+  )
+  on conflict (library_id, artist_key) do update
+  set
+    name = excluded.name,
+    sort_name = excluded.sort_name,
+    last_seen_at = now()
+  returning library.local_artists.id, library.local_artists.library_id
+),
+upserted_typo_album as (
+  insert into library.local_albums (
+    library_id,
+    artist_id,
+    album_key,
+    title,
+    release_year,
+    metadata
+  )
+  select
+    target_album.library_id,
+    upserted_typo_artist.id,
+    lower('Ovderhead'::text) || '::' || lower('Telepathic Minds'::text),
+    'Telepathic Minds',
+    1999,
+    jsonb_build_object(
+      'source', 'runtime_scan_cache',
+      'album_artist', 'Ovderhead',
+      'artists', jsonb_build_array('Ovderhead'),
+      'release_date', '1999-01-01',
+      'is_compilation', false,
+      'featured_artists', '[]'::jsonb
+    )
+  from target_album
+  join upserted_typo_artist
+    on upserted_typo_artist.library_id = target_album.library_id
+  on conflict (library_id, album_key) do update
+  set
+    artist_id = excluded.artist_id,
+    title = excluded.title,
+    release_year = excluded.release_year,
+    metadata = coalesce(library.local_albums.metadata, '{}'::jsonb)
+      || excluded.metadata,
+    last_seen_at = now()
+  returning library.local_albums.id, library.local_albums.library_id
+),
+upserted_typo_membership as (
+  insert into library.local_album_featured_artists (
+    library_id,
+    album_id,
+    artist_id,
+    featured_kind,
+    metadata
+  )
+  select
+    upserted_typo_album.library_id,
+    upserted_typo_album.id,
+    upserted_typo_artist.id,
+    'owner',
+    jsonb_build_object('source', 'runtime_scan_cache')
+  from upserted_typo_album
+  join upserted_typo_artist
+    on upserted_typo_artist.library_id = upserted_typo_album.library_id
+  on conflict (library_id, album_id, artist_id, featured_kind) do update
+  set last_seen_at = now()
+  returning library.local_album_featured_artists.id
+),
 selected_rows as materialized (
   select
     fixture_rows.*,
     library.local_track_files.id as track_file_id,
     library.local_tracks.id as track_id
   from fixture_rows
-  join library.local_tracks
-    on library.local_tracks.title =
-      'Студийная запись ' || fixture_rows.track_number::text
+  cross join target_album
   join library.local_track_files
-    on library.local_track_files.track_id = library.local_tracks.id
+    on right(
+      replace(library.local_track_files.private_path, chr(92), '/'),
+      length(fixture_rows.filename) + 1
+    ) = '/' || fixture_rows.filename
+  join library.local_tracks
+    on library.local_tracks.id = library.local_track_files.track_id
+   and library.local_tracks.library_id = target_album.library_id
+   and library.local_tracks.title =
+      'Студийная запись ' || fixture_rows.track_number::text
+  join library.local_albums as current_album
+    on current_album.id = library.local_tracks.album_id
+   and current_album.library_id = target_album.library_id
+   and (
+     current_album.id = target_album.id
+     or (
+       current_album.title = 'Telepathic Minds'
+       and (
+         current_album.album_key = lower('Overhead'::text)
+           || '::'
+           || lower('Telepathic Minds'::text)
+         or exists (
+           select 1
+           from library.local_artists as current_artist
+           where current_artist.id = current_album.artist_id
+             and current_artist.name in ('Ovderhead', 'Overhead')
+         )
+       )
+     )
+   )
 ),
 updated_album as (
   update library.local_albums
@@ -72,7 +391,12 @@ updated_album as (
 updated_tracks as (
   update library.local_tracks
   set
-    album_id = target_album.id,
+    track_key = selected_rows.private_path,
+    album_id = case
+      when selected_rows.album = 'Telepathic Minds'
+      then (select upserted_typo_album.id from upserted_typo_album)
+      else target_album.id
+    end,
     track_number = selected_rows.track_number,
     disc_number = 1,
     metadata = (
@@ -80,7 +404,8 @@ updated_tracks as (
       - array['year', 'release_date']::text[]
     )
       || jsonb_build_object(
-        'album', 'Студийные записи',
+        'album', selected_rows.album,
+        'album_artist', selected_rows.album_artist,
         'track_number', selected_rows.track_number,
         'disc_number', 1
       ),
@@ -93,6 +418,7 @@ updated_tracks as (
 updated_track_files as (
   update library.local_track_files
   set
+    library_root_id = fixture_root.id,
     private_path = selected_rows.private_path,
     file_size_bytes = selected_rows.file_size_bytes,
     modified_at = to_timestamp(selected_rows.modified_at_epoch),
@@ -109,7 +435,12 @@ updated_track_files as (
           library.local_track_files.metadata #> '{scan_cache,file_entry}',
           '{}'::jsonb
         ) || jsonb_build_object(
-          'album', 'Студийные записи',
+          'key', selected_rows.private_path,
+          'track_ref', selected_rows.private_path,
+          'path', selected_rows.private_path,
+          'artist', selected_rows.artist,
+          'album_artist', selected_rows.album_artist,
+          'album', selected_rows.album,
           'track_number', selected_rows.track_number,
           'disc_number', 1,
           'disc_number_raw', '1',
@@ -123,8 +454,11 @@ updated_track_files as (
     ),
     last_seen_at = now()
   from selected_rows
+  cross join fixture_root
   where library.local_track_files.id = selected_rows.track_file_id
-  returning library.local_track_files.id
+  returning
+    library.local_track_files.id,
+    library.local_track_files.library_root_id
 ),
 deleted_separate_releases as (
   delete from library.separate_releases
@@ -143,9 +477,29 @@ deleted_orphan_albums as (
   using target_album
   where library.local_albums.library_id = target_album.library_id
     and library.local_albums.id <> target_album.id
-    and library.local_albums.title in (
-      'Студийные записи',
-      'Студийные записи merge candidate'
+    and (
+      library.local_albums.title in (
+        'Студийные записи',
+        'Студийные записи merge candidate'
+      )
+      or (
+        library.local_albums.title = 'Telepathic Minds'
+        and not exists (
+          select 1 from fixture_rows
+          where fixture_rows.album = 'Telepathic Minds'
+        )
+        and (
+          library.local_albums.album_key = lower('Overhead'::text)
+            || '::'
+            || lower('Telepathic Minds'::text)
+          or exists (
+            select 1
+            from library.local_artists
+            where library.local_artists.id = library.local_albums.artist_id
+              and library.local_artists.name in ('Ovderhead', 'Overhead')
+          )
+        )
+      )
     )
     and not exists (
       select 1
@@ -153,15 +507,40 @@ deleted_orphan_albums as (
       join library.local_track_files
         on library.local_track_files.track_id = library.local_tracks.id
       where library.local_tracks.album_id = library.local_albums.id
+        and library.local_tracks.id not in (
+          select selected_rows.track_id from selected_rows
+        )
     )
-  returning library.local_albums.id
+  returning library.local_albums.id, library.local_albums.artist_id
+),
+deleted_orphan_artists as (
+  delete from library.local_artists
+  using target_album
+  where library.local_artists.library_id = target_album.library_id
+    and library.local_artists.name in ('Ovderhead', 'Overhead')
+    and not exists (
+      select 1
+      from library.local_albums
+      where library.local_albums.artist_id = library.local_artists.id
+        and library.local_albums.id not in (
+          select deleted_orphan_albums.id from deleted_orphan_albums
+        )
+    )
+  returning library.local_artists.id
 ),
 updated_library as (
   update library.libraries
   set
     metadata = jsonb_set(
-      coalesce(library.libraries.metadata, '{}'::jsonb)
-        #- '{scan_cache,relation_projection}',
+      jsonb_set(
+        coalesce(library.libraries.metadata, '{}'::jsonb),
+        '{scan_cache}',
+        coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
+          - 'relation_projection'
+          - 'relation_views'
+          - 'relations_last_built',
+        true
+      ),
       '{inventory_mutation_revision}',
       to_jsonb(
         coalesce(
@@ -183,8 +562,17 @@ select json_build_object(
   'fixture_input_rows', (select count(*) from fixture_rows),
   'matched_file_rows', (select count(*) from selected_rows),
   'album_rows', (select count(*) from updated_album),
+  'typo_album_rows', (select count(*) from upserted_typo_album),
+  'typo_membership_rows', (select count(*) from upserted_typo_membership),
   'track_rows', (select count(*) from updated_tracks),
   'track_file_rows', (select count(*) from updated_track_files),
+  'fixture_root_rows', (select count(*) from fixture_root),
+  'track_file_root_rows', (
+    select count(*)
+    from updated_track_files
+    cross join fixture_root
+    where updated_track_files.library_root_id = fixture_root.id
+  ),
   'album_edition_rows', (
     select count(*)
     from library.local_albums
@@ -205,5 +593,8 @@ select json_build_object(
     ) is not null
   ),
   'separate_release_rows', (select count(*) from deleted_separate_releases),
-  'orphan_album_rows', (select count(*) from deleted_orphan_albums)
+  'orphan_album_rows', (select count(*) from deleted_orphan_albums),
+  'orphan_artist_rows', (select count(*) from deleted_orphan_artists)
 )::text;
+
+commit;

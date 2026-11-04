@@ -295,6 +295,50 @@ test('focused-track navigation keeps the matching album selected during a summar
   assert.match(elements.detail.innerHTML, /Studio Records \(Suffix 5\)/);
 });
 
+test('incomplete problematic summary does not replace a missing existing selection', () => {
+  const boundedAlbum = { key: 'unrelated', name: 'Unrelated', detail_loaded: false };
+  const loadCalls = [];
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', querySelector() { return null; } },
+    detail: { innerHTML: '', removeAttribute() {} },
+    count: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+    problemFilterButton: { disabled: false, hidden: false },
+    tabs: [],
+  };
+  const context = {
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        focusedTrackPath: '',
+        loading: false,
+        problematicFiles: [boundedAlbum],
+        problematicFilesComplete: false,
+        searchQuery: '',
+        selectedProblematicKey: 'edited-source',
+        selectedProblemFilters: [],
+      },
+    },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return [boundedAlbum]; },
+    renderProblemFilterControls() {},
+    getSelectedProblematicAlbumFrom() { return null; },
+    buildProblematicAlbumListItem(album, selected) {
+      return `<button data-selected="${selected}">${album.name}</button>`;
+    },
+    loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  context.renderProblematicFiles();
+
+  assert.equal(context.state.utility.selectedProblematicKey, 'edited-source');
+  assert.deepEqual(loadCalls, []);
+  assert.match(elements.detail.innerHTML, /Loading problematic albums/);
+});
+
 test('optimistic problematic detail shell defers the ordinary loader to its targeted hydration owner', () => {
   const selectedAlbum = {
     key: 'album-new',

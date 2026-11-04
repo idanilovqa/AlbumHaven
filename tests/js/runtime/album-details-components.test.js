@@ -16,7 +16,7 @@ function loadComponents() {
     fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js'), 'utf8'),
     context,
   );
-  for (const filename of ['alert-components.js', 'album-details-components.js']) {
+  for (const filename of ['gallery-main-components.js', 'alert-components.js', 'album-details-components.js']) {
     vm.runInContext(
       fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', filename), 'utf8'),
       context,
@@ -24,6 +24,122 @@ function loadComponents() {
   }
   return context;
 }
+
+test('Album Details headers never render library source markers', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    layout: 'classic_bar',
+    artist: 'Artist',
+    album: 'Album',
+    sourceCategories: ['main_library', 'hoard', 'new_arrivals'],
+    actionsHtml: '<button type="button">Close</button>',
+  });
+
+  assert.doesNotMatch(html, /album-details-source-markers|aria-label="Hoard"|aria-label="New Arrivals"/);
+  assert.match(html, /album-details-header__actions/);
+});
+
+test('Album Details renders the backend poor-art classification as a focusable SmallAlert beside the title', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    layout: 'classic_bar',
+    artist: 'Sandy Alex G',
+    album: 'Rocket',
+    year: '2017',
+    poorArtQuality: true,
+  });
+
+  assert.match(html, /album-details-header__primary-row/);
+  assert.match(html, /small-alert small-alert--warning album-details-header__quality-alert/);
+  assert.match(html, /aria-label="Poor art quality"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /small-alert__text">Poor art quality</);
+  assert.doesNotMatch(
+    context.buildAlbumDetailsHeaderHtml({ album: 'Rocket', poorArtQuality: false }),
+    /Poor art quality|album-details-header__quality-alert/,
+  );
+});
+
+test('Album Details renders noninteractive source markers below the cover', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumCoverSourceMarkersHtml({
+    root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
+  });
+
+  assert.match(html, /album-details-cover-source-markers/);
+  assert.match(html, /aria-label="Hoard"/);
+  assert.match(html, /aria-label="New Arrivals"/);
+  assert.doesNotMatch(html, /<button|data-open-tracklist/);
+  assert.equal(context.buildAlbumCoverSourceMarkersHtml({ source: 'main_library' }), '');
+});
+
+test('Album Details source markers reuse the gallery source glyphs and obey the icon preference', () => {
+  const context = loadComponents();
+  const hoardGlyph = context.buildLibrarySourceGlyphHtml('hoard');
+  const arrivalsGlyph = context.buildLibrarySourceGlyphHtml('new_arrivals');
+  assert.match(hoardGlyph, /viewBox="0 0 48 48"/);
+  assert.match(arrivalsGlyph, /viewBox="0 0 48 48"/);
+
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-details-components.css'),
+    'utf8',
+  );
+  assert.match(css, /\.album-details-source-markers\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
+});
+
+test('Album Details render path places source markers after the cover shell', () => {
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
+    'utf8',
+  );
+  const renderStart = source.indexOf('function renderTrackModalRelease(album)');
+  const renderEnd = source.indexOf('\nfunction ', renderStart + 1);
+  const render = source.slice(renderStart, renderEnd < 0 ? undefined : renderEnd);
+  assert.doesNotMatch(render, /sourceCategories:\s*resolveAlbumSourceMarkerCategories\(album\)/);
+  assert.match(render, /const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml\(album\)/);
+  assert.match(render, /track-modal-cover-shell[\s\S]*?<\/div>\s*\$\{coverSourceMarkersHtml\}/);
+  assert.equal([...render.matchAll(/\$\{coverSourceMarkersHtml\}/g)].length, 3);
+});
+
+test('mobile Album Details keeps source markers with the cover instead of either header', () => {
+  const navigation = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js'),
+    'utf8',
+  );
+  const components = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-details-components.js'),
+    'utf8',
+  );
+  const mobileCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'),
+    'utf8',
+  );
+  const trackModalCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(navigation, /mobile-album-source-markers|buildAlbumSourceMarkerItemsHtml/);
+  assert.doesNotMatch(components, /mobile-album-overview__source-markers/);
+  assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers/);
+  assert.match(components, /overview\.prepend\(rail\)/);
+  assert.match(components, /rail\.appendChild\(sourceMarkers\)/);
+  assert.match(navigation, /mobile-album-overview__rail/);
+  assert.match(
+    mobileCss,
+    /mobile-album-overview__rail[^}]*grid-column:\s*1[^}]*grid-row:\s*1[^}]*flex-direction:\s*column[^}]*gap:\s*8px/s,
+  );
+  assert.doesNotMatch(mobileCss, /mobile-album-overview\s*>\s*\.album-details-cover-source-markers[^}]*grid-row:\s*1/s);
+  assert.match(mobileCss, /album-details-cover-source-markers[^}]*flex-direction:\s*column/s);
+  assert.match(mobileCss, /\.album-details-cover-source-markers/);
+  assert.match(mobileCss, /mobile-album-overview \.track-modal-cover[^}]*aspect-ratio:\s*auto/);
+  assert.match(trackModalCss, /\.track-modal-cover:has\(> \.album-details-cover-source-markers\)[^}]*aspect-ratio:\s*auto/);
+  assert.match(
+    mobileCss,
+    /data-mobile-album-layout="stacked_bar"[^}]*\.mobile-album-identity[^}]*align-self:\s*start/s,
+  );
+});
 
 test('AlbumDetailsHeader supports the three approved layouts and fat-dot identity separators', () => {
   const context = loadComponents();
@@ -72,7 +188,10 @@ test('Album Details delegates action geometry to ActionButton and aligns stacked
   assert.doesNotMatch(css, /\.album-details-header__action\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/s);
   assert.match(css, /\.album-details-header\s*\{[^}]*width:\s*100%[^}]*align-items:\s*center/s);
   assert.match(css, /\.album-details-header__actions\s*\{[^}]*margin-left:\s*auto/s);
-  assert.match(css, /\.album-details-header__release-type\s*\{[^}]*letter-spacing:/s);
+  assert.match(
+    css,
+    /\.album-details-header__release-type,\s*\.album-details-header__tag\s*\{[^}]*--album-details-tag-accent:[^}]*padding:\s*2px 8px[^}]*border:\s*1px solid[^}]*color:\s*var\(--album-details-tag-accent\)[^}]*font-weight:\s*750/s,
+  );
   assert.match(css, /\.album-details-header__tag--missing\s*\{[^}]*--album-details-tag-accent:\s*var\(--appearance-error/s);
   assert.match(css, /data-album-details-layout="stacked_bar"[^}]*align-items:\s*flex-start/s);
 });

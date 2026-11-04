@@ -14,6 +14,14 @@ function formatDurationCompact(totalSeconds) {
 }
 
 
+function scanStageElapsedDetail(data = {}, stage = '') {
+  const elapsed = stage === 'covers'
+    ? Number(data.covers_elapsed_seconds)
+    : Number(data.scan_stage_elapsed_seconds?.[stage]);
+  return Number.isFinite(elapsed) ? `elapsed ${formatDurationCompact(elapsed)}` : '';
+}
+
+
 function buildScanEstimateParts(data = {}) {
   const parts = [];
   const remainingSeconds = Number(data.scan_estimated_remaining_seconds || 0);
@@ -27,7 +35,7 @@ function buildScanEstimateParts(data = {}) {
     parts.push(`elapsed ${formatDurationCompact(elapsedSeconds)}`);
   }
   if (albumFoldersTotal > 0) {
-    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} album folders`);
+    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} albums`);
   }
   return parts;
 }
@@ -82,12 +90,17 @@ function buildLoaderStatusLines(data, options = {}) {
       detail: `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists (${data.relations_source || 'local'})`,
     });
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished')) {
     const currentFolder = String(data.covers_current_folder || '').split(/[\\/]/).pop();
     lines.push({
-      title: 'Updating cover art',
-      detail: `${Number(data.covers_processed || 0)} of ${Number(data.covers_total || 0)} folders checked${currentFolder ? ` - ${currentFolder}` : ''}`,
+      title: data.covers_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers')
+        : data.covers_outcome === 'failed' ? 'Cover search failed'
+        : data.covers_outcome === 'cancelled' ? 'Cover search cancelled' : 'Cover search finished',
+      detail: buildCoverProgressDetail(data, currentFolder),
     });
+    if (data.covers_phase !== 'preparing' && !data.status_connection_lost && data.covers_spotify_quota_exceeded) {
+      lines.push({ title: 'Spotify', detail: 'Spotify quota reached — skipped for this run' });
+    }
   }
   if (!lines.length) {
     lines.push(options.scanPageVisible ? {
@@ -99,4 +112,29 @@ function buildLoaderStatusLines(data, options = {}) {
     });
   }
   return lines;
+}
+
+function buildCoverProgressDetail(data, currentAlbum = '') {
+  if (data.status_connection_lost) return 'Progress unavailable — reconnecting. Last reported counts may be outdated.';
+  const total = Number(data.covers_total);
+  const processed = Number(data.covers_completed ?? data.covers_processed);
+  const known = Number.isFinite(total) && total > 0 && Number.isFinite(processed) && processed >= 0;
+  const parts = [data.covers_phase === 'preparing' ? 'Preparing cover search' : known
+    ? `${processed} of ${total} albums checked (${Math.min(100, Math.round(processed / total * 100))}%)`
+    : data.covers_outcome === 'completed' && total === 0 ? 'No albums needed a cover search' : 'Progress unavailable'];
+  if (Number.isFinite(Number(data.covers_downloaded)) && data.covers_downloaded != null) {
+    parts.push(`${Number(data.covers_downloaded)} covers fetched`);
+  }
+  if (data.covers_outcome === 'failed') parts.unshift('Cover search failed');
+  if (data.covers_outcome === 'cancelled') parts.unshift('Cover search cancelled');
+  if (data.covers_elapsed_seconds != null && Number.isFinite(Number(data.covers_elapsed_seconds))) {
+    parts.push(`elapsed ${formatDurationCompact(data.covers_elapsed_seconds)}`);
+  }
+  const eta = Number(data.covers_estimated_remaining_seconds);
+  if (data.covers_in_progress && data.covers_phase !== 'preparing') {
+    parts.push(data.covers_estimated_remaining_seconds != null && Number.isFinite(eta) && eta >= 0
+      ? `ETA ${formatDurationCompact(eta)}` : 'ETA calculating…');
+  }
+  if (currentAlbum) parts.push(currentAlbum);
+  return parts.join(' · ');
 }

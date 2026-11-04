@@ -5,8 +5,13 @@ import unicodedata
 import urllib.parse
 import uuid
 from collections.abc import Callable
+from functools import partial
 
-from music_app.services.musicbrainz_http import get_json as default_get_json
+from music_app.services.musicbrainz_http import get_json as _shared_get_json
+
+# Identity enrichment never remembers failures: a direct-entity 404 after a
+# successful search is mirror catch-up and must be retried on the next run.
+default_get_json = partial(_shared_get_json, cache_failures=False)
 
 
 JsonDict = dict[str, object]

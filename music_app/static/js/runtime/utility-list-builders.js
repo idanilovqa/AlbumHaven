@@ -2816,6 +2816,40 @@ async function openUtilityModalForTrack(trackPath) {
   }
 }
 
+async function openMusicBrainzArtistProblem(occurrenceId) {
+  const normalizedOccurrenceId = String(occurrenceId || '').trim();
+  if (!normalizedOccurrenceId) return;
+  const hadLoadedProblems = Boolean(state.utility.loaded);
+  if (!state.utility.loaded) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+  }
+  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+    item?.occurrence_id,
+    item?.musicbrainz_occurrence_id,
+    item?.key,
+  ].some((value) => String(value || '').trim() === normalizedOccurrenceId));
+  let problem = findProblem();
+  if (!problem && hadLoadedProblems) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+    problem = findProblem();
+  }
+  if (!problem) {
+    showToast('This artist issue is not currently listed in Problematic Files.', 'error', 3200);
+    return;
+  }
+  state.utility.selectedProblematicKey = String(problem.key || normalizedOccurrenceId);
+  state.utility.deferProblematicAutoSelection = false;
+  state.utility.selectedProblemFilters = [];
+  state.utility.problemDropdownOpen = false;
+  setUtilityActiveTab('problematic-files');
+  if (!problem.detail_loaded) {
+    await loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true, { render: false });
+  }
+  openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+}
+
 function getIgnorableProblemRows(album) {
   const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows : [];
   const trackRows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [])

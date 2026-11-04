@@ -235,6 +235,7 @@ function getGalleryMainContextSections() {
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+    artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
     labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
@@ -578,15 +579,21 @@ function updateGalleryMainChrome() {
     albumCount: summaryTotals.albumCount,
     groups: sections,
     hasFamily,
+    artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
+  const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
   if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
   summary.hidden = false;
+  if (metadata) {
+    metadata.hidden = true;
+    metadata.innerHTML = '';
+  }
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
     inlineTotal.hidden = true;
@@ -602,7 +609,14 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else {
     name.textContent = context.artist;
-    summary.textContent = galleryMainPlural(context.albumCount, 'album');
+    summary.hidden = true;
+    if (metadata) {
+      metadata.hidden = false;
+      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
+    } else {
+      summary.hidden = false;
+      summary.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
+    }
     if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;

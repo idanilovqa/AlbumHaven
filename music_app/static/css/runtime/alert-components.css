@@ -130,6 +130,25 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   font-size: 0.72rem;
   font-weight: 750;
 }
+.small-alert--triangle-only {
+  width: 18px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  cursor: pointer;
+  transition: width 210ms ease;
+}
+.small-alert--triangle-only:is(:hover, :focus-visible) {
+  width: 172px;
+  box-shadow: none;
+}
+.small-alert--triangle-only .small-alert__icon { width: 18px; height: 20px; }
+.small-alert--triangle-only .small-alert__icon svg { width: 16px; height: 16px; }
+.small-alert--triangle-only .small-alert__text { padding: 0 8px 0 4px; }
 .small-alert svg,
 .on-page-alert svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -212,6 +231,7 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 
 @media (prefers-reduced-motion: reduce) {
   .small-alert,
+  .small-alert--triangle-only,
   .alert-label,
   .on-page-alert__actions .ui-button { transition: none; }
 }

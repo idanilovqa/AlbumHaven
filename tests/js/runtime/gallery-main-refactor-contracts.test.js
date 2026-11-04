@@ -19,8 +19,16 @@ const coreStateAndHelpersSource = fs.readFileSync(
   path.join(runtimeRoot, 'core-state-and-helpers.js'),
   'utf8',
 );
+const galleryMainInteractionsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'gallery-main-interactions.js'),
+  'utf8',
+);
 const galleryMainCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'),
+  'utf8',
+);
+const buttonComponentCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'button-component.css'),
   'utf8',
 );
 const triggerAnchorCssSource = fs.readFileSync(
@@ -267,7 +275,7 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(singleArtistBar, /data-artist-info-trigger/);
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
   assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary>4 albums</);
+  assert.match(singleArtistBar, /data-gallery-context-summary[^>]*><span>4 albums<\/span></);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -299,6 +307,115 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   const artistHeading = buildFamilyArtistHeaderHtml({ artist: 'Flying Colors', albumCount: 4 });
   assert.match(artistHeading, /class="artist-name"[^>]*>Flying Colors</);
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
+});
+
+test('current GalleryBar owner renders stored artist metadata on one compact shared-pill row', () => {
+  const context = loadRuntime();
+  const projection = {
+    country: 'Russia',
+    genres: ['Heavy Metal', 'Power Metal', 'Hard Rock', 'Fourth Genre'],
+  };
+  const markup = requireContract(context, 'buildGalleryBarHtml')({
+    contextKind: 'artist',
+    artist: 'Kipelov',
+    albumCount: 4,
+    artist_musicbrainz: projection,
+  });
+
+  const nameAt = markup.indexOf('Kipelov');
+  const infoAt = markup.indexOf('data-artist-info-trigger');
+  const countAt = markup.indexOf('4 albums');
+  const countryAt = markup.indexOf('Russia');
+  const firstGenreAt = markup.indexOf('Heavy Metal');
+  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countAt && countAt < countryAt && countryAt < firstGenreAt);
+  assert.match(markup, /data-gallery-context-metadata/);
+  assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 3);
+  assert.match(markup, />Heavy Metal</);
+  assert.match(markup, />Power Metal</);
+  assert.match(markup, />Hard Rock</);
+  assert.doesNotMatch(markup, /Fourth Genre/);
+  assert.doesNotMatch(markup, /gallery-bar__actions[\s\S]*MusicBrainz/);
+
+  assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(buttonComponentCssSource, /\.ui-metadata-pill--genre\s*\{[^}]*background:\s*#11202a[^}]*border[^;]*#4199c3[^}]*color:\s*#8bd9ff/is);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*display:\s*flex[^}]*flex-wrap:/s);
+});
+
+test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
+  const context = loadRuntime();
+  const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
+  const confirmedEmpty = buildGalleryBarHtml({
+    contextKind: 'single-artist', artist: 'Unknown Artist', albumCount: 1,
+    artist_musicbrainz: { country: null, genres: ['Genre unavailable'] },
+  });
+  assert.match(confirmedEmpty, /ui-metadata-pill--genre-unavailable[^>]*>Genre unavailable</);
+
+  const family = buildGalleryBarHtml({
+    contextKind: 'family', primaryArtist: 'Kipelov', artistCount: 2, albumCount: 6,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  assert.doesNotMatch(family, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+
+  const familyHeader = requireContract(context, 'buildFamilyArtistHeaderHtml')({
+    artist: 'Kipelov', albumCount: 4,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  const separator = requireContract(context, 'buildGalleryDividerHtml')({
+    label: 'Family', albumCount: 2,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  assert.doesNotMatch(familyHeader, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+  assert.doesNotMatch(separator, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+});
+
+test('stored artist metadata survives the existing sticky-context projection into current owners', () => {
+  const projection = { country: 'Russia', genres: ['Heavy Metal', 'Power Metal'] };
+  const context = loadRuntime({
+    virtualGrid: {
+      sectionHeaderHeight: 52,
+      sections: [{
+        kind: 'artist', top: 200,
+        group: { artist: 'Kipelov', albums: [{}, {}], artist_musicbrainz: projection },
+      }],
+    },
+    document: {
+      getElementById: () => ({ scrollTop: 260, getBoundingClientRect: () => ({ top: 100 }) }),
+      querySelectorAll: () => [],
+    },
+  });
+
+  const sections = plain(context.getGalleryMainContextSections());
+  assert.deepEqual(sections[0].artist_musicbrainz, projection);
+  const sticky = plain(context.resolveGalleryBarContext({
+    scrollTop: 260,
+    artistCount: 1,
+    albumCount: 2,
+    groups: sections,
+  }));
+  assert.deepEqual(sticky.artist_musicbrainz, projection);
+  assert.equal(sticky.artist, 'Kipelov');
+
+  assert.match(galleryMainInteractionsSource, /data-gallery-context-metadata/);
+  assert.match(galleryMainInteractionsSource, /buildGalleryArtistMetadataHtml\s*\(/);
+  assert.equal((indexTemplateSource.match(/data-gallery-context-metadata/g) || []).length, 2,
+    'the live GalleryBar and mobile PageHeader each keep the current-stack metadata slot');
+});
+
+test('the existing delegated Gallery handler opens the exact artist problem occurrence', () => {
+  assert.match(
+    bootstrapGalleryEventHandlersSource,
+    /closest\(['"]\[data-open-musicbrainz-artist-problem\]['"]\)/,
+  );
+  assert.match(
+    bootstrapGalleryEventHandlersSource,
+    /openMusicBrainzArtistProblem\s*\([^)]*(?:dataset\.openMusicbrainzArtistProblem|getAttribute\(['"]data-open-musicbrainz-artist-problem['"]\))[^)]*\)/,
+  );
+  assert.doesNotMatch(
+    bootstrapGalleryEventHandlersSource,
+    /data-open-musicbrainz-artist-problem[\s\S]{0,300}openProblematicFiles\s*\(\s*\)/,
+    'activation must carry the occurrence identity rather than opening a generic list',
+  );
 });
 
 test('the retired inline Artist Family surface is removed while GalleryBar owns the only panel', () => {
@@ -807,8 +924,8 @@ test('GalleryBar scroll context uses absolute virtual section coordinates instea
   });
   const getGalleryMainContextSections = requireContract(context, 'getGalleryMainContextSections');
   assert.deepEqual(plain(getGalleryMainContextSections()), [
-    { artist: 'Neal Morse & The Resonance', albumCount: 2, top: 1200, labelBottom: 1200 },
-    { artist: 'Cosmic Cathedral', albumCount: 1, top: 2200, labelBottom: 2200 },
+    { artist: 'Neal Morse & The Resonance', albumCount: 2, artist_musicbrainz: null, top: 1200, labelBottom: 1200 },
+    { artist: 'Cosmic Cathedral', albumCount: 1, artist_musicbrainz: null, top: 2200, labelBottom: 2200 },
   ]);
 });
 

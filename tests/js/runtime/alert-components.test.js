@@ -35,6 +35,63 @@ test('SmallAlert exposes a near-circular compact error that expands to Album not
   assert.match(html, /small-alert__text">Album not found</);
 });
 
+test('SmallAlert extends the current shared owner with an exact-problem triangle-only action', () => {
+  const context = loadAlertComponents();
+  const html = context.buildSmallAlertHtml({
+    severity: 'warning',
+    message: 'MBID: Multiple matches',
+    variant: 'triangle-only',
+    interactive: true,
+    attributes: {
+      'data-open-musicbrainz-artist-problem': 'artist-problem-19',
+      'aria-label': 'Open MBID: Multiple matches for Axxis',
+    },
+  });
+
+  assert.match(html, /^<button/);
+  assert.match(html, /class="small-alert small-alert--warning small-alert--triangle-only"/);
+  assert.match(html, /type="button"/);
+  assert.match(html, /data-open-musicbrainz-artist-problem="artist-problem-19"/);
+  assert.match(html, /aria-label="Open MBID: Multiple matches for Axxis"/);
+  assert.match(html, /small-alert__icon[^]*<path d="M10\.3 3\.8/);
+  assert.doesNotMatch(html, /<circle|small-alert__icon-shell/);
+});
+
+test('triangle-only SmallAlert expands right in 200–220ms without changing header height', () => {
+  const alertCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
+    'utf8',
+  );
+  const galleryCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'gallery-main.css'),
+    'utf8',
+  );
+  const compactRule = alertCss.match(/\.small-alert--triangle-only\s*\{[^}]*\}/s)?.[0] || '';
+  const expandedRule = alertCss.match(/\.small-alert--triangle-only:is\(:hover,\s*:focus-visible\)\s*\{[^}]*\}/s)?.[0] || '';
+
+  assert.match(compactRule, /border:\s*0/);
+  assert.match(compactRule, /background:\s*transparent/);
+  assert.match(compactRule, /height:\s*\d+px/);
+  assert.match(compactRule, /transition:[^;]*width\s+2(?:00|10|20)ms/);
+  assert.doesNotMatch(compactRule, /transition:[^;]*height/);
+  assert.match(expandedRule, /width:/);
+  assert.match(alertCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.small-alert[^}]*transition:\s*none/s);
+  assert.match(galleryCss, /\.family-artist-header\s*\{[^}]*grid-template-columns:[^;]*auto[^;]*auto[^;]*minmax\(0,\s*1fr\)/s);
+  assert.doesNotMatch(galleryCss, /\.family-artist-header:(?:hover|focus-within)[^}]*height:/s);
+});
+
+test('metadata pending uses a distinct non-error moving-dots treatment', () => {
+  const galleryCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'gallery-main.css'),
+    'utf8',
+  );
+  assert.match(galleryCss, /\.artist-musicbrainz-pending\s*\{[^}]*color:/s);
+  assert.doesNotMatch(galleryCss, /\.artist-musicbrainz-pending\s*\{[^}]*var\(--appearance-error/s);
+  assert.match(galleryCss, /\.artist-musicbrainz-pending[^}]*data-pending-dot[\s\S]*animation:/s);
+  assert.match(galleryCss, /@keyframes\s+artist-musicbrainz-pending-dots/);
+  assert.match(galleryCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*data-pending-dot[^}]*animation:\s*none/s);
+});
+
 test('OnPageAlert supports semantic variants and shared action slots', () => {
   const context = loadAlertComponents();
   const html = context.buildOnPageAlertHtml({

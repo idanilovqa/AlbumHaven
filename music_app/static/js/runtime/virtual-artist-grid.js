@@ -1956,7 +1956,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: group.artist_musicbrainz_problem, artistMusicBrainzState: group.artist_musicbrainz_state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -2002,7 +2002,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: safeGroup.artist_musicbrainz_problem, artistMusicBrainzState: safeGroup.artist_musicbrainz_state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;

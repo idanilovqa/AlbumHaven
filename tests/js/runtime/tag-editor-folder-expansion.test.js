@@ -26,6 +26,7 @@ function escapeHtml(value) {
 function loadHelpers(overrides = {}) {
   const context = {
     escapeHtml,
+    ButtonComponent: require(path.join(root, 'music_app', 'static', 'js', 'button-component.js')),
     state: {},
     document: { getElementById: () => null },
     getTagEditorElements: () => ({ overlay: { hidden: false } }),
@@ -76,6 +77,18 @@ test('tag editor shows folder path beside artwork and provides an icon-only fold
   ]);
   assert.match(artwork.innerHTML, /class="tag-editor-folder-path"/);
   assert.match(artwork.innerHTML, />C:\\Music\\Album<\/div>/);
+  assert.match(artwork.innerHTML, /tag-editor-folder-path[^>]*>[^<]*<\/div><button[^>]*class="[^"]*action-button[^"]*tag-editor-open-folder"[^>]*aria-label="Open this folder in File Explorer"/);
+  assert.match(artwork.innerHTML, /data-open-tag-editor-folder="C:\\Music\\Album\\02 - Two\.mp3"/);
+  assert.doesNotMatch(artwork.innerHTML, / disabled/);
+
+  context.window = { AlbumHavenCapabilities: { allows: () => false } };
+  context.renderTagEditorArtwork(['C:\\Music\\Album\\01 - One.mp3']);
+  assert.match(artwork.innerHTML, /<button[^>]*tag-editor-open-folder[^>]* disabled/);
+});
+
+test('the Edit Tags open-folder action opens the focused track folder through the shared location route', () => {
+  const source = fs.readFileSync(path.join(root, 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(source, /closest\('\[data-open-tag-editor-folder\]'\)[\s\S]*?openAlbumInExplorer\(\{ name: '', tracks: \[\{ path: trackPath \}\] \}\)/);
 });
 
 test('loading folder files preserves selection and pending values while deduplicating paths', async () => {

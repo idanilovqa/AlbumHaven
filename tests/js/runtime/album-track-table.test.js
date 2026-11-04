@@ -74,7 +74,8 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
     }],
   });
 
-  assert.match(html, /--cdt-columns: 36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
+  assert.match(html, /--cdt-columns: var\(--album-track-table-columns\)/);
+  assert.match(html, /<div class="album-track-table" data-track-problem-column /);
   assert.doesNotMatch(html, /data-cdt-column="play"/);
   assert.match(html, /data-cdt-column="title"[^>]*>Track<\/div><div data-cdt-column="problem" data-cdt-action aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"/);
   assert.match(html, /data-cdt-column="title"[^>]*><span[^>]*>Problem Track<\/span><\/div><div role="cell" data-cdt-column="problem" data-cdt-action><button class="track-problem-link"/);
@@ -82,7 +83,7 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
   assert.match(html, /data-cdt-row-key="clean\.flac"[\s\S]*data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
 });
 
-test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {
+test('AlbumTrackTable Loose Tracks variant inserts File path and drops the unused problem slot', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({
     showPath: true,
@@ -102,14 +103,15 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
     totalLength: '4:05',
   });
 
-  assert.match(html, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(html, /<div class="album-track-table" data-track-path-column data-playing-animation/);
+  assert.doesNotMatch(html, /data-cdt-column="problem"/, 'no listed track is problematic, so its space goes to other columns');
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
-  assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
+  assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length/);
   assert.match(html, /class="album-track-table__secondary" title="Guest Artist"><span>Guest Artist<\/span>/);
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
-  assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
-  assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
+  assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path"[^<]*<\/span><\/div><div role="cell" data-cdt-column="duration"/);
+  assert.ok(html.includes('<div class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05</div></div>'), 'one Total Length summary closes the loose-track table');
 });
 
 test('AlbumTrackTable splits a main disc and bonus disc into separate tables without a CD 1 label', () => {
@@ -129,29 +131,38 @@ test('AlbumTrackTable splits a main disc and bonus disc into separate tables wit
   assert.match(html, /album-track-table__row--search-match/);
 });
 
-test('AlbumTrackTable retains aggregate and explicit main and bonus duration summaries in its shared frame', () => {
+test('AlbumTrackTable closes the main discs with their total and ends bonus discs with bonus and album totals', () => {
   const html = loadTrackTable().buildAlbumTrackTableHtml({
     groups: [
-      { discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: [{ path: 'main', title: 'Main' }] },
-      { discNumber: 2, discLabel: 'Bonus Disc', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus' }] },
+      { discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: [{ path: 'main-1', title: 'Main 1' }] },
+      { discNumber: 2, discLabel: 'CD 2', isBonus: false, tracks: [{ path: 'main-2', title: 'Main 2' }] },
+      { discNumber: 3, discLabel: 'Bonus Disc', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus' }] },
     ],
     totalLength: '25m 30s', mainLength: '3:00', bonusLength: '22:30',
   });
-  assert.match(html, /class="album-track-table__aggregate-total">Total Length: 25m 30s<\/div>/);
-  assert.match(html, /class="album-track-table__main-total">Total Main Album Length: 3:00<\/div>/);
-  assert.match(html, /class="album-track-table__bonus-total">Bonus Disc Length: 22:30<\/div>/);
-  assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.doesNotMatch(html, /album-track-table__disc-heading[^>]*>CD 1/);
+  const main = html.indexOf('Total Main Album Length');
+  const bonusHeading = html.indexOf('>Bonus Disc</h4>');
+  const bonus = html.indexOf('Bonus Disc Length');
+  const total = html.indexOf('>Total Length:');
+  assert.ok(html.indexOf('Main 2') < main && main < bonusHeading, 'the main total follows the last main disc (Testimony: after disc 2)');
+  assert.ok(bonusHeading < bonus && bonus < total, 'the bonus length precedes the album Total Length');
+  assert.ok(html.includes('class="album-track-table__main-total">Total Main Album Length: 3:00</div>'));
+  assert.ok(html.includes('class="album-track-table__bonus-total">Bonus Disc Length: 22:30</div>'));
+  assert.ok(html.includes('class="album-track-table__aggregate-total">Total Length: 25m 30s</div>'));
+  assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 2);
+  assert.match(html, /<section class="album-track-table__disc">[\s\S]*Main 2[\s\S]*album-track-table__main-total[\s\S]*<\/section><section class="album-track-table__disc"><h4/);
   assert.equal((html.match(/class="compact-data-table-header"/g) || []).length, 1);
 });
 
-test('AlbumTrackTable escapes named duration summaries and omits absent summaries', () => {
-  const context = loadTrackTable();
-  const html = context.buildAlbumTrackTableHtml({ totalLength: '25m', bonusLength: '<img src=x>' });
-  assert.match(html, /Bonus Disc Length: &lt;img src=x&gt;/);
-  assert.doesNotMatch(html, /album-track-table__main-total/);
-  const ordinary = context.buildAlbumTrackTableHtml({ totalLength: '18m' });
-  assert.doesNotMatch(ordinary, /album-track-table__(?:main|bonus)-total/);
+test('AlbumTrackTable names the bonus length after a numbered bonus CD', () => {
+  const html = loadTrackTable().buildAlbumTrackTableHtml({
+    groups: [
+      { discNumber: 1, isBonus: false, tracks: [{ path: 'main', title: 'Main' }] },
+      { discNumber: 3, discLabel: 'CD 3', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus' }] },
+    ],
+    totalLength: '50m', mainLength: '40:00', bonusLength: '10:00',
+  });
+  assert.match(html, /album-track-table__bonus-total">CD 3 Length: 10:00</);
 });
 
 test('AlbumTrackTable labels every main disc outside its separately framed table', () => {
@@ -210,7 +221,7 @@ test('the final table right outline fades into the footer without a corner glow 
   );
   assert.match(
     css,
-    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table\s*\{[^}]*border-bottom-right-radius:\s*0/s,
+    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:is\(:last-of-type, :has\(> \.album-track-table__total\)\) \.compact-data-table\s*\{[^}]*border-bottom-right-radius:\s*0/s,
   );
   assert.match(css, /\.album-track-table__total\s*\{[^}]*margin:\s*-1px 0 0 auto/s);
   assert.match(css, /\.album-track-table__total::before\s*\{[^}]*border-right:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 75%, transparent\)/s);
@@ -219,7 +230,7 @@ test('the final table right outline fades into the footer without a corner glow 
   assert.doesNotMatch(css.match(/\.album-track-table__total\s*\{[^}]*\}/s)[0], /mask-image:/);
   assert.match(
     css,
-    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table::after\s*\{[^}]*position:\s*absolute[^}]*right:\s*-1px[^}]*bottom:\s*-1px[^}]*width:\s*1px[^}]*background:\s*linear-gradient\(to bottom,\s*transparent[\s\S]*var\(--album-track-accent\) 75%/s,
+    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:is\(:last-of-type, :has\(> \.album-track-table__total\)\) \.compact-data-table::after\s*\{[^}]*position:\s*absolute[^}]*right:\s*-1px[^}]*bottom:\s*-1px[^}]*width:\s*1px[^}]*background:\s*linear-gradient\(to bottom,\s*transparent[\s\S]*var\(--album-track-accent\) 75%/s,
   );
   assert.doesNotMatch(css, /\.album-track-table__total::after/);
 });
@@ -298,4 +309,13 @@ test('row double-click clears its word highlight and starts playback without tog
   context.handleAlbumTrackRowDoubleClick(event);
   assert.equal(plays,1);
   assert.equal(cleared,2);
+});
+
+test('AlbumTrackTable column priority keeps #, Track and Length on narrow tables and yields File path first', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  assert.match(css, /\.album-track-table\s*\{\s*container-type:\s*inline-size/);
+  const narrow = css.slice(css.indexOf('@container (max-width: 520px)'));
+  assert.match(narrow, /\[data-cdt-column="path"\]\s*\{\s*display:\s*none/);
+  assert.match(narrow, /--album-track-table-columns:\s*36px minmax\(0, 1fr\) minmax\(54px, auto\)/);
+  assert.match(narrow, /\[data-track-problem-column\][^{]*\{\s*--album-track-table-columns:\s*36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
 });

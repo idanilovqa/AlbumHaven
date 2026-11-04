@@ -19,17 +19,6 @@ function handleGalleryBootstrapClick(event) {
     void confirmMissingAlbumRemoval(album, runtimeOptions);
     return;
   }
-  const ignoreVersionButton = event.target.closest('[data-ignore-version-context="1"]');
-  if (ignoreVersionButton) {
-    event.preventDefault();
-    const menu = document.getElementById('track-modal-version-context-menu');
-    ignoreAlbumVersion(menu?.dataset.albumKey || '');
-    return;
-  }
-
-  if (!event.target.closest('#track-modal-version-context-menu')) {
-    hideVersionContextMenu();
-  }
   const toggleCombineSimilarArtistsButton = event.target.closest('[data-toggle-combine-similar-artists="1"]');
   if (toggleCombineSimilarArtistsButton && !toggleCombineSimilarArtistsButton.disabled) {
     event.preventDefault();
@@ -110,9 +99,15 @@ function handleGalleryBootstrapClick(event) {
     event.preventDefault();
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
+    const menuAlbumKey = menu?.dataset.albumKey || '';
+    const album = getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
+
+    if (action === 'separate-release') {
+      void separateAlbumRelease(menuAlbumKey);
+      return;
+    }
 
     if (action === 'open-explorer') {
       openAlbumInExplorer(album);

@@ -1421,18 +1421,6 @@ function getAlbumReleaseSet(album) {
   return { releases, selectedIndex };
 }
 
-function isPlainDuplicateVersionTab(release, index, releases) {
-  if (index <= 0 || !release || !Array.isArray(releases) || !releases.length) return false;
-  const original = releases[0] || {};
-  const releaseName = String(release.name || '').trim();
-  const originalName = String(original.name || '').trim();
-  if (!releaseName || releaseName.localeCompare(originalName, undefined, { sensitivity: 'base' }) !== 0) return false;
-  if (String(release.edition || '').trim()) return false;
-  if (isInstrumentalVariant(release)) return false;
-  if (findVariantSuffixIndex(releaseName) > 0) return false;
-  return true;
-}
-
 async function ignoreAlbumVersion(albumKey) {
   const key = String(albumKey || '');
   if (!key) return;
@@ -1608,65 +1596,36 @@ function renderTrackModalTabs(els) {
   const tablist = els.tabs.querySelector('.in-page-tabs');
   tablist?.querySelectorAll('[data-in-page-tab]').forEach((button, index) => {
     button.dataset.trackTabIndex = String(index);
-    if (isPlainDuplicateVersionTab(releases[index], index, releases)) {
-      button.dataset.versionContextKey = releases[index].key || '';
-    }
+    // Every version after the original can be separated into its own release.
+    if (index > 0 && releases[index]?.key) button.dataset.versionContextKey = releases[index].key;
   });
   mountInPageTabs(tablist);
   if (restoreTabFocus) tablist?.querySelector('[aria-selected="true"]')?.focus();
-  renderVersionContextMenu();
 }
 
-function ensureVersionContextMenu() {
-  let menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'track-modal-version-context-menu';
-  menu.className = 'track-modal-version-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '<button type="button" data-ignore-version-context="1">Don\'t count as a version</button>';
-  document.body.appendChild(menu);
-  return menu;
-}
-
-function renderVersionContextMenu() {
-  const menu = ensureVersionContextMenu();
-  const stateMenu = state.modalVersionContextMenu || {};
-  if (!stateMenu.visible || !stateMenu.albumKey) {
-    menu.hidden = true;
-    return;
-  }
-  menu.style.left = `${stateMenu.x}px`;
-  menu.style.top = `${stateMenu.y}px`;
-  menu.dataset.albumKey = stateMenu.albumKey;
-  menu.hidden = false;
-  if (typeof activateTriggerSurface === 'function') {
-    activateTriggerSurface(menu, hideVersionContextMenu);
-  }
-}
-
+// Version releases reuse the shared album context menu; "Separate release" records a version rule.
 function showVersionContextMenu(albumKey, x, y) {
-  state.modalVersionContextMenu = {
-    albumKey: String(albumKey || ''),
-    x,
-    y,
-    visible: true,
-  };
-  renderVersionContextMenu();
+  const key = String(albumKey || '');
+  if (!key || isMobileClient() || usesMobilePageLayout()) return;
+  const menu = ensureAlbumCardContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.albumKey = key;
+  menu.dataset.menuKind = 'release';
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release">Separate release</button>';
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
 
 function hideVersionContextMenu() {
-  state.modalVersionContextMenu = {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  };
-  const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) {
-    menu.hidden = true;
-    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
-  }
+  const menu = document.getElementById('album-card-context-menu');
+  if (menu?.dataset?.menuKind === 'release') hideAlbumCardContextMenu();
+}
+
+function separateAlbumRelease(albumKey) {
+  const key = String(albumKey || '');
+  if (!key) return Promise.resolve();
+  return getManualVersionLinks()[key] ? unmarkAlbumVersion(key) : ignoreAlbumVersion(key);
 }
 
 function buildTrackModalCoverVisualHtml({

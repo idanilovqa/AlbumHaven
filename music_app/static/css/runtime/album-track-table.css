@@ -6,7 +6,17 @@
   min-width: 0;
 }
 
-.album-track-table__frame { min-width: 0; }
+/* Column priority: #, Track and Length always fit; Problem appears only when needed; File path yields first. */
+.album-track-table { container-type: inline-size; }
+.album-track-table__frame { --album-track-table-columns: 36px minmax(0, 1fr) minmax(54px, auto); min-width: 0; }
+.album-track-table[data-track-problem-column] .album-track-table__frame { --album-track-table-columns: 36px minmax(0, 1fr) 20px minmax(54px, auto); }
+.album-track-table[data-track-path-column] .album-track-table__frame { --album-track-table-columns: 36px minmax(140px, 1fr) minmax(160px, .9fr) minmax(54px, auto); }
+.album-track-table[data-track-path-column][data-track-problem-column] .album-track-table__frame { --album-track-table-columns: 36px minmax(140px, 1fr) minmax(160px, .9fr) 20px minmax(54px, auto); }
+@container (max-width: 520px) {
+  .album-track-table[data-track-path-column] .album-track-table__frame { --album-track-table-columns: 36px minmax(0, 1fr) minmax(54px, auto); }
+  .album-track-table[data-track-path-column][data-track-problem-column] .album-track-table__frame { --album-track-table-columns: 36px minmax(0, 1fr) 20px minmax(54px, auto); }
+  .album-track-table [data-cdt-column="path"] { display: none; }
+}
 .album-track-table__disc { min-width: 0; }
 .album-track-table__disc + .album-track-table__disc { margin-top: 14px; }
 .album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
@@ -23,11 +33,12 @@
   background: var(--appearance-table-surface, color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 94%, var(--appearance-ink, var(--text, #f3f6fa))));
   color: var(--appearance-ink, var(--text));
 }
-.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table {
+/* Each summary (main-album total and final total) receives the table edge handoff. */
+.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:is(:last-of-type, :has(> .album-track-table__total)) .compact-data-table {
   position: relative;
   border-bottom-right-radius: 0;
 }
-.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table::after {
+.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:is(:last-of-type, :has(> .album-track-table__total)) .compact-data-table::after {
   content: '';
   pointer-events: none;
   position: absolute;
@@ -149,7 +160,10 @@
 .album-track-table__total {
   position: relative;
   isolation: isolate;
-  width: min(54%, 390px);
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: min(54%, 390px);
+  max-width: 100%;
   margin: -1px 0 0 auto;
   padding: 12px 12px 10px 28px;
   border-right: 1px solid transparent;
@@ -161,6 +175,8 @@
   text-align: right;
   font-weight: 700;
 }
+/* A summary and its duration always stay on one line, on every screen width. */
+.album-track-table__total > div { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .album-track-table__total::before {
   content: '';
   position: absolute;

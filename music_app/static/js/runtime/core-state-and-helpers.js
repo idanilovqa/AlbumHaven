@@ -400,12 +400,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  modalVersionContextMenu: {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  },
   versionPicker: {
     album: null,
     selectedTargetKey: '',

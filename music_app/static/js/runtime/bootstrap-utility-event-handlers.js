@@ -13,6 +13,15 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const openTagEditorFolderButton = event.target.closest('[data-open-tag-editor-folder]');
+  if (openTagEditorFolderButton) {
+    event.preventDefault();
+    if (openTagEditorFolderButton.disabled) return;
+    const trackPath = openTagEditorFolderButton.getAttribute('data-open-tag-editor-folder') || '';
+    void openAlbumInExplorer({ name: '', tracks: [{ path: trackPath }] });
+    return;
+  }
+
   const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
   if (exceptionOption) {
     event.preventDefault();

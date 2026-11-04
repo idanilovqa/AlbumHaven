@@ -124,7 +124,9 @@ export class ArtistPageSettingsActions {
     await expect(this.artistPageSettings.nonAlbumNumberCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumTrackCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumPathCells).toHaveCount(tracks.length);
-    await expect(this.artistPageSettings.nonAlbumProblemCells).toHaveCount(tracks.length);
+    // Owner rule: the Problematic Files slot exists only when a listed loose track is problematic.
+    await expect(this.artistPageSettings.nonAlbumProblemCells)
+      .toHaveCount(tracks.some((track) => track.problematic) ? tracks.length : 0);
     await expect(this.artistPageSettings.nonAlbumDurationCells).toHaveCount(tracks.length);
 
     for (const track of tracks) {

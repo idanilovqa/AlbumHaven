@@ -2455,7 +2455,18 @@ function renderTagEditorArtwork(selectedPaths) {
   const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+  const canOpenFolder = Boolean(folderPath) && !(typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location'));
+  // Same ActionButton and open-location route as the Album Details folder action.
+  const openFolderButton = folderPath ? ButtonComponent.renderActionButton({
+    ariaLabel: 'Open this folder in File Explorer',
+    title: 'Open this folder in File Explorer',
+    disabled: !canOpenFolder,
+    className: 'tag-editor-open-folder',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
+    attributes: { 'data-open-tag-editor-folder': focusedPath },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${openFolderButton}</div>`;
 }
 
 function getTagEditorFocusedPath() {

@@ -73,8 +73,7 @@ html .recent-search-popover { background: var(--appearance-panel-background, var
 html .gallery-options-menu,
 html .status-context-menu,
 html .album-card-context-menu { background: rgba(var(--appearance-panel-background-rgb, 28, 31, 38), 0.98); }
-html .utility-problem-filter-menu,
-html .track-modal-version-context-menu { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98); }
+html .utility-problem-filter-menu { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98); }
 html .repair-progress-card { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.96); }
 html .utility-loop-speed-menu { background: rgba(var(--appearance-panel-background-rgb, 8, 28, 24), 0.98); }
 html .non-album-modal-dialog {
@@ -1133,7 +1132,7 @@ html .cover-lookup-drawer {
   .cover-lookup-drawer, .account-menu, .member-actions-menu,
   .gallery-options-menu, .status-context-menu, .album-card-context-menu,
   .recent-search-popover, .utility-problem-filter-menu,
-  .track-modal-version-context-menu, .repair-progress-card, .utility-loop-speed-menu
+  .repair-progress-card, .utility-loop-speed-menu
 ):not(:where([data-trigger-anchor-context='content'])) {
   --appearance-focus-outline: var(--appearance-focus);
   --appearance-interaction-outline: var(--appearance-panel-interaction-outline);

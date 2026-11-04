@@ -106,9 +106,37 @@ function buildAlbumTrackTableHtml(config = {}) {
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
+  const totalLength = String(config.totalLength || '').trim();
+  const mainLength = String(config.mainLength || '').trim();
+  const bonusLength = String(config.bonusLength || '').trim();
+  const summaryLine = (className, label, value) => (
+    `<div class="${className}">${escapeHtml(label)}: ${escapeHtml(value)}</div>`
+  );
+  const summaryBox = (lines) => {
+    const html = lines.filter(Boolean).join('');
+    return html ? `<div class="album-track-table__total">${html}</div>` : '';
+  };
+  // Column priority: number, title and length always fit; the Problematic Files slot exists only when a
+  // listed track needs it; File path is optional and yields first when the table narrows (see CSS).
+  const hasProblemColumn = groups.some((group) => (Array.isArray(group?.tracks) ? group.tracks : [])
+    .some((track) => Boolean(track?.isProblematic)));
+  const groupLabel = (group) => String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+  // The main-album total closes the last main disc; bonus discs then end with their own length and the album total.
+  const bonusGroups = groups.filter((group) => group?.isBonus);
+  const lastMainIndex = groups.reduce((last, group, index) => (group?.isBonus ? last : index), -1);
+  const splitTotals = Boolean(mainLength) && lastMainIndex >= 0 && lastMainIndex < groups.length - 1;
+  const bonusLabel = bonusGroups.length === 1 ? (groupLabel(bonusGroups[0]) || 'Bonus Disc') : 'Bonus Discs';
+  const mainSummaryHtml = splitTotals
+    ? summaryBox([summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength)])
+    : '';
+  const finalSummaryHtml = summaryBox([
+    !splitTotals && mainLength ? summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength) : '',
+    bonusLength ? summaryLine('album-track-table__bonus-total', `${bonusLabel} Length`, bonusLength) : '',
+    totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
+  ]);
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
-    const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+    const label = groupLabel(group);
     const showLabel = Boolean(label) && (
       forceGroupLabels
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
@@ -117,16 +145,14 @@ function buildAlbumTrackTableHtml(config = {}) {
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
+      ...(hasProblemColumn ? [{ key: 'problem', label: 'Problem', header: 'absent', action: true }] : []),
       { key: 'duration', label: 'Length', action: true },
     ];
     const table = buildCompactDataTable({
       id: `${idPrefix}-tracks-${groupIndex + 1}`,
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columns: 'var(--album-track-table-columns)',
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
@@ -134,23 +160,16 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
+    const summaryHtml = groupIndex === lastMainIndex ? mainSummaryHtml : '';
     if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}${summaryHtml}</details>`;
     }
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
-    return `<section class="album-track-table__disc">${heading}${table}</section>`;
+    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>`;
   }).join('');
-  const totalLength = String(config.totalLength || '').trim();
-  const mainLength = String(config.mainLength || '').trim();
-  const bonusLength = String(config.bonusLength || '').trim();
-  const summaries = [
-    totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
-    mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
-    bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
-  ].join('');
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {

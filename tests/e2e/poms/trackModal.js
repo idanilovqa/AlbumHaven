@@ -309,7 +309,7 @@ export class TrackModal extends BasePage {
       .filter(Boolean);
     return {
       headers: normalize(await this.discHeaders.allTextContents()),
-      totals: normalize(await this.albumTrackTable.total.locator(':scope > *').allTextContents()),
+      totals: normalize(await this.albumTrackTable.summaryLines.allTextContents()),
     };
   }
 

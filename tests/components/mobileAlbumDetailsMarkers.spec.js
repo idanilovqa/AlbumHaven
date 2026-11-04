@@ -8,11 +8,11 @@ for (const width of [320, 390]) for (const layout of ['classic_bar', 'stacked_ba
     await page.setViewportSize({ width, height: 720 });
     await page.setContent(`<style>body{margin:0}.shell-main-surface{position:relative}#mobile-page-outlet{height:420px;overflow:auto}#track-modal-cover{height:180px}.gallery-bar__context{min-width:0;flex:1}#mobile-page-header{display:flex;gap:6px}#mobile-page-title{font-size:16px}#mobile-page-cover{width:40px;height:40px}</style>
       <main class="shell-main-surface"><header id="mobile-page-header" class="mobile-page-header"><button id="mobile-back-button">Back</button><img id="mobile-page-cover" hidden><div class="gallery-bar__context"><h1 id="mobile-page-title" class="gallery-bar__title">A long album title</h1><p class="gallery-bar__summary" id="mobile-page-summary">Artist · 2026</p></div></header><div id="mobile-page-outlet" class="mobile-page-outlet" data-mobile-page-kind="album"><section id="track-modal"><div class="mobile-album-overview"><div class="mobile-album-overview__rail"></div><div id="track-modal-cover"></div><div class="mobile-album-identity"></div></div><div style="height:1200px">Tracks</div></section></div></main>`);
-    for (const file of ['runtime/album-details-components.css', 'mobile-layout.css']) {
+    for (const file of ['runtime/alert-components.css', 'runtime/album-details-components.css', 'mobile-layout.css']) {
       await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
     }
     await page.addScriptTag({ content: 'function escapeHtml(v){return String(v || "");} function usesMobilePageLayout(){return true;}' });
-    for (const file of ['gallery-main-components.js', 'album-details-components.js', 'mobile-navigation.js']) {
+    for (const file of ['alert-components.js', 'gallery-main-components.js', 'album-details-components.js', 'mobile-navigation.js']) {
       await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
     }
     await page.evaluate(layout => {
@@ -53,8 +53,10 @@ for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) test(`$
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent('<html><body><main></main></body></html>');
   await page.addStyleTag({ content: ':root { --library-source-hoard: #d6a34c; --library-source-arrivals: #58bf88; }' });
+  await page.addStyleTag({ path: path.join(staticRoot, 'css/runtime/alert-components.css') });
   await page.addStyleTag({ path: path.join(staticRoot, 'css/runtime/album-details-components.css') });
   await page.addScriptTag({ content: 'function escapeHtml(value) { return String(value || ""); }' });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/alert-components.js') });
   await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/gallery-main-components.js') });
   await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/album-details-components.js') });
   await page.evaluate((layout) => {
@@ -68,13 +70,21 @@ for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) test(`$
   const arrivals = page.locator('.album-details-source-marker--new_arrivals');
   await expect(hoard).toHaveText('Hoard');
   await expect(arrivals).toHaveText('New Arrivals');
-  await expect(hoard).toHaveCSS('color', 'rgb(214, 163, 76)');
-  await expect(arrivals).toHaveCSS('color', 'rgb(88, 191, 136)');
+  // Each source is a compact alert whose edge is that source's library color, not plain text.
+  const edge = locator => locator.evaluate(element => getComputedStyle(element).getPropertyValue('--alert-edge').trim());
+  expect(await edge(hoard)).toBe('#d6a34c');
+  expect(await edge(arrivals)).toBe('#58bf88');
+  await expect(hoard).toHaveAttribute('tabindex', '0');
+  const collapsed = await hoard.boundingBox();
+  await hoard.hover();
+  await expect.poll(async () => (await hoard.boundingBox()).width).toBeGreaterThan(collapsed.width + 20);
+  await page.mouse.move(0, 0);
+  await expect.poll(async () => (await hoard.boundingBox()).width).toBeLessThanOrEqual(collapsed.width + 1);
   const boxes = await Promise.all([type, hoard, arrivals].map(locator => locator.boundingBox()));
   for (const box of boxes) expect(box).not.toBeNull();
   expect(boxes[1].x).toBeGreaterThanOrEqual(boxes[0].x + boxes[0].width);
   expect(boxes[2].x).toBeGreaterThanOrEqual(boxes[1].x + boxes[1].width);
-  expect(Math.abs(boxes[1].y - boxes[0].y)).toBeLessThanOrEqual(1);
+  expect(Math.abs((boxes[1].y + boxes[1].height / 2) - (boxes[0].y + boxes[0].height / 2))).toBeLessThanOrEqual(1);
   expect(boxes[2].x + boxes[2].width).toBeLessThanOrEqual(390);
 });
 

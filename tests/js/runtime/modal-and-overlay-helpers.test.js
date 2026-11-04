@@ -810,16 +810,17 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /<div class="album-track-table" data-track-path-column /);
+  assert.match(markup, /--cdt-columns: var\(--album-track-table-columns\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
-  assert.match(markup, /data-cdt-column="problem"/);
+  assert.doesNotMatch(markup, /data-cdt-column="problem"/, 'no loose track is problematic, so the slot is removed');
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
   assert.match(markup, /class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);

@@ -15,6 +15,7 @@ function hideAlbumCardContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.albumKey = '';
+  menu.dataset.menuKind = '';
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
@@ -24,6 +25,7 @@ function showAlbumCardContextMenu(x, y, album) {
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
+  menu.dataset.menuKind = 'album';
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
     ? state.view.manual_version_links

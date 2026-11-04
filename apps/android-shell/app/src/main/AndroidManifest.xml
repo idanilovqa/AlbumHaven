@@ -30,10 +30,29 @@
             </intent-filter>
         </activity>
 
-        <!-- Not exported: system controls reach it through the platform media session, the Activity binds in-process. -->
+        <!--
+            Exported so System UI can bind its media browser for playback resumption: the paused,
+            timed-out, killed or rebooted session keeps a media card whose play resumes without the app.
+            The session accepts only trusted controllers; the Activity's in-process binder needs an
+            unguessable bind intent.
+        -->
         <service
             android:name=".PlaybackService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Media keys and Bluetooth play after the process ended start the service to resume. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

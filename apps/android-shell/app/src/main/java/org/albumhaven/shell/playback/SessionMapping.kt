@@ -100,26 +100,49 @@ object SessionMapping {
         )
     }
 
-    /** The persisted last queue: shown paused with no controls, because nothing it holds can start playback. */
-    fun restoredView(queue: RestorableQueue): SessionView = SessionView(
-        items = queue.items.mapIndexed { position, item ->
-            SessionItem(
-                uid = "restored:$position",
-                title = item.title,
-                artist = item.artist,
-                album = item.album,
-                artworkUri = item.artworkUrl?.let { queue.origin + it },
-                durationMs = item.durationMs,
-            )
-        },
-        currentIndex = queue.currentIndex,
-        positionMs = queue.positionMs,
-        state = SessionPlaybackState.READY,
-        playWhenReady = false,
-        playing = false,
-        controls = emptySet(),
-        restored = true,
-    )
+    /**
+     * The persisted last queue, shown paused. A resumable one offers play, and previous and next
+     * inside its album, which [Resumption] turns into a fresh load; [resuming] shows it buffering
+     * while that load's references are requested. Nothing else it holds can start playback.
+     */
+    fun restoredView(queue: RestorableQueue, resuming: Boolean = false): SessionView {
+        val index = queue.currentIndex
+        val group = queue.items[index].queueGroup
+        fun resumable(position: Int) = queue.items.getOrNull(position)?.let { it.queueGroup == group && it.resumeToken != null } == true
+        return SessionView(
+            items = queue.items.mapIndexed { position, item ->
+                SessionItem(
+                    uid = "restored:$position",
+                    title = item.title,
+                    artist = item.artist,
+                    album = item.album,
+                    artworkUri = item.artworkUrl?.let { queue.origin + it },
+                    durationMs = item.durationMs,
+                )
+            },
+            currentIndex = index,
+            positionMs = queue.positionMs,
+            state = if (resuming) SessionPlaybackState.BUFFERING else SessionPlaybackState.READY,
+            playWhenReady = resuming,
+            playing = false,
+            controls = if (!queue.resumable) {
+                emptySet()
+            } else {
+                buildSet {
+                    add(SystemControl.PLAY_PAUSE)
+                    if (resumable(index - 1)) add(SystemControl.PREVIOUS_ITEM)
+                    if (resumable(index + 1)) add(SystemControl.NEXT_ITEM)
+                }
+            },
+            restored = true,
+        )
+    }
+
+    /** [notice] replaces the current item's artist line, so the media card says why playback did not resume. */
+    fun withNotice(view: SessionView, notice: String?): SessionView {
+        if (notice == null || view.items.isEmpty()) return view
+        return view.copy(items = view.items.mapIndexed { position, item -> if (position == view.currentIndex) item.copy(artist = notice) else item })
+    }
 
     /** Returns null when the request does not apply to the native queue as it is now. */
     fun route(request: SystemRequest, snapshot: NativePlaybackSnapshot): SystemAction? {

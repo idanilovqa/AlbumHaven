@@ -21,17 +21,21 @@ import com.google.common.util.concurrent.SettableFuture
  * The native queue as a Media3 player, so the session, its notification, the lock screen, media
  * buttons and Bluetooth see one ordinary player. Every request becomes a [SystemAction] sent to
  * the controller as [CommandSource.SYSTEM]; state comes only from the controller's snapshot.
- * Runs on the main looper.
+ * [resume] may take a request first, to resume a restored or long-paused queue with fresh
+ * references; it answers null to leave the request to the controller. Runs on the main looper.
  */
 @OptIn(UnstableApi::class)
 class NativeMediaPlayer(
     looper: Looper,
     private val controller: () -> NativePlaybackController,
     private val origin: () -> String,
+    private val resume: (SystemRequest) -> ListenableFuture<*>? = { null },
 ) : SimpleBasePlayer(looper) {
 
     private val handler = Handler(looper)
     private var restored: RestorableQueue? = null
+    private var resuming = false
+    private var resumeFailure: PlaybackException? = null
     private var playlistKey: List<SessionItem>? = null
     private var playlist: List<MediaItemData> = emptyList()
     private var lastPositionMs = 0L
@@ -42,6 +46,17 @@ class NativeMediaPlayer(
     /** Shows the queue saved before process death until a real queue is applied. */
     fun showRestored(queue: RestorableQueue?) {
         restored = queue
+        invalidateState()
+    }
+
+    /**
+     * While [resuming], a restored queue shows as buffering. A [failure] is the player error until
+     * the next attempt, and its message replaces the current item's artist line, so the media card
+     * says why playback did not resume.
+     */
+    fun showResumption(resuming: Boolean, failure: PlaybackException? = null) {
+        this.resuming = resuming
+        resumeFailure = failure
         invalidateState()
     }
 
@@ -64,8 +79,11 @@ class NativeMediaPlayer(
 
     override fun getState(): State {
         val snapshot = controller().snapshot
-        val view = restored?.takeIf { snapshot.items.isEmpty() }?.let(SessionMapping::restoredView)
-            ?: SessionMapping.view(snapshot, origin())
+        val view = SessionMapping.withNotice(
+            restored?.takeIf { snapshot.items.isEmpty() }?.let { SessionMapping.restoredView(it, resuming) }
+                ?: SessionMapping.view(snapshot, origin()),
+            resumeFailure?.message,
+        )
         val builder = State.Builder()
             .setAvailableCommands(commands(view))
             .setAudioAttributes(MUSIC)
@@ -84,9 +102,9 @@ class NativeMediaPlayer(
                     },
                 )
         }
-        if (view.failed) {
-            builder.setPlayerError(PlaybackException("Playback failed", null, PlaybackException.ERROR_CODE_UNSPECIFIED))
-        }
+        val failure = resumeFailure ?: PlaybackException("Playback failed", null, PlaybackException.ERROR_CODE_UNSPECIFIED)
+            .takeIf { view.failed }
+        failure?.let(builder::setPlayerError)
         discontinuityMs?.let { builder.setPositionDiscontinuity(Player.DISCONTINUITY_REASON_INTERNAL, it) }
         return builder.build()
     }
@@ -104,6 +122,7 @@ class NativeMediaPlayer(
 
     /** Completes once the controller applied the command, so the next [getState] already reflects it. */
     private fun dispatch(request: SystemRequest): ListenableFuture<*> {
+        resume(request)?.let { return it }
         val target = controller()
         val action = SessionMapping.route(request, target.snapshot) ?: return Futures.immediateVoidFuture()
         val from = CommandSource.SYSTEM

@@ -9,4 +9,7 @@
     <string name="recovery_update_title">Update required</string>
     <string name="recovery_update_message">This version of Album Haven can’t open the current site. Install the latest app to continue.</string>
     <string name="recovery_retry">Retry</string>
+    <string name="playback_resume_sign_in">Sign in to Album Haven to keep listening</string>
+    <string name="playback_resume_unavailable">Open Album Haven to keep listening</string>
+    <string name="playback_resume_open_app">Open Album Haven</string>
 </resources>

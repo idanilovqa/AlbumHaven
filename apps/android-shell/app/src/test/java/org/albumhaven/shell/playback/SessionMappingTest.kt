@@ -92,9 +92,9 @@ class SessionMappingTest {
     }
 
     @Test
-    fun aRestoredQueueIsShownPausedWithoutControls() {
+    fun aRestoredQueueWithoutResumeTokensIsShownPausedWithoutControls() {
         val restored = RestorableQueue(
-            origin, 7, 1, 30_000,
+            origin, TEST_CLIENT_ID, 7, 1, 30_000,
             listOf(RestorableItem("Signal A", "A", "B", "/static/a.jpg", 1_000), RestorableItem("Signal B", "A", "B", null, 2_000)),
         )
         val view = SessionMapping.restoredView(restored)
@@ -105,6 +105,24 @@ class SessionMappingTest {
         assertEquals(1, view.currentIndex)
         assertEquals(30_000, view.positionMs)
         assertEquals("$origin/static/a.jpg", view.items[0].artworkUri)
+    }
+
+    @Test
+    fun aResumableRestoredQueueOffersPlayAndSkipsInsideItsAlbumAndShowsResumingAndFailure() {
+        fun item(title: String, group: Int, token: String?) =
+            RestorableItem(title, "A", "B", null, 1_000, listenKey = "lk-$title", queueGroup = group, resumeToken = token)
+        val restored = RestorableQueue(
+            origin, TEST_CLIENT_ID, 7, 1, 30_000,
+            listOf(item("a", 0, "rt-a"), item("b", 0, "rt-b"), item("c", 1, "rt-c")),
+        )
+        val view = SessionMapping.restoredView(restored)
+        assertEquals(setOf(SystemControl.PLAY_PAUSE, SystemControl.PREVIOUS_ITEM), view.controls)
+        val resuming = SessionMapping.restoredView(restored, resuming = true)
+        assertEquals(SessionPlaybackState.BUFFERING to true, resuming.state to resuming.playWhenReady)
+        val noticed = SessionMapping.withNotice(view, "Sign in")
+        assertEquals(listOf("A", "Sign in", "A"), noticed.items.map { it.artist })
+        assertEquals(view, SessionMapping.withNotice(view, null))
+        assertTrue(SessionMapping.restoredView(restored.copy(items = listOf(item("a", 0, "rt-a"), item("b", 0, null)))).controls.isEmpty())
     }
 
     @Test

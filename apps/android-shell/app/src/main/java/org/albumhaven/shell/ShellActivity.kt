@@ -116,7 +116,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             ?.getBundle(STATE_WEB_VIEW)
         recovery.show(RecoveryState.LOADING, originHost())
         playbackBound = bindService(
-            Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_BIND_SHELL),
+            PlaybackService.shellBindIntent(this),
             playbackConnection,
             BIND_AUTO_CREATE,
         )

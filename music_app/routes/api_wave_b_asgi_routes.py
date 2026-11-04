@@ -729,8 +729,21 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
     try:
         result = await run_in_threadpool(update_now_playing, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, 400))
+        return _now_playing_failure_response(exc)
     return JSONResponse(_lastfm_submission_response(result, success_key="now_playing"))
+
+
+# Last.fm error 8 asks the caller to try again; a repeated now-playing is harmless.
+_NOW_PLAYING_RETRY_ERROR_CODES = frozenset({8})
+
+
+def _now_playing_failure_response(exc: LastfmError) -> JSONResponse:
+    """A transient Last.fm failure is a retryable 503, with `Retry-After` when rate limited; any other is a final 400."""
+    transient = (exc.retryable or exc.code in _NOW_PLAYING_RETRY_ERROR_CODES) and exc.error_kind != "configuration_error"
+    if not transient:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    headers = {"Retry-After": str(exc.retry_after_seconds)} if exc.retry_after_seconds is not None else None
+    return JSONResponse({"ok": False, "error": str(exc), "retryable": True}, status_code=503, headers=headers)
 
 
 @router.post("/playback/session/scrobble")

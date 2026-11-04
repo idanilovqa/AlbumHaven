@@ -1678,3 +1678,41 @@ def test_reference_listen_writes_recheck_media_read(playback_inventory, playback
         assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=path_body)[0] == 200
     finally:
         claims.release(listener, client_id=client_id, claim_token=token)
+
+
+def test_now_playing_retries_only_transient_lastfm_failures(playback_inventory, playback_app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.lastfm import LastfmError
+
+    fixture = playback_inventory
+    claims, reference, client_id, token = native_listen_claim(fixture, playback_app)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    failure = {}
+
+    def fail(*_args, **_kwargs):
+        raise failure["error"]
+
+    monkeypatch.setattr(routes, "update_now_playing", fail)
+    cases = {
+        "service offline": (LastfmError("offline", code=11, retryable=True), 503, None),
+        "temporarily unavailable": (LastfmError("try later", code=16, retryable=True), 503, None),
+        "rate limited": (LastfmError("slow down", code=29, retryable=True, retry_after_seconds=60), 503, "60"),
+        "operation failed": (LastfmError("backend failed", code=8), 503, None),
+        "network": (LastfmError("timed out", retryable=True, error_kind="network_error"), 503, None),
+        "invalid session": (LastfmError("bad session", code=9, reauthentication_required=True), 400, None),
+        "invalid parameters": (LastfmError("bad params", code=6), 400, None),
+        "server unconfigured": (LastfmError("unconfigured", retryable=True, error_kind="configuration_error"), 400, None),
+    }
+    try:
+        for name, (error, expected, retry_after) in cases.items():
+            failure["error"] = error
+            body = measured_listen_body(client_id, token, session_id=str(uuid4()), track={"playbackRef": reference},
+                                        sequence=0)
+            status, headers, raw = run_asgi_request(playback_app, "POST", "/playback/session/now-playing", json_body=body)
+            assert status == expected, (name, decode_json(raw))
+            answer = decode_json(raw)
+            assert answer["ok"] is False and answer["error"] == str(error), name
+            assert answer.get("retryable") is (True if expected == 503 else None), name
+            assert dict(headers).get("retry-after") == retry_after, name
+    finally:
+        claims.release(fixture.actor, client_id=client_id, claim_token=token)

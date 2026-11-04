@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from http.client import HTTPException
 from typing import Any
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
@@ -42,12 +43,15 @@ class LastfmError(RuntimeError):
         retryable: bool = False,
         reauthentication_required: bool = False,
         error_kind: str = "provider_error",
+        retry_after_seconds: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = bool(retryable)
         self.reauthentication_required = bool(reauthentication_required)
         self.error_kind = error_kind
+        # Set when Last.fm rate-limited the request: how long to wait before sending it again.
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,9 @@ class LastfmSubmissionOutcome:
 _RETRYABLE_ERROR_CODES = frozenset({11, 16, 29})
 _REAUTHENTICATION_ERROR_CODES = frozenset({9})
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_RATE_LIMIT_ERROR_CODE = 29
+# Last.fm names no wait for a rate limit (error 29), so a limited request waits a minute unless told otherwise.
+_RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 
 
 def load_lastfm_settings(config: dict[str, Any], *, account_id=None) -> dict[str, Any]:
@@ -188,7 +195,16 @@ def _lastfm_error_from_body(
     *,
     fallback: str,
     http_status: int | None = None,
+    retry_after: str | None = None,
 ) -> LastfmError:
+    error = _lastfm_error_from_parsed_body(body, fallback=fallback, http_status=http_status)
+    if error.code == _RATE_LIMIT_ERROR_CODE or http_status == 429:
+        text = str(retry_after or "").strip()
+        error.retry_after_seconds = int(text) if text.isdigit() else _RATE_LIMIT_RETRY_AFTER_SECONDS
+    return error
+
+
+def _lastfm_error_from_parsed_body(body: bytes, *, fallback: str, http_status: int | None) -> LastfmError:
     retryable_http_error = int(http_status or 0) in _RETRYABLE_HTTP_STATUSES
     if not body:
         return LastfmError(fallback, retryable=retryable_http_error)
@@ -262,11 +278,19 @@ def _post_lastfm(config: dict[str, Any], method: str, params: dict[str, Any]) ->
             exc.read(),
             fallback=f"Last.fm request failed with HTTP {exc.code}.",
             http_status=int(exc.code),
+            retry_after=exc.headers.get("Retry-After") if exc.headers else None,
         ) from exc
     except URLError as exc:
         reason = str(exc.reason or "Network error contacting Last.fm").strip()
         raise LastfmError(
             reason or "Network error contacting Last.fm",
+            retryable=True,
+            error_kind="network_error",
+        ) from exc
+    except (OSError, HTTPException) as exc:
+        # A timeout or dropped connection while the answer is read.
+        raise LastfmError(
+            "Network error contacting Last.fm",
             retryable=True,
             error_kind="network_error",
         ) from exc

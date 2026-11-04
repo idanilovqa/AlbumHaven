@@ -285,9 +285,14 @@ class MusicBrainzEnrichmentPostgresRepository:
               and jobs.target_kind = 'artist'
               and jobs.state = 'leased'
               and jobs.lease_owner = %(worker_id)s
-            returning true as updated;
+            returning true as updated, jobs.local_artist_id;
         """
-        return bool(self._execute_one(sql, params).get("updated"))
+        return self._update_job_and_sync_problem(
+            sql,
+            params,
+            provider_reason=_provider_problem_reason(params["classification"]),
+            provider_context=params["safe_error"],
+        )
 
     def complete_job(
         self,
@@ -328,9 +333,39 @@ class MusicBrainzEnrichmentPostgresRepository:
               and jobs.target_kind = 'artist'
               and jobs.state = 'leased'
               and jobs.lease_owner = %(worker_id)s
-            returning true as updated;
+            returning true as updated, jobs.local_artist_id;
         """
-        return bool(self._execute_one(sql, params).get("updated"))
+        return self._update_job_and_sync_problem(
+            sql,
+            params,
+            provider_reason=(
+                _provider_problem_reason(params["classification"])
+                if terminal_state == "exhausted"
+                else None
+            ),
+            provider_context=params["safe_error"] or "MusicBrainz provider attempts were exhausted.",
+        )
+
+    def _update_job_and_sync_problem(
+        self,
+        sql: str,
+        params: dict[str, object],
+        *,
+        provider_reason: str | None,
+        provider_context: str,
+    ) -> bool:
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                row = _row_mapping(connection.execute(sql, params).fetchone())
+                if row.get("updated"):
+                    connection.execute(_sync_problem_sql(), _problem_params(
+                        local_artist_id=row.get("local_artist_id"),
+                        observed_at=params["observed_at"],
+                        job_id=params["job_id"],
+                        provider_reason=provider_reason,
+                        provider_context=provider_context,
+                    ))
+        return bool(row.get("updated"))
 
     def replace_candidates(
         self,
@@ -357,6 +392,9 @@ class MusicBrainzEnrichmentPostgresRepository:
                 connection.execute(_upsert_candidate_artists_sql(), params)
                 connection.execute(_insert_candidates_sql(), params)
                 row = _row_mapping(connection.execute(_upsert_candidate_match_sql(), params).fetchone())
+                connection.execute(_sync_problem_sql(), _problem_params(
+                    local_artist_id=local_artist_id, observed_at=observed_at,
+                ))
         return _integer(row.get("candidate_count"))
 
     def record_automatic_outcome(
@@ -383,8 +421,13 @@ class MusicBrainzEnrichmentPostgresRepository:
             **_alias_array_params(aliases),
             **_tag_array_params(tags),
         }
-        sql = _automatic_outcome_sql()
-        return self._execute_one(sql, params)
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                row = _row_mapping(connection.execute(_automatic_outcome_sql(), params).fetchone())
+                connection.execute(_sync_problem_sql(), _problem_params(
+                    local_artist_id=params["local_artist_id"], observed_at=params["observed_at"],
+                ))
+        return row
 
     def assign_manual_match(
         self,
@@ -422,6 +465,10 @@ class MusicBrainzEnrichmentPostgresRepository:
             with _transaction(connection):
                 cursors = [connection.execute(sql, params) for sql in statements]
                 result = _row_mapping(cursors[-1].fetchone())
+                if result.get("assigned"):
+                    connection.execute(_sync_problem_sql(), _problem_params(
+                        local_artist_id=params["local_artist_id"], observed_at=params["observed_at"],
+                    ))
         return bool(result.get("assigned"))
 
     def replace_artist_tags(
@@ -639,6 +686,11 @@ def _bounded_text(value: object, limit: int, *, required: bool = False) -> str:
     return text
 
 
+def _country_code(value: object) -> str | None:
+    code = _bounded_text(value, 8).upper()
+    return code if len(code) == 2 and code.isalpha() else None
+
+
 def _confidence(value: object) -> float:
     try:
         number = float(value)
@@ -698,6 +750,7 @@ def _artist_projection(
         "sort_name": _bounded_text(artist.get("sort_name"), 512) or None,
         "preferred_native_name": _bounded_text(artist.get("preferred_native_name"), 512) or None,
         "artist_kind": _bounded_text(artist.get("artist_type") or artist.get("artist_kind"), 64) or None,
+        "disambiguation": _bounded_text(artist.get("disambiguation"), 1024) or None,
         "country_code": _bounded_text(artist.get("country_code"), 8).upper() or None,
         "country_name": _bounded_text(artist.get("country_name"), 128) or None,
         "aliases": _alias_rows(artist.get("aliases")),
@@ -793,6 +846,9 @@ def _candidate_rows(value: object) -> list[dict[str, object]]:
         rows.append({
             "mbid": mbid,
             "canonical_name": _bounded_text(raw.get("canonical_name"), 512, required=True),
+            "disambiguation": _bounded_text(raw.get("disambiguation"), 1024) or None,
+            "artist_kind": _bounded_text(raw.get("artist_kind") or raw.get("artist_type"), 64) or None,
+            "country_code": _country_code(raw.get("country_code")),
             "score": _confidence(score),
             "evidence": _bounded_text(raw.get("evidence_summary"), 2048, required=True),
             "rejection": _bounded_text(raw.get("rejection_reason"), 512) or None,
@@ -810,6 +866,7 @@ def _projection_params(projection: dict[str, object] | None) -> dict[str, object
         "sort_name": projection.get("sort_name"),
         "preferred_native_name": projection.get("preferred_native_name"),
         "artist_kind": projection.get("artist_kind"),
+        "disambiguation": projection.get("disambiguation"),
         "country_code": projection.get("country_code"),
         "country_name": projection.get("country_name"),
     }
@@ -839,10 +896,127 @@ def _candidate_array_params(rows: list[dict[str, object]]) -> dict[str, object]:
     return {
         "candidate_mbids": [row["mbid"] for row in rows],
         "candidate_names": [row["canonical_name"] for row in rows],
+        "candidate_disambiguations": [row["disambiguation"] for row in rows],
+        "candidate_kinds": [row["artist_kind"] for row in rows],
+        "candidate_countries": [row["country_code"] for row in rows],
         "candidate_scores": [row["score"] for row in rows],
         "candidate_evidence": [row["evidence"] for row in rows],
         "candidate_rejections": [row["rejection"] for row in rows],
     }
+
+
+_PROVIDER_PROBLEM_REASONS = {
+    "catch_up_pending": "musicbrainz_mirror_replication_pending",
+    "provider_unavailable": "musicbrainz_provider_retry_exhausted",
+    "rate_limited": "musicbrainz_provider_retry_exhausted",
+}
+
+
+def _provider_problem_reason(classification: object) -> str | None:
+    return _PROVIDER_PROBLEM_REASONS.get(str(classification or ""))
+
+
+def _problem_params(
+    *,
+    local_artist_id: object,
+    observed_at: datetime,
+    job_id: object = None,
+    provider_reason: str | None = None,
+    provider_context: str = "MusicBrainz evidence requires review.",
+) -> dict[str, object]:
+    return {
+        "local_artist_id": _positive_id(local_artist_id),
+        "observed_at": observed_at,
+        "job_id": _positive_id(job_id) if job_id is not None else None,
+        "provider_reason": provider_reason,
+        "provider_context": _bounded_text(provider_context, 2048, required=True),
+    }
+
+
+def _sync_problem_sql() -> str:
+    """Make the artist's active MI-02 problem follow its stored match.
+
+    Identity outcomes come from the match row as written, so a protected
+    manual or matched decision never opens a problem. Provider and mirror
+    catch-up problems open only while no durable identity outcome exists.
+    A matched artist resolves every active problem.
+    """
+    return _active_library_cte() + """
+        , desired as (
+          select
+            active_library.library_id,
+            artists.id as local_artist_id,
+            matches.state as match_state,
+            matches.decision_source,
+            case
+              when matches.state = 'not_found' then 'musicbrainz_artist_not_found'
+              when matches.state = 'ambiguous' then 'musicbrainz_artist_ambiguous'
+              when matches.state = 'conflict' then 'musicbrainz_artist_metadata_conflict'
+              when matches.state = 'manual_review' then 'musicbrainz_manual_review_required'
+              when matches.state is null or matches.state = 'pending'
+                then %(provider_reason)s::text
+              else null
+            end as reason_code,
+            left(
+              case
+                when matches.state in ('not_found', 'ambiguous', 'conflict', 'manual_review')
+                  then matches.evidence_summary
+                else %(provider_context)s
+              end,
+              2048
+            ) as safe_display_context,
+            (
+              select count(*)::integer
+              from library.local_artist_musicbrainz_candidates candidates
+              where candidates.library_id = active_library.library_id
+                and candidates.local_artist_id = artists.id
+            ) as candidate_count
+          from active_library
+          join library.local_artists artists
+            on artists.library_id = active_library.library_id
+           and artists.id = %(local_artist_id)s
+          left join library.local_artist_musicbrainz_matches matches
+            on matches.library_id = active_library.library_id
+           and matches.local_artist_id = artists.id
+        ), resolved as (
+          update library.metadata_enrichment_problems problems
+          set lifecycle_state = 'resolved',
+              resolved_at = %(observed_at)s,
+              resolution_source = case
+                when desired.match_state = 'matched'
+                  then coalesce(desired.decision_source, 'automatic') || '_match'
+                else 'reclassified'
+              end
+          from desired
+          where problems.library_id = desired.library_id
+            and problems.local_artist_id = desired.local_artist_id
+            and problems.target_kind = 'artist'
+            and problems.lifecycle_state = 'active'
+            and problems.reason_code is distinct from desired.reason_code
+            and (desired.match_state = 'matched' or desired.reason_code is not null)
+          returning problems.id
+        )
+        insert into library.metadata_enrichment_problems (
+          library_id, local_artist_id, target_kind, reason_code, lifecycle_state,
+          safe_display_context, candidate_count, related_job_id, observed_at,
+          first_observed_at, last_observed_at
+        )
+        select desired.library_id, desired.local_artist_id, 'artist', desired.reason_code,
+               'active', desired.safe_display_context, desired.candidate_count,
+               %(job_id)s, %(observed_at)s, %(observed_at)s, %(observed_at)s
+        from desired
+        where desired.reason_code is not null
+        on conflict (library_id, local_artist_id, reason_code) where lifecycle_state = 'active'
+        do update set
+          safe_display_context = excluded.safe_display_context,
+          candidate_count = excluded.candidate_count,
+          related_job_id = coalesce(
+            excluded.related_job_id,
+            library.metadata_enrichment_problems.related_job_id
+          ),
+          observed_at = excluded.observed_at,
+          last_observed_at = excluded.last_observed_at;
+    """
 
 
 def _delete_candidates_sql() -> str:
@@ -871,19 +1045,39 @@ def _upsert_candidate_artists_sql() -> str:
             on artists.library_id = active_library.library_id
            and artists.id = %(local_artist_id)s
         )
-        insert into integration.musicbrainz_artists (
-          mbid, canonical_name, refreshed_at, created_at, updated_at
+        , candidate_rows as (
+          select rows.*
+          from active_artist
+          cross join unnest(
+            %(candidate_mbids)s::uuid[], %(candidate_names)s::text[],
+            %(candidate_disambiguations)s::text[], %(candidate_kinds)s::text[],
+            %(candidate_countries)s::text[]
+          ) as rows(mbid, canonical_name, disambiguation, artist_kind, country_code)
+        ), upserted as (
+          insert into integration.musicbrainz_artists (
+            mbid, canonical_name, disambiguation, artist_kind,
+            refreshed_at, created_at, updated_at
+          )
+          select mbid, canonical_name, disambiguation, artist_kind,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
+          from candidate_rows
+          on conflict (mbid) do update
+          set canonical_name = excluded.canonical_name,
+              disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
+              artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+              refreshed_at = excluded.refreshed_at,
+              updated_at = excluded.updated_at
+          returning mbid
         )
-        select rows.mbid, rows.canonical_name, %(observed_at)s,
-               %(observed_at)s, %(observed_at)s
-        from active_artist
-        cross join unnest(
-          %(candidate_mbids)s::uuid[], %(candidate_names)s::text[]
-        ) as rows(mbid, canonical_name)
-        on conflict (mbid) do update
-        set canonical_name = excluded.canonical_name,
-            refreshed_at = excluded.refreshed_at,
-            updated_at = excluded.updated_at;
+        insert into integration.musicbrainz_artist_countries (
+          artist_mbid, country_code, provenance, observed_at
+        )
+        select candidate_rows.mbid, candidate_rows.country_code,
+               'musicbrainz_lookup', %(observed_at)s
+        from candidate_rows
+        join upserted on upserted.mbid = candidate_rows.mbid
+        where candidate_rows.country_code is not null
+        on conflict (artist_mbid, country_code) do nothing;
     """
 
 
@@ -961,18 +1155,19 @@ def _automatic_outcome_sql() -> str:
         ), upsert_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            refreshed_at, created_at, updated_at
+            disambiguation, refreshed_at, created_at, updated_at
           )
           select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
-                 %(preferred_native_name)s, %(artist_kind)s, %(observed_at)s,
-                 %(observed_at)s, %(observed_at)s
+                 %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from active_artist
-          where %(artist_mbid)s is not null
+          where %(artist_mbid)s::uuid is not null
           on conflict (mbid) do update
           set canonical_name = excluded.canonical_name,
               sort_name = excluded.sort_name,
               preferred_native_name = excluded.preferred_native_name,
               artist_kind = excluded.artist_kind,
+              disambiguation = excluded.disambiguation,
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid
@@ -1010,7 +1205,7 @@ def _automatic_outcome_sql() -> str:
                  'musicbrainz', %(observed_at)s
           from upsert_artist
           cross join (select count(*) from removed_countries) removed
-          where %(country_code)s is not null
+          where %(country_code)s::text is not null
           returning 1
         ), removed_tags as (
           delete from integration.musicbrainz_artist_tags tags
@@ -1083,17 +1278,18 @@ def _manual_artist_sql() -> str:
     return _authorized_artist_cte() + """
         insert into integration.musicbrainz_artists (
           mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          refreshed_at, created_at, updated_at
+          disambiguation, refreshed_at, created_at, updated_at
         )
         select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
-               %(preferred_native_name)s, %(artist_kind)s, %(observed_at)s,
-               %(observed_at)s, %(observed_at)s
+               %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
+               %(observed_at)s, %(observed_at)s, %(observed_at)s
         from authorized_artist
         on conflict (mbid) do update
         set canonical_name = excluded.canonical_name,
             sort_name = excluded.sort_name,
             preferred_native_name = excluded.preferred_native_name,
             artist_kind = excluded.artist_kind,
+            disambiguation = excluded.disambiguation,
             refreshed_at = excluded.refreshed_at,
             updated_at = excluded.updated_at;
     """
@@ -1139,7 +1335,7 @@ def _manual_country_sql() -> str:
                'musicbrainz', %(observed_at)s
         from authorized_artist
         cross join (select count(*) from removed) removed_count
-        where %(country_code)s is not null;
+        where %(country_code)s::text is not null;
     """
 
 
@@ -1208,7 +1404,7 @@ def _manual_audit_sql() -> str:
                  'musicbrainz_artist_manual_assignment', %(request_ref)s,
                  %(observed_at)s,
                  jsonb_build_object('local_artist_id', local_artist_id,
-                                    'artist_mbid', %(artist_mbid)s)
+                                    'artist_mbid', %(artist_mbid)s::text)
           from authorized_artist
           returning 1
         )

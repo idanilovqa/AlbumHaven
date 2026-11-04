@@ -32,6 +32,7 @@ class FakeConnection:
     def __init__(self, cursors):
         self._cursors = list(cursors)
         self.calls = []
+        self.problem_syncs = []
         self.transaction_count = 0
 
     def __enter__(self):
@@ -45,6 +46,9 @@ class FakeConnection:
         return nullcontext()
 
     def execute(self, sql, params=None):
+        if "insert into library.metadata_enrichment_problems" in sql:
+            self.problem_syncs.append(params)
+            return FakeCursor()
         self.calls.append((sql, params))
         if not self._cursors:
             raise AssertionError(f"Unexpected SQL: {sql}")
@@ -198,7 +202,7 @@ def test_load_claimed_artist_context_is_safe_current_library_evidence_only():
 
 def test_retry_wait_records_bounded_safe_failure_and_not_before_time():
     retry_at = NOW + timedelta(minutes=15)
-    connection = FakeConnection([FakeCursor(row={"updated": True})])
+    connection = FakeConnection([FakeCursor(row={"updated": True, "local_artist_id": 7})])
 
     updated = repository_for(connection).schedule_retry(
         job_id=17,
@@ -222,7 +226,7 @@ def test_retry_wait_records_bounded_safe_failure_and_not_before_time():
 
 @pytest.mark.parametrize("state", ["succeeded", "needs_review", "exhausted"])
 def test_terminal_completion_is_lease_owned_scoped_and_preserves_artist_data(state):
-    connection = FakeConnection([FakeCursor(row={"updated": True})])
+    connection = FakeConnection([FakeCursor(row={"updated": True, "local_artist_id": 7})])
 
     updated = repository_for(connection).complete_job(
         job_id=17,
@@ -536,3 +540,86 @@ def test_review_projection_whitelists_fields_even_if_driver_row_contains_secrets
     assert "secret" not in repr(row)
     assert "library_id" not in row
     assert len(row["evidence_summary"]) <= 2048
+
+
+@pytest.mark.parametrize(
+    ("classification", "expected_reason"),
+    [
+        ("catch_up_pending", "musicbrainz_mirror_replication_pending"),
+        ("provider_unavailable", "musicbrainz_provider_retry_exhausted"),
+        ("rate_limited", "musicbrainz_provider_retry_exhausted"),
+    ],
+)
+def test_retry_wait_syncs_the_provider_problem_in_the_same_transaction(classification, expected_reason):
+    connection = FakeConnection([FakeCursor(row={"updated": True, "local_artist_id": 7})])
+
+    repository_for(connection).schedule_retry(
+        job_id=17,
+        worker_id="worker-a",
+        classification=classification,
+        retry_at=NOW + timedelta(minutes=5),
+        safe_error="MusicBrainz provider is temporarily unavailable.",
+        observed_at=NOW,
+    )
+
+    assert connection.transaction_count == 1
+    [sync] = connection.problem_syncs
+    assert sync["local_artist_id"] == 7
+    assert sync["job_id"] == 17
+    assert sync["provider_reason"] == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("state", "classification", "expected_reason"),
+    [
+        ("exhausted", "provider_unavailable", "musicbrainz_provider_retry_exhausted"),
+        ("succeeded", "found", None),
+        ("needs_review", "ambiguous", None),
+    ],
+)
+def test_job_completion_opens_provider_problems_only_on_exhaustion(state, classification, expected_reason):
+    connection = FakeConnection([FakeCursor(row={"updated": True, "local_artist_id": 7})])
+
+    repository_for(connection).complete_job(
+        job_id=17,
+        worker_id="worker-a",
+        state=state,
+        classification=classification,
+        safe_error=None,
+        observed_at=NOW,
+        preserve_existing=True,
+    )
+
+    [sync] = connection.problem_syncs
+    assert sync["provider_reason"] == expected_reason
+
+
+def test_lost_lease_does_not_touch_problems():
+    connection = FakeConnection([FakeCursor(row=None)])
+
+    updated = repository_for(connection).complete_job(
+        job_id=17,
+        worker_id="worker-a",
+        state="exhausted",
+        classification="provider_unavailable",
+        safe_error=None,
+        observed_at=NOW,
+        preserve_existing=True,
+    )
+
+    assert updated is False
+    assert connection.problem_syncs == []
+
+
+def test_problem_sync_derives_identity_reasons_from_the_stored_match():
+    from music_app.services.musicbrainz_enrichment_postgres import _sync_problem_sql
+
+    sql = " ".join(_sync_problem_sql().lower().split())
+    for state, reason in (
+        ("not_found", "musicbrainz_artist_not_found"),
+        ("ambiguous", "musicbrainz_artist_ambiguous"),
+        ("conflict", "musicbrainz_artist_metadata_conflict"),
+    ):
+        assert f"when matches.state = '{state}' then '{reason}'" in sql
+    assert "when desired.match_state = 'matched'" in sql
+    assert "on conflict (library_id, local_artist_id, reason_code) where lifecycle_state = 'active'" in sql

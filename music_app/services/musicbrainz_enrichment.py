@@ -5,7 +5,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from music_app.services.musicbrainz_matching import match_artist
+from music_app.services.musicbrainz_client import normalize_name
+from music_app.services.musicbrainz_matching import candidate_names, match_artist
 
 
 APPROVED_TRIGGERS = frozenset(
@@ -214,8 +215,12 @@ class MusicBrainzArtistEnrichmentProcessor:
 
 def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
     local = dict(context)
-    local["name"] = context.get("local_name")
-    local["release_titles"] = context.get("album_titles") or []
+    local_name = context.get("local_name")
+    album_titles = [str(title) for title in context.get("album_titles") or [] if str(title or "").strip()]
+    local["name"] = local_name
+    local["release_credits"] = [
+        {"title": title, "credited_artist": local_name} for title in album_titles
+    ]
     embedded = list(context.get("embedded_artist_mbids") or [])
     if embedded:
         local["embedded_mbid"] = embedded[0]
@@ -235,12 +240,18 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
         candidates = []
         for candidate in search.get("candidates") or []:
             lookup = client.lookup_artist(candidate.get("mbid"), discovered_by_search=True)
-            if lookup.get("classification") == "matched":
-                artist = dict(lookup["artist"])
-                artist["score"] = candidate.get("score", 0)
-                candidates.append(artist)
-            else:
+            if lookup.get("classification") != "matched":
                 return _provider_outcome(lookup)
+            artist = dict(lookup["artist"])
+            artist["score"] = candidate.get("score", 0)
+            # Release-group evidence is only fetched where the name already
+            # agrees; other candidates can never become the selected match.
+            if normalize_name(local_name) in candidate_names(artist):
+                browse = client.browse_release_group_titles(artist["mbid"], wanted_titles=album_titles)
+                if browse.get("classification") != "complete":
+                    return _provider_outcome(browse)
+                artist["release_titles"] = browse.get("titles") or []
+            candidates.append(artist)
 
     match = match_artist(local, candidates)
     if match.get("classification") == "matched":
@@ -260,7 +271,7 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
     return {
         "classification": match.get("classification", "invalid_response"),
         "candidates": [
-            _candidate_for_storage(candidate)
+            _candidate_for_storage(candidate, album_titles)
             for candidate in match.get("candidates") or []
         ],
         "evidence_summary": "MusicBrainz candidates require manual review.",
@@ -282,7 +293,16 @@ def _provider_outcome(result: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _candidate_for_storage(candidate: dict[str, Any]) -> dict[str, object]:
+def _album_agreement(candidate: dict[str, Any], album_titles: list[str]) -> str:
+    if "release_titles" not in candidate or not album_titles:
+        return "Name only"
+    remote = {normalize_name(title) for title in candidate.get("release_titles") or []}
+    local = {normalize_name(title) for title in album_titles} - {""}
+    agreed = len(local & remote)
+    return f"{agreed} of {len(local)} album{'' if len(local) == 1 else 's'} agree"
+
+
+def _candidate_for_storage(candidate: dict[str, Any], album_titles: list[str]) -> dict[str, object]:
     try:
         score = float(candidate.get("score") or 0)
     except (TypeError, ValueError):
@@ -292,6 +312,9 @@ def _candidate_for_storage(candidate: dict[str, Any]) -> dict[str, object]:
     return {
         "artist_mbid": candidate.get("mbid"),
         "canonical_name": candidate.get("canonical_name"),
+        "disambiguation": candidate.get("disambiguation"),
+        "artist_kind": candidate.get("artist_type"),
+        "country_code": candidate.get("country_code"),
         "candidate_score": max(0, min(score, 1)),
-        "evidence_summary": "MusicBrainz candidate requires manual review.",
+        "evidence_summary": _album_agreement(candidate, album_titles),
     }

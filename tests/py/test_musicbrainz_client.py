@@ -176,6 +176,7 @@ def test_artist_projection_is_bounded_normalized_and_keeps_all_review_tags_with_
         "canonical_name": "Änglagård",
         "sort_name": "Anglagard",
         "artist_type": "Group",
+        "disambiguation": None,
         "country_code": "SE",
         "preferred_native_name": "Änglagård",
         "source_url": f"https://musicbrainz.org/artist/{ARTIST_ID}",

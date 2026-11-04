@@ -135,6 +135,7 @@ def project_artist(
         "canonical_name": canonical_name,
         "sort_name": _text(payload.get("sort-name")) or canonical_name,
         "artist_type": _text(payload.get("type")) or None,
+        "disambiguation": _text(payload.get("disambiguation"))[:1024] or None,
         "country_code": country if len(country) == 2 and country.isalpha() else None,
         "preferred_native_name": preferred_native_name,
         "source_url": artist_url(mbid),
@@ -242,6 +243,48 @@ class MusicBrainzClient:
         if artist is None:
             return {"classification": "invalid_response", "artist": None, "transport": transport}
         return {"classification": "matched", "artist": artist, "transport": transport}
+
+    def browse_release_group_titles(
+        self,
+        mbid: object,
+        *,
+        wanted_titles: object = (),
+        max_pages: int = 5,
+        page_size: int = 100,
+    ) -> JsonDict:
+        """Return a candidate's release-group titles for local-album evidence.
+
+        Paging is bounded and stops early once every wanted local title is seen.
+        """
+        normalized = _valid_mbid(mbid)
+        if not normalized:
+            return {"classification": "invalid_request", "titles": []}
+        wanted = {normalize_name(title) for title in wanted_titles or ()} - {""}
+        titles: list[str] = []
+        seen: set[str] = set()
+        for page in range(max(1, int(max_pages))):
+            query = urllib.parse.urlencode({
+                "artist": normalized,
+                "fmt": "json",
+                "limit": page_size,
+                "offset": page * page_size,
+            })
+            payload, transport = self.get_json(f"{self.base_url}/release-group?{query}", self.user_agent)
+            if not isinstance(payload, dict):
+                return {"classification": _transport_classification(transport), "titles": titles,
+                        "transport": transport}
+            groups = payload.get("release-groups")
+            if not isinstance(groups, list):
+                return {"classification": "invalid_response", "titles": titles, "transport": transport}
+            for group in groups:
+                title = _text(group.get("title")) if isinstance(group, dict) else ""
+                if title:
+                    titles.append(title)
+                    seen.add(normalize_name(title))
+            total = _integer(payload.get("release-group-count"))
+            if (wanted and wanted <= seen) or (page + 1) * page_size >= total:
+                break
+        return {"classification": "complete", "titles": titles}
 
     def search_artists(self, name: object) -> JsonDict:
         query_name = _text(name)

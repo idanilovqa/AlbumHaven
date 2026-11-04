@@ -13,7 +13,7 @@ def _values(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
 
-def _candidate_names(candidate: JsonDict) -> set[str]:
+def candidate_names(candidate: JsonDict) -> set[str]:
     names = {normalize_name(candidate.get("canonical_name"))}
     names.update(
         normalize_name(alias.get("name"))
@@ -81,14 +81,14 @@ def _evidence(local: JsonDict, candidate: JsonDict) -> tuple[int, list[str]]:
     if local_titles and candidate_titles and not release_match:
         reasons.append("release_evidence_conflict")
 
-    candidate_names = _candidate_names(candidate)
-    name_match = normalize_name(local.get("name")) in candidate_names
+    names = candidate_names(candidate)
+    name_match = normalize_name(local.get("name")) in names
     credited_names = {
         normalize_name(credit.get("credited_artist"))
         for credit in _values(local.get("release_credits"))
         if isinstance(credit, dict) and normalize_name(credit.get("credited_artist"))
     }
-    credit_match = bool(credited_names) and all(name in candidate_names for name in credited_names)
+    credit_match = bool(credited_names) and all(name in names for name in credited_names)
     if not name_match:
         reasons.append("name_conflict")
     if credited_names and not credit_match:

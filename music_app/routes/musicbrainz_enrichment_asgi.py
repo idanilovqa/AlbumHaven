@@ -49,6 +49,14 @@ _CANDIDATE_FIELDS = (
     "evidence_summary",
     "musicbrainz_url",
 )
+_STATUS_FIELDS = (
+    "local_artist_id",
+    "local_artist_name",
+    "gallery_artist",
+    "match_state",
+    "problem_occurrence_id",
+    "unresolved_reason",
+)
 _UNAVAILABLE = "MusicBrainz enrichment is unavailable."
 _NOT_FOUND = "Artist was not found."
 
@@ -60,6 +68,18 @@ async def list_artist_review(request: Request):
     if not isinstance(rows, (list, tuple)):
         raise _unavailable()
     return {"artists": [_project_artist(row) for row in rows]}
+
+
+@router.get("/status")
+async def list_artist_status(request: Request):
+    await _require_current_library_owner(request)
+    rows = await _call_service(request, "list_artist_attention")
+    if not isinstance(rows, (list, tuple)):
+        raise _unavailable()
+    return {"artists": [
+        {field: row.get(field) for field in _STATUS_FIELDS}
+        for row in rows if isinstance(row, Mapping)
+    ]}
 
 
 @router.get("/{local_artist_id}")
@@ -189,11 +209,11 @@ def project_artist_problems_into_problematic_files(request: Request, payload: ob
     if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return payload
     service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
-    list_review = getattr(service, "list_present_artist_review", None)
-    if not callable(list_review):
+    list_attention = getattr(service, "list_artist_attention", None)
+    if not callable(list_attention):
         return payload
     try:
-        rows = list_review()
+        rows = list_attention(include_gallery_artist=False)
     except Exception:
         logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
         logger.warning("MusicBrainz artist problems were unavailable for Problematic Files.")

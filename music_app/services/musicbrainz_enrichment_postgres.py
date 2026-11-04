@@ -536,6 +536,11 @@ class MusicBrainzEnrichmentPostgresRepository:
             rows = connection.execute(_artist_review_sql(single_artist=False), {}).fetchall()
         return [_review_row(row) for row in rows]
 
+    def list_artist_attention(self) -> list[dict[str, object]]:
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_artist_attention_sql(), {}).fetchall()
+        return [_attention_row(row) for row in rows]
+
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         params = {"local_artist_id": _positive_id(local_artist_id)}
         with self._connect(self._database_url) as connection:
@@ -637,6 +642,68 @@ def _problem_label_sql() -> str:
     labels = {**PROBLEM_LABELS, **PROVISIONAL_PROBLEM_LABELS}
     cases = " ".join(f"when '{reason}' then '{label}'" for reason, label in labels.items())
     return f"case problem.reason_code {cases} else null end"
+
+
+def _artist_attention_sql() -> str:
+    """Present artists that need owner attention: one active problem or a queued first lookup.
+
+    Bounded by the active-problem and active-job indexes rather than scanning
+    every artist's review projection.
+    """
+    return _active_library_cte() + f"""
+        , attention as (
+          select distinct on (problem.local_artist_id)
+            problem.local_artist_id, problem.id as problem_occurrence_id,
+            problem.reason_code as problem_reason_code
+          from active_library
+          join library.metadata_enrichment_problems problem
+            on problem.library_id = active_library.library_id
+           and problem.target_kind = 'artist'
+           and problem.lifecycle_state = 'active'
+          order by problem.local_artist_id, problem.last_observed_at desc, problem.id desc
+        ), pending as (
+          select distinct jobs.local_artist_id
+          from active_library
+          join ops.metadata_enrichment_jobs jobs
+            on jobs.library_id = active_library.library_id
+           and jobs.target_kind = 'artist'
+           and jobs.state in ('queued', 'leased')
+          left join library.local_artist_musicbrainz_matches matches
+            on matches.library_id = jobs.library_id
+           and matches.local_artist_id = jobs.local_artist_id
+          where matches.id is null
+            and not exists (select 1 from attention where attention.local_artist_id = jobs.local_artist_id)
+        ), wanted as (
+          select local_artist_id, problem_occurrence_id, problem_reason_code as reason_code from attention
+          union all
+          select local_artist_id, null::bigint, null::text from pending
+        )
+        select
+          artists.id as local_artist_id,
+          artists.name as local_artist_name,
+          case when problem.problem_occurrence_id is null then 'pending' end as match_state,
+          problem.problem_occurrence_id,
+          problem.reason_code as problem_reason_code,
+          {_problem_label_sql()} as unresolved_reason,
+          (
+            select count(*)::integer
+            from library.local_albums local_albums
+            where local_albums.library_id = active_library.library_id
+              and local_albums.artist_id = artists.id
+          ) as local_album_count
+        from active_library
+        join wanted problem on true
+        join library.local_artists artists
+          on artists.library_id = active_library.library_id
+         and artists.id = problem.local_artist_id
+        where exists (
+          select 1
+          from library.local_tracks tracks
+          where tracks.library_id = active_library.library_id
+            and tracks.artist_id = artists.id
+        )
+        order by lower(artists.name), artists.id;
+    """
 
 
 def _artist_review_sql(*, single_artist: bool) -> str:
@@ -766,6 +833,22 @@ def _candidate_review_row(row: object) -> dict[str, object]:
     result = {field: source.get(field) for field in _CANDIDATE_REVIEW_FIELDS}
     result["evidence_summary"] = _bounded_text(result.get("evidence_summary"), 2048)
     return result
+
+
+_ATTENTION_FIELDS = (
+    "local_artist_id",
+    "local_artist_name",
+    "match_state",
+    "problem_occurrence_id",
+    "problem_reason_code",
+    "unresolved_reason",
+    "local_album_count",
+)
+
+
+def _attention_row(row: object) -> dict[str, object]:
+    source = _row_mapping(row)
+    return {field: source.get(field) for field in _ATTENTION_FIELDS}
 
 
 def _review_row(row: object) -> dict[str, object]:

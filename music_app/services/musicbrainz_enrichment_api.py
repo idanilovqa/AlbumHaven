@@ -41,7 +41,14 @@ class MusicBrainzEnrichmentApiService:
         Alias-combined Gallery groups use the canonical name, so state must be
         attached by that identity rather than by the local artist name.
         """
-        rows = self._repository.list_present_artist_review()
+        return self._with_gallery_artist(self._repository.list_present_artist_review())
+
+    def list_artist_attention(self, *, include_gallery_artist: bool = True) -> list[dict[str, object]]:
+        """Only artists with an active problem or a queued first lookup."""
+        rows = self._repository.list_artist_attention()
+        return self._with_gallery_artist(rows) if include_gallery_artist else rows
+
+    def _with_gallery_artist(self, rows: list[dict[str, object]]) -> list[dict[str, object]]:
         names = [str(row.get("local_artist_name") or "") for row in rows]
         canonical: Mapping[str, str] = {}
         if self._gallery_artist_names is not None and names:

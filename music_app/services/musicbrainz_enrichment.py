@@ -184,11 +184,15 @@ class MusicBrainzArtistEnrichmentProcessor:
                 evidence_summary=evidence_summary,
                 observed_at=observed_at,
             )
-        elif classification == "ambiguous":
+        elif classification == "ambiguous" or (
+            classification == "permanent_mismatch" and outcome.get("candidates")
+        ):
+            # Contradicted identities keep their candidates so the owner can
+            # compare and choose instead of facing an empty conflict.
             self._repository.replace_candidates(
                 local_artist_id=local_artist_id,
                 candidates=list(outcome.get("candidates") or []),
-                match_state="ambiguous",
+                match_state="ambiguous" if classification == "ambiguous" else "conflict",
                 evidence_summary=evidence_summary,
                 observed_at=observed_at,
             )

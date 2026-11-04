@@ -35,7 +35,7 @@ function buildGalleryArtistMetadataHtml(albumCount, artistMusicBrainz = null) {
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
-const galleryArtistMusicBrainzStatus = { byArtist: new Map(), loadedAt: 0, promise: null };
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
   return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
@@ -54,13 +54,14 @@ function getGalleryArtistMusicBrainzStatus(group = {}) {
 function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
     galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.signature = '[]';
     return Promise.resolve(false);
   }
   if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
   if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS) {
     return Promise.resolve(false);
   }
-  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/review', { headers: { Accept: 'application/json' } })
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
     .then((response) => (response.ok ? response.json() : null))
     .then((payload) => {
       if (!Array.isArray(payload?.artists)) return false;
@@ -75,6 +76,9 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
           next.set(key, { problem: null, state: 'pending' });
         }
       }
+      const signature = JSON.stringify([...next]);
+      if (signature === galleryArtistMusicBrainzStatus.signature) return false;
+      galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
       return true;

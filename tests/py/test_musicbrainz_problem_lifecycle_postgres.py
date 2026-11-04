@@ -140,6 +140,9 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
     assert detail["candidates"][0]["musicbrainz_url"] == f"https://musicbrainz.org/artist/{GERMAN}"
     [review] = repository.list_present_artist_review()
     assert review["problem_occurrence_id"] == detail["problem_occurrence_id"]
+    [attention] = repository.list_artist_attention()
+    assert attention["problem_occurrence_id"] == detail["problem_occurrence_id"]
+    assert attention["unresolved_reason"] == "MBID: Multiple matches"
 
     # A provider failure during a retry never replaces a durable identity problem.
     repository.enqueue_artist(local_artist_id=artist_id, reason="authorized_retry", observed_at=NOW)
@@ -170,6 +173,7 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
         assert _active(connection, artist_id) == []
         assert rows[-1]["resolution_source"] == "manual_match"
 
+    assert repository.list_artist_attention() == []
     detail = repository.get_artist_problem(local_artist_id=artist_id)
     assert detail["match_state"] == "matched"
     assert detail["unresolved_reason"] is None
@@ -226,6 +230,8 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
     )
 
     repository.enqueue_artist(local_artist_id=artist_id, reason="authorized_retry", observed_at=NOW)
+    [queued] = repository.list_artist_attention()
+    assert queued["match_state"] == "pending" and queued["problem_occurrence_id"] is None
     job = repository.claim_due_job(worker_id="worker-b", now=NOW, lease_duration=timedelta(minutes=5))
     repository.schedule_retry(
         job_id=job["id"], worker_id="worker-b", classification="catch_up_pending",

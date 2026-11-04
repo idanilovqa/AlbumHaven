@@ -238,7 +238,7 @@ test('owner gallery status maps active problems and pending first lookups by loc
   ] });
 
   assert.equal(await context.refreshGalleryArtistMusicBrainzStatus(), true);
-  assert.deepEqual(requests, ['/api/musicbrainz/artists/review']);
+  assert.deepEqual(requests, ['/api/musicbrainz/artists/status']);
   assert.equal(getRenders(), 1);
   assert.deepEqual(JSON.parse(JSON.stringify(context.getGalleryArtistMusicBrainzStatus({ artist: 'axxis' }))),
     { problem: { occurrence_id: '19', label: 'MBID: Multiple matches' }, state: '' });

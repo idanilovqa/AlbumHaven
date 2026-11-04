@@ -447,3 +447,26 @@ def test_manual_decision_short_circuits_provider_and_finishes_without_replacemen
     assert result["state"] == "succeeded"
     assert repository.automatic_outcomes == []
     assert repository.completed[0]["preserve_existing"] is True
+
+
+def test_contradicted_identity_keeps_candidates_for_conflict_review():
+    api = enrichment_api()
+    repository = Repository()
+    repository.claims.append({"id": 18, "local_artist_id": 42, "attempt_count": 1})
+    repository.contexts[18] = {"local_artist_id": 42, "local_name": "Aria", "manual_decision": False}
+    candidates = [{"artist_mbid": "00000000-0000-4000-8000-000000000031", "canonical_name": "Ария",
+                   "candidate_score": 1, "evidence_summary": "37 of 38 albums agree"}]
+    processor = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository,
+        client=object(),
+        resolve_artist=Resolver({"classification": "permanent_mismatch", "candidates": candidates,
+                                 "evidence_summary": "MusicBrainz candidates require manual review."}),
+        now=lambda: NOW,
+    )
+
+    result = processor.process_next(worker_id="worker-a")
+
+    assert result["state"] == "needs_review"
+    [replacement] = repository.candidate_replacements
+    assert replacement["match_state"] == "conflict"
+    assert replacement["candidates"] == candidates

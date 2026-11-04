@@ -17,12 +17,13 @@ def _actor(*, owner=True):
 
 
 def _request(rows, *, owner=True, fail=False):
-    def list_present_artist_review():
+    def list_present_artist_review(*, include_gallery_artist=True):
+        assert include_gallery_artist is False, "Problematic Files never loads the Gallery alias map"
         if fail:
             raise RuntimeError("database unavailable")
         return rows
 
-    service = SimpleNamespace(list_present_artist_review=list_present_artist_review)
+    service = SimpleNamespace(list_artist_attention=list_present_artist_review)
     return SimpleNamespace(
         state=SimpleNamespace(current_actor=_actor(owner=owner)),
         app=SimpleNamespace(state=SimpleNamespace(

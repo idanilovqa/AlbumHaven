@@ -130,6 +130,11 @@ def lastfm_api_enabled(config: dict[str, Any]) -> bool:
     return bool(config.get("LASTFM_API_ENABLED"))
 
 
+def lastfm_scrobbling_available(config: dict[str, Any], *, account_id) -> bool:
+    """Whether this account's listens can reach Last.fm: the API is configured and it holds a session."""
+    return lastfm_api_enabled(config) and get_saved_lastfm_session(config, account_id=account_id) is not None
+
+
 def get_saved_lastfm_session(config: dict[str, Any], *, account_id=None) -> LastfmSession | None:
     settings = load_lastfm_settings(config, account_id=account_id)
     username = str(settings.get("username") or "").strip()

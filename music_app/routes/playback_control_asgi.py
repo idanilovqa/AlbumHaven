@@ -1,5 +1,7 @@
 """Authenticated, bounded playback references and ownership contracts."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -7,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.auth_asgi import _same_origin
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.auth_session_csrf import matches_session_csrf
-from music_app.services.lastfm import get_saved_lastfm_session, scrobble_track
+from music_app.services.lastfm import get_saved_lastfm_session, lastfm_scrobbling_available, scrobble_track
 from music_app.services.lastfm_sync_bridge import (
     playback_handoff_completion_fingerprint,
     persist_measured_playback_completion,
@@ -21,11 +23,13 @@ from music_app.services.listen_history import (
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
-from music_app.services.policy_asgi import require_action
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _SESSION_COOKIE = "__Host-album_haven_session"
+_SCROBBLING_ACTIONS = ("integration.lastfm.now_playing", "integration.lastfm.scrobble")
 
 
 def playback_config(request):
@@ -76,7 +80,28 @@ async def acquire_playback(request: Request):
         request.state.current_actor, client_id=payload.get("clientId"),
         client_surface=payload.get("clientSurface"), track=payload.get("track"),
         claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    scrobbling = await _scrobbling_status(request)
+    return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
+
+
+async def _scrobbling_status(request):
+    """`scrobbling.available`: whether this claim's now-playing and scrobble writes can reach Last.fm.
+
+    True only when the actor may send both, the Last.fm API is configured and the account holds a
+    session; it reveals nothing else. Omitted when it cannot be read, so clients fall back to the
+    writes' own `account_scoped_scrobble_unavailable` answer.
+    """
+    allowed = allowed_actions_for_request(request, _SCROBBLING_ACTIONS)
+    if not all(allowed.allows(action) for action in _SCROBBLING_ACTIONS):
+        return {"scrobbling": {"available": False}}
+    try:
+        available = await run_in_threadpool(lastfm_scrobbling_available, playback_config(request),
+            account_id=request.state.current_actor.account_id)
+    except Exception as error:
+        logger.warning("Last.fm scrobbling availability could not be read for a playback claim (%s).",
+            type(error).__name__)
+        return {}
+    return {"scrobbling": {"available": bool(available)}}
 
 
 @router.post("/playback/state/handoff")

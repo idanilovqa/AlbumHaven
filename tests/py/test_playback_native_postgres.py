@@ -1680,6 +1680,59 @@ def test_reference_listen_writes_recheck_media_read(playback_inventory, playback
         claims.release(listener, client_id=client_id, claim_token=token)
 
 
+def test_claim_reports_whether_its_listens_reach_lastfm_and_nothing_else(playback_inventory, playback_app):
+    from music_app.services.lastfm import save_lastfm_settings
+
+    fixture = playback_inventory
+    library_id = fixture.actor.current_library_id
+    reference = issue(reference_service(fixture, lambda: datetime.now(timezone.utc)), fixture)["tracks"][0]["playbackRef"]
+    secrets = ("claim-fixture-listener", "claim-fixture-session-key")
+
+    def claim(actor, *, api_enabled=True, token=None, client_id=None):
+        configure_native_app(playback_app, fixture, actor)
+        playback_app.state.config["LASTFM_API_ENABLED"] = api_enabled
+        client_id = client_id or str(uuid4())
+        status, _, body = run_asgi_request(playback_app, "PUT", "/playback/state", json_body={
+            "protocol": 1, "clientId": client_id, "clientSurface": "mobile", "claimToken": token,
+            "state": "playing", "track": {"playbackRef": reference, "title": "Track", "artist": "Owner",
+                                          "album": "Album", "artworkUrl": None}})
+        assert status == 200, decode_json(body)
+        assert all(secret not in body.decode() for secret in secrets)
+        result = decode_json(body)
+        return result["scrobbling"], client_id, result["claimToken"]
+
+    def connect(actor):
+        save_lastfm_settings(fixture.config, {"username": secrets[0], "session_key": secrets[1],
+                                              "connected_at": "2026-11-04T12:00:00+00:00"}, account_id=actor.account_id)
+
+    def release(actor, client_id, token):
+        claims_service(fixture, lambda: datetime.now(timezone.utc)).release(actor, client_id=client_id, claim_token=token)
+
+    owner = fixture.actor
+    scrobbling, client_id, token = claim(owner)
+    assert scrobbling == {"available": False}, "no Last.fm session"
+    connect(owner)
+    # Every heartbeat answers afresh.
+    scrobbling, client_id, token = claim(owner, token=token, client_id=client_id)
+    assert scrobbling == {"available": True}
+    scrobbling, client_id, token = claim(owner, api_enabled=False, token=token, client_id=client_id)
+    assert scrobbling == {"available": False}, "Last.fm API unconfigured"
+    release(owner, client_id, token)
+
+    listener = replace(create_member(fixture), capability_grants=tuple(
+        CapabilityGrant(action, "library", library_id) for action in (
+            "library.media.read", "integration.lastfm.now_playing", "integration.lastfm.scrobble",
+            "integration.lastfm.complete")))
+    connect(listener)
+    scrobbling, client_id, token = claim(listener)
+    assert scrobbling == {"available": True}, "play access alone reads it; no settings permission is needed"
+    release(listener, client_id, token)
+    reader = replace(listener, capability_grants=(CapabilityGrant("library.media.read", "library", library_id),))
+    scrobbling, client_id, token = claim(reader)
+    assert scrobbling == {"available": False}, "an actor that may not send the writes"
+    release(reader, client_id, token)
+
+
 def test_now_playing_retries_only_transient_lastfm_failures(playback_inventory, playback_app, monkeypatch):
     from music_app.routes import api_wave_b_asgi_routes as routes
     from music_app.services.lastfm import LastfmError

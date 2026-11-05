@@ -203,14 +203,14 @@ class NativePcmEngineTest {
         val operations = harness.sink.operations.toList()
         repeat(5) { harness.step() }
 
-        assertEquals(1, harness.engine.underruns)
+        assertEquals(1, harness.emitted<PcmEngineEvent.Underrun>().size)
         assertEquals(listOf(PcmEngineEvent.Buffering(true, 1)), harness.emitted<PcmEngineEvent.Buffering>())
         harness.server.decoding = true
         harness.server.decodeAll()
         harness.step()
         assertEquals(PcmEngineEvent.Buffering(false, 1), harness.emitted<PcmEngineEvent.Buffering>().last())
         harness.playToEnd()
-        assertEquals(1, harness.engine.underruns)
+        assertEquals(1, harness.emitted<PcmEngineEvent.Underrun>().size)
         assertEquals(operations, harness.sink.operations)
         assertEquals(listOf(Run(5, 0, long.frames)), harness.sink.runs())
     }
@@ -223,7 +223,7 @@ class NativePcmEngineTest {
         harness.engine.setQueuedNext(second.pcm)
         repeat(4) { harness.step() }
 
-        assertTrue(harness.engine.underruns > 0)
+        assertTrue(harness.emitted<PcmEngineEvent.Underrun>().size > 0)
         assertEquals(emptyList<PcmEngineEvent.Ended>(), harness.emitted<PcmEngineEvent.Ended>())
         harness.server.decoding = true
         harness.server.decodeAll()
@@ -280,7 +280,7 @@ class NativePcmEngineTest {
         assertEquals(listOf(PcmClientControl.Close(1, 2, "continuity-replaced")), harness.sent<PcmClientControl.Close>())
         assertEquals(listOf(Run(1, 0, first.frames)), harness.sink.runs())
         assertEquals(listOf(PcmEngineEvent.Ended(1, first.frames)), harness.emitted<PcmEngineEvent.Ended>())
-        assertEquals(0, harness.engine.underruns)
+        assertEquals(0, harness.emitted<PcmEngineEvent.Underrun>().size)
     }
 
     @Test
@@ -312,7 +312,7 @@ class NativePcmEngineTest {
             harness.emitted<PcmEngineEvent.RateChangeRequired>(),
         )
         assertEquals(listOf(Run(1, 0, first.frames)), harness.sink.runs())
-        assertEquals(0, harness.engine.underruns)
+        assertEquals(0, harness.emitted<PcmEngineEvent.Underrun>().size)
         assertEquals(emptyList<PcmClientControl.Close>(), harness.sent<PcmClientControl.Close>())
     }
 

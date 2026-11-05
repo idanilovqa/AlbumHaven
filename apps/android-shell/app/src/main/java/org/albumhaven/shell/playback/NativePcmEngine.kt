@@ -1,5 +1,6 @@
 package org.albumhaven.shell.playback
 
+import androidx.annotation.VisibleForTesting
 import kotlin.math.roundToLong
 
 /**
@@ -151,16 +152,23 @@ class NativePcmEngine(
     /** Track frame of the next sample written to the sink. */
     var timelineFrame = 0L
         private set
-    var underruns = 0
-        private set
-    var staleMessages = 0
-        private set
-    val currentStreamId: Long? get() = current?.streamId
-    val continuityStreamId: Long? get() = continuity?.streamId
 
-    fun bufferedFrames(role: PcmRole): Int = ringFor(role).bufferedFrames
+    // Inspection for the engine's own tests; production reads only the events.
+    @VisibleForTesting
+    internal var staleMessages = 0
+        private set
 
-    fun inFlightFrames(role: PcmRole): Int = streamFor(role)?.inFlightFrames ?: 0
+    @VisibleForTesting
+    internal val currentStreamId: Long? get() = current?.streamId
+
+    @VisibleForTesting
+    internal val continuityStreamId: Long? get() = continuity?.streamId
+
+    @VisibleForTesting
+    internal fun bufferedFrames(role: PcmRole): Int = ringFor(role).bufferedFrames
+
+    @VisibleForTesting
+    internal fun inFlightFrames(role: PcmRole): Int = streamFor(role)?.inFlightFrames ?: 0
 
     /** Replaces everything with a new generation; the server drops older streams on its open. */
     fun start(track: PcmTrack, startFrame: Long = 0, playWhenReady: Boolean = true) {
@@ -511,7 +519,6 @@ class NativePcmEngine(
     }
 
     private fun underrun(stream: Stream) {
-        underruns += 1
         events(PcmEngineEvent.Underrun(stream.streamId, timelineFrame))
     }
 

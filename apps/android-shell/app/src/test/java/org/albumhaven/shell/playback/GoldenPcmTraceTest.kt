@@ -22,7 +22,7 @@ class GoldenPcmTraceTest {
     private fun PcmHarness.assertCleanContract() {
         assertNull(failure())
         assertEquals(emptyList<String>(), server.violations)
-        assertEquals(0, engine.underruns)
+        assertEquals(0, emitted<PcmEngineEvent.Underrun>().size)
         assertTrue(server.maxOutstanding <= RATE)
     }
 
@@ -194,7 +194,7 @@ class GoldenPcmTraceTest {
         val loopEnd = loopStart + 2L * RATE + 3
         harness.server.decoding = false
         harness.engine.setLoop(loopStart, loopEnd, short = true)
-        harness.playUntil { harness.engine.underruns > 0 }
+        harness.playUntil { harness.emitted<PcmEngineEvent.Underrun>().size > 0 }
         val waiting = harness.sink.writtenFrames
         repeat(20) { harness.step() }
         assertEquals(waiting, harness.sink.writtenFrames)

@@ -532,6 +532,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0104_create_playback_claims.sql",
         "0105_add_playback_claim_handoffs.sql",
         "0106_create_android_artifact_access.sql",
+        "0107_add_android_device_key_signer.sql",
     ]
 
 

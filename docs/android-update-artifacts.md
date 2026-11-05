@@ -22,9 +22,11 @@ directory by the deployment synchronizer; see `docs/android-release-signing.md`.
 Certificate digests are public values, not secrets: they are the same as the
 manifest's `signingCertificateSha256`. Download links are signed with a key
 derived from the existing authentication HMAC secret; no new secret is needed.
-Apply migration `0106_create_android_artifact_access.sql` before starting a
-version that serves these routes, and restart the server after changing any of
-these variables.
+Apply migrations `0106_create_android_artifact_access.sql` and
+`0107_add_android_device_key_signer.sql` before starting a version that serves
+these routes, and restart the server after changing any of these variables.
+Removing a signing-certificate digest, or turning the software flag off, revokes
+the device keys it admitted at their next request or download.
 
 ## Protocol
 
@@ -46,23 +48,30 @@ cookie; POSTs also carry the session CSRF header. The route action is
    the leaf carries the attestation extension; its challenge matches; its
    `attestationApplicationId` names exactly the channel's package with an allowed
    signing-certificate digest; its attestation security level is TEE or StrongBox;
-   and the key is P-256. The public key is stored per account and channel, and the
-   response names it with a `deviceKey` id.
+   its hardware-enforced `rootOfTrust` reports `deviceLocked` true and
+   `verifiedBootState` Verified; and the key is P-256. The package and signer come
+   from the Android framework, so they are believed only on a locked, verified
+   boot: an unlocked or rooted device, or a custom ROM, is refused. The public key,
+   its security level and the matched signing-certificate digest are stored per
+   account and channel, and the response names the key with a `deviceKey` id.
 3. `GET /artifacts/android/{channel}/manifest.json` and `POST` to the manifest's
    `apkUrl` carry `X-Album-Haven-Device-Key`, a fresh `request` challenge in
    `X-Album-Haven-Challenge`, and `X-Album-Haven-Signature`: base64 ECDSA-SHA256
    over `album-haven-android-artifact-request-v1`, the method, the path, the
-   challenge and the hex SHA-256 of the (empty) body, joined by newlines.
+   challenge and the hex SHA-256 of the (empty) body, joined by newlines. Each
+   request also rechecks that the key's signing certificate is still allowed and,
+   for a software key, that the sandbox flag is still on. The `POST` body is
+   limited to 1 KiB.
 4. The `POST` returns `{"path":"/artifacts/android/download/<token>"}`: a
    five-minute HMAC link naming one account, device key, channel and file. The app
    checks it with `HEAD` and hands it to `DownloadManager`, which needs no cookies.
-   The link stops working when it expires, the device key is removed or the
-   account is deactivated. The manifest's `apkUrl` remains the immutable logical
+   The link stops working when it expires, the device key is removed or no longer
+   allowed by the configuration, or the account is deactivated. The manifest's `apkUrl` remains the immutable logical
    URL.
 
 Refusals are JSON `{"detail","code"}`: `signed_out` (401 from the boundary),
-`challenge_invalid`, `attestation_required` (the server does not know this key;
-the app attests a new one), `signature_invalid`, `attestation_refused` and
+`challenge_invalid`, `attestation_required` (the server does not know this key, or
+the configuration no longer allows it; the app attests a new one), `signature_invalid`, `attestation_refused` and
 `too_many_challenges`. They never echo tokens, challenges or paths. The server's
 access log records download links as `/artifacts/android/download/[redacted]`.
 
@@ -80,11 +89,14 @@ request; to check revocation, refresh a local copy (for example daily) and set
 
 ## Limitations
 
-- A device key is attested once; later revocation of its chain, or an unlocked
-  bootloader, is not re-checked. Verified boot state is not required. Remove an
-  account's rows from `app.android_device_keys` to force re-attestation.
+- A device key's chain and boot state are checked once, at attestation; a later
+  revocation of its chain, or unlocking the bootloader afterwards, is not
+  re-checked (unlocking wipes the device's keys). Remove an account's rows from
+  `app.android_device_keys` to force re-attestation. Keys attested before
+  migration `0107` have no recorded signer and must attest again.
 - Software attestation proves nothing: the AOSP software attestation key is
-  public. Enable the sandbox flag only on test sandboxes.
+  public, and software keys report no verified boot. Enable the sandbox flag only
+  on test sandboxes.
 - A signed-in user who controls an attested device can still save the APK it
   downloads, and a valid download link works from anywhere for five minutes.
   Front-end proxies may log the full link; keep their access logs private or

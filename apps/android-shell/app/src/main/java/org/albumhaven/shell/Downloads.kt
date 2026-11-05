@@ -25,3 +25,6 @@ fun enqueueDownload(io: Executor, main: (Runnable) -> Unit, enqueue: () -> Long,
     val id = downloadManagerOrNull(enqueue)
     main(Runnable { done(id) })
 }
+
+/** Builds and enqueues one `DownloadManager` request on [io] when nothing waits for its answer. */
+fun enqueueDownload(io: Executor, enqueue: () -> Long) = io.execute { downloadManagerOrNull(enqueue) }

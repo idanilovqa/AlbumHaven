@@ -35,4 +35,19 @@ class DownloadsTest {
 
         assertEquals(listOf("build on io", "answer null on main", "answer 7 on main"), seen)
     }
+
+    @Test
+    fun aDownloadNobodyWaitsForIsEnqueuedOffTheMainThreadAndARefusalIsDropped() {
+        val ran = mutableListOf<String>()
+        val io = Executor { task ->
+            ran += "io"
+            task.run()
+        }
+
+        // Nothing is posted back, and a refusing Download Manager does not throw on the io thread.
+        enqueueDownload(io) { throw IllegalArgumentException("Unknown URL content://downloads/my_downloads") }
+        enqueueDownload(io) { 7L.also { ran += "enqueued" } }
+
+        assertEquals(listOf("io", "io", "enqueued"), ran)
+    }
 }

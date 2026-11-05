@@ -176,7 +176,7 @@ class Updater(
     /** Shows the committed session's confirmation again until Android reports anything else for it. */
     private var confirm: (() -> Unit)? = null
 
-    /** Counts install requests, so a stage or timeout of a superseded one changes nothing. */
+    /** Counts install requests, so a superseded one's stage changes nothing. */
     private var installAttempt = 0
 
     /** Whether the current attempt's session was committed, so Android may already be installing it. */
@@ -335,7 +335,7 @@ class Updater(
         committed = false
         val attempt = ++installAttempt
         state = UpdateState.Installing(manifest)
-        cancelInstallTimeout = ports.after(UpdateSchedule.INSTALL_TIMEOUT_MS) { installTimedOut(attempt) }
+        cancelInstallTimeout = ports.after(UpdateSchedule.INSTALL_TIMEOUT_MS) { installTimedOut() }
         ports.stage(manifest) { result -> staged(attempt, manifest, result, prepare) }
         return true
     }
@@ -346,16 +346,14 @@ class Updater(
      * be installing and is abandoned; a committed one may be, so it is left for its later status,
      * which the session ID still matches until a retry replaces it.
      */
-    private fun installTimedOut(attempt: Int) {
-        val current = state as? UpdateState.Installing ?: return
-        if (attempt != installAttempt) return
+    private fun installTimedOut() {
+        val manifest = (state as UpdateState.Installing).manifest
         val id = sessionId
         if (id != null && !committed) {
             if (ports.sessionExists(id)) ports.abandon(id)
             sessionId = null
         }
-        confirm = null
-        state = UpdateState.Ready(current.manifest)
+        state = UpdateState.Ready(manifest)
     }
 
     private fun clearInstallTimeout() {

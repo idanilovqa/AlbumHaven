@@ -1,6 +1,7 @@
 package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.playback.NativePlaybackPort
 import org.albumhaven.shell.updates.UpdateState
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,7 +34,7 @@ interface UpdatePort {
     fun install(): Boolean
 }
 
-/** Validates and answers web messages for one document; call [reset] when a page starts. */
+/** Validates and answers web messages for one document; call [reset] when a page starts or the Activity goes. */
 class BridgeController(
     private val identity: ShellIdentity,
     private val host: BridgeHost,
@@ -55,6 +56,7 @@ class BridgeController(
         negotiatedProtocol = null
         webProtocols = null
         eventSink = null
+        playback.documentDetached()
     }
 
     /** Sends a native playback event to the negotiated document. Call on the main thread. */
@@ -140,8 +142,7 @@ class BridgeController(
         webProtocols = webMin..webMax
         eventSink = reply
         reply(BridgeCodec.success(message, selected, handshakePayload(selected)))
-        // A document that can play is connected; its first start should not pay for cold connections.
-        playback.warmConnections()
+        playback.documentAttached()
     }
 
     /** The capabilities the site cannot run without; absent means none. Null when malformed. */

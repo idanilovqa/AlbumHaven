@@ -1,7 +1,6 @@
 package org.albumhaven.shell
 
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -10,13 +9,12 @@ import android.content.pm.ServiceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
-import android.os.Binder
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
-import android.webkit.CookieManager
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -29,8 +27,6 @@ import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -39,6 +35,7 @@ import org.albumhaven.shell.playback.AudioFocusPolicy
 import org.albumhaven.shell.playback.AudioTrackPcmSink
 import org.albumhaven.shell.playback.CommandResult
 import org.albumhaven.shell.playback.CommandSource
+import org.albumhaven.shell.playback.ControllerPlaybackPort
 import org.albumhaven.shell.playback.CurrentItemReason
 import org.albumhaven.shell.playback.FocusChange
 import org.albumhaven.shell.playback.FocusEffect
@@ -48,10 +45,14 @@ import org.albumhaven.shell.playback.HttpResumeApi
 import org.albumhaven.shell.playback.NativeMediaPlayer
 import org.albumhaven.shell.playback.NativePlaybackController
 import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.playback.NativePlaybackPort
 import org.albumhaven.shell.playback.NativePlaybackState
 import org.albumhaven.shell.playback.OkHttpConnectionWarmer
 import org.albumhaven.shell.playback.OkHttpPcmTransportFactory
+import org.albumhaven.shell.playback.PlaybackHost
 import org.albumhaven.shell.playback.PlaybackRestoreStore
+import org.albumhaven.shell.playback.PlaybackServiceBinder
+import org.albumhaven.shell.playback.PlaybackServiceHandle
 import org.albumhaven.shell.playback.RestorableQueue
 import org.albumhaven.shell.playback.RestoreStorage
 import org.albumhaven.shell.playback.ResumeAnswer
@@ -67,10 +68,11 @@ import java.util.concurrent.TimeUnit
 /**
  * Owns native playback for as long as it may be heard: the controller, its Media3 session and
  * notification, audio focus and becoming-noisy handling, and the restorable queue. The Activity
- * binds to it in-process and its WebView bridge drives the same controller, so playback outlives
- * the Activity, the screen and document reloads. Media3's default task-removal rule applies:
- * a playing service keeps playing when the task is swiped away; otherwise it stops and the
- * controller releases its claim.
+ * binds to it in-process through [PlaybackServiceHandle] and its WebView bridge drives the same
+ * controller, so playback outlives the Activity, the screen and document reloads. The app's
+ * [PlaybackHost] supplies the origin, the session cookies and the Activity to open. Media3's
+ * default task-removal rule applies: a playing service keeps playing when the task is swiped
+ * away; otherwise it stops and the controller releases its claim.
  *
  * Playback resumption: the service is a [MediaLibraryService] with Media3's `MediaButtonReceiver`,
  * so System UI keeps a resumable media card after the paused session's timeout, process death and
@@ -88,14 +90,15 @@ import java.util.concurrent.TimeUnit
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
 
-    inner class LocalBinder : Binder() {
-        val service: PlaybackService get() = this@PlaybackService
-    }
-
-    private val binder = LocalBinder()
+    private val binder = PlaybackServiceBinder(Handle())
     private val main = Handler(Looper.getMainLooper())
     private val client = ShellSession.client()
-    private val listeners = mutableSetOf<(NativePlaybackEvent) -> Unit>()
+    private val host: PlaybackHost get() = application as PlaybackHost
+    private var eventListener: ((NativePlaybackEvent) -> Unit)? = null
+
+    /** Whether a document negotiated the bridge, so it refreshes the references it handed over. */
+    private var documentAttached = false
+    private val port = ControllerPlaybackPort({ controller }) { attached -> documentAttached = attached }
     private val focusPolicy = AudioFocusPolicy()
 
     // One executor per controller lifetime, so a retired controller's release reaches its own origin.
@@ -103,8 +106,7 @@ class PlaybackService : MediaLibraryService() {
     private var listenIo: ExecutorService = Executors.newSingleThreadExecutor()
 
     @Volatile private lateinit var origin: String
-    lateinit var controller: NativePlaybackController
-        private set
+    private lateinit var controller: NativePlaybackController
 
     private lateinit var player: NativeMediaPlayer
     private lateinit var session: MediaLibrarySession
@@ -132,8 +134,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        val channel = ShellChannel.fromWireName(BuildConfig.CHANNEL)
-        origin = OriginPolicy(channel, BuildConfig.DEV_ORIGIN).initialOrigin(ShellPreferences(this).selectedSandboxSlot)
+        origin = host.initialOrigin()
         val preferences = getSharedPreferences(RESTORE_PREFERENCES, MODE_PRIVATE)
         restoreStore = PlaybackRestoreStore(object : RestoreStorage {
             override fun read(): String? = preferences.getString(KEY_QUEUE, null)
@@ -159,9 +160,8 @@ class PlaybackService : MediaLibraryService() {
         player.showRestored(restored)
         artwork = SessionArtworkLoader(client) { session(origin) }
         session = MediaLibrarySession.Builder(this, player, SessionCallback())
-            .setSessionActivity(openApp())
+            .setSessionActivity(host.sessionActivity())
             .setBitmapLoader(CacheBitmapLoader(artwork))
-            .setMediaButtonPreferences(SessionControls.buttons())
             .build()
         // The Activity binds through its own intent, so the notification and foreground handling
         // start from this explicit registration rather than a controller's first bind.
@@ -217,37 +217,39 @@ class PlaybackService : MediaLibraryService() {
         return binder.takeIf { intent.data == SHELL_BINDING }
     }
 
-    /** Listeners run on the main thread for every controller event. */
-    fun addListener(listener: (NativePlaybackEvent) -> Unit) {
-        listeners += listener
-    }
+    private inner class Handle : PlaybackServiceHandle {
+        override val port: NativePlaybackPort get() = this@PlaybackService.port
 
-    fun removeListener(listener: (NativePlaybackEvent) -> Unit) {
-        listeners -= listener
-    }
+        /**
+         * Another origin never inherits playback: the old controller stops, releases its claim to
+         * its own origin and is discarded, and the saved queue is forgotten.
+         */
+        override fun selectOrigin(origin: String) {
+            if (origin == this@PlaybackService.origin) return
+            retireController()
+            restoreStore.clear()
+            this@PlaybackService.origin = origin
+            controller = createController(origin)
+            player.showRestored(null)
+            player.showResumption(false)
+        }
 
-    /**
-     * Another origin never inherits playback: the old controller stops, releases its claim to its
-     * own origin and is discarded, and the saved queue is forgotten.
-     */
-    fun selectOrigin(selected: String) {
-        if (selected == origin) return
-        retireController()
-        restoreStore.clear()
-        origin = selected
-        controller = createController(selected)
-        player.showRestored(null)
-        player.showResumption(false)
+        override fun setEventListener(listener: ((NativePlaybackEvent) -> Unit)?) {
+            eventListener = listener
+        }
+
+        override fun prepareForPackageReplacement(done: () -> Unit) = this@PlaybackService.prepareForPackageReplacement(done)
     }
 
     /**
      * Before Android replaces the package: the origin's shutdown path stops playback, writes the
      * final listen checkpoint and releases the claim, and [done] runs on the main thread once those
-     * requests have finished, or after [REPLACEMENT_WAIT_MS]. The stopped controller keeps reporting
-     * until then, so the document sees playback stop; a fresh idle one with the same client ID then
-     * takes over in case the installation is cancelled. The saved queue and the origin stay.
+     * requests have finished, or after [REPLACEMENT_WAIT_MS]. The stopped controller keeps reporting,
+     * at the position it stopped, until then, so the document sees playback stop and the saved queue
+     * resumes there; a fresh idle one with the same client ID then takes over in case the
+     * installation is cancelled. The saved queue and the origin stay.
      */
-    fun prepareForPackageReplacement(done: () -> Unit) {
+    private fun prepareForPackageReplacement(done: () -> Unit) {
         val retiring = controller
         val retiredPlaybackIo = playbackIo
         val retiredListenIo = listenIo
@@ -286,8 +288,7 @@ class PlaybackService : MediaLibraryService() {
         super.onDestroy()
     }
 
-    private fun session(target: String) =
-        ShellSession({ target }) { url -> CookieManager.getInstance().getCookie(url) }
+    private fun session(target: String) = ShellSession({ target }, host::cookies)
 
     private fun createController(target: String, restoredClientId: String? = null): NativePlaybackController {
         val shellSession = session(target)
@@ -305,6 +306,12 @@ class PlaybackService : MediaLibraryService() {
             clientId = clientId,
             warmer = OkHttpConnectionWarmer(client, shellSession, clientId),
             deviceId = listenDeviceId(),
+            startThread = { loop ->
+                Thread({
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+                    loop.run()
+                }, "AlbumHavenPlayback").start()
+            },
         )
         return created.also { it.start() }
     }
@@ -337,7 +344,7 @@ class PlaybackService : MediaLibraryService() {
         player.onEvent(event)
         if (event is NativePlaybackEvent.State) apply(focusPolicy.onState(event.snapshot.state))
         saveRestorable(event)
-        listeners.toList().forEach { it(event) }
+        eventListener?.invoke(event)
         refreshAfterFailure(event)
     }
 
@@ -361,14 +368,14 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun referencesMayHaveExpired() =
-        listeners.isEmpty() && SystemClock.elapsedRealtime() - queueLoadedAtMs > REFERENCE_REFRESH_MS
+        !documentAttached && SystemClock.elapsedRealtime() - queueLoadedAtMs > REFERENCE_REFRESH_MS
 
     /** A failure from an expired reference, with no document to refresh it, retries once with fresh ones. */
     private fun refreshAfterFailure(event: NativePlaybackEvent) {
         val failed = event is NativePlaybackEvent.ReferenceExpired ||
             (event is NativePlaybackEvent.Error && event.code == "ownership_unavailable")
         val snapshot = event.snapshot
-        if (!failed || listeners.isNotEmpty() || refreshedRevision == snapshot.queueRevision) return
+        if (!failed || documentAttached || refreshedRevision == snapshot.queueRevision) return
         val queue = RestorableQueue.of(snapshot, origin)?.takeIf { it.resumable } ?: return
         refreshedRevision = snapshot.queueRevision + 1
         resume(queue, refreshedRevision, queue.currentIndex to queue.positionMs)
@@ -392,7 +399,7 @@ class PlaybackService : MediaLibraryService() {
     private fun resumeFailure(signIn: Boolean): PlaybackException {
         val extras = Bundle().apply {
             putString(MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT, getString(R.string.playback_resume_open_app))
-            putParcelable(MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT, openApp())
+            putParcelable(MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT, host.sessionActivity())
         }
         return PlaybackException(
             getString(if (signIn) R.string.playback_resume_sign_in else R.string.playback_resume_unavailable),
@@ -402,28 +409,13 @@ class PlaybackService : MediaLibraryService() {
         )
     }
 
-    private fun openApp(): PendingIntent = PendingIntent.getActivity(
-        this,
-        0,
-        Intent(this, ShellActivity::class.java),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
-
     private inner class SessionCallback : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             if (!controller.isTrusted && controller.packageName != packageName) return MediaSession.ConnectionResult.reject()
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(SessionControls.sessionCommands())
-                .setMediaButtonPreferences(SessionControls.buttons())
-                .build()
+            // Media3's default commands and buttons. A Love button adds its SessionCommand and
+            // CommandButton to this result, and its answer in onCustomCommand.
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session).build()
         }
-
-        override fun onCustomCommand(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            customCommand: SessionCommand,
-            args: Bundle,
-        ): ListenableFuture<SessionResult> = SessionControls.handle(customCommand)
 
         /**
          * Media3 asks while the player has no item, and for System UI's resumption browse while

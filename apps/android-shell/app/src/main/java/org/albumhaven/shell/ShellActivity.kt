@@ -37,7 +37,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.playback.PlaybackServiceBinder
+import org.albumhaven.shell.playback.PlaybackServiceHandle
 import org.albumhaven.shell.updates.UpdateState
 import org.albumhaven.shell.updates.Updater
 import org.albumhaven.shell.updates.Updates
@@ -48,8 +49,7 @@ import java.util.concurrent.Executors
 
 class ShellActivity : ComponentActivity(), BridgeHost {
 
-    private val channel = ShellChannel.fromWireName(BuildConfig.CHANNEL)
-    private val originPolicy = OriginPolicy(channel, BuildConfig.DEV_ORIGIN)
+    private val originPolicy = OriginPolicy.forBuild
     private val probeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -57,11 +57,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var selectedOrigin: String
     private lateinit var bridge: BridgeController
 
-    // The page loads only once the playback service is bound, so the bridge always has a controller.
-    private var playbackService: PlaybackService? = null
+    // The bridge and the page exist only once the playback service is bound, so the bridge always has a player.
+    private var playback: PlaybackServiceHandle? = null
     private var playbackBound = false
     private var pendingWebState: Bundle? = null
-    private val playbackEvents: (NativePlaybackEvent) -> Unit = { event -> bridge.emit(event) }
     private var updater: Updater? = null
     private val updateEvents: (UpdateState) -> Unit = { state ->
         bridge.emit(state)
@@ -75,15 +74,22 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var updateRequired: UpdateRequiredFlow? = null
     private val playbackConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            val service = (binder as PlaybackService.LocalBinder).service
-            playbackService = service
+            val service = (binder as PlaybackServiceBinder).handle
+            playback = service
             service.selectOrigin(selectedOrigin)
-            service.addListener(playbackEvents)
+            bridge = BridgeController(
+                ShellIdentity(packageName, originPolicy.channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
+                this@ShellActivity,
+                service.port,
+                updater?.let(::ShellUpdatePort),
+            )
+            service.setEventListener { event -> bridge.emit(event) }
+            updater?.addListener(updateEvents)
             if (!isDestroyed) loadSelectedOrigin()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
-            playbackService = null
+            playback = null
         }
     }
     private lateinit var webView: WebView
@@ -108,15 +114,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         applySystemBarInsets(findViewById(R.id.shell_root))
 
         preferences = ShellPreferences(this)
-        selectedOrigin = originPolicy.initialOrigin(preferences.selectedSandboxSlot)
+        selectedOrigin = preferences.selectedOrigin
         updater = Updates.get(this)
-        bridge = BridgeController(
-            ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
-            this,
-            ControllerPlaybackPort { checkNotNull(playbackService).controller },
-            updater?.let(::ShellUpdatePort),
-        )
-        updater?.addListener(updateEvents)
         // Once per process: a cold launch checks when the last successful check is six hours old.
         updater?.passiveCheckIfDue()
         recovery = RecoveryPanel(findViewById(R.id.recovery_root))
@@ -166,11 +165,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     override fun onDestroy() {
-        // Playback belongs to the service and outlives the Activity; only this listener goes.
-        playbackService?.removeListener(playbackEvents)
+        // Playback belongs to the service and outlives the Activity; only its document and listeners go.
+        playback?.setEventListener(null)
+        if (::bridge.isInitialized) bridge.reset()
         updater?.removeListener(updateEvents)
         if (playbackBound) unbindService(playbackConnection)
-        playbackService = null
+        playback = null
         probeExecutor.shutdownNow()
         mainHandler.removeCallbacksAndMessages(null)
         fileChooserCallback?.onReceiveValue(null)
@@ -214,7 +214,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                     preferences.selectedSandboxSlot = slot
                     selectedOrigin = origin
                     // Playback, its claim and its queue stay with the origin that started them.
-                    playbackService?.selectOrigin(origin)
+                    playback?.selectOrigin(origin)
                     clearHistoryOnNextPage = true
                     reload()
                 }
@@ -232,7 +232,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     /** Sessions are flushed and playback is stopped, checkpointed and released before the package is replaced. */
     private fun prepareForPackageReplacement(done: () -> Unit) {
         CookieManager.getInstance().flush()
-        playbackService?.prepareForPackageReplacement(done) ?: done()
+        playback?.prepareForPackageReplacement(done) ?: done()
     }
 
     private fun isReachable(origin: String): Boolean = try {
@@ -351,9 +351,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-            bridge.reset()
             // The same origin's next document re-attaches to the running queue from its handshake.
-            playbackService?.controller?.documentStarted()
+            bridge.reset()
             incompatibleWeb = false
             updateRequired = null
         }

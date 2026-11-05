@@ -2,6 +2,7 @@ package org.albumhaven.shell
 
 import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.ControllerHarness
+import org.albumhaven.shell.playback.ControllerPlaybackPort
 import org.albumhaven.shell.playback.CurrentItemReason
 import org.albumhaven.shell.playback.QueueItem
 import org.albumhaven.shell.playback.RATE
@@ -64,10 +65,11 @@ class BridgeControllerTest {
     private val host = FakeHost()
     private val updates = FakeUpdates()
     private val playback = ControllerHarness()
+    private val attachments = mutableListOf<Boolean>()
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
     private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }), updates)
+        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachments::add), updates)
 
     private fun send(
         controller: BridgeController,
@@ -95,6 +97,18 @@ class BridgeControllerTest {
 
     private fun assertSameJson(expected: JSONObject, actual: JSONObject) {
         assertEquals(canonical(expected), canonical(actual))
+    }
+
+    @Test
+    fun onlyANegotiatedDocumentCountsAsAttachedUntilItsPageGoes() {
+        assertEquals("incompatible_bridge", errorCode(send(sandbox, handshake(min = 2, max = 3))))
+        assertEquals(emptyList<Boolean>(), attachments)
+
+        send(sandbox, handshake())
+        assertEquals(listOf(true), attachments)
+        // A page start, a reload, an error panel and a gone Activity all reset the bridge.
+        sandbox.reset()
+        assertEquals(listOf(true, false), attachments)
     }
 
     @Test

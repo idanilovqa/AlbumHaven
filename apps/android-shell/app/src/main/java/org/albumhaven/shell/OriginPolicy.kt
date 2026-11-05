@@ -15,7 +15,7 @@ enum class ShellChannel(val wireName: String) {
 enum class NavigationDecision { LOAD, OPEN_EXTERNALLY, BLOCK }
 
 /** Owns the exact origins each channel may display. Nothing here trusts page-supplied values. */
-class OriginPolicy(private val channel: ShellChannel, private val devOrigin: String = "") {
+class OriginPolicy(val channel: ShellChannel, private val devOrigin: String = "") {
 
     val allowedOrigins: Set<String> = buildSet {
         when (channel) {
@@ -46,6 +46,9 @@ class OriginPolicy(private val channel: ShellChannel, private val devOrigin: Str
         classify(url, selectedOrigin) == NavigationDecision.LOAD
 
     companion object {
+        /** This build's channel and development origin. */
+        val forBuild by lazy { OriginPolicy(ShellChannel.fromWireName(BuildConfig.CHANNEL), BuildConfig.DEV_ORIGIN) }
+
         const val STABLE_ORIGIN = "https://albumhaven.org"
         const val DEFAULT_SANDBOX_SLOT = 2
         val SANDBOX_SLOTS = 1..99

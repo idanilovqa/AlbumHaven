@@ -21,7 +21,6 @@ import okhttp3.OkHttpClient
 import org.albumhaven.shell.BuildConfig
 import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
-import org.albumhaven.shell.ShellChannel
 import org.albumhaven.shell.ShellPreferences
 import org.albumhaven.shell.downloadManagerOrNull
 import java.io.File
@@ -34,18 +33,13 @@ object Updates {
     private var instance: Updater? = null
 
     fun policy(context: Context) = UpdatePolicy(
-        channel = ShellChannel.fromWireName(BuildConfig.CHANNEL),
+        channel = OriginPolicy.forBuild.channel,
         applicationId = context.packageName,
-        artifactOrigin = signedInOrigin(context),
+        artifactOrigin = ShellPreferences(context).selectedOrigin,
         expectedCertificateSha256 = BuildConfig.UPDATE_CERTIFICATE_SHA256,
         installedVersionCode = BuildConfig.VERSION_CODE.toLong(),
         deviceApi = Build.VERSION.SDK_INT,
     )
-
-    /** Artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox. */
-    fun signedInOrigin(context: Context): String =
-        OriginPolicy(ShellChannel.fromWireName(BuildConfig.CHANNEL), BuildConfig.DEV_ORIGIN)
-            .initialOrigin(ShellPreferences(context).selectedSandboxSlot)
 
     /** Main thread only. */
     fun get(context: Context): Updater? {
@@ -107,7 +101,8 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
 
     override fun nowMs() = System.currentTimeMillis()
 
-    override fun artifactOrigin() = Updates.signedInOrigin(context)
+    // Artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox.
+    override fun artifactOrigin() = ShellPreferences(context).selectedOrigin
 
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {

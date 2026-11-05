@@ -12,6 +12,9 @@ class ShellPreferences(context: Context) {
             .takeIf { it in OriginPolicy.SANDBOX_SLOTS } ?: OriginPolicy.DEFAULT_SANDBOX_SLOT
         set(slot) = preferences.edit { putInt(KEY_SLOT, slot).putInt(KEY_CONNECTED, slot) }
 
+    /** The origin this build opens: its development origin, albumhaven.org, or the selected sandbox. */
+    val selectedOrigin: String get() = OriginPolicy.forBuild.initialOrigin(selectedSandboxSlot)
+
     /** One-shot: reports the switch to the first page that handshakes after it. */
     fun takeConnectedSandboxSlot(): Int? {
         val slot = preferences.getInt(KEY_CONNECTED, 0).takeIf { it != 0 }

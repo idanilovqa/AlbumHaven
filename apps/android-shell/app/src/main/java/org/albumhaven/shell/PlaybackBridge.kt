@@ -4,41 +4,13 @@ import org.albumhaven.shell.playback.CommandResult
 import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.LoopKind
 import org.albumhaven.shell.playback.LoopRange48k
-import org.albumhaven.shell.playback.NativePlaybackController
 import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.playback.NativePlaybackPort
 import org.albumhaven.shell.playback.NativePlaybackSnapshot
 import org.albumhaven.shell.playback.QueueItem
 import org.albumhaven.shell.playback.QueueLoad
 import org.json.JSONArray
 import org.json.JSONObject
-
-/** The native player as the bridge sees it. */
-interface NativePlaybackPort {
-    val snapshot: NativePlaybackSnapshot
-    fun loadQueue(load: QueueLoad): CommandResult
-    fun play(queueRevision: Long): CommandResult
-    fun pause()
-    fun stop()
-    fun next(queueRevision: Long): CommandResult
-    fun previous(queueRevision: Long): CommandResult
-    fun seek(queueRevision: Long, positionMs: Long): CommandResult
-    fun setLoop(queueRevision: Long, range: LoopRange48k?): CommandResult
-    fun warmConnections()
-}
-
-/** [controller] names the current origin's controller, which a sandbox switch replaces. */
-class ControllerPlaybackPort(private val controller: () -> NativePlaybackController) : NativePlaybackPort {
-    override val snapshot get() = controller().snapshot
-    override fun loadQueue(load: QueueLoad) = controller().loadQueue(load)
-    override fun play(queueRevision: Long) = controller().play(queueRevision)
-    override fun pause() = controller().pause()
-    override fun stop() = controller().stop()
-    override fun next(queueRevision: Long) = controller().next(queueRevision)
-    override fun previous(queueRevision: Long) = controller().previous(queueRevision)
-    override fun seek(queueRevision: Long, positionMs: Long) = controller().seek(queueRevision, positionMs)
-    override fun setLoop(queueRevision: Long, range: LoopRange48k?) = controller().setLoop(queueRevision, range)
-    override fun warmConnections() = controller().warmConnections()
-}
 
 /** Validates `playback.*` commands and encodes native playback events (Web/Native Bridge v1). */
 class PlaybackBridge(private val port: NativePlaybackPort) {

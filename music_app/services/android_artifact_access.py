@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from music_app.services.android_key_attestation import (
+    MAX_CHAIN_LENGTH,
     AttestationPolicy,
     AttestationRefused,
     load_root_public_keys,
@@ -82,8 +83,9 @@ def _unb64url(text: str) -> bytes:
 
 
 def signing_certificates(channel: str, environ=None) -> frozenset[str]:
+    """Hex digests, in either case and with or without keytool's colons (``AB:CD:...``)."""
     raw = str((os.environ if environ is None else environ).get(SIGNING_CERTIFICATES_ENV[channel]) or "")
-    values = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    values = {item.strip().replace(":", "").lower() for item in raw.split(",")}
     return frozenset(value for value in values if _SHA256_HEX.fullmatch(value))
 
 
@@ -196,7 +198,7 @@ class AndroidArtifactAccess:
     # --- Attestation -------------------------------------------------------------------------
 
     def attest(self, actor, channel: str, challenge: str, chain: list) -> dict:
-        if channel not in CHANNELS or not isinstance(chain, list) or not 2 <= len(chain) <= 10:
+        if channel not in CHANNELS or not isinstance(chain, list) or not 2 <= len(chain) <= MAX_CHAIN_LENGTH:
             raise ArtifactAccessError(400, "invalid_request")
         try:
             chain_der = [base64.b64decode(item, validate=True) for item in chain if isinstance(item, str)]

@@ -18,9 +18,11 @@ from fastapi import FastAPI
 from music_app.routes.android_artifacts_asgi import ARTIFACTS_DIR_ENV, router
 from music_app.services.android_artifact_access import (
     ALLOW_SOFTWARE_ENV,
+    ATTESTATION_STATUS_ENV,
     SIGNING_CERTIFICATES_ENV,
     AndroidArtifactAccess,
     request_message,
+    signing_certificates,
 )
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.current_actor import ActorState, CurrentActor
@@ -208,7 +210,35 @@ def test_an_oversized_apk_exchange_body_is_refused_without_buffering_it(artifact
     status, _, body = _request(app, "POST", "/artifacts/android/sandbox/album-haven-2.apk", session=SESSION_A,
                                headers=headers, receive=endless_body)
     assert (status, json.loads(body)["code"]) == (400, "invalid_request")
-    assert len(chunks) == (0 if declared else 2)
+    assert len(chunks) == (0 if declared else 1)
+
+
+@pytest.mark.parametrize("body", [b"{}", b"x"])
+def test_an_apk_exchange_with_any_body_is_refused_before_database_work(artifacts, body):
+    # The app signs the SHA-256 of an empty body; nothing else is ever sent.
+    def no_database(_url):
+        raise AssertionError("a non-empty exchange is refused before any database work")
+
+    app = _app({SESSION_A: _actor(1, 1)}, access=AndroidArtifactAccess({}, AUTH, connect=no_database))
+    status, _, response = _request(app, "POST", "/artifacts/android/sandbox/album-haven-2.apk", session=SESSION_A,
+                                   body=body)
+    assert (status, json.loads(response)["code"]) == (400, "invalid_request")
+
+
+def test_the_artifact_access_service_is_built_once_per_app(artifacts):
+    app = _app({SESSION_A: _actor(1, 1)})
+    path = "/artifacts/android/sandbox/manifest.json"
+    assert _request(app, "GET", path, session=SESSION_A)[0] == 403
+    access = app.state.android_artifact_access
+    assert isinstance(access, AndroidArtifactAccess)
+    assert _request(app, "GET", path, session=SESSION_A)[0] == 403
+    assert app.state.android_artifact_access is access
+
+
+def test_signing_certificate_digests_accept_the_colon_separated_keytool_form():
+    keytool = ":".join(["AB"] * 32)
+    environ = {SIGNING_CERTIFICATES_ENV["sandbox"]: f"{keytool}, {'cd' * 32},not-a-digest"}
+    assert signing_certificates("sandbox", environ) == {SIGNER, "cd" * 32}
 
 
 # --- Against an isolated Postgres --------------------------------------------------------------
@@ -577,3 +607,34 @@ def test_a_failed_signature_does_not_refresh_the_device_key(world):
     assert last_used() == attested
     assert _manifest_status(world, device_key, key) == (200, None)
     assert last_used() == world.clock.now
+
+
+def _status_list(world, tmp_path, content):
+    path = tmp_path / "attestation-status.json"
+    path.write_text(content, encoding="utf-8")
+    world.environ[ATTESTATION_STATUS_ENV] = str(path)
+
+
+def test_a_chain_with_a_listed_certificate_cannot_attest(world, tmp_path):
+    # Google lists serials in uppercase hex, sometimes with leading zeros.
+    _status_list(world, tmp_path, json.dumps({"entries": {"01F2E": {"status": "REVOKED", "reason": "KEY_COMPROMISE"}}}))
+    status, body, _ = _attest(world, intermediate_serial=0x1F2E)
+    assert (status, body["code"]) == (403, "attestation_refused")
+    with isolatedPostgres._connect(world.db.setup_url) as connection:
+        assert connection.execute("select count(*) as keys from app.android_device_keys").fetchone()["keys"] == 0
+    assert _attest(world, intermediate_serial=0x1F2F)[0] == 200
+
+
+@pytest.mark.parametrize("content", [None, "not json", "[]"], ids=["missing", "garbage", "not-an-object"])
+def test_an_unreadable_status_list_fails_closed_before_the_challenge_is_spent(world, tmp_path, content):
+    if content is None:
+        world.environ[ATTESTATION_STATUS_ENV] = str(tmp_path / "absent.json")
+    else:
+        _status_list(world, tmp_path, content)
+    challenge = _challenge(world, "attest")
+    chain, _ = world.pki.chain(_raw(challenge))
+    payload = {"protocol": 1, "channel": "sandbox", "challenge": challenge, "chain": _chain_payload(chain)}
+    assert _post(world, "/artifacts/android/attest", payload) == (
+        503, {"detail": "Device attestation is unavailable.", "code": "attestation_unavailable"})
+    del world.environ[ATTESTATION_STATUS_ENV]
+    assert _post(world, "/artifacts/android/attest", payload)[0] == 200

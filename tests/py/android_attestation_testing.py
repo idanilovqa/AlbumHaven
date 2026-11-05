@@ -46,17 +46,21 @@ def _octets(value: bytes) -> bytes:
 VERIFIED_BOOT = (True, 0)  # deviceLocked, verifiedBootState Verified
 
 
-def root_of_trust(device_locked: bool, verified_boot_state: int) -> bytes:
-    """[704] EXPLICIT RootOfTrust: verifiedBootKey, deviceLocked, verifiedBootState, verifiedBootHash."""
+def root_of_trust(device_locked: bool | bytes, verified_boot_state: int) -> bytes:
+    """[704] EXPLICIT RootOfTrust: verifiedBootKey, deviceLocked, verifiedBootState, verifiedBootHash.
+
+    ``device_locked`` may instead be the BOOLEAN's raw content bytes."""
+    locked = device_locked if isinstance(device_locked, bytes) else b"\xff" if device_locked else b"\x00"
     return _der(b"\xbf\x85\x40", _seq(
-        _octets(b"k" * 32), _der(b"\x01", b"\xff" if device_locked else b"\x00"),
+        _octets(b"k" * 32), _der(b"\x01", locked),
         _int(verified_boot_state, b"\x0a"), _octets(b"h" * 32),
     ))
 
 
 def key_description(challenge: bytes, *, packages=(SANDBOX_PACKAGE,), digests=(SIGNER,), level: int = 1,
-                    boot=VERIFIED_BOOT) -> bytes:
-    """``boot`` is the hardware-enforced (deviceLocked, verifiedBootState), or None to omit it."""
+                    keymint_level: int | None = None, boot=VERIFIED_BOOT) -> bytes:
+    """``boot`` is the hardware-enforced (deviceLocked, verifiedBootState), or None to omit it.
+    ``keymint_level`` defaults to the attestation security ``level``."""
     application_id = _seq(
         _set(*(_seq(_octets(name.encode()), _int(1)) for name in packages)),
         _set(*(_octets(bytes.fromhex(digest)) for digest in digests)),
@@ -64,7 +68,8 @@ def key_description(challenge: bytes, *, packages=(SANDBOX_PACKAGE,), digests=(S
     # [709] EXPLICIT OCTET STRING: context-specific, constructed, high tag number 709.
     software = _seq(_der(b"\xbf\x85\x45", _octets(application_id)))
     hardware = _seq(root_of_trust(*boot)) if boot is not None else _seq()
-    return _seq(_int(300), _int(level, b"\x0a"), _int(300), _int(level, b"\x0a"),
+    keymint_level = level if keymint_level is None else keymint_level
+    return _seq(_int(300), _int(level, b"\x0a"), _int(300), _int(keymint_level, b"\x0a"),
                 _octets(challenge), _octets(b""), software, hardware)
 
 
@@ -104,8 +109,8 @@ class AttestationPki:
         return frozenset({spki(self.root_key)})
 
     def chain(self, challenge: bytes, *, packages=(SANDBOX_PACKAGE,), digests=(SIGNER,), level: int = 1,
-              boot=VERIFIED_BOOT, leaf_key=None, intermediate_ca=True, intermediate_not_after=None,
-              intermediate_serial=2):
+              keymint_level: int | None = None, boot=VERIFIED_BOOT, leaf_key=None, intermediate_ca=True,
+              intermediate_not_after=None, intermediate_serial=2):
         """Returns ([leaf, intermediate, root] DER, leaf private key)."""
         leaf_key = leaf_key or ec.generate_private_key(ec.SECP256R1())
         root = certificate("Test attestation root", self.root_key, "Test attestation root", self.root_key, ca=True)
@@ -116,7 +121,8 @@ class AttestationPki:
         )
         leaf = certificate(
             "Android Keystore Key", leaf_key, "Test attestation intermediate", self.intermediate_key, ca=None,
-            extension=key_description(challenge, packages=packages, digests=digests, level=level, boot=boot),
+            extension=key_description(challenge, packages=packages, digests=digests, level=level,
+                                      keymint_level=keymint_level, boot=boot),
             not_before=datetime(1970, 1, 1, tzinfo=timezone.utc), not_after=datetime(2048, 1, 1, tzinfo=timezone.utc),
         )
         return [der(leaf), der(intermediate), der(root)], leaf_key

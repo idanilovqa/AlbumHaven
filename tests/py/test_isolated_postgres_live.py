@@ -692,6 +692,89 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
         assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
+def _live_album_rows(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = {
+            row["album_key"]: row for row in connection.execute(
+                "select album_key, title, release_year, metadata ->> 'source' as source from library.local_albums"
+            ).fetchall()
+        }
+        members = {
+            row["private_path"]: row["album_key"] for row in connection.execute(
+                """
+                select files.private_path, albums.album_key
+                from library.local_track_files files
+                join library.local_tracks tracks on tracks.id = files.track_id
+                left join library.local_albums albums on albums.id = tracks.album_id
+                where files.scan_cache_stale is false
+                """
+            ).fetchall()
+        }
+    return albums, members
+
+
+def _live_reconcile(fixture, entries, *folders):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    return TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(entries[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=tuple(Path(folder) for folder in folders),
+        deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+
+def test_live_watcher_album_of_a_new_year_never_rewrites_another_years_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    old_year = {**fixture.entry("Owner/Untagged 2020/01.flac", album="Unknown Album"), "year": 2020}
+    fixture.seed(old_year)
+    new_year = {**fixture.entry("Owner/Untagged 2021/01.flac", album="Unknown Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {new_year["path"]: new_year}, Path(new_year["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    # Both years are year-split exactly as a full scan would; neither album is rewritten.
+    years = {albums[key]["release_year"] for key in members.values()}
+    assert years == {2020, 2021}
+    assert albums[members[old_year["path"]]]["release_year"] == 2020
+    assert albums[members[new_year["path"]]]["release_year"] == 2021
+    assert members[old_year["path"]] != members[new_year["path"]]
+
+
+def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Unknown Album"), "year": 2020}
+    fixture.seed(retagged)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        # A year-qualified row already holds Owner / Unknown Album / 2021.
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%s, %s, 'owner::unknown album::year::2021', 'Unknown Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            (owner["library_id"], owner["id"]),
+        )
+    retagged = {**retagged, "year": 2021}
+    clean = {**fixture.entry("Owner/Clean Album/01.flac", album="Clean Album"), "year": 2021}
+
+    result = _live_reconcile(
+        fixture, {retagged["path"]: retagged, clean["path"]: clean},
+        Path(retagged["path"]).parent, Path(clean["path"]).parent,
+    )
+
+    assert result.revision > 0, "the rest of the root still publishes"
+    albums, members = _live_album_rows(fixture)
+    assert members[clean["path"]] == "owner::clean album"
+    assert albums["owner::unknown album::year::2021"]["source"] == "legacy", "existing rows are untouched"
+    assert albums["owner::unknown album"]["release_year"] == 2020, "the colliding album is withheld, not merged"
+    assert members[retagged["path"]] == "owner::unknown album"
+
+
 def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
 
@@ -756,7 +839,10 @@ def test_live_outdated_file_metadata_is_detected_for_a_startup_repair_scan(watch
 
 @pytest.mark.parametrize("stale_track_editions", [False, True])
 def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watcher_repair_inventory, stale_track_editions):
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
 
     fixture = watcher_repair_inventory
     # The owner's two real copies: a Bandcamp copy in the main library and a
@@ -774,6 +860,8 @@ def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watch
 
     fixture.seed(*copy(0, "Prog 80s leftovers/1980 - Art Zoyd - Génération Sans Futur", "Génération Sans Futur", main_titles, None),
                  *copy(1, "Art Zoyd (1980) - Génération sans futur", "Génération sans futur", arrival_titles, 1))
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
     payload = PostgresLibraryBrowseRepository(fixture.config).build_problematic_files_payload()
     duplicate_items = [
         item for item in payload["items"]

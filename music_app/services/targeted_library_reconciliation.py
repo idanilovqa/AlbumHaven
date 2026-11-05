@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import os
@@ -287,6 +289,19 @@ class TargetedLibraryReconciler:
                     else {}
                 ),
             )
+            identity_conflicts = list(persisted.get("identity_conflicts") or ())
+            if identity_conflicts:
+                from music_app.services.app_logging import log_app_event
+
+                log_app_event(
+                    self._config,
+                    logging.getLogger("music_app"),
+                    "Album identity conflict withheld from library publication",
+                    level="warning",
+                    history=True,
+                    root_id=root_id,
+                    conflicts=identity_conflicts,
+                )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
                 tuple(

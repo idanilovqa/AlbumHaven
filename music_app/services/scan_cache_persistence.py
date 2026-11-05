@@ -577,6 +577,17 @@ class PostgresScanCacheAdapter:
                 if str(row.get("album_key") or "").strip()
             }
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
+            identity_conflicts = _withhold_semantic_identity_conflicts(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+                track_file_rows=track_file_rows,
+                separate_release_keys=separate_release_keys,
+            )
+            if identity_conflicts:
+                withheld_album_keys = {entry["album_key"] for entry in identity_conflicts}
+                affected_album_keys.difference_update(withheld_album_keys)
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_sql(preserve_existing_cover_authority=True),
@@ -624,6 +635,7 @@ class PostgresScanCacheAdapter:
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
                     "new_track_paths": new_track_paths,
+                    **({"identity_conflicts": identity_conflicts} if identity_conflicts else {}),
                 }
             # A logical album can span different containers and configured
             # roots. Replace scan-owned credits using all its retained active
@@ -729,6 +741,7 @@ class PostgresScanCacheAdapter:
             "inventory_mutation_revision": revision,
             "affected_album_keys": sorted(affected_album_keys),
             "new_track_paths": new_track_paths,
+            **({"identity_conflicts": identity_conflicts} if identity_conflicts else {}),
         }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
@@ -1939,6 +1952,14 @@ class PostgresScanCacheAdapter:
                 connection,
                 album_rows,
             )
+            _withhold_semantic_identity_conflicts(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+                track_file_rows=track_file_rows,
+                separate_release_keys=set(separate_release_keys or set()),
+            )
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_sql(),
@@ -2223,6 +2244,143 @@ def _jsonb_compatible(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+_SEMANTIC_IDENTITY_CONFLICTS_SQL = """
+    with bootstrap_context as (
+      select library.libraries.id as library_id
+      from app.bootstrap_owners
+      join library.libraries
+        on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+       and library.libraries.name = 'Local Library'
+       and library.libraries.library_kind = 'local'
+      where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+      limit 1
+    ), incoming as (
+      select *
+      from jsonb_to_recordset(%(incoming_albums)s::jsonb) as incoming(
+        album_key text, artist_key text, title text, release_year integer, edition text
+      )
+    )
+    select incoming.album_key, existing.album_key as existing_album_key
+    from incoming
+    join bootstrap_context on true
+    join library.local_artists as artists
+      on artists.library_id = bootstrap_context.library_id
+     and artists.artist_key = incoming.artist_key
+    join library.local_albums as existing
+      on existing.library_id = bootstrap_context.library_id
+     and existing.artist_id = artists.id
+     and lower(btrim(existing.title)) = lower(btrim(incoming.title))
+     and existing.release_year is not distinct from incoming.release_year
+     and lower(btrim(coalesce(existing.metadata ->> 'edition', '')))
+         = lower(btrim(coalesce(incoming.edition, '')))
+     and existing.semantic_identity_discriminator = ''
+     and existing.album_key <> incoming.album_key
+    where nullif(btrim(incoming.title), '') is not null
+"""
+
+
+def _withhold_semantic_identity_conflicts(
+    connection: Any,
+    *,
+    album_rows: list[dict[str, object]],
+    featured_artist_rows: list[dict[str, object]],
+    track_rows: list[dict[str, object]],
+    track_file_rows: list[dict[str, object]],
+    separate_release_keys: set[str],
+) -> list[dict[str, object]]:
+    """Keep one album's identity collision from rolling back a whole publication.
+
+    Two different album keys may resolve to the same semantic identity (artist,
+    title, year, edition). The unique index then rejects the upsert and aborts
+    every other album in the same root. Albums that would collide are withheld
+    from this publication: their existing rows stay exactly as they are, nothing
+    is merged or re-owned, and the conflicts are returned for diagnostics.
+    """
+    def identity(row: dict[str, object]) -> tuple[object, ...]:
+        metadata = _jsonb_compatible(row.get("metadata"))
+        edition = metadata.get("edition") if isinstance(metadata, dict) else None
+        return (
+            row.get("artist_key"),
+            " ".join(str(row.get("title") or "").casefold().split()),
+            safe_int(row.get("release_year")),
+            str(edition or "").strip().casefold(),
+        )
+
+    def is_separate_release(row: dict[str, object]) -> bool:
+        metadata = _jsonb_compatible(row.get("metadata"))
+        owner = (metadata.get("album_artist") if isinstance(metadata, dict) else None) or ""
+        edition = metadata.get("edition") if isinstance(metadata, dict) else None
+        return album_separate_release_key(str(owner), str(row.get("title") or ""), str(edition or "")) in separate_release_keys
+
+    candidates = [
+        row for row in album_rows
+        if row.get("artist_key") and str(row.get("title") or "").strip() and not is_separate_release(row)
+    ]
+    conflicts: dict[str, dict[str, object]] = {}
+    keys_by_identity: dict[tuple[object, ...], set[str]] = {}
+    for row in candidates:
+        keys_by_identity.setdefault(identity(row), set()).add(str(row.get("album_key") or ""))
+    for row in candidates:
+        if len(keys_by_identity[identity(row)]) > 1:
+            conflicts[str(row["album_key"])] = {
+                "album_key": str(row["album_key"]), "title": row.get("title"),
+                "release_year": row.get("release_year"),
+                "conflicting_album_keys": sorted(keys_by_identity[identity(row)] - {str(row["album_key"])}),
+            }
+    if candidates:
+        incoming = []
+        for row in candidates:
+            metadata = _jsonb_compatible(row.get("metadata"))
+            incoming.append({
+                "album_key": row.get("album_key"), "artist_key": row.get("artist_key"),
+                "title": row.get("title"), "release_year": safe_int(row.get("release_year")),
+                "edition": metadata.get("edition") if isinstance(metadata, dict) else None,
+            })
+        for raw in connection.execute(
+            _SEMANTIC_IDENTITY_CONFLICTS_SQL, {"incoming_albums": _jsonb(incoming)},
+        ).fetchall():
+            found = _row_mapping(raw)
+            album_key = str(found.get("album_key") or "")
+            existing_key = str(found.get("existing_album_key") or "")
+            row = next((item for item in candidates if str(item.get("album_key")) == album_key), {})
+            entry = conflicts.setdefault(album_key, {
+                "album_key": album_key, "title": row.get("title"),
+                "release_year": row.get("release_year"), "conflicting_album_keys": [],
+            })
+            if existing_key and existing_key not in entry["conflicting_album_keys"]:
+                entry["conflicting_album_keys"] = sorted({*entry["conflicting_album_keys"], existing_key})
+    if not conflicts:
+        return []
+    withheld_keys = set(conflicts)
+    withheld_track_keys = {
+        str(row.get("track_key") or "") for row in track_rows if str(row.get("album_key") or "") in withheld_keys
+    }
+    withheld_paths = sorted(
+        str(row.get("private_path") or "") for row in track_file_rows
+        if str(row.get("track_key") or "") in withheld_track_keys
+    )
+    album_rows[:] = [row for row in album_rows if str(row.get("album_key") or "") not in withheld_keys]
+    featured_artist_rows[:] = [
+        row for row in featured_artist_rows if str(row.get("album_key") or "") not in withheld_keys
+    ]
+    track_rows[:] = [row for row in track_rows if str(row.get("album_key") or "") not in withheld_keys]
+    track_file_rows[:] = [
+        row for row in track_file_rows if str(row.get("track_key") or "") not in withheld_track_keys
+    ]
+    _LOGGER.warning(
+        "Withheld %s album(s) whose semantic identity collides with another album key; "
+        "their existing rows are unchanged: %s",
+        len(conflicts),
+        [
+            {key: entry[key] for key in ("album_key", "title", "release_year", "conflicting_album_keys")}
+            for entry in conflicts.values()
+        ],
+    )
+    return [
+        {**entry, "withheld_track_file_count": len(withheld_paths)} for entry in conflicts.values()
+    ]
 
 
 def _execute_semantic_local_album_key_adoptions(

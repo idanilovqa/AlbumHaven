@@ -275,6 +275,13 @@ Rollback first disables projection readers and writers, then removes its trigger
 functions, and projection tables in dependency order; local inventory remains the
 source of truth.
 
+Migration `0172_add_musicbrainz_artist_discogs_link.sql` follows it for the same
+reason. It adds a nullable, range-checked `discogs_artist_id` to
+`integration.musicbrainz_artists`: the Discogs artist named by the MusicBrainz
+artist's url-rels, or null when MusicBrainz lists none or several. Only the ID is
+stored; the public link is derived from it. Rollback drops the column after
+readers stop selecting it.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

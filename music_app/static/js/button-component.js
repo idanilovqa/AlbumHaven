@@ -102,12 +102,31 @@
     );
   }
 
+  // External services shown as an icon and plain text, like MusicBrainz's own links list.
+  // Each accepts only its own public artist-page URL shape.
+  const externalServices = Object.freeze({
+    musicbrainz: { label: 'MusicBrainz', href: /^https:\/\/musicbrainz\.org\/artist\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/ },
+    discogs: { label: 'Discogs', href: /^https:\/\/www\.discogs\.com\/artist\/[1-9][0-9]{0,11}$/ },
+  });
+
+  function renderExternalServiceLink(options = {}) {
+    const service = externalServices[options.service];
+    if (!service) throw new TypeError('Unknown external service.');
+    const href = String(options.href || '');
+    if (!service.href.test(href)) return '';
+    const subject = String(options.subject || '').trim();
+    const ariaLabel = subject ? `Open ${subject} on ${service.label}` : `Open on ${service.label}`;
+    return `<a class="ui-external-link ui-external-link--${escape(options.service)}" href="${escape(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(ariaLabel)}">`
+      + '<span class="ui-external-link__icon" aria-hidden="true"></span>'
+      + `<span class="ui-external-link__text">${escape(service.label)}</span></a>`;
+  }
+
   function setDisabled(element, disabled) {
     element.disabled = Boolean(disabled);
     element.setAttribute('aria-disabled', String(element.disabled));
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
+  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

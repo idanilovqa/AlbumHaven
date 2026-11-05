@@ -13,6 +13,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_ROOT = REPO_ROOT / "migrations" / "postgres"
 MIGRATION_NAME = "0171_create_musicbrainz_artist_enrichment.sql"
 MIGRATION_PATH = MIGRATIONS_ROOT / MIGRATION_NAME
+DISCOGS_MIGRATION_NAME = "0172_add_musicbrainz_artist_discogs_link.sql"
+
+
+def apply_delivery_migrations(connection) -> None:
+    """Apply 0171 and every later Delivery 1 migration, in order."""
+    for path in sorted(MIGRATIONS_ROOT.glob("*.sql")):
+        if path.name >= MIGRATION_NAME:
+            connection.execute(path.read_text(encoding="utf-8"))
 
 ARTIST_TABLES = {
     "integration.musicbrainz_artists",
@@ -87,7 +95,7 @@ def test_delivery_1_migration_is_next_and_lexically_ordered():
     names = sorted(path.name for path in MIGRATIONS_ROOT.glob("*.sql") if path.is_file())
 
     assert MIGRATION_NAME in names
-    assert names[-1] == MIGRATION_NAME
+    assert names[-2:] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME]
     assert names[names.index(MIGRATION_NAME) - 1].startswith("0098_")
 
 

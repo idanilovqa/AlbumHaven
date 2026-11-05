@@ -149,3 +149,27 @@ def test_every_connected_role_keeps_ordinary_gallery_and_album_visibility(role):
     assert grants & accepted_grants
     assert _PRIVATE_ROUTE_ACTIONS[("GET", "/view-data")] == "library.browse.read"
     assert _PRIVATE_ROUTE_ACTIONS[("GET", "/album-details")] == "library.browse.read"
+
+
+def test_artist_projection_links_discogs_only_when_musicbrainz_lists_it():
+    from music_app.services import library_browse_postgres as browse
+
+    linked = browse._root_album_browse_artist_groups(
+        [{**_stored_artist_row(), "artist_discogs_artist_id": 218108}]
+    )[0]["artist_musicbrainz"]
+    unlinked = browse._root_album_browse_artist_groups(
+        [{**_stored_artist_row(), "artist_discogs_artist_id": None}]
+    )[0]["artist_musicbrainz"]
+
+    assert linked == {**SAFE_ARTIST_MUSICBRAINZ, "discogs_url": "https://www.discogs.com/artist/218108"}
+    assert unlinked == SAFE_ARTIST_MUSICBRAINZ, "no Discogs field at all without a link"
+
+
+@pytest.mark.parametrize(
+    "query_factory", ["_root_album_browse_sql", "_selected_artist_sql"],
+)
+def test_browse_queries_carry_only_the_stored_discogs_artist_id(query_factory):
+    from music_app.services import library_browse_postgres as browse
+
+    sql = _normalized(getattr(browse, query_factory)())
+    assert "musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id" in sql

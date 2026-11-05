@@ -37,7 +37,7 @@ def test_client_normalizes_configured_base_url_and_builds_exact_artist_url():
     result = client.lookup_artist(ARTIST_ID)
 
     assert calls == [
-        f"https://mirror.test/custom/ws/2/artist/{ARTIST_ID}?fmt=json&inc=aliases%2Bgenres%2Btags"
+        f"https://mirror.test/custom/ws/2/artist/{ARTIST_ID}?fmt=json&inc=aliases%2Bgenres%2Btags%2Burl-rels"
     ]
     assert result["classification"] == "matched"
     assert result["artist"]["source_url"] == f"https://musicbrainz.org/artist/{ARTIST_ID}"
@@ -194,6 +194,7 @@ def test_artist_projection_is_bounded_normalized_and_keeps_all_review_tags_with_
             {"name": "Progressive Rock", "normalized_name": "progressive rock", "vote_count": 12},
             {"name": "Symphonic Rock", "normalized_name": "symphonic rock", "vote_count": 0},
         ],
+        "discogs_artist_id": None,
     }
 
 
@@ -234,3 +235,42 @@ def test_default_client_transport_never_negative_caches_identity_lookups():
 
     assert musicbrainz_client.default_get_json.func is musicbrainz_http.get_json
     assert musicbrainz_client.default_get_json.keywords == {"cache_failures": False}
+
+
+def _discogs(resource, *, relation_type="discogs", ended=False):
+    return {"type": relation_type, "target-type": "url", "ended": ended, "url": {"resource": resource}}
+
+
+@pytest.mark.parametrize(
+    ("relations", "expected"),
+    [
+        ([_discogs("https://www.discogs.com/artist/82730")], 82730),
+        ([_discogs("https://www.discogs.com/artist/82730-The-Beatles")], 82730),
+        ([_discogs("http://discogs.com/artist/82730/")], 82730),
+        ([_discogs("https://www.discogs.com/artist/82730"), _discogs("https://www.discogs.com/artist/82730-The-Beatles")], 82730),
+        ([_discogs("https://www.discogs.com/artist/82730"), _discogs("https://www.discogs.com/artist/1")], None),
+        ([_discogs("https://www.discogs.com/artist/82730", ended=True)], None),
+        ([_discogs("https://www.discogs.com/artist/82730", relation_type="allmusic")], None),
+        ([_discogs("https://www.discogs.com/label/82730")], None),
+        ([_discogs("https://www.discogs.com/artist/0")], None),
+        ([_discogs("https://www.discogs.com.evil.example/artist/82730")], None),
+        ([_discogs("https://evil.example/www.discogs.com/artist/82730")], None),
+        ([_discogs("javascript:alert(1)//www.discogs.com/artist/82730")], None),
+        ([{"type": "discogs", "url": "https://www.discogs.com/artist/82730"}], None),
+        (None, None),
+    ],
+)
+def test_discogs_artist_id_comes_only_from_one_current_discogs_artist_url_rel(relations, expected):
+    from music_app.services.musicbrainz_client import discogs_artist_id
+
+    assert discogs_artist_id(relations) == expected
+
+
+def test_projected_artist_carries_the_discogs_artist_id():
+    from music_app.services.musicbrainz_client import project_artist
+
+    artist = project_artist({
+        "id": "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", "name": "The Beatles",
+        "relations": [_discogs("https://www.discogs.com/artist/82730")],
+    })
+    assert artist["discogs_artist_id"] == 82730

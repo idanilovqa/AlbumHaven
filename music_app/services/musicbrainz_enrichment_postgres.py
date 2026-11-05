@@ -578,6 +578,37 @@ class MusicBrainzEnrichmentPostgresRepository:
         result["candidates"] = [_candidate_review_row(candidate) for candidate in candidates]
         return result
 
+    def list_accepted_artist_mbids(self) -> list[str]:
+        """MBIDs of artists matched automatically or assigned by the owner."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(
+                _active_library_cte() + """
+                select distinct matches.artist_mbid::text as artist_mbid
+                from library.local_artist_musicbrainz_matches matches
+                join active_library on active_library.library_id = matches.library_id
+                where matches.state = 'matched' and matches.artist_mbid is not null
+                order by 1
+                """
+            ).fetchall()
+        return [str(_row_mapping(row)["artist_mbid"]) for row in rows]
+
+    def refresh_artist_external_links(self, *, artist_mbid: str, discogs_artist_id: object) -> bool:
+        """Store a refreshed Discogs link only; the artist's match is not touched."""
+        row = self._execute_one(
+            """
+            with refreshed as (
+              update integration.musicbrainz_artists
+              set discogs_artist_id = %(discogs_artist_id)s::bigint
+              where mbid = %(artist_mbid)s::uuid
+                and discogs_artist_id is distinct from %(discogs_artist_id)s::bigint
+              returning 1
+            )
+            select count(*)::integer as changed from refreshed
+            """,
+            {"artist_mbid": _mbid(artist_mbid), "discogs_artist_id": _discogs_artist_id(discogs_artist_id)},
+        )
+        return bool(_integer(row.get("changed")))
+
     def _execute_one(self, sql: str, params: dict[str, object]) -> dict[str, object]:
         with self._connect(self._database_url) as connection:
             row = connection.execute(sql, params).fetchone()
@@ -971,6 +1002,7 @@ def _artist_projection(
         "disambiguation": _bounded_text(artist.get("disambiguation"), 1024) or None,
         "country_code": _bounded_text(artist.get("country_code"), 8).upper() or None,
         "country_name": _bounded_text(artist.get("country_name"), 128) or None,
+        "discogs_artist_id": _discogs_artist_id(artist.get("discogs_artist_id")),
         "aliases": _alias_rows(artist.get("aliases")),
         "tags": _artist_tag_rows(artist),
     }
@@ -1087,7 +1119,14 @@ def _projection_params(projection: dict[str, object] | None) -> dict[str, object
         "disambiguation": projection.get("disambiguation"),
         "country_code": projection.get("country_code"),
         "country_name": projection.get("country_name"),
+        "discogs_artist_id": projection.get("discogs_artist_id"),
     }
+
+
+def _discogs_artist_id(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 1 <= value <= 999_999_999_999 else None
 
 
 def _alias_array_params(rows: list[dict[str, object]]) -> dict[str, object]:
@@ -1369,11 +1408,11 @@ def _automatic_outcome_sql() -> str:
         ), upsert_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
           )
           select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                  %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-                 %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
           from active_artist
           where %(artist_mbid)s::uuid is not null
           on conflict (mbid) do update
@@ -1382,6 +1421,7 @@ def _automatic_outcome_sql() -> str:
               preferred_native_name = excluded.preferred_native_name,
               artist_kind = excluded.artist_kind,
               disambiguation = excluded.disambiguation,
+              discogs_artist_id = excluded.discogs_artist_id,
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid
@@ -1492,11 +1532,11 @@ def _manual_artist_sql() -> str:
     return _authorized_artist_cte() + """
         insert into integration.musicbrainz_artists (
           mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, refreshed_at, created_at, updated_at
+          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
         )
         select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-               %(observed_at)s, %(observed_at)s, %(observed_at)s
+               %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
         from authorized_artist
         on conflict (mbid) do update
         set canonical_name = excluded.canonical_name,
@@ -1504,6 +1544,7 @@ def _manual_artist_sql() -> str:
             preferred_native_name = excluded.preferred_native_name,
             artist_kind = excluded.artist_kind,
             disambiguation = excluded.disambiguation,
+            discogs_artist_id = excluded.discogs_artist_id,
             refreshed_at = excluded.refreshed_at,
             updated_at = excluded.updated_at;
     """

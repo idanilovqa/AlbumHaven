@@ -176,7 +176,28 @@ def project_artist(
         "aliases": aliases,
         "tags": _bounded_votes(payload.get("tags"), max(0, int(max_tags))),
         "genres": _bounded_votes(payload.get("genres"), max(0, int(max_genres))),
+        "discogs_artist_id": discogs_artist_id(payload.get("relations")),
     }
+
+
+_DISCOGS_ARTIST_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/artist/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
+
+
+def discogs_artist_id(relations: object) -> int | None:
+    """The Discogs artist ID from MusicBrainz url-rels.
+
+    Only current "discogs" URL relations to a discogs.com artist page count. When
+    they name several different Discogs artists, none is chosen.
+    """
+    found = set()
+    for relation in relations if isinstance(relations, list) else []:
+        if not isinstance(relation, dict) or relation.get("type") != "discogs" or relation.get("ended"):
+            continue
+        url = relation.get("url")
+        match = _DISCOGS_ARTIST_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
+        if match:
+            found.add(int(match.group(1)))
+    return found.pop() if len(found) == 1 else None
 
 
 def select_display_genres(genres: object, *, limit: int = 3) -> list[str]:
@@ -265,7 +286,7 @@ class MusicBrainzClient:
         normalized = _valid_mbid(mbid)
         if not normalized:
             return {"classification": "invalid_request", "artist": None}
-        query = urllib.parse.urlencode({"fmt": "json", "inc": "aliases+genres+tags"})
+        query = urllib.parse.urlencode({"fmt": "json", "inc": "aliases+genres+tags+url-rels"})
         payload, transport = self.get_json(
             f"{self.base_url}/artist/{normalized}?{query}",
             self.user_agent,

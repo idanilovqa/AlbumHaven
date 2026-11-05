@@ -9,10 +9,10 @@ from music_app.services.musicbrainz_enrichment_postgres import (
 )
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_musicbrainz_artist_migration_postgres import (
-    MIGRATION_PATH,
     _apply_pre_delivery_migrations,
     _dedicated_database_urls_or_skip,
     _drop_application_schemas,
+    apply_delivery_migrations,
 )
 
 
@@ -45,7 +45,7 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
     _apply_pre_delivery_migrations(setup_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        apply_delivery_migrations(connection)
         library_id = connection.execute(
             """
             select library.libraries.id
@@ -211,7 +211,7 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
     _apply_pre_delivery_migrations(setup_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        apply_delivery_migrations(connection)
         library_id = connection.execute(
             """
             select library.libraries.id from app.bootstrap_owners
@@ -285,7 +285,7 @@ def test_background_triggers_cool_off_unresolved_artists_but_owner_sync_retries(
     _apply_pre_delivery_migrations(setup_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        apply_delivery_migrations(connection)
         library_id = connection.execute(
             """
             select library.libraries.id from app.bootstrap_owners
@@ -334,7 +334,7 @@ def test_only_album_artists_are_queued_for_delivery_1(monkeypatch: pytest.Monkey
     _apply_pre_delivery_migrations(setup_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        apply_delivery_migrations(connection)
         library_id = connection.execute(
             """
             select library.libraries.id from app.bootstrap_owners
@@ -377,7 +377,7 @@ def _seed_present_artist(setup_url, artist_key):
     _apply_pre_delivery_migrations(setup_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        apply_delivery_migrations(connection)
         library_id = connection.execute(
             "select library.libraries.id from app.bootstrap_owners join library.libraries"
             " on library.libraries.owner_account_id = app.bootstrap_owners.account_id"
@@ -494,3 +494,46 @@ def test_scan_upsert_never_waits_for_an_open_musicbrainz_outcome(monkeypatch: py
         release.set()
         worker.join(10)
     assert not worker.is_alive() and errors == []
+
+
+def test_discogs_link_is_stored_with_the_match_and_refreshed_without_touching_it(monkeypatch: pytest.MonkeyPatch):
+    from psycopg import errors
+
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _library_id, artist_id = _seed_present_artist(setup_url, "discogs-link")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz search evidence agreed.",
+        artist={"mbid": GERMAN, "canonical_name": "Axxis", "artist_type": "Group", "discogs_artist_id": 218108},
+    )
+
+    def stored():
+        with isolatedPostgres._connect(setup_url) as connection:
+            return connection.execute(
+                "select artists.discogs_artist_id, matches.state, matches.decision_source, matches.updated_at"
+                " from integration.musicbrainz_artists artists"
+                " join library.local_artist_musicbrainz_matches matches on matches.artist_mbid = artists.mbid"
+                " where artists.mbid = %s", (GERMAN,),
+            ).fetchone()
+
+    before = stored()
+    assert before["discogs_artist_id"] == 218108 and before["state"] == "matched"
+    assert repository.list_accepted_artist_mbids() == [GERMAN]
+
+    assert repository.refresh_artist_external_links(artist_mbid=GERMAN, discogs_artist_id=999) is True
+    assert repository.refresh_artist_external_links(artist_mbid=GERMAN, discogs_artist_id=999) is False
+    after = stored()
+    assert after["discogs_artist_id"] == 999
+    assert {key: after[key] for key in ("state", "decision_source", "updated_at")} == {
+        key: before[key] for key in ("state", "decision_source", "updated_at")
+    }, "a link refresh never changes the artist's match"
+    assert repository.refresh_artist_external_links(artist_mbid=GERMAN, discogs_artist_id=0) is True
+    assert stored()["discogs_artist_id"] is None, "invalid IDs are stored as no link"
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        with pytest.raises(errors.CheckViolation):
+            connection.execute("update integration.musicbrainz_artists set discogs_artist_id = 0 where mbid = %s", (GERMAN,))

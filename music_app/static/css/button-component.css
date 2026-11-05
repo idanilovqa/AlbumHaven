@@ -195,6 +195,23 @@ white-space: nowrap;
 }
 .ui-metadata-pill--genre { background: #11202a; border: 1px solid #4199c3; color: #8bd9ff; }
 
+/* External service link: a small service icon and plain text, like MusicBrainz's own links list. */
+.ui-external-link {
+display: inline-flex;
+align-items: center;
+gap: 6px;
+color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff));
+text-decoration: none;
+text-underline-offset: .2em;
+border-radius: 3px;
+}
+.ui-external-link:hover { text-decoration: underline; }
+.ui-external-link:focus-visible { text-decoration: underline; outline: 2px solid currentColor; outline-offset: 2px; }
+/* Service marks (Simple Icons, CC0) are masks filled with the link colour, so they read in both themes. */
+.ui-external-link__icon { flex: 0 0 auto; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--ui-external-link-icon) center / contain no-repeat; mask: var(--ui-external-link-icon) center / contain no-repeat; }
+.ui-external-link--musicbrainz { --ui-external-link-icon: url("/static/images/icons/simple-icons-musicbrainz.svg"); }
+.ui-external-link--discogs { --ui-external-link-icon: url("/static/images/icons/simple-icons-discogs.svg"); }
+
 /* Explicit compound fields share focus ownership; embedded actions own their own focus. */
 :root .ui-input-action:has(> input:focus):not(:has(button:active, .trigger-anchor-open, > input[aria-expanded="true"])) {
 outline: var(--ui-input-action-focus-outline, 1px solid var(--muted, var(--appearance-muted, #9ca3af))) !important;

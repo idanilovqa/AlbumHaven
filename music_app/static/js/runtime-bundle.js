@@ -7195,6 +7195,16 @@ function transitionGalleryMain(action) {
   }
 }
 
+// Only an accepted MusicBrainz match carries a projection, so unresolved artists show no links.
+function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
+  if (!artistMusicBrainz || typeof artistMusicBrainz !== 'object') return '';
+  return ['musicbrainz', 'discogs'].map((service) => ButtonComponent.renderExternalServiceLink({
+    service,
+    href: service === 'musicbrainz' ? artistMusicBrainz.musicbrainz_url : artistMusicBrainz.discogs_url,
+    subject: artist,
+  })).join('');
+}
+
 function openGalleryArtistInfo(anchor) {
   if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
@@ -7205,7 +7215,7 @@ function openGalleryArtistInfo(anchor) {
   overlay.classList.remove('is-expanded');
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button></div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button>${buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist)}</div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 

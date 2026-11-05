@@ -187,12 +187,12 @@
 .artist-info-overlay__body { max-height: 300px; overflow: auto; padding: 0 16px 16px; line-height: 1.5; user-select: text; }
 .artist-info-overlay__body [data-artist-info-summary] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 5; }
 .artist-info-overlay__body [data-artist-info-summary].is-expanded { display: block; overflow: visible; }
-.artist-info-overlay__links { display: flex; gap: 14px; }
-.artist-info-overlay__links :is(a, button) { border: 0; background: transparent; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); padding: 0; }
-:root .artist-info-overlay__links :is(a, button):is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: transparent !important; box-shadow: none; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]) { cursor: pointer; text-underline-offset: .2em; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) { text-decoration: underline; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):focus-visible { text-decoration-thickness: 2px; }
+.artist-info-overlay__links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.artist-info-overlay__links :is(a:not(.ui-external-link), button) { border: 0; background: transparent; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); padding: 0; }
+:root .artist-info-overlay__links :is(a:not(.ui-external-link), button):is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: transparent !important; box-shadow: none; }
+.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]) { cursor: pointer; text-underline-offset: .2em; }
+.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) { text-decoration: underline; }
+.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]):focus-visible { text-decoration-thickness: 2px; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }

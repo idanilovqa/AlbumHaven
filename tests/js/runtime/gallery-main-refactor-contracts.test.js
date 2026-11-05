@@ -560,7 +560,7 @@ test('artist info triggers use a larger plain information glyph with neutral env
   assert.match(markup, /gallery-info-button__glyph/);
   assert.doesNotMatch(markup, /ⓘ/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay\s*\{[^}]*background:\s*var\(--panel\);[^}]*color:\s*var\(--text\);/);
-  assert.match(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)\s*\{[^}]*color:\s*var\(--appearance-accent,/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__links :is\(a:not\(\.ui-external-link\), button\)\s*\{[^}]*color:\s*var\(--appearance-accent,/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
@@ -1934,4 +1934,37 @@ test('reopening a family drawer cancels the earlier closing callbacks', () => {
   staleFinish();
   assert.equal(run.panel.hidden, false, 'a stale close cannot finish the new animation');
   assert.equal(run.hiddenWrites(), writes);
+});
+
+
+test('artist information links MusicBrainz and Discogs only for an accepted match, as icon and text', () => {
+  const ButtonComponent = require('../../../music_app/static/js/button-component.js');
+  const context = loadRuntime({ ButtonComponent, state: { view: { query: '' } } });
+  const build = requireContract(context, 'buildGalleryArtistExternalLinksHtml');
+  const mbid = 'c0926f5d-098c-4f29-a463-5489b43a273a';
+
+  const links = build({
+    artist_mbid: mbid,
+    musicbrainz_url: `https://musicbrainz.org/artist/${mbid}`,
+    discogs_url: 'https://www.discogs.com/artist/218108',
+  }, 'Neal Morse');
+  assert.match(links, new RegExp(`<a class="ui-external-link ui-external-link--musicbrainz" href="https://musicbrainz\.org/artist/${mbid}" target="_blank" rel="noopener noreferrer" aria-label="Open Neal Morse on MusicBrainz">`));
+  assert.match(links, /ui-external-link__icon[^>]*aria-hidden="true"[\s\S]*?<span class="ui-external-link__text">MusicBrainz<\/span>/);
+  assert.match(links, /href="https:\/\/www\.discogs\.com\/artist\/218108"[^>]*aria-label="Open Neal Morse on Discogs"[\s\S]*?>Discogs</);
+  assert.doesNotMatch(links, /ui-button/, 'links are plain icon and text, not buttons');
+
+  assert.equal(build(null, 'Angra'), '', 'unresolved artists carry no projection and show no links');
+  assert.doesNotMatch(build({ musicbrainz_url: `https://musicbrainz.org/artist/${mbid}` }, 'Angra'), /Discogs/);
+  assert.equal(build({ musicbrainz_url: `http://127.0.0.1:5050/artist/${mbid}`, discogs_url: 'https://evil.example/artist/1' }, 'Angra'), '',
+    'only the public MusicBrainz and Discogs artist pages are linked');
+});
+
+test('external service links have their own visible focus state, not the panel link override', () => {
+  assert.match(buttonComponentCssSource, /\.ui-external-link:focus-visible\s*\{[^}]*outline:\s*2px solid currentColor/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)/);
+  assert.match(buttonComponentCssSource, /\.ui-external-link__icon\s*\{[^}]*background:\s*currentColor[^}]*mask:\s*var\(--ui-external-link-icon\)/);
+  for (const service of ['musicbrainz', 'discogs']) {
+    assert.match(buttonComponentCssSource, new RegExp(`\\.ui-external-link--${service}\\s*\\{[^}]*simple-icons-${service}\\.svg`));
+    assert.ok(fs.existsSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'images', 'icons', `simple-icons-${service}.svg`)));
+  }
 });

@@ -1,0 +1,8 @@
+simple-icons-musicbrainz.svg and simple-icons-discogs.svg come unmodified from
+Simple Icons 13.21.0 (https://github.com/simple-icons/simple-icons), published
+under CC0 1.0 Universal (public domain dedication):
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The MusicBrainz and Discogs marks remain trademarks of their respective owners
+and are used only to identify links to those services, subject to the owners'
+trademark and brand guidelines.

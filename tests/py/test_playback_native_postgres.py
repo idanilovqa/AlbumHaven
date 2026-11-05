@@ -1072,7 +1072,7 @@ def test_malformed_handoff_completion_is_rejected_before_any_side_effect(
     playback_inventory, playback_app, monkeypatch, changes, case,
 ):
     from music_app.routes import playback_control_asgi as routes
-    from music_app.services import measured_listen_history
+    from music_app.services import lastfm_sync_bridge
 
     fixture = playback_inventory
     configure_native_app(playback_app, fixture)
@@ -1131,7 +1131,7 @@ def test_malformed_handoff_completion_is_rejected_before_any_side_effect(
         provider_calls.append("completion")
         return {"ok": True}, 200
 
-    monkeypatch.setattr(measured_listen_history, "playback_handoff_completion_digest", digest)
+    monkeypatch.setattr(lastfm_sync_bridge, "playback_handoff_completion_digest", digest)
     monkeypatch.setattr(routes, "persist_measured_playback_completion", persist)
     monkeypatch.setattr(routes, "get_saved_lastfm_session", provider_session)
     monkeypatch.setattr(routes, "record_playback_session_complete", provider_completion)
@@ -1216,7 +1216,7 @@ def test_playback_completion_accepts_valid_track_payload_aliases():
 
 
 def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_receipt(monkeypatch):
-    from music_app.services import lastfm_sync_bridge, measured_listen_history
+    from music_app.services import lastfm_sync_bridge
 
     device_id = str(uuid4())
     session_id = str(uuid4())
@@ -1260,7 +1260,7 @@ def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_rece
         return durable_receipt
 
     monkeypatch.setattr(lastfm_sync_bridge, "measured_provider_guard", provider_guard)
-    monkeypatch.setattr(measured_listen_history, "load_measured", load_measured)
+    monkeypatch.setattr(lastfm_sync_bridge, "load_measured", load_measured)
     result, status = lastfm_sync_bridge.record_playback_session_complete(
         {},
         payload,
@@ -1324,6 +1324,26 @@ def test_handoff_completion_fingerprint_is_canonical_and_distinguishes_null():
     assert null_digest == fingerprint(None)
     assert completion_digest == reordered_digest
     assert null_digest != completion_digest
+
+
+@pytest.mark.parametrize("changes", [{"finalized": False}, {"finalized": None}, {"measurement_version": "other"}],
+                         ids=["not-finalized", "finalized-missing", "other-measurement"])
+def test_a_handoff_completion_must_be_a_finalized_rendered_listen(changes):
+    from music_app.services.lastfm_sync_bridge import prepare_handoff_completion
+    from music_app.services.measured_listen_history import MeasuredListenError
+
+    completion = {
+        "title": "Track", "artist": "Owner", "album": "Album", "duration_seconds": 120,
+        "started_at": "2026-10-25T12:00:00+00:00", "started_at_unix": 1792939200,
+        "ended_at": "2026-10-25T12:01:10+00:00", "measurement_version": "rendered-pcm-v1",
+        "device_id": str(uuid4()), "session_id": str(uuid4()), "sequence": 1, "finalized": True,
+        "measured_listened_seconds": 70, "max_measured_contiguous_seconds": 70,
+    }
+    completion.update(changes)
+    completion = {key: value for key, value in completion.items() if value is not None}
+    with pytest.raises(MeasuredListenError):
+        prepare_handoff_completion(completion, user_timezone="UTC", account_id=11, library_id=43,
+                                   is_meaningful_listen_session=lambda _entry: True)
 
 
 def test_accounts_have_independent_claims_and_cannot_read_or_release_each_others_state(playback_inventory):
@@ -1683,6 +1703,37 @@ def test_reference_listen_writes_recheck_media_read(playback_inventory, playback
         assert run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=path_body)[0] == 200
     finally:
         claims.release(listener, client_id=client_id, claim_token=token)
+
+
+def test_a_finalized_scrobble_requires_the_listen_completion_action(playback_inventory, playback_app, monkeypatch):
+    """Finalizing a measured listen is the /playback/session/complete write, whichever route carries it."""
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    fixture = playback_inventory
+    library_id = fixture.actor.current_library_id
+    scrobbler = replace(create_member(fixture), capability_grants=tuple(
+        CapabilityGrant(action, "library", library_id)
+        for action in ("library.media.read", "integration.lastfm.scrobble")))
+    claims, reference, client_id, token = native_listen_claim(fixture, playback_app, scrobbler)
+    ledger = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    monkeypatch.setattr(routes, "record_playback_session_complete",
+                        lambda _config, payload, **kwargs: (ledger.append(payload["finalized"]) or {"ok": True}, 200))
+    body = measured_listen_body(client_id, token, session_id=str(uuid4()), track={"playbackRef": reference}, sequence=1)
+    try:
+        status, _, _ = run_asgi_request(playback_app, "POST", "/playback/session/scrobble",
+                                        json_body={**body, "finalized": True})
+        assert (status, ledger) == (403, [])
+        status, _, _ = run_asgi_request(playback_app, "POST", "/playback/session/scrobble",
+                                        json_body={**body, "finalized": False})
+        assert (status, ledger) == (200, [False])
+        configure_native_app(playback_app, fixture, replace(scrobbler, capability_grants=(
+            *scrobbler.capability_grants, CapabilityGrant("integration.lastfm.complete", "library", library_id))))
+        status, _, _ = run_asgi_request(playback_app, "POST", "/playback/session/scrobble",
+                                        json_body={**body, "finalized": True})
+        assert (status, ledger) == (200, [False, True])
+    finally:
+        claims.release(scrobbler, client_id=client_id, claim_token=token)
 
 
 def test_claim_reports_whether_its_listens_reach_lastfm_and_nothing_else(playback_inventory, playback_app):

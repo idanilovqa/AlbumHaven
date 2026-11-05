@@ -153,9 +153,7 @@ async def stage_playback_handoff(request: Request):
         raise HTTPException(400, "Invalid playback completion.")
     completion = payload.get("completion")
     if completion is not None:
-        if (not isinstance(completion, dict)
-                or completion.get("measurement_version") != "rendered-pcm-v1"
-                or completion.get("finalized") is not True):
+        if not isinstance(completion, dict):
             raise HTTPException(400, "Invalid playback completion.")
         # Recording the listen is the same write as /playback/session/complete.
         await require_action("integration.lastfm.complete")(request)

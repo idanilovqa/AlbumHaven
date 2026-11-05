@@ -8,6 +8,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import org.albumhaven.shell.net.ShellSession
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals

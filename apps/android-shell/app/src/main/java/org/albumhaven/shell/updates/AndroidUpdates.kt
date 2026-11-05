@@ -24,10 +24,10 @@ import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellChannel
 import org.albumhaven.shell.ShellPreferences
 import org.albumhaven.shell.downloadManagerOrNull
-import org.albumhaven.shell.playback.ShellSession
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
+import org.albumhaven.shell.net.ShellSession
 
 /** The process's one [Updater], or null when this build has no compiled update certificate. */
 object Updates {

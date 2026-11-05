@@ -2,8 +2,8 @@ package org.albumhaven.shell.playback
 
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
-import okhttp3.OkHttpClient
 import okio.Buffer
+import org.albumhaven.shell.net.ShellSession
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -22,7 +22,7 @@ class SessionArtworkLoaderTest {
     fun start() {
         server.start()
         origin = server.url("/").toString().removeSuffix("/")
-        loader = SessionArtworkLoader(OkHttpClient()) {
+        loader = SessionArtworkLoader(ShellSession.client()) {
             ShellSession({ origin }) { url -> "__Host-album_haven_session=session-value".takeIf { url == origin } }
         }
     }
@@ -46,6 +46,18 @@ class SessionArtworkLoaderTest {
         assertFailsWithIo { loader.fetch("$origin/playback/artwork/rt1.b").get() }
         assertFailsWithIo { loader.fetch("https://elsewhere.example/playback/artwork/rt1.b").get() }
         assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun aRedirectToAnotherHostNeverReceivesTheSession() {
+        MockWebServer().use { elsewhere ->
+            elsewhere.start()
+            elsewhere.enqueue(MockResponse.Builder().code(200).body(Buffer().write(byteArrayOf(1))).build())
+            server.enqueue(MockResponse.Builder().code(302).addHeader("Location", elsewhere.url("/cover").toString()).build())
+
+            assertFailsWithIo { loader.fetch("$origin/playback/artwork/rt1.b").get() }
+            assertEquals(0, elsewhere.requestCount)
+        }
     }
 
     private fun assertFailsWithIo(block: () -> Unit) {

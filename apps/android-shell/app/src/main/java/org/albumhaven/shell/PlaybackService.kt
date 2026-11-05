@@ -34,7 +34,7 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
-import okhttp3.OkHttpClient
+import org.albumhaven.shell.net.ShellSession
 import org.albumhaven.shell.playback.AudioFocusPolicy
 import org.albumhaven.shell.playback.AudioTrackPcmSink
 import org.albumhaven.shell.playback.CommandResult
@@ -58,7 +58,6 @@ import org.albumhaven.shell.playback.ResumeAnswer
 import org.albumhaven.shell.playback.ResumeRunner
 import org.albumhaven.shell.playback.Resumption
 import org.albumhaven.shell.playback.SessionArtworkLoader
-import org.albumhaven.shell.playback.ShellSession
 import org.albumhaven.shell.playback.SystemRequest
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -95,7 +94,7 @@ class PlaybackService : MediaLibraryService() {
 
     private val binder = LocalBinder()
     private val main = Handler(Looper.getMainLooper())
-    private val client = OkHttpClient()
+    private val client = ShellSession.client()
     private val listeners = mutableSetOf<(NativePlaybackEvent) -> Unit>()
     private val focusPolicy = AudioFocusPolicy()
 

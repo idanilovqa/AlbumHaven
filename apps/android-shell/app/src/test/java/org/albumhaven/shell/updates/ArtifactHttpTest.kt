@@ -6,7 +6,7 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.OkHttpClient
 import org.albumhaven.shell.ShellChannel
-import org.albumhaven.shell.playback.ShellSession
+import org.albumhaven.shell.net.ShellSession
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals

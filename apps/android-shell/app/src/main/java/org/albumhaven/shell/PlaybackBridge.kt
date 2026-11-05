@@ -125,7 +125,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         val fields = item.fieldNames()
         if (fields != ITEM_KEYS && fields != ITEM_KEYS + "resumeToken") return null
         val ref = item.opt("playbackRef") as? String ?: return null
-        if (ref.length !in 1..MAX_REFERENCE_CHARS || !REFERENCE.matches(ref)) return null
+        if (!QueueItem.isPlaybackRef(ref)) return null
         val title = text(item.opt("title")) ?: return null
         val artist = text(item.opt("artist")) ?: return null
         val album = text(item.opt("album")) ?: return null
@@ -197,9 +197,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
 
         /** `POST /playback/refs` issues at most this many references per batch. */
         const val MAX_QUEUE_ITEMS = 100
-        private const val MAX_REFERENCE_CHARS = 2_048
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
-        private val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
 
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
         private val SET_LOOP_KEYS = setOf("queueRevision", "startFrame", "endFrame")

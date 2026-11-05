@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.albumhaven.shell.net.ShellSession
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -74,8 +75,7 @@ class HttpResumeApi(client: OkHttpClient, private val session: ShellSession) : R
                     if (track.opt("clientKey") != "$index") return ResumeAnswer.Unavailable
                     when (val ref = track.opt("playbackRef")) {
                         JSONObject.NULL -> null
-                        is String -> ref.takeIf { it.isNotEmpty() && it.length <= MAX_REFERENCE_CHARS && REFERENCE.matches(it) }
-                            ?: return ResumeAnswer.Unavailable
+                        is String -> ref.takeIf(QueueItem::isPlaybackRef) ?: return ResumeAnswer.Unavailable
                         else -> return ResumeAnswer.Unavailable
                     }
                 },
@@ -89,8 +89,6 @@ class HttpResumeApi(client: OkHttpClient, private val session: ShellSession) : R
         val JSON = "application/json".toMediaType()
         const val SESSION_COOKIE = "__Host-album_haven_session="
         const val TIMEOUT_SECONDS = 10L
-        const val MAX_REFERENCE_CHARS = 2_048
-        val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
     }
 }
 

@@ -1,5 +1,6 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.shell.net.isCanonicalUuid
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -113,7 +114,7 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
     private fun decode(json: JSONObject): RestorableQueue? {
         if (json.fieldNames() != KEYS || json.opt("version") != VERSION) return null
         val origin = json.opt("origin") as? String ?: return null
-        val clientId = (json.opt("clientId") as? String)?.takeIf(CLIENT_ID::matches) ?: return null
+        val clientId = (json.opt("clientId") as? String)?.takeIf(::isCanonicalUuid) ?: return null
         val revision = (json.opt("queueRevision") as? Number)?.toLong() ?: return null
         val index = json.opt("currentIndex") as? Int ?: return null
         val position = (json.opt("positionMs") as? Number)?.toLong()?.takeIf { it >= 0 } ?: return null
@@ -162,6 +163,5 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
         val ITEM_KEYS = setOf(
             "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber", "listenKey", "queueGroup", "resumeToken",
         )
-        val CLIENT_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     }
 }

@@ -14,6 +14,7 @@ import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
+import org.albumhaven.shell.net.ShellSession
 
 /**
  * Loads notification and lock-screen artwork with the WebView session, from the selected origin

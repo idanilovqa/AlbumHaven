@@ -6,7 +6,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.albumhaven.shell.ShellChannel
-import org.albumhaven.shell.playback.ShellSession
+import org.albumhaven.shell.net.ShellSession
+import org.albumhaven.shell.net.isCanonicalUuid
+import org.albumhaven.shell.net.originOf
+import org.albumhaven.shell.net.parseUri
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -54,10 +57,7 @@ class ArtifactHttp(
     private val keys: DeviceKeys,
     private val ids: DeviceKeyIds,
 ) {
-    private val client = client.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val client = ShellSession.client(client)
 
     /** The manifest is small and revalidated on every check. */
     fun fetchManifest(url: String): FetchResult = when (val signed = signed("GET", url)) {
@@ -182,7 +182,7 @@ class ArtifactHttp(
             .put("challenge", challenge)
             .put("chain", JSONArray(chain.map { Base64.getEncoder().encodeToString(it) }))
         val answer = post(origin, "/artifacts/android/attest", body)
-        val id = answer.optString("deviceKey").takeIf(DEVICE_KEY::matches) ?: throw Stop(Signed.Failed)
+        val id = answer.optString("deviceKey").takeIf(::isCanonicalUuid) ?: throw Stop(Signed.Failed)
         ids.set(origin, id)
         return id
     }
@@ -285,7 +285,6 @@ class ArtifactHttp(
         private const val MAX_JSON_BYTES = 16 * 1024
         private val JSON = "application/json".toMediaType()
         private val CHALLENGE = Regex("^[A-Za-z0-9_-]{43}$")
-        private val DEVICE_KEY = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
         private val DOWNLOAD_PATH = Regex("^/artifacts/android/download/[A-Za-z0-9_-]{1,512}\\.[A-Za-z0-9_-]{43}$")
 
         /** Mirrors `request_message` in music_app/services/android_artifact_access.py. */

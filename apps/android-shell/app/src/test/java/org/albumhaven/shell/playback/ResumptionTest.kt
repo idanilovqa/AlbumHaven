@@ -3,6 +3,7 @@ package org.albumhaven.shell.playback
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import org.albumhaven.shell.net.ShellSession
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals

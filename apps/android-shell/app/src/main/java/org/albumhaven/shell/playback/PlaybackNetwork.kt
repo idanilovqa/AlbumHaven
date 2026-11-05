@@ -11,48 +11,11 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import org.albumhaven.shell.net.ShellSession
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
-import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
-
-/**
- * The WebView session as request headers for one origin. Cookies are read when a request
- * starts and never stored by the native player.
- */
-class ShellSession(private val origin: () -> String, private val cookies: (url: String) -> String?) {
-    fun origin(): String = origin.invoke()
-
-    /** Applies the session cookie, its CSRF header and the page origin the server checks. */
-    fun authorize(builder: Request.Builder, withCsrf: Boolean): Request.Builder {
-        val selected = origin()
-        val cookieHeader = cookies(selected).orEmpty()
-        builder.header("Origin", selected)
-        if (cookieHeader.isNotEmpty()) builder.header("Cookie", cookieHeader)
-        if (withCsrf) csrfToken(cookieHeader)?.let { builder.header(CSRF_HEADER, it) }
-        return builder
-    }
-
-    companion object {
-        const val CSRF_HEADER = "X-Album-Haven-CSRF"
-        private const val CSRF_COOKIE = "__Host-album_haven_csrf"
-
-        /** Mirrors `readSessionCsrfCookie` in music_app/static/js/runtime/session-csrf-fetch.js. */
-        fun csrfToken(cookieHeader: String): String? = cookieHeader.split(';').firstNotNullOfOrNull { part ->
-            val separator = part.indexOf('=')
-            if (separator < 0 || part.substring(0, separator).trim() != CSRF_COOKIE) {
-                null
-            } else {
-                try {
-                    URLDecoder.decode(part.substring(separator + 1), Charsets.UTF_8.name())
-                } catch (_: IllegalArgumentException) {
-                    null
-                }
-            }
-        }
-    }
-}
 
 /** `PUT`/`DELETE /playback/state` as the `mobile` client surface. */
 class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session: ShellSession) : PlaybackClaimApi {
@@ -201,9 +164,9 @@ class OkHttpConnectionWarmer(
 class OkHttpPcmTransportFactory(private val client: OkHttpClient, private val session: ShellSession) :
     PcmTransportFactory {
     override fun connect(listener: PcmTransportListener): PcmTransport {
-        val socketUrl = session.origin().replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        // OkHttp upgrades an http(s) URL itself.
         val request = session.authorize(Request.Builder(), withCsrf = false)
-            .url("$socketUrl/playback/pcm")
+            .url("${session.origin()}/playback/pcm")
             .build()
         val socket = client.newWebSocket(request, Adapter(listener))
         return object : PcmTransport {

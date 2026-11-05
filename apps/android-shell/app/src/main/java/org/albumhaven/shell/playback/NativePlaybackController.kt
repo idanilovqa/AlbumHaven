@@ -46,6 +46,10 @@ data class QueueItem(
         /** The web's opaque, path-free track identity, which stays the same when a reference is refreshed. */
         fun isListenKey(value: String): Boolean = LISTEN_KEY.matches(value)
 
+        /** A `POST /playback/refs` reference: opaque base64url text with dots and padding. */
+        fun isPlaybackRef(value: String): Boolean = PLAYBACK_REF.matches(value)
+
+        private val PLAYBACK_REF = Regex("^[A-Za-z0-9_.=-]{1,2048}$")
         private val RESUME_TOKEN = Regex("^[A-Za-z0-9_.-]{1,512}$")
         private val LISTEN_KEY = Regex("^[A-Za-z0-9_.-]{1,128}$")
 

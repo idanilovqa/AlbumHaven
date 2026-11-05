@@ -1,5 +1,6 @@
 package org.albumhaven.shell
 
+import org.albumhaven.shell.net.isCanonicalUuid
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -20,7 +21,6 @@ object BridgeCodec {
 
     private val ENVELOPE_KEYS = setOf("protocol", "id", "type", "name", "payload")
     private val MESSAGE_TYPES = setOf("command", "response", "event")
-    private val ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val NAME = Regex("^[a-z]+(\\.[a-zA-Z]+)+$")
 
     fun parse(raw: String): BridgeMessage {
@@ -41,7 +41,7 @@ object BridgeCodec {
         val name = json.get("name") as? String
         val payload = json.get("payload") as? JSONObject
         if (protocol == null || protocol < 1) throw BridgeFormatException("Invalid protocol")
-        if (id == null || !ID.matches(id)) throw BridgeFormatException("Invalid id")
+        if (id == null || !isCanonicalUuid(id)) throw BridgeFormatException("Invalid id")
         if (type == null || type !in MESSAGE_TYPES) throw BridgeFormatException("Invalid type")
         if (name == null || !NAME.matches(name)) throw BridgeFormatException("Invalid name")
         if (payload == null) throw BridgeFormatException("Invalid payload")

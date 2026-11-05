@@ -1,12 +1,13 @@
 package org.albumhaven.shell.updates
 
 import org.albumhaven.shell.ShellChannel
+import org.albumhaven.shell.net.originOf
+import org.albumhaven.shell.net.parseUri
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.URI
-import java.net.URISyntaxException
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -263,19 +264,3 @@ fun copyHashing(input: InputStream, output: OutputStream, limit: Long): Pair<Lon
 }
 
 fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-
-internal fun parseUri(value: String): URI? = try {
-    URI(value)
-} catch (_: URISyntaxException) {
-    null
-}
-
-/** `scheme://host[:port]` with the default port omitted, lowercased; null for anything without both. */
-internal fun originOf(uri: URI): String? {
-    val scheme = uri.scheme?.lowercase() ?: return null
-    if (scheme != "https" && scheme != "http") return null
-    val host = uri.host?.lowercase() ?: return null
-    val defaultPort = if (scheme == "https") 443 else 80
-    val port = if (uri.port == -1 || uri.port == defaultPort) "" else ":${uri.port}"
-    return "$scheme://$host$port"
-}

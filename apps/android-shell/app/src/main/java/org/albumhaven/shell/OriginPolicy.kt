@@ -1,7 +1,7 @@
 package org.albumhaven.shell
 
-import java.net.URI
-import java.net.URISyntaxException
+import org.albumhaven.shell.net.originOf
+import org.albumhaven.shell.net.parseUri
 
 enum class ShellChannel(val wireName: String) {
     STABLE("stable"),
@@ -32,7 +32,7 @@ class OriginPolicy(private val channel: ShellChannel, private val devOrigin: Str
     }
 
     fun classify(url: String, selectedOrigin: String): NavigationDecision {
-        val uri = parse(url) ?: return NavigationDecision.BLOCK
+        val uri = parseUri(url) ?: return NavigationDecision.BLOCK
         return when {
             uri.scheme.equals("mailto", ignoreCase = true) -> NavigationDecision.OPEN_EXTERNALLY
             uri.scheme?.lowercase() !in WEB_SCHEMES || uri.rawUserInfo != null -> NavigationDecision.BLOCK
@@ -44,20 +44,6 @@ class OriginPolicy(private val channel: ShellChannel, private val devOrigin: Str
 
     fun isSameOrigin(url: String, selectedOrigin: String): Boolean =
         classify(url, selectedOrigin) == NavigationDecision.LOAD
-
-    private fun parse(url: String): URI? = try {
-        URI(url)
-    } catch (_: URISyntaxException) {
-        null
-    }
-
-    private fun originOf(uri: URI): String? {
-        val scheme = uri.scheme?.lowercase() ?: return null
-        val host = uri.host?.lowercase() ?: return null
-        val defaultPort = if (scheme == "https") 443 else 80
-        val port = if (uri.port == -1 || uri.port == defaultPort) "" else ":${uri.port}"
-        return "$scheme://$host$port"
-    }
 
     companion object {
         const val STABLE_ORIGIN = "https://albumhaven.org"

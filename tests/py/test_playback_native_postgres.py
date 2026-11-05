@@ -843,6 +843,52 @@ def test_durable_pause_then_two_hour_resume_scrobbles_once_and_retains_statistic
         claims.release(fixture.actor, client_id=client_id, claim_token=resumed["claimToken"])
 
 
+@pytest.mark.parametrize("duration", [8, 30])
+def test_short_track_heard_to_its_end_is_counted_and_never_scrobbled(
+    playback_inventory, playback_app, monkeypatch, duration,
+):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.listen_history import build_measured_playback_statistics
+
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    provider_calls = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+    monkeypatch.setattr(routes, "scrobble_track", lambda *args, **kwargs: provider_calls.append(args))
+    clock = lambda: datetime.now(timezone.utc)
+    claims = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    client_id = str(uuid4())
+    track = {"playbackRef": reference, "title": "Short", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    claim = claims.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)
+    started = datetime.now(timezone.utc) - timedelta(seconds=duration)
+    payload = {
+        "clientId": client_id, "claimToken": claim["claimToken"], "path": fixture.paths[1],
+        "title": "Short", "artist": "Owner", "album": "Album", "duration_seconds": duration,
+        "started_at": started.isoformat(), "started_at_unix": int(started.timestamp()),
+        "ended_at": (started + timedelta(seconds=duration)).isoformat(),
+        "measurement_version": "rendered-pcm-v1", "device_id": str(uuid4()), "session_id": str(uuid4()),
+        "sequence": 1, "finalized": True, "measured_listened_seconds": duration,
+        "max_measured_contiguous_seconds": duration, "total_listened_seconds": duration,
+        "max_contiguous_seconds": duration, "completion_reason": "ended", "finished_fully": True,
+        "skipped": False, "scrobble_eligible": True, "segments": [{"start_seconds": 0, "end_seconds": duration}],
+    }
+    statistics = lambda: build_measured_playback_statistics(
+        fixture.config, account_id=fixture.actor.account_id, library_id=fixture.actor.current_library_id)
+    baseline = statistics()
+    try:
+        status, _, body = run_asgi_request(playback_app, "POST", "/playback/session/complete", json_body=payload)
+        assert status == 200, decode_json(body)
+        completion = decode_json(body)
+    finally:
+        claims.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
+    assert completion["entry"]["scrobble_eligible"] is False
+    assert completion["scrobbled"] is False
+    assert provider_calls == []
+    assert statistics() == {"local_playcount": baseline["local_playcount"] + 1,
+                            "total_listening_seconds": baseline["total_listening_seconds"] + duration}
+
+
 def test_http_reference_and_claim_lifecycle_round_trip(playback_inventory, playback_app):
     fixture = playback_inventory
     configure_native_app(playback_app, fixture)

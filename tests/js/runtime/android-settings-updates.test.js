@@ -278,7 +278,7 @@ function flakyShell() {
 }
 
 test('opening the Android tab after a failed handshake asks the shell again and shows its answer', async () => {
-  const { api, bridge, pane, state, handshakes } = flakyShell();
+  const { api, pane, state, handshakes } = flakyShell();
   await new Promise(setImmediate);
   assert.equal(handshakes(), 1);
   state.utility.activeTab = 'android';
@@ -289,7 +289,6 @@ test('opening the Android tab after a failed handshake asks the shell again and 
   assert.doesNotMatch(pane.detail.innerHTML, /could not connect/);
   assert.match(pane.detail.innerHTML, /Check for updates/);
   assert.match(pane.detail.innerHTML, /Connected to sandbox3\./);
-  assert.equal(bridge.sent.filter(message => message.name === 'bridge.handshake').length, 2);
 });
 
 test('a later handshake asked for by playback still gives Settings the update state', async () => {

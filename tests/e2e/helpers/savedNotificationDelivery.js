@@ -7,8 +7,20 @@ import { ScanPageActions } from '../actions/scanPageActions.js';
 export async function acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout }) {
   await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
   await expect(tagEditor.repairAlert).toBeVisible({ timeout });
-  expect(await tagEditor.readRepairAlertOverlap()).toEqual({ withinViewport: true, overlaps: [] });
+  expect(await tagEditor.readRepairAlertOverlap()).toEqual({ rendered: true, withinViewport: true, overlaps: [] });
   await tagEditor.repairAlertDismiss.click();
+  await expect(tagEditor.repairAlert).toBeHidden({ timeout });
+}
+
+// A completed save shows a timed toast that can close at any moment, even mid-click, so it is
+// confirmed without clicking: its message and, while it is still shown, its placement are read, and
+// it must then close on its own.
+export async function confirmTimedSavedNotification(tagEditor, expectedMessage, { timeout }) {
+  await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
+  const placement = await tagEditor.readRepairAlertOverlap();
+  if (placement.rendered) {
+    expect(placement).toEqual({ rendered: true, withinViewport: true, overlaps: [] });
+  }
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
@@ -23,8 +35,9 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   let deliveryError;
   try {
     await scan.openStatusPageFromMenu();
-    // A completed save shows a timed toast, which may end before the status page opens.
-    if (!autoDismisses || await tagEditor.repairAlert.isVisible()) {
+    if (autoDismisses) {
+      await confirmTimedSavedNotification(tagEditor, expectedMessage, { timeout });
+    } else {
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }
   } catch (error) {

@@ -127,8 +127,12 @@ export class TagEditor extends BasePage {
           overlaps.push(control.getAttribute('aria-label') || control.textContent.trim() || control.tagName);
         }
       }
+      // Shown as Playwright judges visibility, read in the same evaluation as its placement.
+      const rendered = bounds.width > 0 && bounds.height > 0
+        && getComputedStyle(alert).visibility === 'visible';
       return {
-        withinViewport: bounds.width > 0 && bounds.height > 0
+        rendered,
+        withinViewport: rendered
           && bounds.left >= 0 && bounds.top >= 0
           && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
         overlaps,

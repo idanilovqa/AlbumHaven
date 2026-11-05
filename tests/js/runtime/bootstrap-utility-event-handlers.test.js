@@ -1120,7 +1120,7 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 1 });
 
@@ -1159,7 +1159,7 @@ test('Album Details interactions do not close Notifications behind it', async ()
   context.renderCoverLookupDrawer = () => { renders += 1; };
   const trackModal = createElement();
   const { event } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': trackModal,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': trackModal,
   });
 
   await context.handleUtilityBootstrapClick(event);
@@ -1248,7 +1248,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   });
   taskButton.contains = (node) => node === selectedTextNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1315,7 +1315,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   });
   taskButton.contains = (node) => node === anchorNode || node === focusNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1368,7 +1368,7 @@ test('a moved notification-title drag suppresses its immediate card click when m
     'data-open-cover-lookup-task': 'cover-task-drag',
   });
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1418,7 +1418,7 @@ test('keyboard activation opens a cover lookup task while unrelated page text re
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 0 });
 
@@ -1537,4 +1537,9 @@ test('confirming local cover deletion forwards the retained path exactly once', 
 
   assert.equal(wasPrevented(), true);
   assert.deepEqual(paths, ['C:\\Music\\Artist\\Album\\Front.jpg']);
+});
+
+test('a click inside the shared app-form dialog (split-release chooser) keeps the Cover Look Up drawer open', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(source, /closest\('#cover-lookup-drawer, [^']*#app-form-modal'\)[\s\S]{0,80}state\.coverLookup\.drawerOpen/);
 });

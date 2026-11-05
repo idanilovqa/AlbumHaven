@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadCapabilityUi } = require('../support/capability-ui-context.cjs');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const runtimeDir = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime');
@@ -85,6 +86,7 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
     updatePlayerUi: () => {},
   };
   vm.createContext(context);
+  loadCapabilityUi(context);
   // The listen helpers name the track identity a queue item's listen key is derived from.
   const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'player-listen-session-helpers.js',
     ...(listen ? ['playback-ownership-helpers.js'] : [])];
@@ -570,6 +572,38 @@ test('events the stopped queue still emits never revive playback or ownership', 
   assert.equal(api.snapshot().currentTime, 0);
   assert.equal(api.native.ownership, 'none');
   assert.equal(api.snapshot().diagnostics.queueRevision, 0);
+});
+
+test('a stop while the first queue load is pending stops what Android loads', async () => {
+  let releaseLoad;
+  const held = new Promise(resolve => { releaseLoad = resolve; });
+  // The shell applies commands in the order they arrive; only the load's answer is delayed.
+  let audible = false;
+  const { api, bridge } = createHarness({
+    respond: (message) => {
+      if (message.name === 'playback.loadQueue') {
+        audible = message.payload.autoplay;
+        return held.then(() => ({ ok: true, queueRevision: message.payload.queueRevision }));
+      }
+      if (message.name === 'playback.stop') audible = false;
+      return null;
+    },
+  });
+  await api.connectAndroidBridge();
+  const starting = api.start(tracks[0], { autoplay: true });
+  while (!commands(bridge, 'playback.loadQueue').length) await settle();
+  await api.stop('stopped');
+  assert.deepEqual(bridge.sent.slice(1).map(message => message.name), ['playback.loadQueue', 'playback.stop']);
+  releaseLoad();
+  assert.equal(await starting, null);
+  await settle();
+
+  assert.equal(audible, false, 'Android plays nothing the web shows stopped');
+  assert.equal(api.snapshot().mode, 'stopped');
+  assert.equal(api.snapshot().diagnostics.queueRevision, 0);
+  assert.equal(api.native.ownerIntent, false);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+  assert.equal(api.snapshot().paused, true);
 });
 
 test('a start whose references or queue load fail leaves Android no owner intent', async () => {

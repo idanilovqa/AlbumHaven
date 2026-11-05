@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadCapabilityUi } = require('../support/capability-ui-context.cjs');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'android-bridge', 'v1.json'), 'utf8'));
@@ -15,8 +16,11 @@ const HOUR = 60 * 60 * 1000;
 function loadRuntime({ bridge, now = Date.now() } = {}) {
   const listeners = [];
   const holder = { innerHTML: '', contains: () => false, querySelector: () => null };
+  // The Settings utility pane the Android tab renders into.
+  const pane = { overlay: {}, list: { innerHTML: '' }, detail: { innerHTML: '' }, count: { textContent: '' } };
   const context = {
-    window: { crypto },
+    window: { crypto, NavigationTree: { renderItem: ({ label }) => `<li>${label}</li>` } },
+    getUtilityModalElements: () => pane,
     document: {
       activeElement: null,
       addEventListener: (type, listener) => listeners.push({ type, listener }),
@@ -32,14 +36,16 @@ function loadRuntime({ bridge, now = Date.now() } = {}) {
   };
   if (bridge) context.window.AlbumHavenBridge = bridge;
   vm.createContext(context);
+  loadCapabilityUi(context);
   vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js'), 'utf8'), context);
   for (const file of ['alert-components.js', 'android-bridge-client.js', 'android-settings.js']) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
   }
   vm.runInContext(`globalThis.api = { androidBridge, androidSettings, buildAndroidSettingsHtml, connectAndroidBridge,
-    formatAndroidCheckedAgo, handleAndroidSettingsClick, initAndroidSettings };`, context);
+    formatAndroidCheckedAgo, handleAndroidSettingsClick, initAndroidSettings, renderUtilityAndroid };`, context);
   context.listeners = listeners;
   context.holder = holder;
+  context.pane = pane;
   return context;
 }
 
@@ -258,4 +264,54 @@ test('updates.state events from the shell replace the card state', async () => {
   assert.match(holder.innerHTML, /Downloading update · 42%/);
   bridge.event('updates.state', { nonsense: true });
   assert.equal(api.androidSettings.update.progress, 42);
+});
+
+// The first handshake times out; every later one succeeds with the shell's update state.
+function flakyShell() {
+  let handshakes = 0;
+  const bridge = fakeBridge(message => (message.name !== 'bridge.handshake' ? null
+    : (handshakes += 1) === 1 ? { ok: false, error: { code: 'timeout', message: 'Timed out' } }
+      : { ...handshakePayload, updates: update(), sandbox: { ...handshakePayload.sandbox, connectedSlot: 3 } }));
+  const context = loadRuntime({ bridge });
+  context.api.initAndroidSettings();
+  return { ...context, bridge, handshakes: () => handshakes };
+}
+
+test('opening the Android tab after a failed handshake asks the shell again and shows its answer', async () => {
+  const { api, bridge, pane, state, handshakes } = flakyShell();
+  await new Promise(setImmediate);
+  assert.equal(handshakes(), 1);
+  state.utility.activeTab = 'android';
+  api.renderUtilityAndroid();
+  assert.match(pane.detail.innerHTML, /This app could not connect to the current site/);
+  await new Promise(setImmediate);
+  assert.equal(handshakes(), 2);
+  assert.doesNotMatch(pane.detail.innerHTML, /could not connect/);
+  assert.match(pane.detail.innerHTML, /Check for updates/);
+  assert.match(pane.detail.innerHTML, /Connected to sandbox3\./);
+  assert.equal(bridge.sent.filter(message => message.name === 'bridge.handshake').length, 2);
+});
+
+test('a later handshake asked for by playback still gives Settings the update state', async () => {
+  const { api, handshakes } = flakyShell();
+  await new Promise(setImmediate);
+  const info = await api.connectAndroidBridge();
+  assert.equal(handshakes(), 2);
+  assert.equal(api.androidSettings.update.state, 'idle');
+  assert.match(api.buildAndroidSettingsHtml(info), /Check for updates/);
+});
+
+test('a Settings retry that fails again waits for the next time the tab opens', async () => {
+  const bridge = fakeBridge(message => (message.name === 'bridge.handshake'
+    ? { ok: false, error: { code: 'timeout', message: 'Timed out' } } : null));
+  const { api, pane, state } = loadRuntime({ bridge });
+  api.initAndroidSettings();
+  state.utility.activeTab = 'android';
+  api.renderUtilityAndroid();
+  for (let turn = 0; turn < 5; turn += 1) await new Promise(setImmediate);
+  assert.equal(bridge.sent.length, 1, 'a pending handshake is shared, and a failure is not retried in a loop');
+  api.renderUtilityAndroid();
+  await new Promise(setImmediate);
+  assert.equal(bridge.sent.length, 2);
+  assert.match(pane.detail.innerHTML, /This app could not connect to the current site/);
 });

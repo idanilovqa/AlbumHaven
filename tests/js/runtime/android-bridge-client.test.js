@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadCapabilityUi } = require('../support/capability-ui-context.cjs');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'android-bridge', 'v1.json'), 'utf8'));
@@ -29,6 +30,7 @@ function loadRuntime({ bridge } = {}) {
   };
   if (bridge) context.window.AlbumHavenBridge = bridge;
   vm.createContext(context);
+  loadCapabilityUi(context);
   for (const file of ['android-bridge-client.js', 'android-settings.js']) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
   }

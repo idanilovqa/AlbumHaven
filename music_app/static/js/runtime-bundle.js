@@ -11724,11 +11724,10 @@ const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
 // required capability. Every bridge feature then stays off, as it does with no shell at all.
 const androidBridge = { info: null, pending: new Map(), connection: null, events: new Map(), updateRequired: false };
 
-// The shell injects a plain script object with `postMessage`. Named access can expose an element or
-// a frame's window under the same global name; neither is the shell (capability-ui.js agrees).
+// The shell injects a plain script object with `postMessage`; capability-ui.js, which every page
+// loads before this bundle, owns that test.
 function isAndroidShell() {
-  const bridge = typeof window !== 'undefined' ? window.AlbumHavenBridge : null;
-  return typeof bridge?.postMessage === 'function' && bridge.window !== bridge;
+  return typeof window !== 'undefined' && window.AlbumHavenCapabilities?.isAndroidShell() === true;
 }
 
 function hasAndroidCapability(capability) {
@@ -11815,6 +11814,8 @@ function connectAndroidBridge() {
       }
       androidBridge.info = info;
       if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
+      // Settings (android-settings.js) takes the shell's update and sandbox state from every success.
+      if (typeof adoptAndroidSettingsHandshake === 'function') adoptAndroidSettingsHandshake(info);
       return info;
     }, (error) => {
       androidBridge.updateRequired = error.code === 'incompatible_bridge' || error.code === 'update_required';
@@ -11832,7 +11833,8 @@ function connectAndroidBridge() {
 // Android owns the audible clock, the PCM socket, the server playback claim and every listen write
 // (now-playing, scrobble, completion), so listening is recorded with or without this document.
 const ANDROID_NATIVE_PLAYBACK_CAPABILITY = 'playback.native.v1';
-// Album queue groups and a queue replaced around the playing item (`keepCurrent`).
+// A queue replaced around the playing item (`keepCurrent`). Every v1 queue item names its album
+// `queueGroup`, so groups need no capability.
 const ANDROID_NATIVE_QUEUE_CAPABILITY = 'playback.queue.v1';
 // `playback.setLoop` with the web's loop kind, and `playback.clearLoop`.
 const ANDROID_NATIVE_LOOPS_CAPABILITY = 'playback.loops.v1';
@@ -11855,6 +11857,8 @@ const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playi
 const androidNativePlayback = {
   revision: 0,
   appliedRevision: 0,
+  // The revision of a `playback.loadQueue` Android has been sent but not yet answered.
+  loadingRevision: 0,
   items: [],
   index: 0,
   generation: 0,
@@ -11988,7 +11992,6 @@ function androidNativeListenKey(item) {
 // The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
 function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent = false) {
   const resumable = hasAndroidCapability(ANDROID_NATIVE_RESUMPTION_CAPABILITY);
-  const grouped = hasAndroidCapability(ANDROID_NATIVE_QUEUE_CAPABILITY);
   const payload = {
     queueRevision: revision,
     items: queueWindow.items.map((item, index) => ({
@@ -12001,7 +12004,7 @@ function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSecond
       artworkUrl: refs[index].resumeToken ? `/playback/artwork/${refs[index].resumeToken}` : null,
       durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
       trackNumber: androidNativeText(item.trackNumber),
-      ...(grouped ? { queueGroup: queueWindow.groups[index] } : {}),
+      queueGroup: queueWindow.groups[index],
       ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
     })),
     currentIndex: queueWindow.currentIndex,
@@ -12051,11 +12054,14 @@ async function startAndroidNativePlaybackTrack(track, {
     const refs = await requestAndroidNativePlaybackRefs(queueWindow.items);
     if (revision !== native.revision) return null;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    native.loadingRevision = revision;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
     // Nothing Android plays came from this start, so it acquires nothing for it.
     if (revision === native.revision) native.ownerIntent = false;
     throw error;
+  } finally {
+    if (native.loadingRevision === revision) native.loadingRevision = 0;
   }
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
@@ -12272,8 +12278,10 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   const native = androidNativePlayback;
   // A media session outlives the document: the next document of this origin re-attaches to it.
   if (reason === 'unload' && hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY)) return;
-  const wasLoaded = native.appliedRevision > 0 && native.items.length > 0;
+  // A load Android has been sent may already play; the shell applies the stop after it.
+  const wasLoaded = native.loadingRevision > 0 || (native.appliedRevision > 0 && native.items.length > 0);
   native.revision += 1;
+  native.loadingRevision = 0;
   native.ownerIntent = false;
   native.items = [];
   native.index = 0;
@@ -12290,7 +12298,7 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
     src: preserveSnapshot ? native.snapshot.src : '',
     readyState: 0,
   });
-  const stopped = wasLoaded ? sendAndroidNativeTransport('playback.stop') : null;
+  const stopped = wasLoaded ? sendAndroidBridgeCommand('playback.stop') : null;
   // Android releases its claim with the stop; no event of the stopped queue applies any more.
   native.appliedRevision = 0;
   native.ownership = 'none';
@@ -26169,9 +26177,31 @@ function buildAndroidSettingsHtml(info) {
   </div>`;
 }
 
+// Every successful handshake, whichever feature asked for it, names the shell's update state and
+// the sandbox it just connected to.
+function adoptAndroidSettingsHandshake(info) {
+  if (info.updates) androidSettings.update = info.updates;
+  const connectedSlot = info.sandbox?.connectedSlot;
+  if (connectedSlot) {
+    androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
+      message: 'The selected server is ready.' };
+  }
+  if (state.utility.activeTab === 'android') renderUtilityAndroid();
+}
+
+// Settings without a shell connection asks again each time it renders; a pending handshake is
+// shared, and a failed one waits for the next render rather than retrying in a loop.
+function connectAndroidSettings() {
+  if (androidBridge.info || isAndroidUpdateRequired()) return;
+  void connectAndroidBridge().then(() => {
+    if (isAndroidUpdateRequired() && state.utility.activeTab === 'android') renderUtilityAndroid();
+  });
+}
+
 function renderUtilityAndroid() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  connectAndroidSettings();
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
   const info = androidBridge.info;
   const rows = [{ key: 'updates', label: 'App & updates' }];
@@ -26240,15 +26270,7 @@ function initAndroidSettings() {
   if (!isAndroidShell()) return;
   document.addEventListener('click', handleAndroidSettingsClick);
   androidBridge.events.set('updates.state', setAndroidUpdate);
-  void connectAndroidBridge().then((info) => {
-    if (info?.updates) androidSettings.update = info.updates;
-    const connectedSlot = info?.sandbox?.connectedSlot;
-    if (connectedSlot) {
-      androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
-        message: 'The selected server is ready.' };
-    }
-    if (state.utility.activeTab === 'android') renderUtilityAndroid();
-  });
+  connectAndroidSettings();
 }
 
 // END js/runtime/android-settings.js

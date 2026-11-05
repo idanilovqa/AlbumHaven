@@ -175,9 +175,31 @@ function buildAndroidSettingsHtml(info) {
   </div>`;
 }
 
+// Every successful handshake, whichever feature asked for it, names the shell's update state and
+// the sandbox it just connected to.
+function adoptAndroidSettingsHandshake(info) {
+  if (info.updates) androidSettings.update = info.updates;
+  const connectedSlot = info.sandbox?.connectedSlot;
+  if (connectedSlot) {
+    androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
+      message: 'The selected server is ready.' };
+  }
+  if (state.utility.activeTab === 'android') renderUtilityAndroid();
+}
+
+// Settings without a shell connection asks again each time it renders; a pending handshake is
+// shared, and a failed one waits for the next render rather than retrying in a loop.
+function connectAndroidSettings() {
+  if (androidBridge.info || isAndroidUpdateRequired()) return;
+  void connectAndroidBridge().then(() => {
+    if (isAndroidUpdateRequired() && state.utility.activeTab === 'android') renderUtilityAndroid();
+  });
+}
+
 function renderUtilityAndroid() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  connectAndroidSettings();
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
   const info = androidBridge.info;
   const rows = [{ key: 'updates', label: 'App & updates' }];
@@ -246,13 +268,5 @@ function initAndroidSettings() {
   if (!isAndroidShell()) return;
   document.addEventListener('click', handleAndroidSettingsClick);
   androidBridge.events.set('updates.state', setAndroidUpdate);
-  void connectAndroidBridge().then((info) => {
-    if (info?.updates) androidSettings.update = info.updates;
-    const connectedSlot = info?.sandbox?.connectedSlot;
-    if (connectedSlot) {
-      androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
-        message: 'The selected server is ready.' };
-    }
-    if (state.utility.activeTab === 'android') renderUtilityAndroid();
-  });
+  connectAndroidSettings();
 }

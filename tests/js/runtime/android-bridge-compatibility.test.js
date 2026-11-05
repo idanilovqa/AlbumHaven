@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadCapabilityUi } = require('../support/capability-ui-context.cjs');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const runtimeDir = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime');
@@ -47,11 +48,19 @@ function capabilitiesFor({ name, payload }) {
   if (name === 'sandbox.select') return ['sandbox.select.v1'];
   if (name.startsWith('updates.')) return ['updates.manual.v1'];
   if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v1'];
-  if (name === 'playback.loadQueue' && (payload.keepCurrent || payload.items.some(item => 'queueGroup' in item))) {
-    return ['playback.native.v1', 'playback.queue.v1'];
-  }
+  if (name === 'playback.loadQueue' && payload.keepCurrent) return ['playback.native.v1', 'playback.queue.v1'];
   if (name.startsWith('playback.')) return ['playback.native.v1'];
   return [`unknown command ${name}`];
+}
+
+const V1_LOAD = readJson('v1.json').loadQueueRequest.payload;
+const sortedKeys = (value, optional) => Object.keys(value).filter(key => key !== optional).sort().join();
+
+/** PlaybackBridge.parseLoad accepts exactly the v1 keys, with `keepCurrent` and `resumeToken` optional. */
+function isV1LoadQueue(payload) {
+  return sortedKeys(payload, 'keepCurrent') === sortedKeys(V1_LOAD)
+    && Array.isArray(payload.items)
+    && payload.items.every(item => sortedKeys(item, 'resumeToken') === sortedKeys(V1_LOAD.items[0], 'resumeToken'));
 }
 
 function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeDir, file), 'utf8') }) {
@@ -68,8 +77,11 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
       const missing = message.name === 'bridge.handshake' ? []
         : capabilitiesFor(message).filter(name => !capabilities.includes(name));
       if (missing.length) bridge.refused.push(`${message.name} without ${missing.join(', ')}`);
+      const invalid = message.name === 'playback.loadQueue' && !isV1LoadQueue(message.payload);
+      if (invalid) bridge.refused.push(`${message.name} with keys outside the v1 contract`);
       const payload = answer || (missing.length
         ? { ok: false, error: { code: 'unsupported_command', message: 'Unsupported command' } }
+        : invalid ? { ok: false, error: { code: 'invalid_payload', message: 'Invalid playback command' } }
         : { ok: true, ...(message.name === 'playback.loadQueue' ? { queueRevision: message.payload.queueRevision } : {}) });
       Promise.resolve(payload).then(answer => bridge.onmessage({
         data: JSON.stringify({ ...message, type: 'response', payload: answer }),
@@ -135,6 +147,7 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
     updatePlayerUi: () => {},
   };
   vm.createContext(context);
+  loadCapabilityUi(context);
   for (const file of RUNTIME_FILES) vm.runInContext(source(file), context, { filename: file });
   vm.runInContext(`globalThis.api = { androidBridge, connectAndroidBridge, androidNativePlaybackRoute,
     isAndroidPlaybackUnavailable, isAndroidUpdateRequired, isAndroidNativePlayback, buildAndroidSettingsHtml,

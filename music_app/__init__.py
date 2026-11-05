@@ -286,6 +286,9 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.config = runtime.config
     app.state.media_host_library_id = None
     app.state.library_state = runtime.library_state
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
+    app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
+    runtime.config["_LOCAL_COVER_INVENTORY"] = app.state.local_cover_inventory
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
     runtime.library_watch_health_service = LibraryWatchHealthService(
@@ -339,6 +342,11 @@ def _configure_asgi_app(app, runtime) -> None:
             )
             if cover_preview_backfill is not None:
                 cover_preview_backfill.note_foreground_activity()
+            local_cover_inventory = getattr(app.state, "local_cover_inventory", None)
+            if local_cover_inventory is not None and request.url.path not in {
+                "/utilities/cover-lookup/tasks", "/utilities/cover-lookup/tasks/counts",
+            }:
+                local_cover_inventory.note_foreground_activity()
         response = await call_next(request)
         path = request.url.path
         if (
@@ -518,6 +526,7 @@ def create_asgi_app():
             _app.state.generated_preview_relocation.start()
         else:
             _app.state.cover_preview_backfill.start()
+        _app.state.local_cover_inventory.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -539,6 +548,7 @@ def create_asgi_app():
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                ("local cover inventory", _app.state.local_cover_inventory.stop),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop
@@ -641,6 +651,18 @@ def create_asgi_app():
             return tuple(sorted(root_id for root_id in root_ids if root_id))
 
         def reconcile_targeted_request(request) -> None:
+            changed_paths = [*request.paths, *request.deleted_paths, *request.deleted_subtrees]
+            changed_subtrees = list(request.deleted_subtrees)
+            for move in request.moves:
+                changed_paths.extend((move.source, move.destination))
+                if move.is_directory:
+                    changed_subtrees.extend((move.source, move.destination))
+            image_extensions = set(runtime.config.get("IMAGE_EXTENSIONS") or ())
+            _app.state.local_cover_inventory.invalidate_paths(
+                changed_paths,
+                subtree_paths=changed_subtrees,
+                context_changed=bool(changed_subtrees) or any(Path(path).suffix.lower() not in image_extensions for path in changed_paths),
+            )
             root_healthy = all(
                 runtime.library_watch_health_service
                 .root_allows_destructive_reconciliation(root_id)
@@ -747,6 +769,7 @@ def create_asgi_app():
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
             targeted_reconciler.replace_roots(root_definitions)
+            _app.state.local_cover_inventory.rescan()
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:

@@ -40,7 +40,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
     utilityRulesActions,
   }) => {
     requirePostgresRuntimeEnv('the Problematic Files benchmark');
-    const capture = observeProblematicDetails(page);
+    let capture;
     try {
 
       await galleryActions.goto();
@@ -147,6 +147,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       // Reset frontend state after the cold fetch; the following first open retains
       // the historical warm-server contract without reusing the loaded UI data.
       await galleryActions.goto();
+      capture = observeProblematicDetails(page);
 
       let problematicFilesPayload = null;
       let initialDetailRequestCount = 0;
@@ -476,6 +477,6 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         'Problematic Files readiness',
       );
       expect(benchmarkEvaluation.failures, benchmarkEvaluation.failures.join('\n')).toEqual([]);
-    } finally { await capture.dispose(); }
+    } finally { await capture?.dispose(); }
   });
 });

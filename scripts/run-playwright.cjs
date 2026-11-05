@@ -100,6 +100,8 @@ function createPlaywrightResultNonce() {
   return randomBytes(32).toString('hex');
 }
 
+const ownedCleanupDiagnostics = new WeakMap();
+
 function safeErrorSummary(error) {
   if (!error) {
     return null;
@@ -113,6 +115,11 @@ function safeErrorSummary(error) {
   }
   if (safeTokenPattern.test(code)) {
     summary.code = code;
+  }
+  const cleanup = ownedCleanupDiagnostics.get(error);
+  if (cleanup) {
+    summary.cleanup = cleanup;
+    ownedCleanupDiagnostics.set(summary, cleanup);
   }
   return Object.keys(summary).length > 0 ? summary : null;
 }
@@ -748,6 +755,25 @@ function buildIsolatedLibraryCleanupEnv(childEnv = {}) {
   };
 }
 
+function sanitizeOwnedCleanupText(value, childEnv = {}) {
+  let text = String(value || '');
+  for (const [key, secret] of Object.entries({ ...process.env, ...childEnv })) {
+    if (secret && /password|passwd|token|secret|credential|database.*url|dsn/i.test(key)) {
+      text = text.split(String(secret)).join('[redacted secret]');
+    }
+  }
+  return text
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, '[redacted URL]')
+    .replace(/\b(?:password|passwd|pwd|token|secret|credential|PGPASSWORD)["']?\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '[redacted secret]')
+    .replace(/\bAuthorization["']?\s*[=:]\s*["']?(?:Bearer|Basic)\s+[^\s"',;}]+/gi, '[redacted authorization]')
+    .replace(/[A-Za-z]:[\\/][^\r\n]*/g, '[redacted path]')
+    .replace(/\\\\[^\r\n]*/g, '[redacted path]')
+    .replace(/\/(?:[^\s/"'<>]+\/)*[^\s"'<>]+/g, '[redacted path]')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .trim().slice(0, 2048);
+}
+
 function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
   const runCommandFn = options.runCommandFn || runCommand;
   const timeoutMs = Number(options.timeoutMs || ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS);
@@ -762,15 +788,17 @@ function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
       timeout: timeoutMs,
     },
   );
-  if (result.error) {
-    throw new Error(`Isolated library database cleanup failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || '').trim();
-    throw new Error(
-      `Isolated library database cleanup exited with status ${String(result.status)}`
-      + (detail ? `: ${detail}` : '.'),
-    );
+  if (result.error || result.status !== 0) {
+    const error = new Error('Isolated library database cleanup failed.');
+    ownedCleanupDiagnostics.set(error, {
+      exitCode: Number.isInteger(result.status) ? result.status : null,
+      signal: /^[A-Z][A-Z0-9]{0,31}$/.test(result.signal || '') ? result.signal : null,
+      spawnError: safeErrorSummary(result.error),
+      message: sanitizeOwnedCleanupText(result.error?.message, childEnv),
+      stderr: sanitizeOwnedCleanupText(result.stderr, childEnv),
+      stdout: sanitizeOwnedCleanupText(result.stdout, childEnv),
+    });
+    throw error;
   }
 }
 
@@ -1911,6 +1939,14 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
     const managedLaunchRootsByPid = new Map();
     const reclaimedProcessOwners = [];
     const portReclaimErrors = [];
+    const recordPortReclaimError = (error, phase, port, pid = null) => {
+      ownedCleanupDiagnostics.set(error, {
+        phase, port, pid,
+        error: safeErrorSummary(error),
+        message: sanitizeOwnedCleanupText(error?.message, childEnv),
+      });
+      portReclaimErrors.push(error);
+    };
     const lifecycle = {
       authoritativeResult: null,
       listOnly: isListOnlyCommand(passthroughArgv),
@@ -2104,10 +2140,15 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         && cleanupIsolatedLibraryDatabaseFn
       ) {
         if (portReclaimErrors.length > 0) {
-          throw attachLifecycle(new Error(
+          const cleanupError = new Error(
             'Could not safely snapshot and reclaim all isolated Playwright port owners: '
-            + portReclaimErrors.map((error) => String(error?.message || error)).join('; '),
-          ), 'owned-process-cleanup-error');
+            + portReclaimErrors.map((error) => sanitizeOwnedCleanupText(error?.message, childEnv)).join('; '),
+          );
+          ownedCleanupDiagnostics.set(cleanupError, {
+            phase: 'port-reclaim',
+            failures: portReclaimErrors.slice(0, 16).map((error) => safeErrorSummary(error)),
+          });
+          throw attachLifecycle(cleanupError, 'owned-process-cleanup-error');
         }
         lifecycle.fakeDatabaseCleanup.status = 'running';
         try {
@@ -2235,7 +2276,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
               reclaimedProcessOwners.push(...reclaimedOwners);
             }
           } catch (portCleanupError) {
-            portReclaimErrors.push(portCleanupError);
+            recordPortReclaimError(portCleanupError, 'reclaim-port', managedPort);
           }
         }
         if (reclaimedProcessOwners.length > 0) {
@@ -2310,7 +2351,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         try {
           portOwners = readPortOwningProcessIdentitiesFn(managedPort);
         } catch (error) {
-          portReclaimErrors.push(error);
+          recordPortReclaimError(error, 'capture-port-owner', managedPort);
           continue;
         }
         for (const owner of Array.isArray(portOwners) ? portOwners : []) {
@@ -2332,9 +2373,9 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
           const existingRoot = managedLaunchRootsByPid.get(launchRoot.pid);
           if (existingRoot && existingRoot.creationIdentity !== launchRoot.creationIdentity) {
             managedLaunchRootsByPid.delete(launchRoot.pid);
-            portReclaimErrors.push(new Error(
+            recordPortReclaimError(new Error(
               `Managed launch-root PID ${launchRoot.pid} changed identity while port ownership was captured.`,
-            ));
+            ), 'launch-root-identity', managedPort, launchRoot.pid);
             continue;
           }
           managedLaunchRootsByPid.set(launchRoot.pid, {

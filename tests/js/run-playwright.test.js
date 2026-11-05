@@ -5895,6 +5895,92 @@ test('owned temp cleanup failure rejects authoritative pass while passive diagno
   );
 });
 
+test('owned port capture rejection preserves safe context before database cleanup', async () => {
+  const child = createFakeChildProcess();
+  const timerHarness = createTimerHarness();
+  let databaseCleanupCalls = 0;
+  const runPromise = _private.runPlaywrightProcess(['test'], {}, 1000, {
+    spawnFn() { return child; },
+    stopProcessTreeFn() {},
+    reclaimPortFn() { return []; },
+    readProcessTreeIdentitiesFn() { return []; },
+    readPortOwningProcessIdentitiesFn() {
+      throw Object.assign(new Error('port identity probe failed: password="hidden" C:\\private\\music.mp3'), { code: 'EACCES' });
+    },
+    cleanupIsolatedLibraryDatabaseFn() { databaseCleanupCalls += 1; },
+    setTimeoutFn: timerHarness.setTimeoutFn,
+    clearTimeoutFn: timerHarness.clearTimeoutFn,
+    stdout: { write() {} }, stderr: { write() {} },
+  });
+  child.stdout.emit('data', Buffer.from(`Running 1 test using 1 worker\n1 passed (1.1s)\n${PASS_FINAL_RESULT.replace('"run-final"', '"tests-complete"')}\n`));
+  child.stdout.emit('data', Buffer.from(`${PASS_FINAL_RESULT}\n`));
+  await timerHarness.timers.find((timer) => timer.delay === 15000).fn();
+  child.emit('exit', 0);
+  await assert.rejects(runPromise, (error) => {
+    assert.equal(databaseCleanupCalls, 0);
+    assert.equal(error.lifecycle.exitReason, 'owned-process-cleanup-error');
+    const diagnostic = _private.buildAuthoritativePassFinalDecisionDiagnostic({
+      lifecycle: { fakeDatabaseCleanup: { status: 'failed', error } },
+    });
+    const failures = diagnostic.fakeDatabaseCleanup.error.cleanup.failures;
+    assert.ok(failures.length > 0);
+    assert.equal(failures[0].cleanup.phase, 'capture-port-owner');
+    assert.equal(failures[0].cleanup.error.code, 'EACCES');
+    assert.ok(Number.isInteger(failures[0].cleanup.port));
+    assert.match(failures[0].cleanup.message, /port identity probe failed/);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /hidden|private|music\.mp3/);
+    return true;
+  });
+});
+
+test('owned cleanup diagnostics redact secrets and paths without hiding the exception', () => {
+  let failure;
+  assert.throws(() => _private.cleanupIsolatedLibraryDatabase({
+    PGPASSWORD: 'raw-environment-secret',
+    DATABASE_APP_URL: 'postgresql://user:password@host/database',
+  }, { runCommandFn() {
+    return {
+      status: 1, signal: null,
+      stderr: 'Traceback\nFile "N:\\Music\\Private Artist\\song.mp3"\n'
+        + 'RuntimeError: ownership lock unavailable\n'
+        + 'postgresql://other:credentials@host/db https://private.example/image\n'
+        + 'password="hidden phrase" raw-environment-secret\n'
+        + '{"token":"unlisted-json-secret"} {\'password\': \'unlisted-dict-secret\'}\n'
+        + 'Authorization: Bearer unlisted-auth-secret\n'
+        + '/mnt/music/private/song.flac\n\\\\server\\music\\track.mp3\n',
+      stdout: 'cleanup phase: acquire',
+    };
+  } }), (error) => { failure = error; return true; });
+  const diagnostic = _private.buildAuthoritativePassFinalDecisionDiagnostic({
+    lifecycle: { fakeDatabaseCleanup: { status: 'failed', error: failure } },
+  });
+  const cleanup = diagnostic.fakeDatabaseCleanup.error.cleanup;
+  assert.equal(cleanup.exitCode, 1);
+  assert.match(cleanup.stderr, /RuntimeError: ownership lock unavailable/);
+  assert.equal(cleanup.stdout, 'cleanup phase: acquire');
+  assert.doesNotMatch(JSON.stringify(diagnostic), /raw-environment-secret|hidden phrase|unlisted-|credentials|private\.example|Private Artist|song\.flac|track\.mp3|postgresql:\/\//);
+  assert.equal(failure.message, 'Isolated library database cleanup failed.');
+});
+
+test('owned cleanup diagnostics preserve bounded spawn failure context', () => {
+  let failure;
+  assert.throws(() => _private.cleanupIsolatedLibraryDatabase({}, { runCommandFn() {
+    return { status: null, signal: 'SIGTERM',
+      error: Object.assign(new Error('spawn C:\\private\\python.exe timed out'), { code: 'ETIMEDOUT' }),
+      stderr: 'x'.repeat(10000), stdout: '',
+    };
+  } }), (error) => { failure = error; return true; });
+  const diagnostic = _private.buildAuthoritativePassFinalDecisionDiagnostic({
+    lifecycle: { fakeDatabaseCleanup: { status: 'failed', error: failure } },
+  });
+  const cleanup = diagnostic.fakeDatabaseCleanup.error.cleanup;
+  assert.equal(cleanup.exitCode, null);
+  assert.equal(cleanup.signal, 'SIGTERM');
+  assert.deepEqual(cleanup.spawnError, { name: 'Error', code: 'ETIMEDOUT' });
+  assert.equal(cleanup.stderr.length, 2048);
+  assert.doesNotMatch(cleanup.message, /private|python\.exe/);
+});
+
 test('authoritative pass cleanup rejection carries safe final-decision evidence', async () => {
   const child = createFakeChildProcess();
   const timerHarness = createTimerHarness();
@@ -5916,7 +6002,9 @@ test('authoritative pass cleanup rejection carries safe final-decision evidence'
       setTimeoutFn: timerHarness.setTimeoutFn,
       clearTimeoutFn: timerHarness.clearTimeoutFn,
       cleanupIsolatedLibraryDatabaseFn() {
-        throw new Error('fixture database cleanup failed');
+        _private.cleanupIsolatedLibraryDatabase({}, { runCommandFn() {
+          return { status: 1, stderr: 'RuntimeError: ownership lock unavailable' };
+        } });
       },
       stdout: { write() {} },
       stderr: { write() {} },
@@ -5932,7 +6020,10 @@ test('authoritative pass cleanup rejection carries safe final-decision evidence'
   await assert.rejects(runPromise, (error) => {
     assert.equal(error.lifecycle.authoritativeResult.status, 'passed');
     assert.equal(error.lifecycle.fakeDatabaseCleanup.status, 'failed');
-    assert.deepEqual(error.lifecycle.fakeDatabaseCleanup.error, { name: 'Error' });
+    assert.equal(error.lifecycle.fakeDatabaseCleanup.error.name, 'Error');
+    const diagnostic = _private.buildAuthoritativePassFinalDecisionDiagnostic({ lifecycle: error.lifecycle });
+    assert.equal(diagnostic.fakeDatabaseCleanup.error.cleanup.exitCode, 1);
+    assert.equal(diagnostic.fakeDatabaseCleanup.error.cleanup.stderr, 'RuntimeError: ownership lock unavailable');
     assert.equal(error.lifecycle.exitReason, 'fake-database-cleanup-error');
     return true;
   });

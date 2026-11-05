@@ -47,12 +47,74 @@ test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { t
   });
 });
 
+test('FTC-TAGS-028 adds the missing sibling disc without losing selection or unsaved edits', { tag: '@area:tag-edit' }, async ({
+  galleryActions, searchToolbarActions, stepLogger, tagEditorActions,
+}) => {
+  const tagEditor = tagEditorActions.tagEditor;
+  const mainAlbum = 'Folder Expansion Main Album';
+  const firstMainFile = '01 - Main 01.mp3';
+  const firstFestivalFile = '01 - Festival 01.mp3';
+  const unsavedTitle = 'Pending main-disc title';
+  try {
+    await stepLogger.step('Open the separately indexed 14-track main disc and edit one title', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.search(mainAlbum, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(mainAlbum);
+      await galleryActions.waitForAlbumVisible(mainAlbum);
+      await galleryActions.openAlbumTagEditorFromContextMenu(mainAlbum);
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 14 });
+      await tagEditorActions.selectTrackByFilename(firstMainFile);
+      await tagEditorActions.setTrackName(unsavedTitle);
+      await tagEditorActions.expectSelectedTrackFilenames([firstMainFile]);
+    });
+    await stepLogger.step('Expand to 28 visible rows while preserving selection, pending title and disc order', async () => {
+      await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: 28 });
+      await expect(tagEditor.subtitle).toContainText('28 files in editor - 1 selected');
+      await tagEditorActions.expectSelectedTrackFilenames([firstMainFile]);
+      await expect(tagEditor.trackNameInput).toHaveValue(unsavedTitle);
+      await expect(tagEditor.albumNameInput).toHaveValue(mainAlbum);
+      await expect(tagEditor.discNumberInput).toHaveValue('1');
+      const paths = await tagEditorActions.readTrackPaths();
+      expect(paths.map((path) => path.split(/[\\/]/u).slice(-2).join('/'))).toEqual([
+        ...Array.from({ length: 14 }, (_, index) => {
+          const number = String(index + 1).padStart(2, '0');
+          return `CD 1 - Main/${number} - Main ${number}.mp3`;
+        }),
+        ...Array.from({ length: 14 }, (_, index) => {
+          const number = String(index + 1).padStart(2, '0');
+          return `CD 2 - Festival/${number} - Festival ${number}.mp3`;
+        }),
+      ]);
+      await tagEditorActions.selectTrackByFilename(firstFestivalFile);
+      await expect(tagEditor.albumNameInput).toHaveValue('Folder Expansion Festival Album');
+      await expect(tagEditor.albumArtistInput).toHaveValue('Various Artists');
+      await expect(tagEditor.trackNameInput).toHaveValue('Festival 01');
+      await expect(tagEditor.discNumberInput).toHaveValue('2');
+      await expect(tagEditor.trackNumberInput).toHaveValue('1');
+      await tagEditorActions.selectTrackByFilename(firstMainFile);
+      await expect(tagEditor.trackNameInput).toHaveValue(unsavedTitle);
+    });
+    await stepLogger.step('Cancel and reopen the original 14-track album with unchanged saved tags', async () => {
+      await tagEditorActions.close();
+      await galleryActions.openAlbumTagEditorFromContextMenu(mainAlbum);
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 14 });
+      await tagEditorActions.selectTrackByFilename(firstMainFile);
+      await expect(tagEditor.trackNameInput).toHaveValue('Main 01');
+      await expect(tagEditor.albumNameInput).toHaveValue(mainAlbum);
+    });
+  } finally {
+    await tagEditorActions.closeIfOpen();
+  }
+});
+
 test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions, artistPageSettingsActions, galleryActions, navigationPanelActions, page,
   searchToolbarActions, stepLogger, tagEditorActions, trackModalActions,
 }) => {
-  const filenames = ['01 - Track 1.mp3', '02 - Track 2.mp3', '03 - Track 3.mp3'];
-  const editedArtists = [CONTROL_OWNER, `${CONTROL_LEAD}, ${CONTROL_PARTNER}`, 'Independent Credit Voice'];
+  const filenames = ['01 - Track 1.mp3', '02 - Track 2.mp3', '03 - Track 3.mp3', '04 - Track 4.mp3'];
+  const editedArtists = [CONTROL_OWNER, `${CONTROL_LEAD}, ${CONTROL_PARTNER}`, 'Independent Credit Voice', `${CONTROL_LEAD} feat. 25 / 17`];
+  const expectedSecondaryArtists = [`feat. ${CONTROL_PARTNER}`, editedArtists[1], editedArtists[2], 'feat. 25/17'];
   let originalCredits = [];
   let saveMayHaveStarted = false;
   let exceptionSaveMayHaveStarted = false;
@@ -61,9 +123,9 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 pres
   const partnerScope = { primaryArtist: CONTROL_LEAD, memberArtist: CONTROL_PARTNER,
     ownedAlbum: CONTROL_PARTNER_SOLO, excludedAlbum: CONTROL_LEAD_SOLO, galleryActions, navigationPanelActions };
   try {
-    await stepLogger.step('Edit three owned generated credits through the shared tag editor', async () => {
+    await stepLogger.step('Edit four owned generated credits through the shared tag editor', async () => {
       await galleryActions.openSearchedAlbumDetails(ownedAlbum);
-      originalCredits = await trackModalActions.readTrackCredits(3);
+      originalCredits = await trackModalActions.readTrackCredits(4);
       await trackModalActions.openTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
       for (let index = 0; index < filenames.length; index += 1) {
@@ -80,9 +142,9 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 pres
       await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
       await galleryActions.selectAlbumDetailsByIdentity({ artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026' });
       await trackModalActions.waitForInteractiveSummary();
-      expect(await trackModalActions.readTrackCredits(3)).toEqual(originalCredits.map((credit, index) => ({
+      expect(await trackModalActions.readTrackCredits(4)).toEqual(originalCredits.map((credit, index) => ({
         ...credit, rawArtist: editedArtists[index],
-        secondaryArtist: index === 0 ? `feat. ${CONTROL_PARTNER}` : editedArtists[index],
+        secondaryArtist: expectedSecondaryArtists[index],
       })));
       await trackModalActions.close();
     });
@@ -174,7 +236,7 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 pres
       });
     }
     if (saveMayHaveStarted) {
-      await stepLogger.step('Restore and verify all three owned Artist values through the UI', async () => {
+      await stepLogger.step('Restore and verify all four owned Artist values through the UI', async () => {
         await galleryActions.openSearchedAlbumDetails(ownedAlbum);
         await trackModalActions.openTagEditor();
         await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
@@ -189,7 +251,7 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 pres
         await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
         await galleryActions.selectAlbumDetailsByIdentity({ artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026' });
         await trackModalActions.waitForInteractiveSummary();
-        expect(await trackModalActions.readTrackCredits(3)).toEqual(originalCredits);
+        expect(await trackModalActions.readTrackCredits(4)).toEqual(originalCredits);
         await trackModalActions.close();
         await searchToolbarActions.clearSearch({ submitWithEnter: true });
         await searchToolbarActions.waitForQuery('');
@@ -313,20 +375,18 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
   });
 
   await stepLogger.step('Keep an album-title search visible under its selected featured performer', async () => {
-    await searchToolbarActions.search(CONTROL_SHARED_ALBUM, { submitWithEnter: true });
-    await searchToolbarActions.waitForQuery(CONTROL_SHARED_ALBUM);
-    await navigationPanelActions.selectSidebarArtistByName(CONTROL_PARTNER);
-    await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
-    await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_SHARED_ALBUM);
+    await searchToolbarActions.search('Tribute To Harley-Davidson', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Tribute To Harley-Davidson');
+    await navigationPanelActions.selectSidebarArtistByName('U.D.O.');
+    await navigationPanelActions.waitForSidebarSelection('U.D.O.');
+    await galleryActions.waitForAlbumVisibleUnderHeading('U.D.O.', 'Tribute To Harley-Davidson');
 
-    // ID-012 (owner, 2026-11-03): a split release (each equally main artist on their own tracks)
-    // belongs to each artist's main discography, never under Featured On.
     const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(
-      CONTROL_PARTNER,
-      CONTROL_SHARED_ALBUM,
+      'U.D.O.',
+      'Tribute To Harley-Davidson',
     );
-    expect(subsectionTitle).toBeNull();
-    expect(await galleryActions.readAlbumNamesByHeading(CONTROL_PARTNER)).toEqual([CONTROL_SHARED_ALBUM]);
+    expect(subsectionTitle).toBe('Featured On');
+    expect(await galleryActions.readAlbumNamesByHeading('U.D.O.')).toEqual(['Tribute To Harley-Davidson']);
   });
 });
 

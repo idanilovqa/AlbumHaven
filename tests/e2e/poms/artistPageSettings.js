@@ -85,8 +85,8 @@ export class ArtistPageSettings extends BasePage {
 
   async waitForNonAlbumTracksHydrated(options = {}) {
     await this.waitForPageCondition(() => (
-      typeof state !== 'undefined'
-      && state.view?.non_album_tracks_deferred === false
+      typeof state !== 'undefined' && Boolean(state.view)
+      && state.view.non_album_tracks_deferred === false
     ), { timeout: options.timeout || 10000 });
   }
 

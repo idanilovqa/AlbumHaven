@@ -1,6 +1,97 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const vm = require('node:vm');
+
+test('atomic modal snapshot preserves exact defaults and captures mobile readiness together', async () => {
+  const { TrackModal } = await import('../e2e/poms/trackModal.js');
+  const textNode = (textContent) => ({ textContent });
+  const row = { querySelector: (selector) => selector === '[data-track-title]'
+    ? { getAttribute: () => 'First' } : textNode('1.') };
+  const header = {
+    querySelector: () => textNode('Source'),
+    querySelectorAll: () => [],
+    getAttribute: () => 'default',
+  };
+  const dialog = {
+    hidden: false,
+    getBoundingClientRect: () => ({ width: 400, height: 600 }),
+    classList: { contains: () => true },
+    closest: () => ({ querySelector: () => textNode('Artist · 2000') }),
+    querySelector: (selector) => ({
+      '.album-details-header': header,
+      '.album-track-table__total': textNode('1 track'),
+    })[selector] || null,
+    querySelectorAll: () => [row],
+  };
+  const emptyArtbox = { hidden: false, getBoundingClientRect: () => ({ width: 100, height: 100 }) };
+  const document = {
+    querySelector: (selector) => ({
+      '#track-modal-title': textNode('Source'),
+      '#track-modal-footer': textNode('Footer'),
+      '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]': emptyArtbox,
+    })[selector] || null,
+    querySelectorAll: (selector) => selector.includes('play-track-button') ? [{}] : [],
+  };
+  const modal = Object.create(TrackModal.prototype);
+  modal.dialog = {
+    evaluate: (callback, selectors) => vm.runInNewContext(`(${callback})(dialog, selectors)`, {
+      dialog, selectors, document, HTMLImageElement: class {},
+      getComputedStyle: () => ({ visibility: 'visible' }),
+    }),
+  };
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(await modal.readExactAlbumDetailsSnapshot()), {
+    title: 'Source', trackRowCount: 1, trackTitles: ['First'], displayedTrackNumbers: [1],
+  });
+  const snapshot = await modal.readExactAlbumDetailsSnapshot({ includeSummary: true });
+  assert.equal(snapshot.visible, true);
+  assert.equal(snapshot.loading, false);
+  assert.deepEqual(plain(snapshot.summary), {
+    title: 'Source', subtitle: 'Artist · 2000', footer: 'Footer', total: '1 track',
+    playButtons: 1, trackRows: 1, coverLoaded: false,
+    coverPlaceholderVisible: true, coverReady: true,
+  });
+  const originalQuerySelector = document.querySelector;
+  document.querySelector = (selector) => {
+    if (selector === modal.coverPlaceholderSelector) return null;
+    if (selector === modal.missingArtboxSelector) return emptyArtbox;
+    return originalQuerySelector(selector);
+  };
+  const missing = await modal.readExactAlbumDetailsSnapshot({ includeSummary: true });
+  assert.equal(missing.summary.coverLoaded, false);
+  assert.equal(missing.summary.coverPlaceholderVisible, true);
+  assert.equal(missing.summary.coverReady, true);
+});
+
+test('interactive summary returns one coherent ready snapshot for the expected album', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  const summary = { title: 'Artist - Source - 2000', trackRows: 15, playButtons: 15 };
+  const snapshots = [
+    { visible: false, loading: false, summary },
+    { visible: true, loading: true, summary },
+    { visible: true, loading: false, summary: { ...summary, trackRows: 0 } },
+    { visible: true, loading: false, summary: { ...summary, playButtons: 0 } },
+    { visible: true, loading: false, summary: { ...summary, title: 'Wrong album' } },
+    { visible: true, loading: false, summary },
+  ];
+  let reads = 0;
+  const actions = new TrackModalActions({
+    async readExactAlbumDetailsSnapshot(options) {
+      assert.equal(options.includeSummary, true);
+      assert.ok(reads < snapshots.length, 'must not reread after the coherent ready snapshot');
+      return snapshots[reads++];
+    },
+  });
+  actions.waitForReady = async () => {};
+  actions.readSummary = () => { throw new Error('separate summary read races loading'); };
+  const result = await actions.waitForInteractiveSummary({
+    expectedTitle: summary.title,
+    timeout: 5000,
+  });
+  assert.equal(result, summary);
+  assert.equal(reads, snapshots.length);
+});
 
 test('TrackModalActions exposes the current-release split choice journey', async () => {
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');

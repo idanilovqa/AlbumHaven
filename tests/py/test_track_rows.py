@@ -120,6 +120,28 @@ def test_semicolon_track_credits_show_only_guests_with_feature_prefix(artist, se
     assert build_track_rows([track], album=album)[0]["secondary_artist"] == expected
 
 
+@pytest.mark.parametrize(
+    ("owner", "artist", "secondary_credit", "expected"),
+    [
+        ("Owner", "Owner feat. 25 / 17", "", "feat. 25/17"),
+        ("Owner", "Owner; 25 / 17", "", "feat. 25/17"),
+        ("Owner", "Owner / 25 / 17", "", "feat. 25/17"),
+        ("Owner", "Owner", "feat. 25 / 17", "feat. 25/17"),
+        ("Maroon 5", "Maroon 5 / 25 / 17", "", "feat. 25/17"),
+        ("Maroon 5", "Maroon 5 / 311", "", "feat. 311"),
+        ("25 / 17", "25 / 17", "", None),
+    ],
+)
+def test_numeric_slash_band_remains_one_track_credit(owner, artist, secondary_credit, expected):
+    album = SimpleNamespace(album_artist=owner, artists=[owner])
+    track = SimpleNamespace(
+        path="/Album/track.flac", title="Track", artist=artist,
+        album_artist=owner, secondary_credit=secondary_credit,
+    )
+
+    assert build_track_rows([track], album=album)[0]["secondary_artist"] == expected
+
+
 def test_semicolon_guest_credit_preserves_both_joint_album_owners():
     album = SimpleNamespace(
         album_artist="Brian Eno / David Byrne", artists=["Brian Eno", "David Byrne"],

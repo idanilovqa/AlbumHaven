@@ -2762,7 +2762,7 @@ test('derived artwork target retains exact validated provenance in its target ar
     schemaVersion: 1,
     profile: 'synthetic-large-library',
     base: { release: 'fixtures-v1.0.25', manifestSha256: 'a'.repeat(64) },
-    generator: { commit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11' },
+    generator: { commit: '35c374fcbcbadf703849d2581e2303e293c87a76' },
     derivative: { release: 'fixtures-v1.0.25-distinct-artwork-diagnostic' },
     diversity: { variantCount: 512, sourceMaxEdge: 960 },
   };

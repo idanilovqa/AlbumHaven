@@ -15,6 +15,7 @@ export class CoverLookup extends BasePage {
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
     this.albumDetailsLink = this.modalSubtitle.locator("[data-open-cover-lookup-album-details]");
+    this.currentReleaseChoices = this.modalBody.locator('[data-cover-lookup-current-release]');
     this.modalStatus = page.locator(this.modalStatusSelector);
     this.modalStatusTitle = this.modalStatus.locator('.on-page-alert__title');
     this.modalStatusMessage = this.modalStatus.locator('.on-page-alert__message');
@@ -548,6 +549,46 @@ export class CoverLookup extends BasePage {
     ).first();
   }
 
+  async startLocalInventoryObservation(expectedCount) {
+    // parity-check: allow-read-only-measurement-evaluate -- Observe rendered inventory, never application state.
+    return this.modalBody.evaluateHandle((body, expected) => {
+      const observation = { samples: [], sawKnownCards: false };
+      const sample = () => {
+        if (!body.getClientRects().length) return;
+        const count = body.querySelectorAll('[data-select-local-cover]').length;
+        const placeholders = body.querySelectorAll('[data-cover-lookup-loading-section="local"]').length;
+        const empty = Array.from(body.querySelectorAll('.cover-lookup-empty'))
+          .some((element) => element.textContent.includes('No local cover art'));
+        observation.samples.push({
+          empty,
+          wrongPlaceholderCount: placeholders > 0 && placeholders !== expected,
+          lostKnownCards: observation.sawKnownCards && count !== expected,
+        });
+        if (count === expected) observation.sawKnownCards = true;
+      };
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    }, expectedCount);
+  }
+
+  remotePreviewById(candidateId) {
+    return this.remoteCoverCardById(candidateId).locator('.cover-lookup-art-preview');
+  }
+
+  async finishLocalInventoryObservation(handle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- Read and stop the rendered inventory observer.
+      return await handle.evaluate((observation) => {
+        observation.observer.disconnect();
+        return { sawKnownCards: observation.sawKnownCards, samples: observation.samples };
+      });
+    } finally {
+      await handle.dispose();
+    }
+  }
+
   async startRemoteCandidateContinuityObservation(expectedIds) {
     // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
     return this.modalBody.evaluateHandle((body, expectedCandidateIds) => {
@@ -691,6 +732,10 @@ export class CoverLookup extends BasePage {
 
   taskStatusById(taskId) {
     return this.taskCardById(taskId).locator(this.taskStatusWithinCardSelector).first();
+  }
+
+  taskProgressWithin(card) {
+    return card.locator('.cover-lookup-task-progress > span');
   }
 
   taskBylineByTitle(taskTitle) {

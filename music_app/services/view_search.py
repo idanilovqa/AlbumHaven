@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import unicodedata
 
 from music_app.routes.api_rules_helpers import looks_like_collaboration_name
 from music_app.services.library import shared_album_display_artist
@@ -12,8 +13,17 @@ _TRACK_PATH_SEPARATOR_RE = re.compile(r"[\\/]+")
 _SEARCH_COMMIT_DEBOUNCE_MS = 150
 
 
+def fold_search_accents(value: str) -> str:
+    text = str(value or "").strip().casefold()
+    if text.isascii():
+        return text
+    decomposed = unicodedata.normalize("NFD", text)
+    # Fold Latin accents only; й and ё remain distinct Cyrillic letters.
+    return unicodedata.normalize("NFC", re.sub(r"([a-z])[\u0300-\u036f]+", r"\1", decomposed))
+
+
 def normalize_search_text(value: str) -> str:
-    text = (value or "").strip().casefold()
+    text = unicodedata.normalize("NFC", (value or "").strip().casefold())
     text = text.replace("'", "").replace("\u2019", "")
     text = _SEARCH_PUNCT_RE.sub(" ", text)
     words = []
@@ -427,8 +437,8 @@ def search_word_matches(query_word: str, candidate_word: str) -> bool:
 
 
 def search_term_matches_field(term: str, field: str) -> bool:
-    normalized_term = str(term or "").strip()
-    normalized_field = str(field or "").strip()
+    normalized_term = fold_search_accents(term)
+    normalized_field = fold_search_accents(field)
     if not normalized_term or not normalized_field:
         return False
     if normalized_term in normalized_field:
@@ -463,14 +473,18 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
 
 
 def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:
-    normalized_query = normalize_search_text(query)
-    candidates = {normalize_search_text(canonical_artist), *{normalize_search_text(value) for value in aliases if value}}
+    spelling_query = normalize_search_text(query)
+    normalized_query = fold_search_accents(spelling_query)
+    candidates = {normalize_search_text(value) for value in [canonical_artist, *aliases] if value}
     best_rank = (5, 9999, canonical_artist.casefold())
-    for candidate in candidates:
+    for spelling_candidate in candidates:
+        candidate = fold_search_accents(spelling_candidate)
         if not candidate:
             continue
-        if candidate == normalized_query:
-            rank = (0, 0, candidate)
+        if spelling_candidate == spelling_query:
+            rank = (0, 0, spelling_candidate)
+        elif candidate == normalized_query:
+            rank = (0, 1, spelling_candidate)
         elif candidate.startswith(normalized_query):
             rank = (1, len(candidate) - len(normalized_query), candidate)
         elif f" {normalized_query}" in candidate or candidate.endswith(normalized_query):

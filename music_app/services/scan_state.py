@@ -453,6 +453,9 @@ def refresh_library_state(
                 expected_inventory_mutation_revision
             )
         refresh_relation_views(**relation_refresh_options)
+        local_cover_inventory = cfg.get("_LOCAL_COVER_INVENTORY")
+        if local_cover_inventory is not None:
+            local_cover_inventory.rescan()
         finish_scan_stage(library_state, "relations")
         library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:

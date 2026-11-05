@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Collection, Mapping
+from itertools import chain
 from pathlib import Path
 
-from music_app.services.cover_workflow import is_disc_like_folder, resolve_album_root_from_track_paths
+from music_app.services.cover_workflow import (
+    _is_explicit_release_part_layout,
+    resolve_album_root_from_track_paths,
+)
 from music_app.services.library_roots import configured_library_root_paths_snapshot
 from music_app.services.metadata import read_editable_tag_values
 
@@ -35,6 +39,7 @@ def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:
     )
 
 
+_LEADING_DISC_FOLDER = re.compile(r"^\s*(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?![0-9])", re.IGNORECASE)
 _DISC_NUMBER = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
 
 
@@ -84,13 +89,34 @@ def load_tag_editor_folder_files(
         else None
     )
     folder = resolved_album_root or source.parent
-    recursive = resolved_album_root is not None
-    # A disc folder (CD1, Disc 2, ...) loads the whole album folder, every disc included.
+    entries = folder.rglob("*") if resolved_album_root is not None else folder.iterdir()
+    release_root = folder.parent
     resolved_roots = {root.resolve(strict=False) for root in roots}
-    if is_disc_like_folder(folder) and folder.parent not in resolved_roots and _is_within_any_root(folder.parent, roots):
-        folder = folder.parent
-        recursive = True
-    entries = folder.rglob("*") if recursive else folder.iterdir()
+    if (
+        _is_explicit_release_part_layout(release_root, [folder])
+        and _is_within_any_root(release_root, roots)
+        and release_root not in resolved_roots
+    ):
+        children = list(release_root.iterdir())
+        discs = {child.resolve(strict=True) for child in children if child.is_dir()
+                 and _is_explicit_release_part_layout(release_root, [child])
+                 and _is_explicit_release_part_layout(release_root, [child.resolve(strict=True)])}
+        if len(discs) > 1 and folder in discs:
+            folder = release_root
+            # The explicit folder action may add sibling discs; artwork stays
+            # scoped to represented tracks. Do not traverse other release folders.
+            entries = chain((child for child in children if child.is_file()),
+                            *(disc.rglob("*") for disc in discs))
+    # REC-005: a folder named as a disc (CD1, Disc 2, "CD2 - Bonus", ...) loads its whole album folder.
+    # An album folder that only ends with a disc marker ("First Album CD1") stays a release of its own.
+    if (
+        folder.parent == release_root
+        and _LEADING_DISC_FOLDER.match(folder.name)
+        and release_root not in resolved_roots
+        and _is_within_any_root(release_root, roots)
+    ):
+        folder = release_root
+        entries = folder.rglob("*")
     candidates = sorted(
         (
             candidate

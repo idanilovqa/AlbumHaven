@@ -289,12 +289,13 @@ export class TrackModalActions {
   }
 
   async waitForInteractiveSummary(options = {}) {
-    // A library change reloads open details and briefly hides their rows, so wait it out.
     let summary;
     await expect.poll(async () => {
-      await this.waitForReady(options);
-      summary = await this.readSummary();
-      return summary.trackRows > 0 && summary.playButtons > 0;
+      const snapshot = await this.trackModal.readExactAlbumDetailsSnapshot({ includeSummary: true });
+      summary = snapshot.summary;
+      return snapshot.visible && !snapshot.loading
+        && summary.trackRows > 0 && summary.playButtons > 0 && Boolean(summary.title)
+        && (!options.expectedTitle || summary.title === options.expectedTitle);
     }, { timeout: options.timeout || 60000 }).toBe(true);
     expect(summary.trackRows).toBeGreaterThan(0);
     expect(summary.playButtons).toBeGreaterThan(0);

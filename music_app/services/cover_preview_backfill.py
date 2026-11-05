@@ -8,7 +8,6 @@ from typing import Callable, Mapping
 
 from music_app.services.covers import (
     display_cover_variant_cache_root,
-    display_cover_variant_cache_roots,
     find_existing_cover_display_variant,
     resolve_cover_display_variant,
 )
@@ -97,23 +96,6 @@ class CoverPreviewBackfill:
         for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
-            data_dir = self._data_dir if cover_revision else None
-            storage_policy = self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
-            # Like the cover route, reuse a preview from any readable root. During a
-            # relocation the write root is the destination; regenerating there would
-            # repoint the inventory and strand the source copy outside the move.
-            if any(
-                find_existing_cover_display_variant(
-                    source_path,
-                    cache_root=cache_root,
-                    max_size=_DISPLAY_COVER_SIZE,
-                    revision=cover_revision,
-                )
-                for cache_root in display_cover_variant_cache_roots(
-                    source_path, data_dir=data_dir, storage_policy=storage_policy
-                )
-            ):
-                continue
             generation_options = {}
             recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
             if recorder is not None:
@@ -121,7 +103,11 @@ class CoverPreviewBackfill:
             self._generate(
                 source_path,
                 cache_root=display_cover_variant_cache_root(
-                    source_path, data_dir=data_dir, storage_policy=storage_policy
+                    source_path,
+                    data_dir=self._data_dir if cover_revision else None,
+                    storage_policy=self._config.get(
+                        "_GENERATED_PREVIEW_STORAGE_POLICY"
+                    ),
                 ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",

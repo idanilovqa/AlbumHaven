@@ -286,7 +286,7 @@ function decryptForRecipient(blob, recipientPrivateKeyBase64) {
   try {
     return Buffer.concat([decipher.update(blob.subarray(headerLength, blob.length - 16)), decipher.final()]);
   } catch {
-    return fail('Encrypted APK is not for this key or was altered');
+    throw new Error('Encrypted APK is not for this key or was altered');
   }
 }
 

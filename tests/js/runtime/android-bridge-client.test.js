@@ -84,6 +84,40 @@ test('connection is negotiated once per document', async () => {
   assert.equal(bridge.sent.length, 1);
 });
 
+test('a failed handshake is asked again instead of leaving the document silent', async () => {
+  let attempts = 0;
+  const bridge = fakeBridge(() => (++attempts === 1
+    ? { ok: false, error: { code: 'timeout', message: 'Android bridge timed out.' } } : handshakePayload));
+  const { api } = loadRuntime({ bridge });
+  assert.equal(await api.connectAndroidBridge(), null);
+  assert.equal(api.isAndroidPlaybackUnavailable(), true);
+  assert.equal((await api.connectAndroidBridge()).variant, 'sandbox');
+  assert.equal(bridge.sent.length, 2);
+  assert.equal(api.isAndroidPlaybackUnavailable(), false);
+  await api.connectAndroidBridge();
+  assert.equal(bridge.sent.length, 2, 'a negotiated connection is kept');
+});
+
+test('a shell that refuses the site is not asked again', async () => {
+  const bridge = fakeBridge(() => ({ ok: false, error: { code: 'update_required', message: 'Missing capability' } }));
+  const { api } = loadRuntime({ bridge });
+  assert.equal(await api.connectAndroidBridge(), null);
+  assert.equal(await api.connectAndroidBridge(), null);
+  assert.equal(bridge.sent.length, 1);
+});
+
+test('only the object the shell injects counts as the Android bridge', () => {
+  // Named access exposes an element, or a frame's window, under the same global name.
+  const frame = { postMessage() {} };
+  frame.window = frame;
+  for (const named of [frame, { tagName: 'IMG' }, { length: 2, item() {} }]) {
+    const { api } = loadRuntime({ bridge: named });
+    assert.equal(api.isAndroidShell(), false);
+    assert.equal(api.isAndroidPlaybackUnavailable(), false);
+  }
+  assert.equal(loadRuntime({ bridge: fakeBridge(() => null) }).api.isAndroidShell(), true);
+});
+
 test('playback stays unavailable before and after a handshake without an audio capability', async () => {
   const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['sandbox.select.v1'] }));
   const { api } = loadRuntime({ bridge });
@@ -132,14 +166,22 @@ test('stable card shows the version with no selector or native update action', (
   assert.doesNotMatch(html, /Sandbox server|Check for updates/);
 });
 
-test('sandbox card shows the approved selector and notice without ownership wording', () => {
-  const { api } = loadRuntime();
-  const html = api.buildAndroidSettingsHtml(handshakePayload);
+test('sandbox card shows the approved selector and notice without ownership wording', async () => {
+  const { api } = loadRuntime({ bridge: fakeBridge(() => handshakePayload) });
+  const html = api.buildAndroidSettingsHtml(await api.connectAndroidBridge());
   assert.match(html, /S · Sandbox/);
   assert.match(html, /Sandbox server/);
   assert.match(html, /https:\/\/sandbox2\.albumhaven\.org/);
   assert.match(html, /Changing sandbox stops playback, clears the current queue, and loads the selected server\./);
   assert.doesNotMatch(html, /ownership/i);
+});
+
+test('a sandbox shell without sandbox.select.v1 shows no server selector', async () => {
+  const capabilities = handshakePayload.capabilities.filter(name => name !== 'sandbox.select.v1');
+  const { api } = loadRuntime({ bridge: fakeBridge(() => ({ ...handshakePayload, capabilities })) });
+  const html = api.buildAndroidSettingsHtml(await api.connectAndroidBridge());
+  assert.match(html, /S · Sandbox/);
+  assert.doesNotMatch(html, /Sandbox server|data-android-sandbox-trigger/);
 });
 
 test('failed sandbox switch keeps the current server and explains it', async () => {

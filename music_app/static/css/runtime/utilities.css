@@ -2110,6 +2110,4 @@
 .android-settings .android-settings__channel { flex: none; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); }
 .android-settings .android-settings__channel.is-sandbox { border-color: var(--appearance-warning, #e0aa50); color: var(--appearance-warning, #e0aa50); }
 .android-settings__sandbox { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
-.android-settings .android-settings__selector { width: 100%; min-height: 48px; justify-content: space-between; padding-inline: 12px; }
-.android-settings__selector .ui-button__content { flex: 1; justify-content: flex-start; }
-.android-settings__selector svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+.android-settings__sandbox > .ui-button { justify-self: start; }

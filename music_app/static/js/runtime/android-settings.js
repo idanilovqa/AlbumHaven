@@ -5,6 +5,7 @@ const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
 }));
 
 const ANDROID_UPDATES_CAPABILITY = 'updates.manual.v1';
+const ANDROID_SANDBOX_CAPABILITY = 'sandbox.select.v1';
 
 // `update` is the shell's latest `updates.state` payload; null until the handshake reports one.
 const androidSettings = { status: null, switching: false, update: null };
@@ -33,6 +34,11 @@ const ANDROID_UPDATE_ACCESS_MESSAGES = {
   device_unsupported: 'This device can’t verify this app for updates.',
 };
 
+// Shell codes name only the tables' own entries, never inherited ones such as `constructor`.
+function ownAndroidEntry(table, code) {
+  return Object.hasOwn(table, code) ? table[code] : null;
+}
+
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
 }
@@ -57,9 +63,9 @@ function androidUpdateView(info, update) {
     case 'failed': {
       const failure = update.reason === 'unsupported_android'
         ? ['Update check failed.', 'This update needs a newer version of Android.', 'Retry', 'check']
-        : ANDROID_UPDATE_FAILURES[update.error] || ANDROID_UPDATE_FAILURES.check_failed;
+        : ownAndroidEntry(ANDROID_UPDATE_FAILURES, update.error) || ANDROID_UPDATE_FAILURES.check_failed;
       const [title, message, label, action] = failure;
-      return ['error', title, ANDROID_UPDATE_ACCESS_MESSAGES[update.reason] || message, label, action];
+      return ['error', title, ownAndroidEntry(ANDROID_UPDATE_ACCESS_MESSAGES, update.reason) || message, label, action];
     }
     default: return ['info', 'Android app', checked ? `${version} · Last checked ${checked}` : version, 'Check for updates', 'check'];
   }
@@ -75,14 +81,34 @@ function buildAndroidUpdateHtml(info) {
   });
   return buildOnPageAlertHtml({
     severity, title, message, actionsHtml, role: 'status',
-    progress: progress === undefined ? null : { value: progress, label: `Download progress: ${progress}%` },
+    progress: progress === undefined ? null : { value: progress, label: androidDownloadProgressLabel(progress) },
   });
 }
 
-// Progress arrives every half second, so only the update alert is replaced, keeping focus on its button.
+function androidDownloadProgressLabel(progress) {
+  return `Download progress: ${progress}%`;
+}
+
+// Progress arrives every half second. A running download changes only its bar and title in place,
+// with the status region busy, so screen readers are not handed every tick.
+function updateAndroidDownloadProgress(holder) {
+  const bar = holder.querySelector('progress');
+  if (androidSettings.update.state !== 'downloading' || !bar) return false;
+  const [, title, , , , progress] = androidUpdateView(androidBridge.info, androidSettings.update);
+  const label = androidDownloadProgressLabel(progress);
+  bar.value = progress;
+  bar.setAttribute('aria-label', label);
+  holder.querySelector('.on-page-alert__progress').firstChild.nodeValue = label;
+  holder.querySelector('.on-page-alert__title').textContent = title;
+  holder.querySelector('[role="status"]').setAttribute('aria-busy', 'true');
+  return true;
+}
+
+// Only the update alert is replaced, keeping focus on its button.
 function renderAndroidUpdate() {
   const holder = document.querySelector('[data-android-update]');
   if (!holder || !androidBridge.info) return;
+  if (updateAndroidDownloadProgress(holder)) return;
   const focused = holder.contains(document.activeElement);
   holder.innerHTML = buildAndroidUpdateHtml(androidBridge.info);
   if (focused) holder.querySelector('button')?.focus();
@@ -104,10 +130,15 @@ async function requestAndroidUpdate(action) {
   }
 }
 
+function androidSelectsSandbox(info) {
+  return Boolean(info?.sandbox) && hasAndroidCapability(ANDROID_SANDBOX_CAPABILITY);
+}
+
 function buildAndroidSandboxHtml(info) {
   const label = `sandbox${info.sandbox.slot}`;
+  // The shared dropdown trigger, as Library settings' path choices use it.
   const trigger = window.ButtonComponent.renderButton({
-    label, className: 'android-settings__selector', disabled: androidSettings.switching,
+    label, disabled: androidSettings.switching,
     attributes: {
       'data-android-sandbox-trigger': '', 'aria-labelledby': 'android-sandbox-label',
       'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-describedby': 'android-sandbox-origin',
@@ -140,7 +171,7 @@ function buildAndroidSettingsHtml(info) {
       <span class="android-settings__channel${sandbox ? ' is-sandbox' : ''}">${sandbox ? 'S · Sandbox' : 'Stable'}</span>
     </div>
     <div data-android-update>${buildAndroidUpdateHtml(info)}</div>
-    ${sandbox && info.sandbox ? buildAndroidSandboxHtml(info) : ''}
+    ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}
   </div>`;
 }
 
@@ -150,7 +181,7 @@ function renderUtilityAndroid() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
   const info = androidBridge.info;
   const rows = [{ key: 'updates', label: 'App & updates' }];
-  if (info?.sandbox) rows.push({ key: 'sandbox', label: 'Sandbox server' });
+  if (androidSelectsSandbox(info)) rows.push({ key: 'sandbox', label: 'Sandbox server' });
   els.count.textContent = String(rows.length);
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -163,8 +194,6 @@ function renderUtilityAndroid() {
     attributes: { 'data-utility-android-key': row.key },
   })).join('');
   els.detail.innerHTML = buildAndroidSettingsHtml(info);
-  const trigger = els.detail.querySelector('[data-android-sandbox-trigger]');
-  trigger?.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>');
 }
 
 async function selectAndroidSandbox(slot) {

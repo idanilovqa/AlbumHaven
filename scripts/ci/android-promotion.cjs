@@ -1,6 +1,7 @@
 // Shared logic for .github/workflows/android-promote.yml: verifies a commit's complete pipeline
-// and stable release, allocates the channel's next version code, and turns the signed APK into
-// an Update Manifest v1 plus an APK encrypted to the deployment synchronizer's key.
+// and stable release, allocates the channel's next version code, carries the unsigned APK to the
+// signing job encrypted to the signing environment's key, and turns the signed APK into an Update
+// Manifest v1 plus an APK encrypted to the deployment synchronizer's key.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,6 +34,7 @@ const APK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.apk$/;
 const ENCRYPTION_MAGIC = Buffer.from('AHAPKv1\n', 'ascii');
 const ENCRYPTION_INFO = Buffer.from('album-haven-android-apk-v1', 'ascii');
 const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
+const X25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
 
 function fail(message) {
   throw new Error(message);
@@ -226,28 +228,74 @@ function sha256Hex(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
-function x25519PublicKey(base64) {
-  const raw = Buffer.from(String(base64 || '').trim(), 'base64');
-  if (raw.length !== 32 || raw.toString('base64') !== String(base64).trim()) {
-    fail('Recipient public key must be 32 bytes of base64');
-  }
-  return { raw, key: crypto.createPublicKey({ key: Buffer.concat([X25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' }) };
+/** 32 raw key bytes from their canonical base64, as repository variables and secrets hold them. */
+function rawX25519Key(base64, role) {
+  const text = String(base64 || '').trim();
+  const raw = Buffer.from(text, 'base64');
+  if (raw.length !== 32 || raw.toString('base64') !== text) fail(`Recipient ${role} key must be 32 bytes of base64`);
+  return raw;
 }
 
-/** Encrypts to the synchronizer's X25519 key; only its private key can recover the APK. */
+function x25519PublicKey(raw) {
+  return crypto.createPublicKey({ key: Buffer.concat([X25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
+}
+
+function rawPublicKey(keyObject) {
+  return keyObject.export({ format: 'der', type: 'spki' }).subarray(-32);
+}
+
+function apkKey(privateKey, publicKey, ephemeralRaw, recipientRaw) {
+  const shared = crypto.diffieHellman({ privateKey, publicKey });
+  return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.alloc(0),
+    Buffer.concat([ENCRYPTION_INFO, ephemeralRaw, recipientRaw]), 32));
+}
+
+/**
+ * Encrypts to an X25519 recipient key; only its private key can recover the APK. The build job
+ * encrypts the unsigned APK to the signing environment's key, the sign job the signed APK to the
+ * deployment synchronizer's.
+ */
 function encryptForRecipient(plaintext, recipientPublicKeyBase64) {
-  const recipient = x25519PublicKey(recipientPublicKeyBase64);
+  const recipientRaw = rawX25519Key(recipientPublicKeyBase64, 'public');
   const ephemeral = crypto.generateKeyPairSync('x25519');
-  const ephemeralRaw = ephemeral.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
-  const shared = crypto.diffieHellman({ privateKey: ephemeral.privateKey, publicKey: recipient.key });
-  const key = Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.alloc(0),
-    Buffer.concat([ENCRYPTION_INFO, ephemeralRaw, recipient.raw]), 32));
+  const ephemeralRaw = rawPublicKey(ephemeral.publicKey);
+  const key = apkKey(ephemeral.privateKey, x25519PublicKey(recipientRaw), ephemeralRaw, recipientRaw);
   const nonce = crypto.randomBytes(12);
   const header = Buffer.concat([ENCRYPTION_MAGIC, ephemeralRaw, nonce]);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   cipher.setAAD(header);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return Buffer.concat([header, ciphertext, cipher.getAuthTag()]);
+}
+
+/** Recovers what [encryptForRecipient] encrypted to this private key; anything else fails. */
+function decryptForRecipient(blob, recipientPrivateKeyBase64) {
+  const privateKey = crypto.createPrivateKey({
+    key: Buffer.concat([X25519_PKCS8_PREFIX, rawX25519Key(recipientPrivateKeyBase64, 'private')]), format: 'der', type: 'pkcs8',
+  });
+  const headerLength = ENCRYPTION_MAGIC.length + 32 + 12;
+  if (blob.length < headerLength + 16 || !blob.subarray(0, ENCRYPTION_MAGIC.length).equals(ENCRYPTION_MAGIC)) {
+    fail('Not an encrypted Album Haven APK');
+  }
+  const ephemeralRaw = blob.subarray(ENCRYPTION_MAGIC.length, ENCRYPTION_MAGIC.length + 32);
+  const header = blob.subarray(0, headerLength);
+  const key = apkKey(privateKey, x25519PublicKey(ephemeralRaw), ephemeralRaw, rawPublicKey(crypto.createPublicKey(privateKey)));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, header.subarray(-12));
+  decipher.setAAD(header);
+  decipher.setAuthTag(blob.subarray(blob.length - 16));
+  try {
+    return Buffer.concat([decipher.update(blob.subarray(headerLength, blob.length - 16)), decipher.final()]);
+  } catch {
+    throw new Error('Encrypted APK is not for this key or was altered');
+  }
+}
+
+/** A new recipient key pair: the private key goes to [privateKeyPath] only, never to the output. */
+function generateRecipientKey(privateKeyPath) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('x25519');
+  const raw = privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32);
+  fs.writeFileSync(privateKeyPath, `${raw.toString('base64')}\n`, { flag: 'wx', mode: 0o600 });
+  return rawPublicKey(publicKey).toString('base64');
 }
 
 /**
@@ -310,7 +358,23 @@ function cli(argv = process.argv.slice(2), env = process.env) {
     const match = /^--([a-z-]+)=(.*)$/.exec(arg);
     return match ? [match[1], match[2]] : fail(`Unexpected argument: ${arg}`);
   }));
-  if (command !== 'finalize') fail('Usage: android-promotion.cjs finalize --plan=FILE --apk=FILE --badging=FILE --certs=FILE --out=DIR');
+  if (command === 'encrypt') {
+    fs.writeFileSync(options.out, encryptForRecipient(fs.readFileSync(options.in), env.ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY));
+    return;
+  }
+  if (command === 'decrypt') {
+    fs.writeFileSync(options.out, decryptForRecipient(fs.readFileSync(options.in), env.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY),
+      { mode: 0o600 });
+    return;
+  }
+  if (command === 'keygen') {
+    process.stdout.write(`${generateRecipientKey(options['private-key'])}\n`);
+    return;
+  }
+  if (command !== 'finalize') {
+    fail('Usage: android-promotion.cjs finalize --plan=FILE --apk=FILE --badging=FILE --certs=FILE --out=DIR'
+      + ' | encrypt --in=FILE --out=FILE | decrypt --in=FILE --out=FILE | keygen --private-key=FILE');
+  }
   const promotion = finalizePromotion({
     plan: JSON.parse(fs.readFileSync(options.plan, 'utf8')),
     apkBytes: fs.readFileSync(options.apk),
@@ -331,6 +395,9 @@ module.exports = {
   MANIFEST_KEYS,
   apkName,
   checkStableRelease,
+  cli,
+  decryptForRecipient,
+  encryptForRecipient,
   finalizePromotion,
   findCompletePipelineRun,
   nextVersionCode,

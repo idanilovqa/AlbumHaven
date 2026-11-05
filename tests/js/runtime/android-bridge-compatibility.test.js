@@ -19,7 +19,7 @@ const RUNTIME_FILES = ['player-streaming-engine.js', 'android-bridge-client.js',
   'playback-ownership-helpers.js', 'android-settings.js'];
 const AUDIO_CAPABILITIES = ['playback.native.v1', 'playback.webview.v1'];
 
-const tracks = ['Signal A', 'Signal B'].map((title, index) => ({
+const tracks = ['Signal A', 'Signal B', 'Signal C'].map((title, index) => ({
   path: `C:/Music/Android Acceptance/0${index + 1} ${title}.flac`,
   src: `/track?id=${index}`,
   title,
@@ -42,14 +42,35 @@ function stableHandshake(shell, capabilities = shell.capabilities) {
   };
 }
 
+/** The capabilities a shell needs to accept `message`, as BridgeController and PlaybackBridge check them. */
+function capabilitiesFor({ name, payload }) {
+  if (name === 'sandbox.select') return ['sandbox.select.v1'];
+  if (name.startsWith('updates.')) return ['updates.manual.v1'];
+  if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v1'];
+  if (name === 'playback.loadQueue' && (payload.keepCurrent || payload.items.some(item => 'queueGroup' in item))) {
+    return ['playback.native.v1', 'playback.queue.v1'];
+  }
+  if (name.startsWith('playback.')) return ['playback.native.v1'];
+  return [`unknown command ${name}`];
+}
+
 function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeDir, file), 'utf8') }) {
+  let capabilities = [];
   const bridge = {
     sent: [],
+    refused: [],
     postMessage(raw) {
       const message = JSON.parse(raw);
       bridge.sent.push(message);
-      const payload = respond(message) || { ok: true, ...(message.name === 'playback.loadQueue'
-        ? { queueRevision: message.payload.queueRevision } : {}) };
+      const answer = respond(message);
+      if (message.name === 'bridge.handshake') capabilities = answer?.capabilities || [];
+      // A shell refuses every command whose capability it lacks, so the site must never send one.
+      const missing = message.name === 'bridge.handshake' ? []
+        : capabilitiesFor(message).filter(name => !capabilities.includes(name));
+      if (missing.length) bridge.refused.push(`${message.name} without ${missing.join(', ')}`);
+      const payload = answer || (missing.length
+        ? { ok: false, error: { code: 'unsupported_command', message: 'Unsupported command' } }
+        : { ok: true, ...(message.name === 'playback.loadQueue' ? { queueRevision: message.payload.queueRevision } : {}) });
       Promise.resolve(payload).then(answer => bridge.onmessage({
         data: JSON.stringify({ ...message, type: 'response', payload: answer }),
       }));
@@ -119,8 +140,9 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
     isAndroidPlaybackUnavailable, isAndroidUpdateRequired, isAndroidNativePlayback, buildAndroidSettingsHtml,
     initAndroidSettings, protocolRange: [ANDROID_BRIDGE_PROTOCOL_MIN, ANDROID_BRIDGE_PROTOCOL_MAX],
     capabilityUse: ANDROID_BRIDGE_CAPABILITY_USE, start: startStreamingTrack, pause: pauseStreamingPlayback,
-    resume: resumeStreamingPlayback, seek: seekStreamingPlayback, setLoop: setStreamingLoop, stop: stopStreamingPlayback };`, context);
-  return { api: context.api, bridge };
+    resume: resumeStreamingPlayback, seek: seekStreamingPlayback, continuity: scheduleStreamingContinuity,
+    setLoop: setStreamingLoop, stop: stopStreamingPlayback };`, context);
+  return { api: context.api, bridge, context };
 }
 
 const answering = handshake => message => (message.name === 'bridge.handshake' ? handshake : null);
@@ -128,7 +150,8 @@ const commands = (bridge, name) => bridge.sent.filter(message => message.name ==
 
 /** Everything a page does with a shell that can run it: connect, Settings, and playback. */
 async function exerciseSite(handshake) {
-  const { api, bridge } = loadSite({ respond: answering(handshake) });
+  const { api, bridge, context } = loadSite({ respond: answering(handshake) });
+  const has = name => handshake.capabilities.includes(name);
   api.initAndroidSettings();
   const info = await api.connectAndroidBridge();
   assert.equal(api.isAndroidUpdateRequired(), false);
@@ -144,17 +167,27 @@ async function exerciseSite(handshake) {
   assert.equal(await api.androidNativePlaybackRoute(), native);
   if (native) {
     await api.start(tracks[0], { autoplay: true });
+    // The web queue changes under Android: the new successor replaces the queue around the playing item.
+    context.state.player.playbackQueue = { tracks: [tracks[0], tracks[2]], currentIndex: 0 };
+    await api.continuity(tracks[2]);
+    await api.continuity(tracks[0], { kind: 'long-loop', startSeconds: 10, endSeconds: 20 });
+    api.setLoop(false);
     await api.pause();
     await api.resume();
     await api.seek(30);
     await api.stop();
+    await new Promise(setImmediate);
     const [load] = commands(bridge, 'playback.loadQueue');
-    const resumable = handshake.capabilities.includes('playback.resumption.v1');
-    assert.ok(load.payload.items.every(item => ('resumeToken' in item) === resumable));
+    assert.ok(load.payload.items.every(item => ('resumeToken' in item) === has('playback.resumption.v1')));
+    assert.equal(commands(bridge, 'playback.loadQueue').length, has('playback.queue.v1') ? 2 : 1);
+    for (const name of ['playback.setLoop', 'playback.clearLoop']) {
+      assert.equal(commands(bridge, name).length, has('playback.loops.v1') ? 1 : 0, name);
+    }
     for (const name of ['playback.pause', 'playback.play', 'playback.seek', 'playback.stop']) {
       assert.equal(commands(bridge, name).length >= 1, true, name);
     }
   }
+  assert.deepEqual(bridge.refused, []);
   // Every command after the handshake speaks the protocol the shell negotiated.
   assert.ok(bridge.sent.slice(1).every(message => message.protocol === handshake.bridgeProtocol));
   return { api, bridge };
@@ -262,7 +295,7 @@ test('an unreachable shell is a connection failure, not an update requirement', 
 function requiringUpdates(file) {
   const source = fs.readFileSync(path.join(runtimeDir, file), 'utf8');
   return file === 'android-bridge-client.js'
-    ? source.replace("'updates.manual.v1': 'optional'", "'updates.manual.v1': 'required'") : source;
+    ? source.replace('"updates.manual.v1": "optional"', '"updates.manual.v1": "required"') : source;
 }
 
 test('a required capability is named in the handshake and a refusing shell shows update required', async () => {

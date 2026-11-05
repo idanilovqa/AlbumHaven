@@ -24,9 +24,14 @@
   function install(document) {
     const policy = readPolicy(document);
     const allows = (action) => Boolean(policy && policy.actions[action] === true);
-    // The Android tab is client-owned: only the APK's bridge object can reveal it.
+    // The Android tab is client-owned: only the APK's injected bridge object can reveal it, never an
+    // element or frame window that named access exposes under its name (isAndroidShell agrees).
+    const isAndroidShell = () => {
+      const bridge = root.AlbumHavenBridge;
+      return typeof bridge?.postMessage === 'function' && bridge.window !== bridge;
+    };
     const allowsUtilityTab = (tab) => tab === 'android'
-      ? Boolean(root.AlbumHavenBridge)
+      ? isAndroidShell()
       : Boolean(policy && policy.availableTabs.includes(tab));
     const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
       ? preferred : policy?.availableTabs[0] || null;

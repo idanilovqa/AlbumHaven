@@ -14,7 +14,6 @@
 // capability the site only gates on at runtime (`optional`) may ship before its APK, hidden.
 // Promoted entries of the stable shell record must match their android/stable/<code> tags.
 const fs = require('node:fs');
-const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { matchesPattern } = require('./performance-change-impact.cjs');
 const { readBridgeRange } = require('./android-promotion.cjs');
@@ -24,6 +23,7 @@ const STABLE_SHELLS = 'tests/fixtures/android-bridge/stable-shells.json';
 const FIXTURE_DIR = 'tests/fixtures/android-bridge';
 const BRIDGE_CONTROLLER = 'apps/android-shell/app/src/main/java/org/albumhaven/shell/BridgeController.kt';
 const SUPPORTED_SHELLS = Object.freeze(['latest', 'previous']);
+const POLICY_BLOCK = /\/\* android-bridge-policy \*\/([\s\S]*?)\/\* end android-bridge-policy \*\//;
 
 // What the APK is built from or speaks: shell and native sources and the shared contract fixtures.
 const NATIVE_CONTRACT_PATTERNS = Object.freeze([
@@ -83,17 +83,24 @@ function showFile(git, commit, filePath) {
   }
 }
 
-/** The bridge policy a version of android-bridge-client.js declares, or null before it declared one. */
+/**
+ * The bridge policy a version of android-bridge-client.js declares: the JSON between its policy
+ * markers, read as data so the rest of the file never runs here. Null when it declares none.
+ */
 function readSitePolicy(source) {
-  if (source === null) return null;
-  const context = vm.createContext({});
-  vm.runInContext(source, context, { filename: BRIDGE_CLIENT, timeout: 1000 });
-  const read = (name) => vm.runInContext(`typeof ${name} === 'undefined' ? undefined : ${name}`, context);
-  const min = read('ANDROID_BRIDGE_PROTOCOL_MIN');
-  const max = read('ANDROID_BRIDGE_PROTOCOL_MAX');
-  const use = read('ANDROID_BRIDGE_CAPABILITY_USE');
-  if (min === undefined || max === undefined || use === undefined) return null;
-  return { min, max, use: { ...use } };
+  const block = POLICY_BLOCK.exec(source ?? '');
+  if (!block) return null;
+  let policy;
+  try {
+    policy = JSON.parse(block[1]);
+  } catch {
+    return null;
+  }
+  const { protocolMin: min, protocolMax: max, capabilities: use } = policy ?? {};
+  const valid = Number.isInteger(min) && Number.isInteger(max) && min >= 1 && min <= max
+    && use && typeof use === 'object' && !Array.isArray(use)
+    && Object.values(use).every((value) => value === 'optional' || value === 'required');
+  return valid ? { min, max, use: { ...use } } : null;
 }
 
 function readStableShells(text) {
@@ -210,9 +217,12 @@ function checkRecordAgainstTags(git, record) {
     }
     const fixture = showFile(git, commit, `${FIXTURE_DIR}/${shell.fixture}`);
     const controller = showFile(git, commit, BRIDGE_CONTROLLER);
-    const promoted = fixture && JSON.parse(fixture).capabilities?.stable;
+    let promoted = null;
+    try {
+      promoted = fixture && JSON.parse(fixture).capabilities?.stable;
+    } catch { /* reported below */ }
     const range = controller && readBridgeRange(controller);
-    if (!promoted || [...promoted].sort().join() !== [...shell.capabilities].sort().join()) {
+    if (!Array.isArray(promoted) || [...promoted].sort().join() !== [...shell.capabilities].sort().join()) {
       errors.push(`The ${role} stable shell record's capabilities differ from ${tag}'s ${FIXTURE_DIR}/${shell.fixture}`);
     }
     if (!range || range.min !== shell.bridgeProtocolMin || range.max !== shell.bridgeProtocolMax) {
@@ -274,7 +284,6 @@ function cli(argv = process.argv.slice(2), env = process.env) {
   if (!base) throw new Error('Usage: android-release-compatibility.cjs --base=<commit> [--head=<commit>]');
   const result = evaluate({ base, head });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, `release_class=${result.releaseClass}\n`);
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, summaryMarkdown(result));
   if (result.errors.length) {
     for (const error of result.errors) process.stderr.write(`::error::${error}\n`);

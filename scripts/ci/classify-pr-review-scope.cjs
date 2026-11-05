@@ -54,18 +54,41 @@ function isDocumentationPath(filePath) {
 
 // The Android shell, its future native modules, and the contract fixtures its Kotlin tests share
 // with the browser. Markdown there is documentation and never needs a Gradle or emulator run.
+// android-promote builds and signs installable APKs with the toolchain the Android jobs verify.
 const ANDROID_PATH_PATTERNS = Object.freeze([
   'apps/android-shell/**',
   'packages/native/**',
   'tests/fixtures/android-bridge/**',
   'tests/fixtures/listen-sessions-v1.json',
   'tests/fixtures/playback-protocol-v1.json',
+  '.github/workflows/android-promote.yml',
 ]);
+// The Android job definitions live in this workflow beside every other job; editing them runs them.
+const PIPELINE_WORKFLOW = '.github/workflows/pr-gates.yml';
+const ANDROID_JOBS = Object.freeze(['test_android', 'test_android_instrumentation']);
 
 function isAndroidPath(filePath) {
   const normalized = normalizePath(filePath);
   return !normalized.toLowerCase().endsWith('.md')
     && ANDROID_PATH_PATTERNS.some((pattern) => matchesPattern(normalized, pattern));
+}
+
+/** Whether a zero-context diff of the pipeline workflow changes a line of an Android job definition. */
+function changesAndroidJobs(workflowDiff, headWorkflow) {
+  const lines = String(headWorkflow || '').split(/\r?\n/);
+  const jobStarts = lines.flatMap((line, index) => {
+    const job = /^ {2}([a-z0-9_]+):\s*$/.exec(line);
+    return job ? [{ name: job[1], line: index + 1 }] : [];
+  });
+  // 1-based head-side line ranges, from each Android job's key to the line before the next job.
+  const ranges = jobStarts.flatMap((job, index) => (ANDROID_JOBS.includes(job.name)
+    ? [{ first: job.line, last: (jobStarts[index + 1]?.line ?? lines.length + 1) - 1 }] : []));
+  return [...String(workflowDiff || '').matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].some((hunk) => {
+    const first = Number(hunk[1]);
+    // A pure deletion names the head line before it, which belongs to the job it was cut from.
+    const last = hunk[2] === '0' ? first : first + Number(hunk[2] ?? 1) - 1;
+    return ranges.some((range) => first <= range.last && last >= range.first);
+  });
 }
 
 function parseNumstat(numstat) {
@@ -350,7 +373,11 @@ function runCli(env = process.env) {
   const wholePrPaths = diffBase === mergeBase
     ? changedPaths
     : parseNumstat(changedNumstat(mergeBase)).map(({ path: changedPath }) => changedPath);
-  const runAndroid = pipeline.pipelineMode === 'full' && wholePrPaths.some(isAndroidPath);
+  const runAndroid = pipeline.pipelineMode === 'full' && (wholePrPaths.some(isAndroidPath)
+    || (wholePrPaths.includes(PIPELINE_WORKFLOW) && changesAndroidJobs(
+      execFileSync('git', ['diff', '--unified=0', '--no-renames', mergeBase, headSha, '--', PIPELINE_WORKFLOW], { encoding: 'utf8' }),
+      execFileSync('git', ['show', `${headSha}:${PIPELINE_WORKFLOW}`], { encoding: 'utf8' }),
+    )));
   const performanceChangeImpact = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', '..', 'tests', 'ci', 'performance-change-impact.json'),
     'utf8',
@@ -439,6 +466,7 @@ module.exports = {
   classifyPipelineLabels,
   applyPipelineSkips,
   parseFocusedE2eRequest,
+  changesAndroidJobs,
   isAndroidPath,
   isDocumentationPath,
   parseNumstat,

@@ -540,3 +540,75 @@ test('an ownership read inside the APK waits for the handshake that names the na
   await vm.runInContext('handlePlaybackOwnershipEvent()', context);
   assert.deepEqual(urls, [`/playback/state?client_id=${handshakePayload.playback.clientId}`]);
 });
+
+test('a playback claim inside the APK waits for the handshake that names the native player', async () => {
+  const { context } = createHarness({ listen: true });
+  const urls = [];
+  context.AbortController = AbortController;
+  context.fetch = async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ is_playing_elsewhere: false }) };
+  };
+  const claim = `claimPlaybackOwnership(${JSON.stringify(tracks[0])}, { showBlockedToast: false })`;
+  assert.equal(await vm.runInContext(claim, context), true);
+  assert.notEqual(vm.runInContext('getPlaybackOwnershipState().lockStatus', context), 'locked');
+  assert.deepEqual(urls, [], 'Android claims for itself; the web never asks');
+});
+
+test('events the stopped queue still emits never revive playback or ownership', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+  await api.stop('stopped');
+  // Android releases its claim with the stop.
+  assert.equal(api.native.ownership, 'none');
+
+  bridge.event('playback.state', state(1, 'playing', 2000));
+  bridge.event('playback.ownership', { ...state(1, 'playing'), ownership: 'owned' });
+  assert.equal(api.snapshot().paused, true);
+  assert.equal(api.snapshot().mode, 'stopped');
+  assert.equal(api.snapshot().currentTime, 0);
+  assert.equal(api.native.ownership, 'none');
+  assert.equal(api.snapshot().diagnostics.queueRevision, 0);
+});
+
+test('a start whose references or queue load fail leaves Android no owner intent', async () => {
+  const refused = createHarness({ refs: () => ({ protocol: 1, tracks: [] }) });
+  await assert.rejects(refused.api.start(tracks[0]), /Playback references are unavailable/);
+  assert.equal(refused.api.native.ownerIntent, false);
+
+  const rejected = createHarness({
+    respond: message => (message.name === 'playback.loadQueue'
+      ? { ok: false, error: { code: 'invalid_queue', message: 'Refused' } } : null),
+  });
+  await assert.rejects(rejected.api.start(tracks[0]), /Refused/);
+  assert.equal(rejected.api.native.ownerIntent, false);
+});
+
+test('a refused resume leaves Android no owner intent', async () => {
+  const { api, bridge } = createHarness({
+    respond: message => (message.name === 'playback.play'
+      ? { ok: false, error: { code: 'invalid_state', message: 'Refused' } } : null),
+  });
+  await api.start(tracks[0], { autoplay: false });
+  bridge.event('playback.state', state(1, 'paused'));
+  await assert.rejects(api.resume(), /Refused/);
+  assert.equal(api.native.ownerIntent, false);
+});
+
+test('a reference that expires again after a recovered one is refreshed again', async () => {
+  const { api, bridge, fetches } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.referenceExpired', state(1, 'error', 0, 0));
+  await settle();
+  assert.equal(fetches.length, 2);
+  bridge.event('playback.state', state(2, 'playing', 5000));
+
+  bridge.event('playback.referenceExpired', state(2, 'error', 0, 0));
+  await settle();
+  assert.equal(fetches.length, 3);
+  assert.equal(api.snapshot().mode, 'starting');
+  // A refreshed reference that expires before it plays is a real failure.
+  bridge.event('playback.referenceExpired', state(3, 'error', 0, 0));
+  assert.equal(api.snapshot().mode, 'error');
+});

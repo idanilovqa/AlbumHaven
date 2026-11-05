@@ -51,6 +51,20 @@ test('denied dynamic controls reject activation without interfering with permitt
   assert.equal(stopped, 1);
 });
 
+test('only the object the Android shell injects reveals the Android tab', (t) => {
+  t.after(() => { delete globalThis.AlbumHavenBridge; });
+  const payload = { allowed_actions: {}, available_tabs: ['appearance'], denied_selectors: [], denied_tabs: [] };
+  // Named access exposes an element, or a frame's window, under the same global name.
+  const frame = { postMessage() {} };
+  frame.window = frame;
+  for (const named of [undefined, frame, { tagName: 'IFRAME' }]) {
+    globalThis.AlbumHavenBridge = named;
+    assert.equal(install(documentFor(payload)).allowsUtilityTab('android'), false);
+  }
+  globalThis.AlbumHavenBridge = { postMessage() {} };
+  assert.equal(install(documentFor(payload)).allowsUtilityTab('android'), true);
+});
+
 test('full-access desktop installs no click interception', () => {
   const document = documentFor({ allowed_actions: { 'library.media.read': true }, denied_selectors: [], denied_tabs: [] });
   install(document);

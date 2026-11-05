@@ -74,25 +74,23 @@ class ListenSessionsParityTest {
             jitter = { fixture.getDouble("retryJitter") },
             scrobblingUnavailable = { scrobbling == false },
         )
-        fun select(key: String) {
+        // As the controller does: the item it names becomes the playing one, then listen glue follows.
+        fun play(key: String): ListenTrack {
             val (item, seconds) = track(key)
             playing = item
             duration = seconds
-            sessions.measureItem(item)
+            return item
         }
         val steps = scenario.getJSONArray("steps")
         for (index in 0 until steps.length()) {
             val step = steps.getJSONObject(index)
             now = fixture.getLong("startEpochMs") + step.getLong("at")
             when (step.getString("do")) {
-                "select" -> {
-                    val next = track(step.getString("track")).first
-                    val previous = sessions.currentTrack
-                    if (previous != null && previous.listenKey != next.listenKey) {
-                        sessions.trackChange(step.getDouble("position"), step.getDouble("duration"))
-                    }
-                    select(step.getString("track"))
-                }
+                "select" -> sessions.select(
+                    play(step.getString("track")),
+                    step.optDouble("position", 0.0),
+                    step.optDouble("duration", 0.0),
+                )
                 "begin" -> {
                     paused = false
                     sessions.begin(playing!!, step.getDouble("position"))
@@ -107,9 +105,7 @@ class ListenSessionsParityTest {
                 "seek" -> sessions.seek(playing!!, step.getDouble("from"), step.getDouble("to"), !paused)
                 "advance" -> {
                     val outgoing = duration
-                    // As in the controller, the playing item is already the incoming one.
-                    select(step.getString("track"))
-                    sessions.advance(outgoing, outgoing, playing!!)
+                    sessions.advance(outgoing, outgoing, play(step.getString("track")))
                 }
                 "ended" -> {
                     paused = true
@@ -118,9 +114,9 @@ class ListenSessionsParityTest {
                 "lost" -> sessions.ownershipLost(step.getDouble("position"))
                 "refresh" -> {
                     // As the controller applies a reloaded queue: same listen key, fresh reference, then a start.
-                    val refreshed = track(step.getString("track")).first.copy(playbackRef = step.getString("playbackRef"))
+                    val refreshed = play(step.getString("track")).copy(playbackRef = step.getString("playbackRef"))
                     playing = refreshed
-                    sessions.measureItem(refreshed)
+                    sessions.select(refreshed, step.getDouble("position"), duration)
                     sessions.begin(refreshed, step.getDouble("position"))
                 }
                 "unload" -> sessions.unload(step.getDouble("position"), duration)
@@ -134,7 +130,10 @@ class ListenSessionsParityTest {
         return JSONArray(writes)
     }
 
-    /** Writes in order within each listen session, as JSON values with every number a double. */
+    /**
+     * Writes in order within each listen session, as JSON values with every number a double: the
+     * shared fixture holds the browser's writes grouped the same way (`bySession`).
+     */
     private fun canonical(writes: JSONArray): List<Any?> {
         val all = (0 until writes.length()).map { writes.getJSONObject(it) }
         val sessions = all.map { it.getJSONObject("body").getString("session_id") }.distinct()

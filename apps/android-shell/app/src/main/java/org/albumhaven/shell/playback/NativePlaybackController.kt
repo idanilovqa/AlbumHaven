@@ -950,13 +950,10 @@ class NativePlaybackController(
     /** The web's `setCurrentPlayerTrack`: another track ends the listen of the one left. */
     private fun changeListenTrack(outgoing: QueueItem?, outgoingPositionMs: Long) {
         val incoming = queue.getOrNull(index)
-        if (incoming != null && listens.currentTrack?.listenKey != incoming.listenKey) {
-            // An unknown position or duration falls back to the incoming item's, as the web's snapshot does.
-            val positionMs = outgoingPositionMs.takeIf { it > 0 } ?: heldPositionMs
-            val durationMs = outgoing?.durationMs?.takeIf { it > 0 } ?: incoming.durationMs
-            listens.trackChange(positionMs / 1000.0, durationMs / 1000.0)
-        }
-        listens.measureItem(incoming?.listenTrack())
+        // An unknown position or duration falls back to the incoming item's, as the web's snapshot does.
+        val positionMs = outgoingPositionMs.takeIf { it > 0 } ?: heldPositionMs
+        val durationMs = outgoing?.durationMs?.takeIf { it > 0 } ?: incoming?.durationMs ?: 0
+        listens.select(incoming?.listenTrack(), positionMs / 1000.0, durationMs / 1000.0)
     }
 
     /** The web's gapless boundary: the outgoing listen ends complete and the incoming one starts. */
@@ -964,7 +961,6 @@ class NativePlaybackController(
         val incoming = queue[index].listenTrack()
         val durationSeconds = outgoing.durationMs / 1000.0
         listens.advance(if (durationSeconds > 0) durationSeconds else positionMs() / 1000.0, durationSeconds, incoming)
-        listens.measureItem(incoming)
     }
 
     /** Hands the item's frames heard since the last call, and any new underrun, to the current listen. */

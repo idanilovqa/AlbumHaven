@@ -59,10 +59,19 @@ class ListenSessions(
     private var measuredTrack: ListenTrack? = null
     private var measuredSession: Session? = null
 
-    val currentTrack: ListenTrack? get() = current?.track
+    /**
+     * `setCurrentPlayerTrack`: [incoming] becomes the item heard, and another track ends the listen
+     * of the one left at [outgoingPositionSeconds] of [outgoingDurationSeconds].
+     */
+    fun select(incoming: ListenTrack?, outgoingPositionSeconds: Double, outgoingDurationSeconds: Double) {
+        if (incoming != null && current?.track?.listenKey != incoming.listenKey) {
+            trackChange(outgoingPositionSeconds, outgoingDurationSeconds)
+        }
+        measureItem(incoming)
+    }
 
     /** A new item is heard; frames before it belong to the previous one. */
-    fun measureItem(track: ListenTrack?) {
+    private fun measureItem(track: ListenTrack?) {
         measuredTrack = track
         measuredSession = null
     }
@@ -123,13 +132,14 @@ class ListenSessions(
         if (playing) resume(track, toSeconds)
     }
 
-    /** `handleStreamingPlaybackBoundary`: the queued successor took over gaplessly. */
+    /** `handleStreamingPlaybackBoundary`: the queued successor took over gaplessly and is the item heard now. */
     fun advance(outgoingPositionSeconds: Double, outgoingDurationSeconds: Double, incoming: ListenTrack) {
         current?.let { outgoing ->
             current = null
             finalize(outgoing, "ended", outgoingPositionSeconds, outgoingDurationSeconds, finishedFully = true)
         }
         sendNowPlaying(incoming, resume(incoming, 0.0))
+        measureItem(incoming)
     }
 
     /** `handleStreamingPlaybackEnded`. */
@@ -137,8 +147,7 @@ class ListenSessions(
         current?.let { finalize(it, "ended", positionSeconds, durationSeconds, finishedFully = true) }
     }
 
-    /** `setCurrentPlayerTrack` with another track: the listen of the one left ends here. */
-    fun trackChange(positionSeconds: Double, durationSeconds: Double) {
+    private fun trackChange(positionSeconds: Double, durationSeconds: Double) {
         current?.let { finalize(it, "track-change", positionSeconds, durationSeconds, finishedFully = false) }
     }
 

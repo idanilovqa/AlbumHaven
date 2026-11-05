@@ -294,6 +294,40 @@ def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
 
 
+def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    # `<> all(array)` compared every candidate file with every current path.
+    assert "<> all(" not in normalized_sql
+    assert (
+        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
+        "where current_file.private_path = library.local_track_files.private_path )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_identity", [False, True])
+def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_artist_sql(
+        preserve_existing_identity=preserve_existing_identity,
+    ))
+
+    if preserve_existing_identity:
+        assert (
+            "where ( library.local_artists.metadata) is distinct from "
+            "( library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+        assert "sort_name = excluded.sort_name" not in normalized_sql
+    else:
+        assert (
+            "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
+            "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+
+
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 

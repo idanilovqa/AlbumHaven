@@ -7452,6 +7452,10 @@ def _upsert_local_artist_sql(*, preserve_existing_identity: bool = False) -> str
     # A track edit ensures artist references exist; it does not rename or
     # normalize the shared artist record for every other album using it.
     identity_update = "" if preserve_existing_identity else "name = excluded.name, sort_name = excluded.sort_name,"
+    # Unchanged artists are not rewritten: every rewrite fires the gallery and
+    # relation triggers and adds index entries, and a full scan sends them all.
+    identity_columns = "" if preserve_existing_identity else "library.local_artists.name, library.local_artists.sort_name,"
+    incoming_identity = "" if preserve_existing_identity else "excluded.name, excluded.sort_name,"
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7469,7 +7473,9 @@ def _upsert_local_artist_sql(*, preserve_existing_identity: bool = False) -> str
         on conflict (library_id, artist_key) do update
           set {identity_update}
               last_seen_at = now(),
-              metadata = library.local_artists.metadata || excluded.metadata;
+              metadata = library.local_artists.metadata || excluded.metadata
+          where ({identity_columns} library.local_artists.metadata)
+            is distinct from ({incoming_identity} library.local_artists.metadata || excluded.metadata);
     """
 
 
@@ -7877,9 +7883,14 @@ def _mark_stale_track_files_sql() -> str:
             nullif(library.library_roots.metadata ->> 'root_id', ''),
             library.local_track_files.metadata ->> 'library_root_id'
           ) = any(%(observed_root_ids)s::text[])
+          -- A hashed anti-join: comparing each file against the whole path array
+          -- was quadratic for a full library.
           and (
             %(current_path_count)s = 0
-            or library.local_track_files.private_path <> all(%(current_paths)s::text[])
+            or not exists (
+              select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
+              where current_file.private_path = library.local_track_files.private_path
+            )
           );
     """
 

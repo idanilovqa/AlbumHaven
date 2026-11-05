@@ -2391,6 +2391,10 @@ class PostgresScanCacheAdapter:
                 if before_commit is not None:
                     before_commit(connection)
                 record_pending_scan_receipt(connection, pending_baseline, projection_metadata)
+                # A whole-library save prepared before this one must not
+                # overwrite it: advancing the revision supersedes that save,
+                # which then rebases onto this publication and retries.
+                connection.execute(_increment_inventory_mutation_revision_sql())
 
             if seed_missing_album_ratings:
                 if album_rating_seed_guard is None:

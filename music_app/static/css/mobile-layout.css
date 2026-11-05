@@ -197,7 +197,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .utility-modal-body { display: flex; flex-direction: column; min-height: 0; overflow: visible; }
   .is-mobile-page .utility-problem-filter-menu { left: 0; }
   .is-mobile-page .utility-sidebar { width: 100%; min-width: 0; max-height: 170px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .is-mobile-page:is([data-active-tab="appearance"], [data-active-tab="integrations"], [data-active-tab="rules"]) .utility-sidebar { display: none; }
+  .is-mobile-page:is([data-active-tab="appearance"], [data-active-tab="integrations"], [data-active-tab="rules"], [data-active-tab="android"]) .utility-sidebar { display: none; }
   .is-mobile-page .utility-detail { padding: 0 0 16px; width: 100%; min-width: 0; overflow: visible; }
   .is-mobile-page .utility-modal-footer { position: sticky; bottom: 0; z-index: 3; background: var(--appearance-main-surface, var(--bg)); padding: 12px 0; }
   .is-mobile-page :is(.background-editor-columns, .appearance-album-page__workspace, .selection-hover-workspace, .player-style-workspace) { grid-template-columns: minmax(0, 1fr) !important; min-width: 0; }

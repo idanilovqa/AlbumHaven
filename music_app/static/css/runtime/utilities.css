@@ -2100,7 +2100,6 @@
 
 /* Android app settings render only inside the APK's WebView. */
 #utility-modal[data-active-tab="android"] .utility-sidebar-search { display: none; }
-#utility-modal.is-mobile-page[data-active-tab="android"] .utility-sidebar { display: none; }
 .android-settings { display: grid; gap: 16px; padding: 16px; }
 .android-settings__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .android-settings__heading h2,

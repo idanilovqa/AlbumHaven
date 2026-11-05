@@ -971,8 +971,9 @@ class NativePlaybackController(
         closeTransport()
         releaseOutput()
         retired = true
-        dropRetiredWork()
+        // Shutdowns that already waited finish first; one posted since runs at once after them.
         shutdownFinished()
+        dropRetiredWork()
     }
 
     /** One listen write as the owner, once a pending claim settles; [done] runs on the playback thread. */

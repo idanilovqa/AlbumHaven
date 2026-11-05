@@ -3180,6 +3180,33 @@ async function openUtilityModalForTrack(trackPath) {
       await Promise.allSettled([optimisticDetailPromise]);
       if (!ownsNavigation()) return;
     }
+    if (!pendingTasks.length && !getProblematicAlbumForTrackPath(trackPath)) {
+      const directAlbum = await loadProblematicAlbumDetailForTrackPath(trackPath);
+      if (!ownsNavigation()) return;
+      if (directAlbum) {
+        const directKey = String(directAlbum.key || '').trim();
+        state.utility.problematicFiles = [
+          ...(state.utility.problematicFiles || []).filter((item) => String(item?.key || '').trim() !== directKey),
+          { ...directAlbum, detail_loaded: true, detail_load_failed: false },
+        ];
+        state.utility.pinnedProblematicKey = directKey;
+        const completeListPending = state.utility.problematicFilesComplete === false
+          && Boolean(state.utility.completeLoadPromise);
+        state.utility.loaded = true;
+        state.utility.selectedProblematicKey = directKey;
+        state.utility.focusedTrackPath = String(trackPath || '');
+        state.utility.showRepairedDisplay = true;
+        state.utility.deferProblematicAutoSelection = false;
+        state.utility.selectedProblemFilters = [];
+        state.utility.problemDropdownOpen = false;
+        setUtilityActiveTab('problematic-files');
+        openedCanonicalTarget = true;
+        openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+        // Fill in the rest of the list behind the open album.
+        if (!completeListPending) void loadProblematicFiles(true);
+        return;
+      }
+    }
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
       pendingTasks.length > 0

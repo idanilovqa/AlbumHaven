@@ -5023,6 +5023,11 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
+        def build_problematic_file_detail_payload_for_track_path(self, track_path):
+            if track_path == "missing.flac":
+                return None
+            return {"key": "track-album", "focused_path": track_path, "detail_loaded": True}
+
         def build_problematic_file_detail_payload(self, album_key):
             if album_key == "missing":
                 return None
@@ -5088,12 +5093,28 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "GET",
         "/utilities/problematic-files/detail",
     )
+    track_detail_status, _track_detail_headers, track_detail_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"track_path": "D:/Music/Art Zoyd/01.flac"},
+    )
+    missing_track_status, _missing_track_headers, missing_track_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"track_path": "missing.flac"},
+    )
     missing_album_status, _missing_album_headers, missing_album_body = _run_asgi_request(
         asgi_app,
         "GET",
         "/utilities/problematic-files/missing",
     )
 
+    # Album Details opens a track's album without the full list.
+    assert track_detail_status == 200
+    assert _decode_json(track_detail_body)["focused_path"] == "D:/Music/Art Zoyd/01.flac"
+    assert missing_track_status == 404
     assert list_status == 200
     list_payload = _decode_json(list_body)
     assert list_payload == {
@@ -5159,7 +5180,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config, app.config, app.config, app.config, app.config]
+    assert repository_configs == [app.config] * 7
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

@@ -10063,6 +10063,9 @@ def test_postgres_selected_artist_payload_excludes_persisted_non_album_override_
     albums = payload["primary_artist_groups"][0]["albums"]
     assert [track["path"] for track in albums[0]["tracks"]] == [sibling_path]
     assert albums[0]["tracks"][0]["is_problematic"] is True
+    # Album Details shows these on hover without a Problematic Files request.
+    reasons = albums[0]["tracks"][0]["problem_reasons"]
+    assert reasons and all(isinstance(reason, str) and reason for reason in reasons)
     assert payload["album_count"] == 1
     sql = " ".join(_selected_artist_sql().split())
     assert "library.exception_overrides" in sql
@@ -18515,3 +18518,47 @@ def test_relation_alias_query_materializes_one_normalized_snapshot():
     assert sql.count("library.local_relation_views(") == 1
     assert sql.count("relation_snapshot.relation_views ->") == 9
     assert "from relation_snapshot limit 1" in sql
+
+
+def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypatch):
+    """Album Details' Problematic Files icon opened nothing on a large library: it
+    waited for the complete list. The track lookup reads only the track's album."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from music_app.services import library_browse_postgres as browse
+
+    track_path = r"D:\Music\Art Zoyd\Musique pour l'Odyssée\02.flac"
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append(params)
+            return SimpleNamespace(fetchall=lambda: [{"album_key": "art zoyd::musique pour l'odyssée"}])
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _url: Connection(),
+    )
+    loaded_keys = []
+    monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
+    monkeypatch.setattr(
+        repository, "_load_problematic_file_rows",
+        lambda album_key=None, **_kwargs: loaded_keys.append(album_key) or ["rows"],
+    )
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda: {"alias_to_canonical": {}})
+    monkeypatch.setattr(browse, "_problematic_album_projection_payloads", lambda rows: [
+        {"key": "art zoyd::musique pour l'odyssée::year::1979", "tracks": [{"path": "other.flac"}]},
+        {"key": "art zoyd::musique pour l'odyssée", "tracks": [{"path": track_path}]},
+    ])
+    monkeypatch.setattr(browse, "_problematic_album_detail_payload", lambda album: {"key": album["key"]})
+
+    assert repository.build_problematic_file_detail_payload_for_track_path(track_path) == {
+        "key": "art zoyd::musique pour l'odyssée",
+    }
+    assert executed == [{"path": track_path}]
+    assert loaded_keys == ["art zoyd::musique pour l'odyssée"]
+    assert repository.build_problematic_file_detail_payload_for_track_path("  ") is None

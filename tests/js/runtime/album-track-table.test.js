@@ -82,6 +82,22 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
   assert.match(html, /data-cdt-row-key="clean\.flac"[\s\S]*data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
 });
 
+test('AlbumTrackTable names the track problem on the Problematic Files icon', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{
+      discNumber: 1,
+      tracks: [{
+        path: 'problem.flac', title: 'Problem Track', trackNumber: 1, duration: '4:05',
+        isProblematic: true, problemReasons: ['Year mismatch', 'Missing album artist'],
+      }],
+    }],
+  });
+
+  const label = 'Year mismatch, Missing album artist. Open this track in Problematic Files';
+  assert.match(html, new RegExp(`class="track-problem-link"[^>]*title="${label}"[^>]*aria-label="${label}"`));
+});
+
 test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

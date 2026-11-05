@@ -89,13 +89,20 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
+        // A track-opened album stays listed until the complete list can confirm it.
+        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedAlbum = pinnedKey && data.complete === false
+          && !summaryItems.some((item) => item.key === pinnedKey)
+          ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
+          : null;
+        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
           return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
-        });
+        }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
@@ -410,6 +417,24 @@ function validateProblematicSummaryPayload(payload) {
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
   };
+}
+
+// Album Details opens a track's album directly: waiting for the complete list
+// took tens of seconds on a large library whenever the album was off page one.
+async function loadProblematicAlbumDetailForTrackPath(trackPath) {
+  const path = String(trackPath || '').trim();
+  if (!path) return null;
+  try {
+    const response = await fetch(`/utilities/problematic-files/detail?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return validateProblematicDetailPayload(data, String(data?.key || '').trim());
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to load the problematic album for a track.', error);
+    return null;
+  }
 }
 
 function validateProblematicDetailPayload(payload, requestedKey) {

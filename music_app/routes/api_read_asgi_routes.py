@@ -1329,6 +1329,18 @@ def utilities_problematic_files(
 @router.get("/utilities/problematic-files/detail")
 def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
     album_key = str(request.query_params.get("album_key", "") or "")
+    track_path = str(request.query_params.get("track_path", "") or "")
+    if not album_key and track_path and _is_postgres_utility_projection_request(request):
+        payload = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_problematic_file_detail_payload_for_track_path(track_path)
+        if payload is None:
+            return JSONResponse(
+                {"ok": False, "error": "Problematic album not found."},
+                status_code=404,
+            )
+        _project_missing_album_actions_for_request(request, payload)
+        return JSONResponse(payload)
     if not album_key:
         return JSONResponse({"ok": False, "error": "Missing album_key."}, status_code=400)
     if _is_postgres_utility_projection_request(request):

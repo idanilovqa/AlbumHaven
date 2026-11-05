@@ -561,6 +561,7 @@ function loadProblematicTrackNavigationHelpers() {
     },
     async loadProblematicFiles() {},
     async loadProblematicAlbumDetail() {},
+    async loadProblematicAlbumDetailForTrackPath() { return null; },
     getSelectedProblematicAlbum() {
       return context.state.utility.problematicFiles.find(
         (item) => item.key === context.state.utility.selectedProblematicKey,

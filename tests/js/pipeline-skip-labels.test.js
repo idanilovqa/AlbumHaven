@@ -37,6 +37,9 @@ test('review waiver permits complete tests but skipped tests never authorize rel
   for (const name of REQUIRED_JOBS.filter(name => name.startsWith('test_') || name.startsWith('e2e_'))) {
     assert.equal(validateCloudVerificationGate({ ...input, jobResults: { ...jobResults, [name]: 'skipped' } }).conclusion, 'failure');
   }
+  for (const reviewMode of ['full', 'incremental']) {
+    assert.equal(validateCloudVerificationGate({ ...input, reviewMode }).conclusion, 'failure', `run_reviews ${reviewMode} mode requires reviews`);
+  }
 });
 
 test('workflow honors test skips without publishing a false reviewed baseline', () => {
@@ -51,6 +54,8 @@ test('workflow honors test skips without publishing a false reviewed baseline', 
   assert.match(workflow, /skip_tests: \$\{\{ steps\.classify\.outputs\.skip_tests \}\}/);
   const marker = workflow.slice(workflow.indexOf('      - name: Record successfully reviewed head'));
   assert.match(marker.split('uses:')[0], /needs\.review_scope\.outputs\.skip_reviews != 'true'/);
+  assert.match(workflow, /name === 'skip_reviews'\) \? 'skip_reviews' : 'default'/);
+  assert.match(workflow, /skipped by default; add the run_reviews label/);
   assert.match(workflow, /name: pr1-review-waiver-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
 });
 

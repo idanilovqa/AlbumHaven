@@ -801,9 +801,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.27 `
+            -Release fixtures-v1.0.30 `
             -Profile functional-core `
-            -ManifestSha256 1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA
+            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -1003,9 +1003,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & "${{ github.workspace }}\album-haven-trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.27 `
+            -Release fixtures-v1.0.30 `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA
+            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -1109,8 +1109,8 @@ jobs:
             }
             $runnerArguments += @{
               GeneratorCheckout = $generatorCheckout
-              ExpectedFixtureRelease = "fixtures-v1.0.27"
-              BaseManifestSha256 = "1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA"
+              ExpectedFixtureRelease = "fixtures-v1.0.30"
+              BaseManifestSha256 = "0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752"
               GeneratorCommit = "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11"
               VariantCount = 512
               SourceMaxEdge = 960

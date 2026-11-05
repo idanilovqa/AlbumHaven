@@ -1536,7 +1536,8 @@ jobs:
               runId: process.env.GITHUB_RUN_ID,
               runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
               headSha: context.payload.pull_request.head.sha,
-              label: 'skip_reviews', review_waived: true, mode: 'none',
+              label: context.payload.pull_request.labels.some(({ name }) => name === 'skip_reviews') ? 'skip_reviews' : 'default',
+              review_waived: true, mode: 'none',
               pipelineMode: process.env.PIPELINE_MODE,
               skipTests: process.env.SKIP_TESTS === 'true',
               ...(context.payload.pull_request.number === 1 ? {
@@ -1545,8 +1546,8 @@ jobs:
               } : {}),
             };
             fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'waiver.json'), JSON.stringify(waiver));
-            await core.summary.addHeading('AI reviews skipped by request')
-              .addRaw('The skip_reviews label waives AI reviews. This run does not establish review coverage. All test gates remain mandatory for merge and release.').write();
+            await core.summary.addHeading('AI reviews skipped')
+              .addRaw('Hosted AI reviews are skipped by default; add the run_reviews label to run them. This run does not establish review coverage. All test gates remain mandatory for merge and release.').write();
 
       - name: Preserve review waiver evidence
         if: ${{ steps.classify.outputs.skip_reviews == 'true' }}

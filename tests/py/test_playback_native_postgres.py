@@ -1289,6 +1289,7 @@ def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_rece
     stale_receipt = {
         **payload,
         "id": "durable-listen",
+        "scrobble_eligible": True,
         "scrobbled": False,
         "scrobble_submission_state": "not_sent",
     }

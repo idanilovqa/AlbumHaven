@@ -45,16 +45,40 @@ def invoke(payload, monkeypatch, *, lastfm_session=None):
 
 @pytest.mark.parametrize("client_scrobbled", [False, True])
 def test_measured_completion_stays_pending_without_account_credential(monkeypatch, client_scrobbled):
-    (body, status), calls = invoke(measured_payload(scrobbled=client_scrobbled), monkeypatch)
+    (body, status), calls = invoke(measured_payload(
+        scrobbled=client_scrobbled, measured_listened_seconds=90, max_measured_contiguous_seconds=90,
+    ), monkeypatch)
     assert status == 200 and len(calls) == 1
     entry, scope = calls[0]
     assert scope == {"account_id": 7, "library_id": 9}
     assert entry["measurement_version"] == "rendered-pcm-v1"
-    assert entry["measured_listened_seconds"] == 12.5
+    assert entry["measured_listened_seconds"] == 90
     assert entry["device_id"] == measured_payload()["device_id"]
     assert not entry.get("scrobbled") and not body["scrobbled"]
     assert "credential" in str(body["scrobble_error"]).lower()
     assert body["entry"].get("sync_problem")
+
+
+def test_ineligible_measured_listen_reports_no_credential_problem_while_connected(monkeypatch):
+    from music_app.services.lastfm import LastfmSession
+    (body, status), calls = invoke(measured_payload(), monkeypatch,
+                                   lastfm_session=LastfmSession('own-user', 'own-test-session', ''))
+    stored = calls[0][0]
+    assert status == 200 and stored["scrobble_eligible"] is False
+    assert (stored["scrobble_error"], stored["scrobble_retryable"], stored["sync_problem"]) == ("", False, None)
+    assert (body["scrobbled"], body["scrobble_error"], body["scrobble_attempted"]) == (False, "", False)
+    assert body["entry"]["sync_problem"] is None
+
+
+def test_ineligible_handoff_completion_persists_no_credential_problem():
+    entry, _digest = bridge.prepare_handoff_completion(
+        measured_payload(), user_timezone="UTC", account_id=7, library_id=9,
+        is_meaningful_listen_session=listen_history.is_meaningful_listen_session)
+    stored = bridge.persist_measured_playback_completion(
+        {}, entry, account_id=7, library_id=9, connection=None,
+        append_listen_history_entry=lambda config, item, **scope: dict(item))
+    assert stored["scrobble_eligible"] is False
+    assert (stored["scrobble_error"], stored["scrobble_retryable"], stored["sync_problem"]) == ("", False, None)
 
 
 @pytest.mark.parametrize("changes", [

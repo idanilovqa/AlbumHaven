@@ -109,16 +109,17 @@ _CREDENTIAL_UNAVAILABLE = "Account-scoped Last.fm credential is unavailable"
 
 def _seed_measured_playback_completion(entry: JsonDict) -> JsonDict:
     seeded = dict(entry)
+    eligible = bool(entry["scrobble_eligible"])
     seeded.update({
         "scrobbled": False,
-        "scrobble_error": _CREDENTIAL_UNAVAILABLE,
-        "scrobble_retryable": True,
+        "scrobble_error": _CREDENTIAL_UNAVAILABLE if eligible else "",
+        "scrobble_retryable": eligible,
         "sync_problem": {
             "provider": "lastfm",
             "kind": "scrobble",
             "status": "account_credential_unavailable",
             "message": _CREDENTIAL_UNAVAILABLE,
-        },
+        } if eligible else None,
     })
     return seeded
 
@@ -173,7 +174,7 @@ def record_playback_session_complete(
         with measured_provider_guard(config, account_id=account_id, library_id=library_id,
                                      device_id=entry["device_id"], session_id=entry["session_id"]) as provider_connection:
             provider_attempted = False
-            error = _CREDENTIAL_UNAVAILABLE
+            error = _CREDENTIAL_UNAVAILABLE if entry["scrobble_eligible"] else ""
             if persisted_entry is not None:
                 stored = load_measured(
                     provider_connection,

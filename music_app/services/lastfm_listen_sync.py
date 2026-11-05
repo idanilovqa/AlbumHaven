@@ -47,15 +47,7 @@ def has_heard_scrobble_threshold(payload: dict[str, object]) -> bool:
 
 def is_playback_complete_scrobble_eligible(payload: dict[str, object]) -> bool:
     threshold = playback_scrobble_threshold_seconds(payload.get("duration_seconds"))
-    if threshold <= 0:
-        return bool(payload.get("scrobble_eligible"))
-    if math.isinf(threshold):
-        return False
-    listened = max(
-        _float_payload_value(payload, "total_listened_seconds"),
-        _float_payload_value(payload, "max_contiguous_seconds"),
-    )
-    return listened >= threshold or bool(payload.get("scrobble_eligible"))
+    return not math.isinf(threshold) and (has_heard_scrobble_threshold(payload) or bool(payload.get("scrobble_eligible")))
 
 
 def _empty_sync_state() -> dict[str, object]:

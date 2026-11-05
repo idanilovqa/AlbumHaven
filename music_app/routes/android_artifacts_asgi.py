@@ -104,7 +104,7 @@ async def _signed(request: Request, channel: str):
     """Verifies the device signature over this bodiless request."""
     return await run_in_threadpool(
         _access(request).verify_signed_request, request.state.current_actor, channel,
-        request.method, request.url.path, request.headers, b"",
+        request.method, request.url.path, request.headers,
     )
 
 

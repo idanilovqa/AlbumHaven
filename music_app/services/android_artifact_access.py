@@ -6,7 +6,7 @@
    and sends the chain; a verified key is stored per account and channel (a device key),
    with its security level and the allowed signing certificate it matched.
 3. ``verify_signed_request``: each manifest read or APK exchange carries a fresh request
-   nonce and that key's ECDSA signature over the method, path, nonce and body digest. The
+   nonce and that key's ECDSA signature over the method, path, nonce and empty-body digest. The
    key's security level and signer are rechecked against the current configuration on every
    request and download.
 4. ``issue_download_token``/``resolve_download_token``: an APK exchange yields a five-minute
@@ -254,7 +254,7 @@ class AndroidArtifactAccess:
 
     # --- Signed requests ---------------------------------------------------------------------
 
-    def verify_signed_request(self, actor, channel: str, method: str, path: str, headers, body: bytes) -> UUID:
+    def verify_signed_request(self, actor, channel: str, method: str, path: str, headers) -> UUID:
         account_id, session_id = self._identity(actor)
         try:
             device_key = UUID(str(headers.get("x-album-haven-device-key") or ""))
@@ -262,7 +262,7 @@ class AndroidArtifactAccess:
         except (ValueError, binascii.Error):
             raise ArtifactAccessError(403, "attestation_required") from None
         challenge = str(headers.get("x-album-haven-challenge") or "")
-        message = request_message(method, path, challenge, body)
+        message = request_message(method, path, challenge, b"")
         with self._connect(self._database_url) as connection:
             # Any refusal is raised only after this transaction commits the spent challenge.
             refusal = "challenge_invalid"

@@ -71,7 +71,9 @@ cookie; POSTs also carry the session CSRF header. The route action is
    URL.
 
 Refusals are JSON `{"detail","code"}`: `signed_out` (401 from the boundary),
-`challenge_invalid`, `attestation_required` (the server does not know this key, or
+`invalid_request` (400: malformed JSON, channel or chain, or a non-empty exchange body),
+`attestation_unavailable` (503: the configured status list is unreadable or the link secret
+is missing), `challenge_invalid`, `attestation_required` (the server does not know this key, or
 the configuration no longer allows it; the app attests a new one), `signature_invalid`, `attestation_refused` and
 `too_many_challenges`. They never echo tokens, challenges or paths. The server's
 access log records download links as `/artifacts/android/download/[redacted]`.

@@ -249,7 +249,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091`, plus `0099` through `0107`, are unreleased branch migrations.
+`0099` through `0107` are unreleased branch migrations.
 Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order

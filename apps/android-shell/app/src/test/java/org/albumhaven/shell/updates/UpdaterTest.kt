@@ -30,8 +30,10 @@ class UpdaterTest {
         val committed = mutableListOf<Int>()
         val abandoned = mutableListOf<Int>()
         var commitSucceeds = true
+        var origin = ARTIFACT_ORIGIN
 
         override fun nowMs() = now
+        override fun artifactOrigin() = origin
         override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
             fetched += url
             fetch = done
@@ -120,6 +122,44 @@ class UpdaterTest {
         updater.check(1..1)
         ports.fetch!!(FetchResult.Failed)
         assertEquals(UpdateState.Failed(UpdateError.CHECK_FAILED, null, null, 5L), updater.state)
+    }
+
+    @Test
+    fun `signed out, refused and unsupported devices are readable check failures`() {
+        val updater = updater()
+        for (reason in AccessFailure.entries) {
+            updater.check(1..1)
+            ports.fetch!!(FetchResult.Denied(reason))
+            assertEquals(UpdateState.Failed(UpdateError.CHECK_FAILED, reason.wireName, null, null), updater.state)
+        }
+    }
+
+    @Test
+    fun `a passive check that is denied stays silent`() {
+        val updater = updater()
+        updater.passiveCheckIfDue()
+        ports.fetch!!(FetchResult.Denied(AccessFailure.SIGNED_OUT))
+        assertEquals(UpdateState.Idle(null), updater.state)
+    }
+
+    @Test
+    fun `a download that is denied can be retried`() {
+        val updater = available()
+        updater.download()
+        ports.downloadDone!!(DownloadResult.Denied(AccessFailure.SIGNED_OUT))
+        assertEquals(UpdateState.Failed(UpdateError.DOWNLOAD_FAILED, "signed_out", manifest(), 1_000_000L), updater.state)
+        assertTrue(updater.download())
+    }
+
+    @Test
+    fun `artifacts come from the origin currently signed in to`() {
+        ports.origin = "https://sandbox5.albumhaven.org"
+        val updater = updater()
+        updater.check(1..1)
+        assertEquals(listOf("https://sandbox5.albumhaven.org/artifacts/android/sandbox/manifest.json"), ports.fetched)
+        // An APK URL on another origin than the signed-in one is refused.
+        ports.fetch!!(FetchResult.Body(manifestJson()))
+        assertEquals(UpdateState.Failed(UpdateError.MANIFEST_REJECTED, "untrusted_host", null, null), updater.state)
     }
 
     @Test

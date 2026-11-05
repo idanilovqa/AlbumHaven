@@ -13,13 +13,17 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.webkit.CookieManager
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import okhttp3.OkHttpClient
 import org.albumhaven.shell.BuildConfig
+import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellChannel
+import org.albumhaven.shell.ShellPreferences
+import org.albumhaven.shell.playback.ShellSession
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -31,11 +35,16 @@ object Updates {
     fun policy(context: Context) = UpdatePolicy(
         channel = ShellChannel.fromWireName(BuildConfig.CHANNEL),
         applicationId = context.packageName,
-        artifactOrigin = BuildConfig.ARTIFACT_ORIGIN,
+        artifactOrigin = signedInOrigin(context),
         expectedCertificateSha256 = BuildConfig.UPDATE_CERTIFICATE_SHA256,
         installedVersionCode = BuildConfig.VERSION_CODE.toLong(),
         deviceApi = Build.VERSION.SDK_INT,
     )
+
+    /** Artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox. */
+    fun signedInOrigin(context: Context): String =
+        OriginPolicy(ShellChannel.fromWireName(BuildConfig.CHANNEL), BuildConfig.DEV_ORIGIN)
+            .initialOrigin(ShellPreferences(context).selectedSandboxSlot)
 
     /** Main thread only. */
     fun get(context: Context): Updater? {
@@ -76,7 +85,14 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
 private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
-    private val http = ArtifactHttp(OkHttpClient(), policy.artifactOrigin)
+    // The WebView session is read per request and never stored here.
+    private val http = ArtifactHttp(
+        OkHttpClient(),
+        ShellSession(::artifactOrigin) { url -> CookieManager.getInstance().getCookie(url) },
+        policy.channel,
+        KeystoreDeviceKeys(context),
+        PreferencesDeviceKeyIds(context),
+    )
     private val downloads = context.getSystemService(DownloadManager::class.java)
     private val installer = context.packageManager.packageInstaller
     private var downloadId: Long? = null
@@ -89,6 +105,8 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     private val verifiedApk get() = File(File(context.noBackupFilesDir, UPDATES_DIR), APK_NAME)
 
     override fun nowMs() = System.currentTimeMillis()
+
+    override fun artifactOrigin() = Updates.signedInOrigin(context)
 
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {
@@ -104,6 +122,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 when (resolution) {
                     is ArtifactHttp.Resolution.Url -> enqueue(resolution.url, manifest, onProgress, done)
                     is ArtifactHttp.Resolution.Refused -> done(DownloadResult.Refused(resolution.reason))
+                    is ArtifactHttp.Resolution.Denied -> done(DownloadResult.Denied(resolution.reason))
                     ArtifactHttp.Resolution.Failed -> done(DownloadResult.Failed)
                 }
             }

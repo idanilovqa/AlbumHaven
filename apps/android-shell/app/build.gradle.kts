@@ -9,11 +9,6 @@ plugins {
 // Debug-only local server, for example -PalbumHavenDevOrigin=http://10.0.2.2:5000.
 val devOrigin = providers.gradleProperty("albumHavenDevOrigin").getOrElse("")
 
-// Update artifacts (Update Manifest v1) come only from albumhaven.org. A debug build may read them
-// from a sandbox instead, for example -PalbumHavenArtifactOrigin=https://sandbox5.albumhaven.org.
-val releaseArtifactOrigin = "https://albumhaven.org"
-val debugArtifactOrigin = providers.gradleProperty("albumHavenArtifactOrigin").getOrElse(releaseArtifactOrigin)
-
 // Release builds trust their channel's release signing certificate (SHA-256 of the DER certificate,
 // 64 lowercase hex). Without one the build offers no updates. Debug builds trust the debug key.
 val releaseCertificates = mapOf(
@@ -68,13 +63,10 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "DEV_ORIGIN", "\"$devOrigin\"")
-            buildConfigField("String", "ARTIFACT_ORIGIN", "\"$debugArtifactOrigin\"")
-            manifestPlaceholders["cleartextTraffic"] =
-                devOrigin.startsWith("http://") || debugArtifactOrigin.startsWith("http://")
+            manifestPlaceholders["cleartextTraffic"] = devOrigin.startsWith("http://")
         }
         release {
             buildConfigField("String", "DEV_ORIGIN", "\"\"")
-            buildConfigField("String", "ARTIFACT_ORIGIN", "\"$releaseArtifactOrigin\"")
             manifestPlaceholders["cleartextTraffic"] = false
             isMinifyEnabled = false
         }

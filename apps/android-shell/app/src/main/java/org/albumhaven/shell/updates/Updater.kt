@@ -93,12 +93,14 @@ object UpdateSchedule {
 sealed interface FetchResult {
     data class Body(val text: String) : FetchResult
     data class Refused(val reason: Rejection) : FetchResult
+    data class Denied(val reason: AccessFailure) : FetchResult
     data object Failed : FetchResult
 }
 
 sealed interface DownloadResult {
     data object Completed : DownloadResult
     data class Refused(val reason: Rejection) : DownloadResult
+    data class Denied(val reason: AccessFailure) : DownloadResult
     data object Failed : DownloadResult
 }
 
@@ -125,6 +127,9 @@ interface UpdateStore {
 /** Android work the [Updater] asks for. Every callback arrives on the main thread. */
 interface UpdatePorts {
     fun nowMs(): Long
+
+    /** The origin this app is signed in to, which alone serves its artifacts. */
+    fun artifactOrigin(): String
     fun fetchManifest(url: String, done: (FetchResult) -> Unit)
 
     /** Downloads [manifest]'s APK into app-private storage, reporting bytes received so far. */
@@ -149,10 +154,13 @@ interface UpdatePorts {
  * manifest whose version code exceeds the installed one is ever downloaded.
  */
 class Updater(
-    private val policy: UpdatePolicy,
+    private val basePolicy: UpdatePolicy,
     private val ports: UpdatePorts,
     private val store: UpdateStore,
 ) {
+    /** The compiled policy, trusting only the origin currently selected. */
+    private val policy: UpdatePolicy get() = basePolicy.copy(artifactOrigin = ports.artifactOrigin())
+
     private val listeners = mutableSetOf<(UpdateState) -> Unit>()
     private var passiveChecked = false
     private var sessionId: Int? = null
@@ -202,13 +210,14 @@ class Updater(
 
     private fun runCheck(passive: Boolean, webProtocols: IntRange?) {
         val previous = store.lastCheckedAtMs
+        val checkPolicy = policy
         state = UpdateState.Checking(previous)
-        ports.fetchManifest(policy.manifestUrl) { result ->
+        ports.fetchManifest(checkPolicy.manifestUrl) { result ->
             if (state !is UpdateState.Checking) return@fetchManifest
             val check = when (result) {
-                is FetchResult.Body -> ManifestValidator.check(result.text, policy, webProtocols)
+                is FetchResult.Body -> ManifestValidator.check(result.text, checkPolicy, webProtocols)
                 is FetchResult.Refused -> ManifestCheck.Rejected(result.reason)
-                FetchResult.Failed -> null
+                is FetchResult.Denied, FetchResult.Failed -> null
             }
             if (check is ManifestCheck.Newer || check is ManifestCheck.Current) {
                 val now = ports.nowMs()
@@ -224,7 +233,7 @@ class Updater(
                 passive -> UpdateState.Idle(previous)
                 check is ManifestCheck.Rejected ->
                     UpdateState.Failed(UpdateError.MANIFEST_REJECTED, check.reason.wireName, null, previous)
-                else -> UpdateState.Failed(UpdateError.CHECK_FAILED, null, null, previous)
+                else -> UpdateState.Failed(UpdateError.CHECK_FAILED, (result as? FetchResult.Denied)?.reason?.wireName, null, previous)
             }
         }
     }
@@ -256,7 +265,8 @@ class Updater(
         if ((state as? UpdateState.Downloading)?.manifest != manifest) return
         when (result) {
             DownloadResult.Completed -> verify(manifest)
-            is DownloadResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason, manifest)
+            is DownloadResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason.wireName, manifest)
+            is DownloadResult.Denied -> fail(UpdateError.DOWNLOAD_FAILED, result.reason.wireName, manifest)
             DownloadResult.Failed -> fail(UpdateError.DOWNLOAD_FAILED, null, manifest)
         }
     }
@@ -267,7 +277,7 @@ class Updater(
             if ((state as? UpdateState.Verifying)?.manifest != manifest) return@inspect
             val rejection = DownloadVerifier.verify(manifest, policy, inspection)
             if (rejection != null) {
-                fail(UpdateError.VERIFICATION_FAILED, rejection, manifest)
+                fail(UpdateError.VERIFICATION_FAILED, rejection.wireName, manifest)
                 return@inspect
             }
             store.stagedManifest = manifest.raw
@@ -316,7 +326,7 @@ class Updater(
                     }
                 }
             }
-            is StageResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason, manifest)
+            is StageResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason.wireName, manifest)
             StageResult.Failed -> fail(UpdateError.INSTALL_FAILED, null, manifest)
         }
     }
@@ -349,10 +359,11 @@ class Updater(
         if (ports.canRequestInstalls()) state = UpdateState.Ready(current.manifest)
     }
 
-    private fun fail(error: UpdateError, reason: Rejection?, manifest: UpdateManifest) {
+    /** [reason] is a [Rejection] or [AccessFailure] wire name. */
+    private fun fail(error: UpdateError, reason: String?, manifest: UpdateManifest) {
         ports.cancelDownload()
         ports.discardFiles()
         store.stagedManifest = null
-        state = UpdateState.Failed(error, reason?.wireName, manifest, store.lastCheckedAtMs)
+        state = UpdateState.Failed(error, reason, manifest, store.lastCheckedAtMs)
     }
 }

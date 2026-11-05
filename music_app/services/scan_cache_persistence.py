@@ -641,6 +641,11 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            retired = connection.execute(
+                _retire_placeholder_albums_sql(), {"album_ids": sorted(prior_album_ids - {0})},
+            ).fetchall()
+            inventory_changed = inventory_changed or bool(retired)
+            affected_album_keys.update(str(_row_mapping(row)["album_key"]) for row in retired)
             if not inventory_changed:
                 return {
                     "inventory_mutation_revision": 0,
@@ -2235,6 +2240,7 @@ class PostgresScanCacheAdapter:
                     ),
                 },
             )
+            connection.execute(_retire_placeholder_albums_sql(), {"album_ids": None})
             relation_source_rows = list(
                 connection.execute(load_relation_source_rows_sql()).fetchall()
             )
@@ -4630,6 +4636,42 @@ def _load_inventory_mutation_revision_sql() -> str:
     """
 
 
+def _retire_placeholder_albums_sql() -> str:
+    """Delete "Unknown Artist"/"Unknown Album" rows once no track uses them.
+
+    Owner-approved 2026-11-04: absent tags are loose tracks, so a placeholder
+    album that an older scan published is retired after its tracks move to
+    Loose Tracks. Real albums and placeholders still holding tracks are kept.
+    """
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        delete from library.local_albums albums
+        using bootstrap_context
+        where albums.library_id = bootstrap_context.library_id
+          and (%(album_ids)s::bigint[] is null or albums.id = any(%(album_ids)s::bigint[]))
+          and (
+            lower(btrim(coalesce(albums.title, ''))) in ('', 'unknown album')
+            or exists (
+              select 1 from library.local_artists artists
+              where artists.id = albums.artist_id and artists.artist_key = 'unknown artist'
+            )
+          )
+          and not exists (
+            select 1 from library.local_tracks tracks where tracks.album_id = albums.id
+          )
+        returning albums.album_key
+    """
+
+
 def _increment_inventory_mutation_revision_sql() -> str:
     return """
         with bootstrap_context as (
@@ -4644,8 +4686,10 @@ def _increment_inventory_mutation_revision_sql() -> str:
         ),
         updated_library as (
           update library.libraries
-             set metadata = jsonb_set(
-                   coalesce(library.libraries.metadata, '{}'::jsonb)
+             -- The same transaction publishes relations before it commits, so
+             -- it never marks them stale: a loose-track-only change has no
+             -- album journal rows to justify a stale status.
+             set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                    || jsonb_build_object(
                         'inventory_mutation_revision',
                         coalesce(
@@ -4656,10 +4700,6 @@ def _increment_inventory_mutation_revision_sql() -> str:
                           0
                         ) + 1
                       ),
-                   '{scan_cache,relation_projection,status}',
-                   to_jsonb('stale'::text),
-                   true
-                 ),
                  updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id

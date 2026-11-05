@@ -108,7 +108,11 @@ def _is_collaboration_variant(value: object, base: object) -> bool:
         return False
     if not value_key.startswith(base_key):
         return False
-    remainder = value_key[len(base_key):].strip()
+    raw_remainder = value_key[len(base_key):]
+    remainder = raw_remainder.strip()
+    if remainder.startswith("/") and not raw_remainder[:1].isspace():
+        # 'To/Die/For' and 'AC/DC' are one name; only 'Owner / Guest' credits two.
+        return False
     return any(remainder.startswith(prefix) for prefix in _COLLAB_REMAINDER_PREFIXES)
 
 

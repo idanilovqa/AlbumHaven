@@ -32,6 +32,7 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
     physical_folders: dict[tuple[str, str, str], list[Mapping[str, object]]] = defaultdict(list)
     physical_roots_by_folder: dict[tuple[str, str, str], str] = {}
+    untagged: dict[str, str] = {}
     for entry in entries:
         if (
             normalize_exception_value(entry.get("exception_type"))
@@ -40,6 +41,11 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
         ):
             continue
         path = str(entry.get("path") or "")
+        missing_tags = missing_album_identity_tags(entry)
+        if missing_tags:
+            if path:
+                untagged[path] = missing_tags
+            continue
         if path:
             normalized_path = path.strip()
             folder_identity = None
@@ -100,7 +106,31 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
                 path = str(entry["path"])
                 if path in rejected:
                     rejected[path] = "Mixed album metadata in one folder"
+    rejected.update(untagged)
     return rejected
+
+
+_PLACEHOLDER_ARTISTS = frozenset({"", "unknown artist"})
+_PLACEHOLDER_ALBUMS = frozenset({"", "unknown album"})
+
+
+def missing_album_identity_tags(entry: Mapping[str, object]) -> str | None:
+    """Name the absent tags that keep a file out of every album.
+
+    Blank or placeholder artist and album values mean the tags are absent, so
+    the file is a loose track, never an "Unknown Artist" or "Unknown Album".
+    """
+    artist_missing = all(
+        _text(entry.get(field)) in _PLACEHOLDER_ARTISTS for field in ("album_artist", "artist")
+    )
+    album_missing = _text(entry.get("album")) in _PLACEHOLDER_ALBUMS
+    if artist_missing and album_missing:
+        return "Missing artist and album"
+    if artist_missing:
+        return "Missing artist"
+    if album_missing:
+        return "Missing album"
+    return None
 
 
 def _text(value: object) -> str:

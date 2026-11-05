@@ -648,14 +648,17 @@ def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
     )
 
 
-def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
+def test_targeted_inventory_revision_leaves_relation_status_to_its_publication():
+    # The targeted transaction publishes relations before committing; marking
+    # them stale made a loose-track-only change journal a full replay row.
     from music_app.services import scan_cache_persistence
 
     sql = scan_cache_persistence._increment_inventory_mutation_revision_sql()
     normalized = _normalized_sql(sql)
 
-    assert "'{scan_cache,relation_projection,status}'" in normalized
-    assert "to_jsonb('stale'::text)" in normalized
+    assert "'inventory_mutation_revision'" in normalized
+    assert "relation_projection,status" not in normalized
+    assert "'stale'" not in normalized
 
 
 def test_targeted_album_upsert_preserves_existing_user_cover_authority():

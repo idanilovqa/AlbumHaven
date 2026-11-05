@@ -5550,6 +5550,7 @@ _PROBLEM_REASON_IDENTITY_CODES = {
     "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
     "Missing album": "missing-album",
+    "Missing artist and album": "missing-artist-and-album",
     "Missing track title": "missing-track-title",
     "Missing track artist": "missing-track-artist",
     "Missing album artist": "missing-album-artist",

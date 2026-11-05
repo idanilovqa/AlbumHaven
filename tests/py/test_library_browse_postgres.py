@@ -8243,7 +8243,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Cosmic Cathedral"]
+    # The search tree is alphabetical; the exact match is still selected.
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Cosmic Cathedral", "Neal Morse"]
     assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),

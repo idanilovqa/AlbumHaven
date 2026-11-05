@@ -75,6 +75,22 @@ def test_split_album_artist_members_requires_explicitly_spaced_slash():
     ]
 
 
+def test_unspaced_slash_band_name_never_collapses_into_its_prefix_artist():
+    # ID-001: 'To/Die/For' is one band; it must not become the artist 'To'.
+    from music_app.services.library import _canonicalize_artist_names, build_albums_from_file_cache
+
+    assert _canonicalize_artist_names(["To/Die/For", "To"])[0] == ["To/Die/For", "To"]
+    assert _canonicalize_artist_names(["Owner / Guest", "Owner"])[0] == ["Owner"]
+    entries = {}
+    for index, artist in enumerate(("To/Die/For", "To/Die/For", "To")):
+        path = f"C:/Music/To Die For/1999 - All Eternity/0{index + 1}.mp3"
+        entries[path] = _entry(path=path, title=f"Track {index}", artist=artist,
+                               album_artist="To/Die/For", album="All Eternity", track_number=index + 1)
+    (album,) = build_albums_from_file_cache(entries)
+    assert album.album_artist == "To/Die/For"
+    assert album.artists == ["To/Die/For"]
+
+
 def _entry(*, path: str, title: str, artist: str, album_artist: str, album: str, track_number: int) -> dict[str, object]:
     return {
         "path": path,

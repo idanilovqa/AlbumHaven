@@ -5,7 +5,7 @@ Files come from the directory named by ``ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR``, wh
 ``*.apk`` files are served; there is no listing, and nothing reveals the configured location.
 
 Every route except the short-lived download link sits behind the private route boundary
-(signed in, ``app.access``). The manifest and the APK exchange also need a request signed by a
+(signed in, ``account.self.android_updates``). The manifest and the APK exchange also need a request signed by a
 device key this account attested (see ``android_artifact_access``). The exchange returns a
 five-minute HMAC link for one file, which ``DownloadManager`` fetches without cookies.
 """

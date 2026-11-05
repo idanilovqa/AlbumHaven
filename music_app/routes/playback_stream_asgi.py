@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
+from music_app.routes.playback_control_asgi import playback_config
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_encoded import (
@@ -37,6 +38,7 @@ from music_app.services.waveform_peaks import (
     WAVEFORM_ANALYZER_VERSION,
     WaveformPeaksBusyError,
 )
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.policy_asgi import require_action
 
 
@@ -682,9 +684,6 @@ class _PlaybackPcmConnection:
         if "path" in control and "playbackRef" in control:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
         if "playbackRef" in control:
-            from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
-            from music_app.routes.playback_control_asgi import playback_config
-
             try:
                 service = PlaybackReferenceService(playback_config(self._websocket))
                 resolved_path = await asyncio.to_thread(service.resolve,

@@ -104,8 +104,10 @@ def revoked_serials(environ=None) -> frozenset[str]:
         with open(path, "rb") as handle:
             entries = json.load(handle).get("entries") or {}
     except (OSError, ValueError, AttributeError):
+        entries = None
+    if not isinstance(entries, dict):
         # A configured but unreadable list must not silently disable revocation.
-        raise ArtifactAccessError(503, "attestation_unavailable") from None
+        raise ArtifactAccessError(503, "attestation_unavailable")
     return frozenset(str(serial).lower().lstrip("0") or "0" for serial in entries)
 
 
@@ -258,9 +260,12 @@ class AndroidArtifactAccess:
         account_id, session_id = self._identity(actor)
         try:
             device_key = UUID(str(headers.get("x-album-haven-device-key") or ""))
+        except ValueError:
+            raise ArtifactAccessError(403, "attestation_required") from None
+        try:
             signature = base64.b64decode(str(headers.get("x-album-haven-signature") or ""), validate=True)
         except (ValueError, binascii.Error):
-            raise ArtifactAccessError(403, "attestation_required") from None
+            raise ArtifactAccessError(403, "signature_invalid") from None
         challenge = str(headers.get("x-album-haven-challenge") or "")
         message = request_message(method, path, challenge, b"")
         with self._connect(self._database_url) as connection:
@@ -336,7 +341,8 @@ class AndroidArtifactAccess:
             row = connection.execute(
                 """select keys.security_level, keys.signing_certificate_sha256 from app.android_device_keys keys
                     join app.accounts accounts on accounts.id = keys.account_id
-                    where keys.id = %s and keys.account_id = %s and keys.channel = %s and accounts.is_active""",
+                    where keys.id = %s and keys.account_id = %s and keys.channel = %s
+                    and accounts.is_active is true and accounts.disabled_at is null""",
                 (device_key, account_id, channel),
             ).fetchone()
         return DownloadGrant(channel, name) if row is not None and self._key_in_standing(channel, row) else None

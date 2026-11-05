@@ -458,7 +458,8 @@ def test_a_replayed_request_nonce_is_refused(world):
     assert (status, json.loads(body)["code"]) == (403, "challenge_invalid")
 
 
-@pytest.mark.parametrize("case", ["other-key", "other-path", "unknown-key", "other-account", "other-channel"])
+@pytest.mark.parametrize(
+    "case", ["other-key", "other-path", "malformed-signature", "unknown-key", "other-account", "other-channel"])
 def test_a_request_not_signed_by_this_accounts_device_key_is_refused(world, case):
     device_key, key = _device(world)
     path, session, channel = "/artifacts/android/sandbox/manifest.json", SESSION_A, "sandbox"
@@ -475,10 +476,12 @@ def test_a_request_not_signed_by_this_accounts_device_key_is_refused(world, case
         path, channel = "/artifacts/android/stable/manifest.json", "stable"
     challenge = _challenge(world, "request", channel, session)
     signature = signer.sign(request_message("GET", signed_path, challenge, b""), ec.ECDSA(hashes.SHA256()))
+    encoded = "not base64!" if case == "malformed-signature" else base64.b64encode(signature).decode()
     status, _, body = _request(world.app, "GET", path, session=session, headers={
         "x-album-haven-device-key": device_key, "x-album-haven-challenge": challenge,
-        "x-album-haven-signature": base64.b64encode(signature).decode()})
-    expected = "signature_invalid" if case in {"other-key", "other-path"} else "attestation_required"
+        "x-album-haven-signature": encoded})
+    signed_wrongly = {"other-key", "other-path", "malformed-signature"}
+    expected = "signature_invalid" if case in signed_wrongly else "attestation_required"
     assert (status, json.loads(body)["code"]) == (403, expected)
     assert b"schemaVersion" not in body
 
@@ -625,7 +628,11 @@ def test_a_chain_with_a_listed_certificate_cannot_attest(world, tmp_path):
     assert _attest(world, intermediate_serial=0x1F2F)[0] == 200
 
 
-@pytest.mark.parametrize("content", [None, "not json", "[]"], ids=["missing", "garbage", "not-an-object"])
+@pytest.mark.parametrize(
+    "content",
+    [None, "not json", "[]", '{"entries": 5}', '{"entries": "01F2E"}'],
+    ids=["missing", "garbage", "not-an-object", "entries-not-an-object", "entries-a-string"],
+)
 def test_an_unreadable_status_list_fails_closed_before_the_challenge_is_spent(world, tmp_path, content):
     if content is None:
         world.environ[ATTESTATION_STATUS_ENV] = str(tmp_path / "absent.json")

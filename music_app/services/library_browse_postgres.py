@@ -11059,6 +11059,36 @@ def _problematic_files_sql(
            and mixed.library_root_id = files.library_root_id
            and mixed.physical_parent = files.physical_parent
         ),
+        exception_override_files as materialized (
+          -- The few files that carry an exception override, found first. Joining
+          -- every active file to its folder companions before this filter made
+          -- millions of rows on a real library (46 s of a 53 s cold request).
+          select distinct
+            exception_files.track_id,
+            exception_files.library_id,
+            exception_files.library_root_id,
+            exception_files.physical_album_container,
+            exception_files.file_album,
+            exception_files.file_album_artist,
+            exception_files.file_year
+          from (
+            select exception_files.*
+            from library.exception_overrides overrides
+            join active_problem_rows exception_files
+              on exception_files.library_id = overrides.library_id
+             and exception_files.track_id = overrides.track_id
+            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+            union all
+            select exception_files.*
+            from library.exception_overrides overrides
+            join active_problem_rows exception_files
+              on exception_files.library_id = overrides.library_id
+             and exception_files.private_path = overrides.track_key
+            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+          ) exception_files
+          where exception_files.file_album is not null
+            and exception_files.file_album_artist is not null
+        ),
         exception_source_tracks as materialized (
           select distinct
             source_files.album_id as source_album_id,
@@ -11069,13 +11099,7 @@ def _problematic_files_sql(
             exception_tracks.disc_number,
             exception_tracks.track_number,
             exception_tracks.duration_seconds
-          from library.exception_overrides
-          join active_problem_rows exception_files
-            on exception_files.library_id = library.exception_overrides.library_id
-           and (
-             exception_files.track_id = library.exception_overrides.track_id
-             or exception_files.private_path = library.exception_overrides.track_key
-           )
+          from exception_override_files exception_files
           join library.local_tracks exception_tracks
             on exception_tracks.id = exception_files.track_id
            and exception_tracks.library_id = exception_files.library_id
@@ -11087,11 +11111,6 @@ def _problematic_files_sql(
            and source_files.file_album_artist = exception_files.file_album_artist
            and source_files.file_year is not distinct from exception_files.file_year
            and source_files.album_id is not null
-          where nullif(btrim(
-              library.exception_overrides.override_payload ->> 'exception_type'
-          ), '') is not null
-            and exception_files.file_album is not null
-            and exception_files.file_album_artist is not null
         ),
     """
     physical_file_ctes = (

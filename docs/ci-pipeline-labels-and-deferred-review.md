@@ -1,11 +1,11 @@
 # Pipeline controls and deferred review
 
-Paid API reviews are temporarily skipped by default for trusted same-repository pull requests. Full test selection is unchanged, and CI records the review waiver without recording a successfully reviewed-head baseline.
+Paid API reviews are skipped by default for trusted same-repository pull requests; no label is needed. Full test selection is unchanged, Cloud Verification Gate accepts the intentional skip, and CI records the review waiver without recording a successfully reviewed-head baseline. The local review rounds in `AGENTS.md` "Thorough local review" remain required.
 
 Trusted same-repository pull requests support these controls:
 
 - `run_reviews`: opt into the calculated full or incremental Codex and PR Agent review. When both review labels are present, `run_reviews` wins.
-- `skip_reviews`: skip Codex and PR Agent without making paid review calls. Full test selection is unchanged. CI retains explicit waiver evidence and does not record a successfully reviewed-head baseline.
+- `skip_reviews`: redundant with the default and kept for existing pull requests; skips Codex and PR Agent without making paid review calls. Full test selection is unchanged. CI retains explicit waiver evidence and does not record a successfully reviewed-head baseline.
 - `skip_tests`: skip every test family. Review selection is unchanged. Cloud Verification Gate cannot succeed because a complete passing test pipeline is still required for merge and release.
 
 Forks cannot activate repository-owner controls. Label changes trigger a new native pull-request run. Complete passing tests remain mandatory for merge and release regardless of review selection.

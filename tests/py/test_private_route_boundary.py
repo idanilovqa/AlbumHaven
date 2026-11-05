@@ -46,8 +46,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/accept-invitation/continue",
                 "/favicon.ico",
                 "/static",
-                "/artifacts/android/{channel}/manifest.json",
-                "/artifacts/android/{channel}/{name}",
+                "/artifacts/android/download/{token}",
             }:
                 continue
             action = private_action_for_route(method, path)
@@ -80,6 +79,10 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
         ("POST", "/playback/state/handoff", "app.access"),
+        ("POST", "/artifacts/android/challenge", "account.self.android_updates"),
+        ("POST", "/artifacts/android/attest", "account.self.android_updates"),
+        ("GET", "/artifacts/android/{channel}/manifest.json", "account.self.android_updates"),
+        ("POST", "/artifacts/android/{channel}/{name}", "account.self.android_updates"),
         ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
         (
             "POST",

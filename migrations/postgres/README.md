@@ -166,6 +166,7 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0098_track_generated_preview_current_path.sql
 0104_create_playback_claims.sql
 0105_add_playback_claim_handoffs.sql
+0106_create_android_artifact_access.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -242,7 +243,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091`, plus `0104` and `0105`, are unreleased branch migrations.
+`0081` through `0091`, plus `0104` through `0106`, are unreleased branch migrations.
 Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
@@ -306,6 +307,16 @@ handoff rows are harmless, while rewriting or removing an applied migration
 would invalidate ledger history. Dropping the table discards only transient
 ownership leases, not listen-history rows, but must not occur while any running
 application depends on durable ownership.
+
+Migration `0106_create_android_artifact_access.sql` adds two additive tables for
+attested Android update downloads. `app.android_artifact_challenges` holds only the
+SHA-256 of each single-use, two-minute attestation or request nonce, bound to the
+account, session, channel and purpose. `app.android_device_keys` holds the attested
+public key (SubjectPublicKeyInfo DER), its digest and security level per account and
+channel; no private key, token or certificate chain is stored. Older application
+versions leave both tables unused. For rollback, roll back the application first;
+retaining the tables is harmless, and dropping them only forces every device to
+attest again.
 
 Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
 

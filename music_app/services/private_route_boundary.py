@@ -101,6 +101,12 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("PUT", "/playback/state"): "library.media.read",
     ("DELETE", "/playback/state"): "library.media.read",
     ("POST", "/playback/state/handoff"): "app.access",
+    # Self-service for any active account (no capability); the manifest and APK exchange
+    # also need an attested device key.
+    ("POST", "/artifacts/android/challenge"): "account.self.android_updates",
+    ("POST", "/artifacts/android/attest"): "account.self.android_updates",
+    ("GET", "/artifacts/android/{channel}/manifest.json"): "account.self.android_updates",
+    ("POST", "/artifacts/android/{channel}/{name}"): "account.self.android_updates",
     ("POST", "/refresh-api"): "library.refresh",
     (
         "POST",
@@ -324,9 +330,10 @@ def _is_public(method: str, path: str) -> bool:
         return normalized_method in _READ_METHODS
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS
-    # Signed Android update artifacts: a Sandbox app reads them from albumhaven.org without that
-    # origin's session, and they hold nothing private.
-    if path.startswith("/artifacts/android/"):
+    # A five-minute HMAC link for one APK, fetched by Android's DownloadManager without cookies.
+    # The route itself refuses any link that is not genuine, current and still backed by an
+    # attested device of an active account.
+    if path.startswith("/artifacts/android/download/"):
         return normalized_method in _READ_METHODS
     return False
 

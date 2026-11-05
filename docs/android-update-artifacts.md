@@ -1,0 +1,88 @@
+# Android update artifacts
+
+The Android app updates itself from `/artifacts/android/{stable|sandbox}/` on the
+origin it is signed in to (`https://albumhaven.org` for Stable, the selected
+`https://sandboxN.albumhaven.org` for Sandbox). Nothing under that prefix is
+public: a browser, `curl` or a script without the app gets the normal sign-in
+refusal, and a signed-in browser gets no manifest or APK without a device key.
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` | Directory with `stable/` and `sandbox/`, each holding `manifest.json` and flat `*.apk` files. Unset serves nothing. |
+| `ALBUM_HAVEN_ANDROID_STABLE_SIGNING_CERT_SHA256` | Comma-separated lowercase SHA-256 of the DER signing certificates whose Stable app (`org.albumhaven.app`) may attest. Empty refuses Stable. |
+| `ALBUM_HAVEN_ANDROID_SANDBOX_SIGNING_CERT_SHA256` | The same for the Sandbox app (`org.albumhaven.app.sandbox`). |
+| `ALBUM_HAVEN_ANDROID_SANDBOX_ALLOW_SOFTWARE_ATTESTATION` | `1` lets a sandbox server accept software-backed Sandbox keys, for emulators and debug testing only. Off by default; never applies to Stable. |
+| `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE` | Optional local copy of Google's attestation status list. When set but unreadable, attestation fails closed. |
+
+Certificate digests are public values, not secrets: they are the same as the
+manifest's `signingCertificateSha256`. Download links are signed with a key
+derived from the existing authentication HMAC secret; no new secret is needed.
+Apply migration `0106_create_android_artifact_access.sql` before starting a
+version that serves these routes, and restart the server after changing any of
+these variables.
+
+## Protocol
+
+All requests below except the download link carry the app's WebView session
+cookie; POSTs also carry the session CSRF header. The route action is
+`account.self.android_updates`, so any signed-in, active account may use it.
+
+1. `POST /artifacts/android/challenge` `{"protocol":1,"channel","purpose"}` with
+   purpose `attest` or `request` returns a 32-byte single-use challenge bound to
+   the account, session, channel and purpose, valid for two minutes. Only its
+   SHA-256 is stored. Each account may hold sixteen open challenges.
+2. `POST /artifacts/android/attest` `{"protocol":1,"channel","challenge","chain"}`.
+   The app generates an EC P-256 signing key in Android Keystore (StrongBox when
+   present, otherwise TEE) with the challenge as its attestation challenge and
+   sends the certificate chain (leaf first, base64 DER). The server requires that
+   every certificate is signed by the next one and only certificate authorities
+   issue; issuers are within their validity period; no certificate is on the
+   status list; the chain ends at a pinned Google hardware attestation root; only
+   the leaf carries the attestation extension; its challenge matches; its
+   `attestationApplicationId` names exactly the channel's package with an allowed
+   signing-certificate digest; its attestation security level is TEE or StrongBox;
+   and the key is P-256. The public key is stored per account and channel, and the
+   response names it with a `deviceKey` id.
+3. `GET /artifacts/android/{channel}/manifest.json` and `POST` to the manifest's
+   `apkUrl` carry `X-Album-Haven-Device-Key`, a fresh `request` challenge in
+   `X-Album-Haven-Challenge`, and `X-Album-Haven-Signature`: base64 ECDSA-SHA256
+   over `album-haven-android-artifact-request-v1`, the method, the path, the
+   challenge and the hex SHA-256 of the (empty) body, joined by newlines.
+4. The `POST` returns `{"path":"/artifacts/android/download/<token>"}`: a
+   five-minute HMAC link naming one account, device key, channel and file. The app
+   checks it with `HEAD` and hands it to `DownloadManager`, which needs no cookies.
+   The link stops working when it expires, the device key is removed or the
+   account is deactivated. The manifest's `apkUrl` remains the immutable logical
+   URL.
+
+Refusals are JSON `{"detail","code"}`: `signed_out` (401 from the boundary),
+`challenge_invalid`, `attestation_required` (the server does not know this key;
+the app attests a new one), `signature_invalid`, `attestation_refused` and
+`too_many_challenges`. They never echo tokens, challenges or paths. The server's
+access log records download links as `/artifacts/android/download/[redacted]`.
+
+## Google roots and revocation
+
+`music_app/services/android_attestation_roots.pem` bundles the roots published at
+<https://android.googleapis.com/attestation/root> (linked from the Android key
+attestation documentation) and pins them by public key. To update it, fetch that
+URL, replace the PEM blocks and run `tests/py/test_android_key_attestation.py`.
+
+Google publishes revoked attestation certificates at
+<https://android.googleapis.com/attestation/status>. The server makes no outbound
+request; to check revocation, refresh a local copy (for example daily) and set
+`ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE`.
+
+## Limitations
+
+- A device key is attested once; later revocation of its chain, or an unlocked
+  bootloader, is not re-checked. Verified boot state is not required. Remove an
+  account's rows from `app.android_device_keys` to force re-attestation.
+- Software attestation proves nothing: the AOSP software attestation key is
+  public. Enable the sandbox flag only on test sandboxes.
+- A signed-in user who controls an attested device can still save the APK it
+  downloads, and a valid download link works from anywhere for five minutes.
+  Front-end proxies may log the full link; keep their access logs private or
+  short-lived.

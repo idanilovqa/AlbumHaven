@@ -25930,6 +25930,13 @@ const ANDROID_UPDATE_FAILURES = {
   install_failed: ['Update couldn’t be installed.', 'Android didn’t install the update. Download it again.', 'Retry download', 'download'],
 };
 
+// The server would not hand this install its artifacts; the failure keeps its title and retry.
+const ANDROID_UPDATE_ACCESS_MESSAGES = {
+  signed_out: 'Sign in to Album Haven again, then retry.',
+  attestation_refused: 'This server didn’t accept this app’s device check. Try again later.',
+  device_unsupported: 'This device can’t verify this app for updates.',
+};
+
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
 }
@@ -25955,7 +25962,8 @@ function androidUpdateView(info, update) {
       const failure = update.reason === 'unsupported_android'
         ? ['Update check failed.', 'This update needs a newer version of Android.', 'Retry', 'check']
         : ANDROID_UPDATE_FAILURES[update.error] || ANDROID_UPDATE_FAILURES.check_failed;
-      return ['error', ...failure];
+      const [title, message, label, action] = failure;
+      return ['error', title, ANDROID_UPDATE_ACCESS_MESSAGES[update.reason] || message, label, action];
     }
     default: return ['info', 'Android app', checked ? `${version} · Last checked ${checked}` : version, 'Check for updates', 'check'];
   }

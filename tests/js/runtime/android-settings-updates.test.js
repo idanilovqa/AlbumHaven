@@ -127,6 +127,10 @@ const STATES = [
   [update({ state: 'failed', error: 'download_failed', ...ready }), 'error', 'Download failed.', 'Check your connection and try again.', 'Retry download', 'download'],
   [update({ state: 'failed', error: 'verification_failed', reason: 'hash_mismatch', ...ready }), 'error', 'Update couldn’t be verified.', 'The downloaded app did not match Album Haven’s signed release. Download it again.', 'Retry download', 'download'],
   [update({ state: 'failed', error: 'install_failed', ...ready }), 'error', 'Update couldn’t be installed.', 'Android didn’t install the update. Download it again.', 'Retry download', 'download'],
+  [update({ state: 'failed', error: 'check_failed', reason: 'signed_out' }), 'error', 'Update check failed.', 'Sign in to Album Haven again, then retry.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'check_failed', reason: 'attestation_refused' }), 'error', 'Update check failed.', 'This server didn’t accept this app’s device check. Try again later.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'check_failed', reason: 'device_unsupported' }), 'error', 'Update check failed.', 'This device can’t verify this app for updates.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'download_failed', reason: 'signed_out', ...ready }), 'error', 'Download failed.', 'Sign in to Album Haven again, then retry.', 'Retry download', 'download'],
 ];
 
 for (const [state, severity, title, message, label, action] of STATES) {

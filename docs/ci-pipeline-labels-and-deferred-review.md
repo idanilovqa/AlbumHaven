@@ -7,6 +7,7 @@ Trusted same-repository pull requests support these controls:
 - `run_reviews`: opt into the calculated full or incremental Codex and PR Agent review. When both review labels are present, `run_reviews` wins.
 - `skip_reviews`: redundant with the default and kept for existing pull requests; skips Codex and PR Agent without making paid review calls. Full test selection is unchanged. CI retains explicit waiver evidence and does not record a successfully reviewed-head baseline.
 - `skip_tests`: skip every test family. Review selection is unchanged. Cloud Verification Gate cannot succeed because a complete passing test pipeline is still required for merge and release.
+- `test_build`: not a PR Gates control; the classifier ignores it, so review and test selection are unchanged. `android-test-build.yml` promotes the head of a labeled same-repository pull request to the Android sandbox channel on each push without waiting for any test, until the label is removed (see `docs/android-release-signing.md`). A sandbox build is never merge, release or stable evidence.
 
 Forks cannot activate repository-owner controls. Label changes trigger a new native pull-request run. Complete passing tests remain mandatory for merge and release regardless of review selection.
 

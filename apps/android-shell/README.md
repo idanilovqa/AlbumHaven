@@ -25,7 +25,8 @@ certificate given by `-PalbumHavenStableCertificateSha256` or
 `-PalbumHavenSandboxCertificateSha256` (SHA-256 of the DER signing certificate,
 lowercase hex) and offer no updates without one; debug builds trust the debug
 signing key. `-PalbumHavenVersionCode` and `-PalbumHavenVersionName` override the
-version.
+version. Pull-request APKs are unsigned evidence; signed releases come only from
+the `android-promote` workflow (see `docs/android-release-signing.md`).
 
 The bridge needs an Android System WebView with `WEB_MESSAGE_LISTENER`. Older
 providers, including the stock API-29 emulator image, get the Update required

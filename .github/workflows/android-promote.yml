@@ -1,0 +1,311 @@
+name: Android Promote
+
+# Promotes one exact, already-verified commit to an Android channel. It builds the release APK
+# once, signs it with the channel key held by the protected environment, and records the result
+# as a data-only workflow artifact: promotion.json (provenance and the Update Manifest v1) plus
+# the APK encrypted to the deployment synchronizer's key. Nothing here deploys or publishes; the
+# outbound-only synchronizer in album-haven-deployments verifies and publishes the artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact 40-character commit SHA whose complete PR Gates pipeline passed
+        required: true
+        type: string
+      channel:
+        description: Android channel
+        required: true
+        type: choice
+        options:
+          - sandbox
+          - stable
+
+permissions:
+  contents: read
+
+# One promotion per channel at a time: version codes are allocated and recorded under this lock.
+concurrency:
+  group: android-promote-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Commit And Allocate Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      version_code: ${{ steps.plan.outputs.version_code }}
+      version_name: ${{ steps.plan.outputs.version_name }}
+      flavor: ${{ steps.plan.outputs.flavor }}
+      certificate: ${{ steps.plan.outputs.certificate }}
+    steps:
+      - name: Require the default branch workflow and an exact commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main || { echo "::error::Promote only from the main branch workflow"; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be 40 lowercase hexadecimal characters"; exit 1; }
+
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v5
+        with:
+          path: tooling
+          persist-credentials: false
+
+      - name: Fetch the promoted commit
+        working-directory: tooling
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          git cat-file -e "$COMMIT^{commit}"
+
+      - name: Verify pipeline, release and allocate the version code
+        id: plan
+        uses: actions/github-script@v7
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          COMMIT: ${{ inputs.commit }}
+          CERTIFICATE: ${{ vars[inputs.channel == 'stable' && 'ANDROID_STABLE_SIGNING_CERT_SHA256' || 'ANDROID_SANDBOX_SIGNING_CERT_SHA256'] }}
+          VERSION_CODE_FLOOR: ${{ vars.ANDROID_VERSION_CODE_FLOOR }}
+        with:
+          script: |
+            const path = require('node:path');
+            const { execFileSync } = require('node:child_process');
+            const tooling = path.join(process.env.GITHUB_WORKSPACE, 'tooling');
+            const promotion = require(path.join(tooling, 'scripts', 'ci', 'android-promotion.cjs'));
+            const git = (...args) => execFileSync('git', args, { cwd: tooling, encoding: 'utf8' });
+            const channel = promotion.requireChannel(process.env.CHANNEL);
+            const commit = promotion.requireCommit(process.env.COMMIT);
+            const certificate = process.env.CERTIFICATE;
+            if (!/^[0-9a-f]{64}$/.test(certificate)) throw new Error(`The ${channel} signing certificate variable is not configured`);
+            const { owner, repo } = context.repo;
+            const repository = `${owner}/${repo}`;
+
+            await github.rest.repos.getCommit({ owner, repo, ref: commit });
+            const pipeline = await promotion.findCompletePipelineRun({
+              repository,
+              commit,
+              listRuns: () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: 'pr-gates.yml', head_sha: commit, event: 'pull_request', status: 'success', per_page: 100,
+              }),
+              listJobs: (run) => github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+              }),
+            });
+            if (!pipeline) throw new Error(`Commit ${commit} has no successful complete PR Gates pipeline`);
+
+            const releaseVersion = promotion.readReleaseVersion(git('show', `${commit}:version.py`));
+            const versionName = promotion.versionNameFor(channel, releaseVersion, commit);
+            const bridge = promotion.readBridgeRange(git('show', `${commit}:apps/android-shell/app/src/main/java/org/albumhaven/shell/BridgeController.kt`));
+            let releaseNotesUrl = `https://github.com/${repository}/commit/${commit}`;
+            if (channel === 'stable') {
+              const tag = `v${releaseVersion}`;
+              let release = null;
+              try {
+                release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+              let releaseTree = '';
+              if (release) {
+                git('fetch', '--no-tags', '--depth=1', 'origin', `+refs/tags/${tag}:refs/tags/${tag}`);
+                releaseTree = git('rev-parse', `${tag}^{tree}`).trim();
+              }
+              const check = promotion.checkStableRelease({
+                release,
+                releaseVersion,
+                owner,
+                sourceTree: git('rev-parse', `${commit}^{tree}`).trim(),
+                releaseTree,
+                changelog: git('show', `${commit}:CHANGELOG.md`),
+              });
+              if (check.errors.length) throw new Error(check.errors.join('\n'));
+              releaseNotesUrl = check.releaseNotesUrl;
+            }
+
+            const tags = await github.paginate(github.rest.git.listMatchingRefs, {
+              owner, repo, ref: `tags/android/${channel}/`, per_page: 100,
+            });
+            const floor = process.env.VERSION_CODE_FLOOR ? Number(process.env.VERSION_CODE_FLOOR) : 0;
+            const versionCode = promotion.nextVersionCode(tags.map((tag) => tag.ref.replace(/^refs\/tags\//, '')), channel, floor);
+            const plan = {
+              repository,
+              channel,
+              commit,
+              versionCode,
+              versionName,
+              certificate,
+              bridgeProtocolMin: bridge.min,
+              bridgeProtocolMax: bridge.max,
+              releaseNotesUrl,
+              runId: Number(process.env.GITHUB_RUN_ID),
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              pipelineRunId: pipeline.runId,
+            };
+            core.setOutput('plan', JSON.stringify(plan));
+            core.setOutput('version_code', String(versionCode));
+            core.setOutput('version_name', versionName);
+            core.setOutput('flavor', promotion.CHANNELS[channel].flavor);
+            core.setOutput('certificate', certificate);
+            await core.summary.addHeading(`Android ${channel} promotion plan`)
+              .addList([
+                `Commit ${commit}`,
+                `Complete pipeline run ${pipeline.url}`,
+                `Version code ${versionCode}, version name ${versionName}`,
+                `Release notes ${releaseNotesUrl}`,
+              ]).write();
+
+  build:
+    name: Build Unsigned Release APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the promoted commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+
+      - name: Confirm the exact commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # Release builds never read a cache another run could have written.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
+
+      - name: Assemble the release APK
+        working-directory: apps/android-shell
+        env:
+          FLAVOR: ${{ needs.verify.outputs.flavor }}
+          VERSION_CODE: ${{ needs.verify.outputs.version_code }}
+          VERSION_NAME: ${{ needs.verify.outputs.version_name }}
+          CERTIFICATE: ${{ needs.verify.outputs.certificate }}
+        run: >-
+          ./gradlew --no-daemon --console=plain "assemble${FLAVOR}Release"
+          "-PalbumHavenVersionCode=$VERSION_CODE"
+          "-PalbumHavenVersionName=$VERSION_NAME"
+          "-PalbumHaven${FLAVOR}CertificateSha256=$CERTIFICATE"
+
+      - name: Keep the unsigned APK for signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: apps/android-shell/app/build/outputs/apk/${{ inputs.channel }}/release/app-${{ inputs.channel }}-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signing runs in the channel's protected environment and never executes the promoted source.
+  sign:
+    name: Sign And Record Promotion
+    needs:
+      - verify
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: android-${{ inputs.channel }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v5
+        with:
+          path: tooling
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build tools
+        run: sdkmanager "build-tools;36.0.0"
+
+      - name: Download the unsigned APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/unsigned
+
+      - name: Sign with the channel key
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          keystore="$RUNNER_TEMP/release.p12"
+          trap 'rm -f "$keystore"' EXIT
+          test -n "$KEYSTORE_BASE64" && test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::The channel signing secrets are not configured"; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/unsigned/app-$CHANNEL-release-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$keystore" --ks-type PKCS12 --ks-key-alias "album-haven-$CHANNEL" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --print-certs --min-sdk-version 29 "$RUNNER_TEMP/signed.apk" > "$RUNNER_TEMP/certs.txt"
+          "$tools/aapt2" dump badging "$RUNNER_TEMP/signed.apk" > "$RUNNER_TEMP/badging.txt"
+
+      - name: Write the manifest and the encrypted APK
+        env:
+          PLAN: ${{ needs.verify.outputs.plan }}
+          ANDROID_ARTIFACT_RECIPIENT_PUBLIC_KEY: ${{ vars.ANDROID_ARTIFACT_RECIPIENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          node tooling/scripts/ci/android-promotion.cjs finalize "--plan=$RUNNER_TEMP/plan.json" \
+            "--apk=$RUNNER_TEMP/signed.apk" "--badging=$RUNNER_TEMP/badging.txt" \
+            "--certs=$RUNNER_TEMP/certs.txt" "--out=$RUNNER_TEMP/promotion"
+          rm -f "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+
+      # The tag is the durable record of allocated version codes; creating an existing tag fails.
+      - name: Record the version tag
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ needs.verify.outputs.plan }}
+        with:
+          script: |
+            const plan = JSON.parse(process.env.PLAN);
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/android/${plan.channel}/${plan.versionCode}`,
+              sha: plan.commit,
+            });
+
+      - name: Upload the promotion artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-promotion-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90

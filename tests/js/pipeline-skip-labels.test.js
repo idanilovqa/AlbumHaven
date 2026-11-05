@@ -5,7 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { applyPipelineSkips } = require('../../scripts/ci/classify-pr-review-scope.cjs');
-const { REQUIRED_JOBS, validateCloudVerificationGate } = require('../../scripts/ci/validate-cloud-verification-gate.cjs');
+const { ANDROID_JOBS, REQUIRED_JOBS, validateCloudVerificationGate } = require('../../scripts/ci/validate-cloud-verification-gate.cjs');
 
 const scope = { mode: 'full', pipelineMode: 'full', functionalChange: true, functionalLines: 500 };
 const trusted = { repository: 'owner/app', headRepository: 'owner/app' };
@@ -32,16 +32,17 @@ test('fork or missing repository context cannot activate pipeline skips', () => 
 test('review waiver permits complete tests but skipped tests never authorize release', () => {
   const jobResults = Object.fromEntries(REQUIRED_JOBS.map(name => [name, 'success']));
   jobResults.pr_agent_review = jobResults.codex_review = 'skipped';
-  const input = { mode: 'trusted', pipelineMode: 'full', reviewMode: 'none', isDraft: false, jobResults };
+  for (const name of ANDROID_JOBS) jobResults[name] = 'success';
+  const input = { mode: 'trusted', pipelineMode: 'full', reviewMode: 'none', isDraft: false, runAndroid: true, jobResults };
   assert.equal(validateCloudVerificationGate(input).conclusion, 'success');
-  for (const name of REQUIRED_JOBS.filter(name => name.startsWith('test_') || name.startsWith('e2e_'))) {
+  for (const name of [...REQUIRED_JOBS, ...ANDROID_JOBS].filter(name => name.startsWith('test_') || name.startsWith('e2e_'))) {
     assert.equal(validateCloudVerificationGate({ ...input, jobResults: { ...jobResults, [name]: 'skipped' } }).conclusion, 'failure');
   }
 });
 
 test('workflow honors test skips without publishing a false reviewed baseline', () => {
   const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/pr-gates.yml'), 'utf8');
-  for (const name of REQUIRED_JOBS.filter(name => name.startsWith('test_') || name.startsWith('e2e_'))) {
+  for (const name of [...REQUIRED_JOBS, ...ANDROID_JOBS].filter(name => name.startsWith('test_') || name.startsWith('e2e_'))) {
     const start = workflow.indexOf(`  ${name}:`);
     const next = workflow.slice(start + 3).search(/^  [a-z0-9_]+:\s*$/m);
     const block = workflow.slice(start, next < 0 ? undefined : start + 3 + next);
@@ -92,5 +93,6 @@ test('CLI emits independent controls while retaining every full test family', ()
     assert.equal(JSON.parse(values.performance_shards_json).length, 5);
     assert.equal(values.run_phase7_auth, 'true');
     assert.equal(values.run_phase7_admin, 'true');
+    assert.equal(values.run_android, 'false');
   }
 });

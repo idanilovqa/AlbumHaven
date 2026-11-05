@@ -6,6 +6,9 @@ origin it is signed in to (`https://albumhaven.org` for Stable, the selected
 public: a browser, `curl` or a script without the app gets the normal sign-in
 refusal, and a signed-in browser gets no manifest or APK without a device key.
 
+Artifacts are produced by the `android-promote` workflow and placed in the
+directory by the deployment synchronizer; see `docs/android-release-signing.md`.
+
 ## Configuration
 
 | Variable | Purpose |

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { applyPerformanceChangeImpact } = require('./performance-change-impact.cjs');
+const { applyPerformanceChangeImpact, matchesPattern } = require('./performance-change-impact.cjs');
 const {
   FUNCTIONAL_SHARDS: FUNCTIONAL_SHARD_CONFIGS,
   PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS,
@@ -50,6 +50,21 @@ function isDocumentationPath(filePath) {
   // Downloadable helpers remain executable code even when shipped under docs/.
   if (/\.(?:ps1|py)$/.test(lower)) return false;
   return lower.startsWith('docs/') || (!normalized.includes('/') && lower.endsWith('.md'));
+}
+
+// The Android shell, its future native modules, and the contract fixtures its Kotlin tests share
+// with the browser. Markdown there is documentation and never needs a Gradle or emulator run.
+const ANDROID_PATH_PATTERNS = Object.freeze([
+  'apps/android-shell/**',
+  'packages/native/**',
+  'tests/fixtures/android-bridge-v1.json',
+  'tests/fixtures/listen-sessions-v1.json',
+]);
+
+function isAndroidPath(filePath) {
+  const normalized = normalizePath(filePath);
+  return !normalized.toLowerCase().endsWith('.md')
+    && ANDROID_PATH_PATTERNS.some((pattern) => matchesPattern(normalized, pattern));
 }
 
 function parseNumstat(numstat) {
@@ -321,15 +336,20 @@ function runCli(env = process.env) {
   const pipeline = classifyPipelineLabels(labels, focusedRequest, action, headSha);
   const selectedBase = selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview: pipeline.forceFullReview });
   // Whole-PR scope excludes commits added only to the target branch.
-  const diffBase = selectedBase === baseSha
-    ? requireSha(execFileSync('git', ['merge-base', baseSha, headSha], { encoding: 'utf8' }).trim(), 'merge base')
-    : selectedBase;
-  const numstat = execFileSync(
+  const mergeBase = requireSha(execFileSync('git', ['merge-base', baseSha, headSha], { encoding: 'utf8' }).trim(), 'merge base');
+  const diffBase = selectedBase === baseSha ? mergeBase : selectedBase;
+  const changedNumstat = (from) => execFileSync(
     'git',
-    ['diff', '--numstat', '--no-renames', diffBase, headSha],
+    ['diff', '--numstat', '--no-renames', from, headSha],
     { encoding: 'utf8' },
   );
+  const numstat = changedNumstat(diffBase);
   const changedPaths = parseNumstat(numstat).map(({ path: changedPath }) => changedPath);
+  // Android jobs cover the whole pull request, so an incremental review never drops them.
+  const wholePrPaths = diffBase === mergeBase
+    ? changedPaths
+    : parseNumstat(changedNumstat(mergeBase)).map(({ path: changedPath }) => changedPath);
+  const runAndroid = pipeline.pipelineMode === 'full' && wholePrPaths.some(isAndroidPath);
   const performanceChangeImpact = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', '..', 'tests', 'ci', 'performance-change-impact.json'),
     'utf8',
@@ -392,6 +412,7 @@ function runCli(env = process.env) {
     `run_performance=${String(performanceShards.length > 0)}`,
     `run_phase7_auth=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth'))}`,
     `run_phase7_admin=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-admin'))}`,
+    `run_android=${String(runAndroid)}`,
     `selected_families_json=${JSON.stringify([
       ...(functionalShards.length ? ['e2e_functional'] : []),
       ...(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth') ? ['e2e_phase7_auth'] : []),
@@ -417,6 +438,7 @@ module.exports = {
   classifyPipelineLabels,
   applyPipelineSkips,
   parseFocusedE2eRequest,
+  isAndroidPath,
   isDocumentationPath,
   parseNumstat,
   classifyReviewScope,

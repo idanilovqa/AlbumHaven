@@ -911,6 +911,38 @@ def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_r
     assert removed == {deleted["path"]}
 
 
+def test_live_full_publication_marker_skips_only_its_own_relation_journal_rows(watcher_repair_inventory):
+    # A full publication clears the journal itself, so its rows skip journaling;
+    # every other writer, and that writer's next transaction, still journals.
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Journal/01.flac", album="Journal"))
+    retitle = "update library.local_tracks set title = title || ' (edit)' returning album_id"
+    journaled = "select count(*) as count from library.local_relation_dirty_albums where album_id = %s"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_relation_dirty_albums")
+        connection.execute("set local album_haven.full_inventory_publication = 'on'")
+        album_id = connection.execute(retitle).fetchone()["album_id"]
+        assert connection.execute(journaled, (album_id,)).fetchone()["count"] == 0
+        connection.commit()
+        connection.execute(retitle)
+        assert connection.execute(journaled, (album_id,)).fetchone()["count"] == 1
+        connection.rollback()
+
+
+def test_live_full_scan_publication_leaves_no_relation_journal(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    first = fixture.entry("Owner/Full/01.flac", album="Full")
+    fixture.seed(first)
+    retagged = {**first, "title": "Full Repair Title"}
+    fixture.adapter.save_snapshot(
+        Path("unused-watcher-repair.json"), {first["path"]: retagged}, "watcher-repair", 2.0,
+        rebuild_relation_projection=True, observed_library_root_ids={root["id"] for root in fixture.roots},
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as count from library.local_relation_dirty_albums").fetchone()["count"] == 0
+        assert connection.execute("select title from library.local_tracks").fetchone()["title"] == "Full Repair Title"
+
+
 def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Demo Album"), "year": 2020}

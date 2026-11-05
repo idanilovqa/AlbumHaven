@@ -8,7 +8,7 @@ Trusted same-repository pull requests support these controls:
 - `skip_reviews`: skip Codex and PR Agent without making paid review calls. Full test selection is unchanged. CI retains explicit waiver evidence and does not record a successfully reviewed-head baseline.
 - `skip_tests`: skip every test family. Review selection is unchanged. Cloud Verification Gate cannot succeed because a complete passing test pipeline is still required for merge and release.
 
-The Android jobs (`test_android`, `test_android_instrumentation`) run in full mode only when the whole pull request, not just the incremental review range, changes `apps/android-shell/`, `packages/native/` or the shared `android-bridge-v1.json` and `listen-sessions-v1.json` fixtures (Markdown excluded). Cloud Verification Gate then requires both to succeed, and otherwise requires both to be skipped. Their unsigned APKs are evidence only; `android-promote` builds and signs installable APKs (see `docs/android-release-signing.md`).
+The Android jobs (`test_android`, `test_android_instrumentation`) run in full mode only when the whole pull request, not just the incremental review range, changes `apps/android-shell/`, `packages/native/` or the shared `tests/fixtures/android-bridge/`, `listen-sessions-v1.json` and `playback-protocol-v1.json` contract fixtures (Markdown excluded). Cloud Verification Gate then requires both to succeed, and otherwise requires both to be skipped. Their unsigned APKs are evidence only; `android-promote` builds and signs installable APKs (see `docs/android-release-signing.md`).
 
 Forks cannot activate repository-owner controls. Label changes trigger a new native pull-request run. Complete passing tests remain mandatory for merge and release regardless of review selection.
 

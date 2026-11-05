@@ -6,7 +6,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
-const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'android-bridge-v1.json'), 'utf8'));
+const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'android-bridge', 'v1.json'), 'utf8'));
 const runtimeDir = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime');
 const handshakePayload = fixture.handshakeResponse.payload;
 

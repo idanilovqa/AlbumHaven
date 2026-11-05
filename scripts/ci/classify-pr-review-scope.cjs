@@ -57,8 +57,9 @@ function isDocumentationPath(filePath) {
 const ANDROID_PATH_PATTERNS = Object.freeze([
   'apps/android-shell/**',
   'packages/native/**',
-  'tests/fixtures/android-bridge-v1.json',
+  'tests/fixtures/android-bridge/**',
   'tests/fixtures/listen-sessions-v1.json',
+  'tests/fixtures/playback-protocol-v1.json',
 ]);
 
 function isAndroidPath(filePath) {

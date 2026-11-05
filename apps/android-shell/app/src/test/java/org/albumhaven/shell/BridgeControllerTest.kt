@@ -26,7 +26,7 @@ private const val ID = "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10"
 
 class BridgeControllerTest {
     // Shared with tests/js/runtime/android-bridge-client.test.js.
-    private val fixture = JSONObject(File("../../../tests/fixtures/android-bridge-v1.json").readText())
+    private val fixture = JSONObject(File("../../../tests/fixtures/android-bridge/v1.json").readText())
 
     private class FakeHost : BridgeHost {
         var connected: Int? = null

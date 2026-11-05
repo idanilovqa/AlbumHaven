@@ -441,29 +441,36 @@ class UpdaterTest {
     }
 
     @Test
-    fun `any status for the session stops the installation timeout`() {
+    fun `an install with no result two minutes after its confirmation becomes ready again`() {
         val updater = ready()
         updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
-        // A status for another session leaves the timer running.
+        // A status for another session changes nothing.
         updater.onInstallStatus(9, InstallStatus.Failed)
-        assertEquals(1, ports.timers.size)
-        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
-        assertTrue(ports.timers.isEmpty())
-        ports.advance(10 * UpdateSchedule.INSTALL_TIMEOUT_MS)
+        var confirmed = 0
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction { confirmed++ })
+        // Showing the confirmation again neither restarts nor stops the timer.
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS - 1)
+        assertTrue(updater.install { error("not reached") })
+        assertEquals(2, confirmed)
         assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.advance(1)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+        // The committed session may be installing, so it is left to Android.
+        assertTrue(ports.abandoned.isEmpty())
+        assertTrue(ports.timers.isEmpty())
     }
 
     @Test
-    fun `a restored update has no installation timeout`() {
-        ready().install { it() }
+    fun `only a result for the session stops the installation timeout`() {
+        val updater = ready()
+        updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
-        val restored = updater()
-        assertEquals(UpdateState.Ready(manifest()), restored.state)
-        // The process that set the old timer is gone.
-        ports.timers.clear()
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        updater.onInstallStatus(3, InstallStatus.Succeeded)
+        assertTrue(ports.timers.isEmpty())
         ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS)
-        assertEquals(UpdateState.Ready(manifest()), restored.state)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
     }
 
     @Test

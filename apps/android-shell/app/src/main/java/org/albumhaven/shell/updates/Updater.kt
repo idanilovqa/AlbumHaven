@@ -341,9 +341,10 @@ class Updater(
     }
 
     /**
-     * No status came for the session in time. A session not yet committed cannot be installing and
-     * is abandoned; a committed one may be, so it is left for its later status, which the session
-     * ID still matches until a retry replaces it.
+     * No result came for the session in time; Android's request for the user's confirmation is not
+     * one, so the timer runs on through it and its re-showing. A session not yet committed cannot
+     * be installing and is abandoned; a committed one may be, so it is left for its later status,
+     * which the session ID still matches until a retry replaces it.
      */
     private fun installTimedOut(attempt: Int) {
         val current = state as? UpdateState.Installing ?: return
@@ -353,6 +354,7 @@ class Updater(
             if (ports.sessionExists(id)) ports.abandon(id)
             sessionId = null
         }
+        confirm = null
         state = UpdateState.Ready(current.manifest)
     }
 
@@ -390,7 +392,6 @@ class Updater(
      */
     fun onInstallStatus(statusSessionId: Int, status: InstallStatus) {
         if (statusSessionId != sessionId) return
-        clearInstallTimeout()
         val manifest = when (val current = state) {
             is UpdateState.Installing -> current.manifest
             is UpdateState.Ready -> current.manifest
@@ -404,6 +405,7 @@ class Updater(
             }
             // Android replaces the package and ends this process; nothing is left to show.
             InstallStatus.Succeeded -> {
+                clearInstallTimeout()
                 sessionId = null
                 store.stagedManifest = null
             }

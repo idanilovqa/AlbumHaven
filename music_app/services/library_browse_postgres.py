@@ -10982,18 +10982,21 @@ def _problematic_files_sql(
           select distinct scoped_files.id
           from physical_seed_folders
           join lateral (
-            select id, track_id, private_path
-            from library.local_track_files
-            where library_root_id = physical_seed_folders.library_root_id
-              and regexp_replace(case when library.local_path_style(private_path) = 'windows'
-                then replace(library.local_path_key(private_path), chr(92), '/')
-                else library.local_path_key(private_path) end, '/[^/]*$', '')
+            -- Check each folder file's track by key; a join outside this lateral
+            -- hashed every track in the library.
+            select files.id
+            from library.local_track_files files
+            join library.local_tracks scoped_tracks
+              on scoped_tracks.id = files.track_id
+             and scoped_tracks.library_id = physical_seed_folders.library_id
+            where files.library_root_id = physical_seed_folders.library_root_id
+              and regexp_replace(case when library.local_path_style(files.private_path) = 'windows'
+                then replace(library.local_path_key(files.private_path), chr(92), '/')
+                else library.local_path_key(files.private_path) end, '/[^/]*$', '')
                 = physical_seed_folders.physical_parent
-              and scan_cache_stale is false
+              and files.scan_cache_stale is false
             offset 0
           ) scoped_files on true
-          join library.local_tracks scoped_tracks on scoped_tracks.id = scoped_files.track_id
-          where scoped_tracks.library_id = physical_seed_folders.library_id
         ),
         """
         physical_scope_join = "join physical_scope_file_ids on physical_scope_file_ids.id = library.local_track_files.id"
@@ -11636,10 +11639,11 @@ def _problematic_files_sql(
         ),
         """
     elif candidate_summary:
+        # Join the folder context once; inside the per-track lateral loop the
+        # planner rebuilt its hash for every selected file.
         selected_active_track_file_rows_sql = f"""
-        selected_active_track_file_rows as materialized (
-          select selected_track_file.*, physical_file_context.file_mixed_album_folder,
-            physical_file_context.local_album_membership_problem
+        selected_track_file_rows as materialized (
+          select selected_track_file.*
           from selected_tracks
           cross join lateral (
             select
@@ -11666,8 +11670,13 @@ def _problematic_files_sql(
               and library.local_track_files.scan_cache_stale is false
             offset 0
           ) selected_track_file
+        ),
+        selected_active_track_file_rows as materialized (
+          select selected_track_file_rows.*, physical_file_context.file_mixed_album_folder,
+            physical_file_context.local_album_membership_problem
+          from selected_track_file_rows
           join physical_file_context
-            on physical_file_context.file_id = selected_track_file.file_id
+            on physical_file_context.file_id = selected_track_file_rows.file_id
         ),
         """
     else:
@@ -11864,6 +11873,8 @@ def _problematic_files_sql(
           join selected_albums
             on selected_albums.id = library.local_tracks.album_id
            and selected_albums.library_id = library.local_tracks.library_id
+          -- The CTE row estimate is far too high; an id array keeps the album index.
+          where library.local_tracks.album_id = any(array(select id from selected_albums))
           {exception_source_track_union}
         ),
         {selected_active_track_file_rows_sql}

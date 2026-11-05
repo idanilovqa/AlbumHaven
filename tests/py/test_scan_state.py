@@ -2438,7 +2438,8 @@ def test_scan_future_cancellation_remains_normal(
     library_state.update(file_cache={}, albums=[], last_scan=0.0)
     _install_scan_cache_adapter(monkeypatch)
     monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
-    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+    events = []
+    monkeypatch.setattr(scan_state, "log_app_event", lambda _cfg, _logger, action, **fields: events.append((action, fields)))
 
     def cancel(**_kwargs):
         raise cancellation("cancelled")
@@ -2456,6 +2457,7 @@ def test_scan_future_cancellation_remains_normal(
         assert future.result(timeout=5) is None
     assert future.exception() is None
     assert followups == []
+    assert ("Library indexing cancelled", {"level": "info", "reason": cancellation.__name__, "detail": "cancelled"}) in events
     assert library_state["scan_outcome"] == "cancelled"
     assert library_state["scan_in_progress"] is False
     assert "active_scan_preview_state" not in library_state

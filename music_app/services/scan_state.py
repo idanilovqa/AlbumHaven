@@ -552,11 +552,12 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_outcome"] = "completed"
-    except (ScanCancelled, ScanCachePublicationSuperseded):
+    except (ScanCancelled, ScanCachePublicationSuperseded) as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_outcome"] = "cancelled"
-        log_app_event(cfg, logger, "Library indexing cancelled", level="info")
+        log_app_event(cfg, logger, "Library indexing cancelled", level="info",
+                      reason=type(exc).__name__, detail=str(exc))
     except Exception as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:

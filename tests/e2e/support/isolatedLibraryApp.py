@@ -451,6 +451,9 @@ LASTFM_SCROBBLE_ARTIST = "Album Haven Last.fm Fixture"
 LASTFM_SCROBBLE_ALBUM = "Signed Scrobble Journey"
 LASTFM_SCROBBLE_TRACK = "Fake Loop Source"
 LASTFM_SCROBBLE_YEAR = 2026
+# Last.fm never scrobbles a track of 30 s or less, so the album's later tracks outlast the 14 s
+# loop source its first track keeps for the loop cases.
+LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS = 32
 TRANSATLANTIC_ARTIST = "Transatlantic"
 TRANSATLANTIC_NEAL_ALBUM = "The Transatlantic Demos"
 NEAL_SCOPE_TRACK_TITLE = "Family Scope Beacon"
@@ -592,7 +595,7 @@ def _resolve_ffmpeg_executable() -> str | None:
         return None
 
 
-def ensure_playable_loop_source(path: Path) -> None:
+def ensure_playable_loop_source(path: Path, *, duration_seconds: int = 14) -> None:
     if path.is_file():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -602,9 +605,9 @@ def ensure_playable_loop_source(path: Path) -> None:
     result = subprocess.run(
         [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-            "anoisesrc=color=white:amplitude=0.08:duration=14:sample_rate=44100:seed=41",
+            f"anoisesrc=color=white:amplitude=0.08:duration={duration_seconds}:sample_rate=44100:seed=41",
             "-f", "lavfi", "-i",
-            "anoisesrc=color=white:amplitude=0.08:duration=14:sample_rate=44100:seed=97",
+            f"anoisesrc=color=white:amplitude=0.08:duration={duration_seconds}:sample_rate=44100:seed=97",
             "-filter_complex", "[0:a][1:a]amerge=inputs=2[stereo]",
             "-map", "[stereo]", "-ac", "2",
             "-codec:a", "libmp3lame", "-q:a", "4", str(path),
@@ -2469,6 +2472,7 @@ def materialize_fixture_track_files(
 
     loop_path = _absolute_fixture_path(playable_loop_source)
     playback_album_dir = loop_path.parent
+    scrobble_journey_source: Path | None = None
     prepared_parent_dirs: set[Path] = set()
     for cache_path, metadata in file_cache.items():
         track_path = _absolute_fixture_path(
@@ -2509,8 +2513,9 @@ def materialize_fixture_track_files(
                 and str(metadata.get("album") or "").strip()
                 == PROBLEMATIC_ENCODING_ALBUM
             )
+            in_playback_album = track_path.parent == playback_album_dir
             copy_playable_source = (
-                track_path.parent == playback_album_dir
+                in_playback_album
                 or is_player_artwork_fixture_album
                 or is_track_credit_player_fixture_album
                 or is_cover_persistence_fixture_track
@@ -2519,8 +2524,15 @@ def materialize_fixture_track_files(
             )
             created_track = False
             try:
-                if copy_playable_source:
-                    with loop_path.open("rb") as source, track_path.open("xb") as target:
+                if in_playback_album and scrobble_journey_source is None:
+                    # The album's first later track is generated in place; the rest copy it.
+                    ensure_playable_loop_source(
+                        track_path, duration_seconds=LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS,
+                    )
+                    scrobble_journey_source = track_path
+                elif copy_playable_source:
+                    source_path = scrobble_journey_source if in_playback_album else loop_path
+                    with source_path.open("rb") as source, track_path.open("xb") as target:
                         shutil.copyfileobj(source, target)
                 else:
                     track_path.touch(exist_ok=False)

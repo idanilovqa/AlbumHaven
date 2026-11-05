@@ -16,6 +16,7 @@ export {
   controlLastfmProvider,
   LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
   LASTFM_PLAYBACK_TARGET,
+  LASTFM_SCROBBLE_TRACK,
   readLastfmProviderRequests,
   readLastfmProviderState,
 } from './lastfmProviderHelpers.js';

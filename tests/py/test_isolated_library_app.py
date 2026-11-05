@@ -3582,10 +3582,10 @@ def test_isolated_fixture_seeds_alias_parity_rows_and_nested_family_paths(tmp_pa
     }
 
 
-def test_isolated_fixture_copies_playback_album_bytes_and_other_production_paths(tmp_path):
+def test_isolated_fixture_copies_playback_album_bytes_and_other_production_paths(tmp_path, monkeypatch):
     library_root = tmp_path / "media"
     loop_source = library_root / "Artist" / "Album" / "01 - Loop.mp3"
-    preloaded_track = library_root / "Artist" / "Album" / "02 - Track 2.mp3"
+    preloaded_tracks = [library_root / "Artist" / "Album" / f"0{number} - Track {number}.mp3" for number in (2, 3)]
     player_artwork_tracks = [
         (
             library_root
@@ -3606,7 +3606,7 @@ def test_isolated_fixture_copies_playback_album_bytes_and_other_production_paths
     loop_source.write_bytes(b"playable-loop")
     file_cache = {
         str(loop_source): {"path": str(loop_source), "mtime": 0.0, "size": 0},
-        str(preloaded_track): {"path": str(preloaded_track), "mtime": 0.0, "size": 0},
+        **{str(track): {"path": str(track), "mtime": 0.0, "size": 0} for track in preloaded_tracks},
         **{
             str(player_artwork_track): {
                 "path": str(player_artwork_track),
@@ -3629,10 +3629,22 @@ def test_isolated_fixture_copies_playback_album_bytes_and_other_production_paths
         str(placeholder): {"path": str(placeholder), "mtime": 0.0, "size": 0},
     }
 
+    generated = []
+
+    def generate(path, *, duration_seconds=14):
+        generated.append((path, duration_seconds))
+        path.write_bytes(b"scrobble-journey")
+
+    monkeypatch.setattr(isolatedLibraryApp, "ensure_playable_loop_source", generate)
     isolatedLibraryApp.materialize_fixture_track_files(file_cache, loop_source)
 
     assert loop_source.read_bytes() == b"playable-loop"
-    assert preloaded_track.read_bytes() == b"playable-loop"
+    # Last.fm never scrobbles the 14 s loop source, so the album's later tracks share one longer source.
+    assert generated == [
+        (preloaded_tracks[0], isolatedLibraryApp.LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS),
+    ]
+    assert isolatedLibraryApp.LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS > 30
+    assert all(track.read_bytes() == b"scrobble-journey" for track in preloaded_tracks)
     assert all(
         player_artwork_track.read_bytes() == b"playable-loop"
         for player_artwork_track in player_artwork_tracks
@@ -3893,6 +3905,10 @@ def test_playable_loop_source_builds_distinct_stereo_mp3_without_visible_windows
     assert all(source.startswith("anoisesrc=") for source in input_sources)
     assert input_sources[0] != input_sources[1]
     assert all("duration=14" in source for source in input_sources)
+
+    isolatedLibraryApp.ensure_playable_loop_source(tmp_path / "journey.mp3", duration_seconds=32)
+    journey = recorded["command"]
+    assert all("duration=32" in journey[index + 1] for index, argument in enumerate(journey) if argument == "-i")
     assert all("sample_rate=44100" in source for source in input_sources)
     assert all("seed=" in source for source in input_sources)
     assert command[command.index("-filter_complex") + 1] == (

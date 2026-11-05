@@ -596,6 +596,8 @@ export class TrackModalActions {
 
   async playTrackAtAndWaitForConsecutiveLastfmJourneys(index, expectedTitles, options = {}) {
     const titles = [...expectedTitles].map((title) => String(title || '').trim()).filter(Boolean);
+    // Tracks Last.fm never scrobbles still complete; only these titles scrobble.
+    const scrobbleTitles = options.scrobbleTitles ? [...options.scrobbleTitles] : titles;
     if (titles.length < 2) {
       throw new Error('Consecutive Last.fm playback requires at least two expected tracks.');
     }
@@ -619,7 +621,7 @@ export class TrackModalActions {
       await followingTrackButton.click();
       await expect(followingTrackButton).toHaveAttribute('aria-label', 'Play track');
       await journeyObserver.waitForStableExactJourneys({
-        scrobbleTitles: titles,
+        scrobbleTitles,
         completionTitles: titles,
         timeout: options.timeout || 60000,
       });

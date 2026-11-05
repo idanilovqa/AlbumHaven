@@ -643,7 +643,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
-              "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order",
+              "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks over 30 s each scrobble exactly once in order and a shorter one never does",
               "area": "playback"
             }
           ]

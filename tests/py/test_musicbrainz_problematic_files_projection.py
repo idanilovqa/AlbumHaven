@@ -71,3 +71,12 @@ def test_non_owners_and_failures_leave_the_existing_payload_unchanged():
         payload = {"items": [dict(item) for item in ALBUMS], "count": 2}
         project_artist_problems_into_problematic_files(request, payload)
         assert payload == {"items": ALBUMS, "count": 2}
+
+
+def test_bounded_first_page_stays_compact_without_artist_rows():
+    payload = {"items": [dict(item) for item in ALBUMS], "count": 2, "complete": False}
+
+    project_artist_problems_into_problematic_files(_request(ROWS), payload)
+
+    assert [item["key"] for item in payload["items"]] == ["album-b", "album-k"]
+    assert payload["count"] == 2

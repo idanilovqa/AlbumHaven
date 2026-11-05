@@ -206,6 +206,10 @@ def project_artist_problems_into_problematic_files(request: Request, payload: ob
     """
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return payload
+    if payload.get("complete") is False:
+        # The bounded first page stays compact; Artist rows arrive with the
+        # complete summary the client always loads next.
+        return payload
     if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return payload
     service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)

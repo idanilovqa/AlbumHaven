@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const api = require('../../../music_app/static/js/appearance-backgrounds.js');
-const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',docked_compact_player_behavior:'follow_sidebar',docked_compact_player_regular_style:false,compact_player_motion:'normal',floating_player_edge:{source:'player',color:null},album_details_layout:'classic_bar',album_playing_row_animation:'enabled',library_source_indicators:{card_colors:false,hover_outline_colors:false,icons:true},alert_family:'ember',loop_control_style:'capsule',action_button_outlines:true,device_profiles:{}});
+const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',docked_compact_player_behavior:'follow_sidebar',docked_compact_player_regular_style:false,compact_player_motion:'normal',floating_player_edge:{source:'player',color:null},album_details_layout:'classic_bar',album_playing_row_animation:'enabled',library_source_indicators:{card_colors:false,hover_outline_colors:false,icons:true},album_art_quality_alert:'enabled',alert_family:'ember',loop_control_style:'capsule',action_button_outlines:true,device_profiles:{}});
 const custom = () => ({...defaults(),palette_id:'steelblue',player_override:{background:'#14283B',fill:'#8BAED1',edge:'#B9CADD'}});
 function setup(options={}) {
   const requests=[],applied=[];
@@ -513,4 +513,21 @@ test('cleared Appearance controller cannot repaint through its real bridge after
   assert.equal(controller.getState().loadFailed, true);
   assert.equal(context.state.player.appearance.seekbarMode, 'default');
   assert.equal(paints, 0, 'An expired account draft must not paint the live player');
+});
+
+test('UI-ARTQ: Show art quality alert on album details page is an Album page choice that defaults on',async()=>{
+  const {controller,requests,applied}=setup();
+  assert.equal(controller.getState().draft.album_art_quality_alert,'enabled');
+  assert.throws(()=>controller.setAlbumArtQualityAlert('sometimes'));
+  controller.setAlbumArtQualityAlert('disabled');
+  assert.equal(controller.getState().draft.album_art_quality_alert,'disabled');
+  assert.deepEqual(applied,[]);
+  assert.equal(await controller.save(),true);
+  assert.equal(requests[0].payload.album_art_quality_alert,'disabled');
+  const attrs={};
+  const root={style:{setProperty(){},removeProperty(){}},setAttribute(name,value){attrs[name]=value;},removeAttribute(name){delete attrs[name];}};
+  api.applyTheme({...custom(),album_art_quality_alert:'disabled'},root);
+  assert.equal(attrs['data-album-art-quality-alert'],'disabled');
+  api.applyTheme(custom(),root);
+  assert.equal(attrs['data-album-art-quality-alert'],'enabled');
 });

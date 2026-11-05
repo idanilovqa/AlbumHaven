@@ -39,25 +39,30 @@ test('Album Details headers never render library source markers', () => {
   assert.match(html, /album-details-header__actions/);
 });
 
-test('Album Details renders the backend poor-art classification as a focusable SmallAlert beside the title', () => {
+test('UI-ARTQ: the poor-art warning leaves the header and sits on the album art', () => {
   const context = loadComponents();
-  const html = context.buildAlbumDetailsHeaderHtml({
-    layout: 'classic_bar',
-    artist: 'Sandy Alex G',
-    album: 'Rocket',
-    year: '2017',
-    poorArtQuality: true,
-  });
+  const header = context.buildAlbumDetailsHeaderHtml({ layout: 'classic_bar', artist: 'Sandy Alex G', album: 'Rocket', year: '2017', poorArtQuality: true });
+  assert.doesNotMatch(header, /Poor art quality|quality-alert/, 'never in the header');
 
-  assert.match(html, /album-details-header__primary-row/);
-  assert.match(html, /small-alert small-alert--warning album-details-header__quality-alert/);
-  assert.match(html, /aria-label="Poor art quality"/);
-  assert.match(html, /tabindex="0"/);
-  assert.match(html, /small-alert__text">Poor art quality</);
-  assert.doesNotMatch(
-    context.buildAlbumDetailsHeaderHtml({ album: 'Rocket', poorArtQuality: false }),
-    /Poor art quality|album-details-header__quality-alert/,
-  );
+  const inserted = [];
+  const shell = { insertAdjacentHTML: (_where, html) => inserted.push(['art', html]) };
+  const body = { insertAdjacentHTML: (_where, html) => inserted.push(['body', html]) };
+  const removed = [];
+  const page = { classList: { contains: () => false }, querySelectorAll: () => [{ remove: () => removed.push(1) }] };
+  const cover = { closest: (selector) => (selector === '#track-modal' ? page : body), querySelector: () => shell };
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: true });
+  assert.equal(removed.length, 1, 'a re-render replaces the previous alert');
+  assert.equal(inserted[0][0], 'art');
+  assert.match(inserted[0][1], /small-alert small-alert--warning album-details-art-quality-alert" role="status" aria-label="Poor art quality"[^>]*tabindex="0"/);
+  assert.match(inserted[0][1], /small-alert__text">Poor art quality</);
+
+  context.usesMobilePageLayout = () => true;
+  page.classList.contains = (name) => name === 'is-mobile-page';
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: true });
+  assert.equal(inserted[1][0], 'body', 'mobile places it on the page body, not the header');
+
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: false });
+  assert.equal(inserted.length, 2, 'albums without the classification show nothing');
 });
 
 test('Album Details renders library sources as focusable compact alerts in the source color', () => {

@@ -92,7 +92,7 @@ test('shared alert CSS uses the same tinted surface family and honors reduced mo
   assert.match(css, /\.small-alert:focus-visible/);
   assert.doesNotMatch(css, /\.album-card__artbox-trigger:hover \.small-alert/);
   assert.match(css, /\.album-card__artbox-trigger:focus-visible \.small-alert/);
-  assert.match(css, /\.small-alert:hover[^}]*width:\s*min\(154px,\s*100%\)/s);
+  assert.match(css, /\.small-alert:hover[^}]*max-width:\s*min\(260px,\s*100%\)/s);
   assert.match(css, /\.small-alert__text\s*\{[^}]*padding:\s*0 14px 0 4px/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--primary\s*\{[^}]*background:\s*var\(--alert-edge\)/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--secondary\s*\{[^}]*border-color:\s*color-mix\([^;]*var\(--alert-edge\)/s);

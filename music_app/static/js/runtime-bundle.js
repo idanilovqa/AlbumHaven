@@ -5230,19 +5230,11 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const titleId = escapeHtml(config.titleId || 'track-modal-title');
   const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
   const actionHtml = String(config.actionsHtml || '');
-  const qualityAlertHtml = config.poorArtQuality === true
-    ? buildSmallAlertHtml({
-      severity: 'warning',
-      message: 'Poor art quality',
-      className: 'album-details-header__quality-alert',
-      focusable: true,
-    })
-    : '';
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3></div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -5266,7 +5258,25 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, sourceMarkersHtml, ...tagParts].join('');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3></div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+}
+
+// UI-ARTQ: the poor-art warning sits on the album art's top-right corner (desktop) or the album page
+// body's top-right corner (mobile), never in the header. Collapsed it is the icon; hover or focus
+// expands it leftward to its full text. The Album page setting hides it (data-album-art-quality-alert).
+function renderAlbumArtQualityAlert(coverElement, album) {
+  const page = coverElement?.closest?.('#track-modal');
+  page?.querySelectorAll?.('.album-details-art-quality-alert').forEach((node) => node.remove());
+  if (album?.poor_art_quality !== true || !coverElement) return;
+  const mobile = Boolean(page?.classList?.contains('is-mobile-page'))
+    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const host = mobile ? coverElement.closest('.track-modal-body') : coverElement.querySelector('.track-modal-cover-shell');
+  host?.insertAdjacentHTML('beforeend', buildSmallAlertHtml({
+    severity: 'warning',
+    message: 'Poor art quality',
+    className: 'album-details-art-quality-alert',
+    focusable: true,
+  }));
 }
 
 const ALBUM_SERVICE_LINK_PROVIDERS = Object.freeze({
@@ -5424,7 +5434,6 @@ function syncMobileAlbumComposition(album) {
         title: album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
-        poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
@@ -36230,7 +36239,6 @@ function renderTrackModalRelease(album) {
       releaseType: album.release_type || 'ALBUM',
       sourceMarkersHtml: coverSourceMarkersHtml,
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -36363,6 +36371,7 @@ function renderTrackModalRelease(album) {
     `;
   }
   if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  if (typeof renderAlbumArtQualityAlert === 'function') renderAlbumArtQualityAlert(els.cover, albumMissing ? null : album);
   const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
     ? '' : buildAlbumServiceLinksHtml(album.external_links);
   if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);

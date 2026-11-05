@@ -59,7 +59,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  width: 30px;
+  width: max-content;
+  max-width: 30px;
   height: 30px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--alert-edge) 72%, transparent);
@@ -67,13 +68,14 @@
   background: var(--alert-tint);
   color: var(--alert-ink);
   box-shadow: 0 0 16px color-mix(in srgb, var(--alert-edge) 20%, transparent);
-  transition: width 180ms ease, box-shadow 180ms ease;
+  transition: max-width 180ms ease, box-shadow 180ms ease;
 }
 
 .small-alert:hover,
 .small-alert:focus-visible,
 .album-card__artbox-trigger:focus-visible .small-alert {
-  width: min(154px, 100%);
+  /* Grows to exactly its icon and text: no dead space. */
+  max-width: min(260px, 100%);
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
@@ -82,6 +84,7 @@
 .small-alert.small-alert--badge,
 .small-alert.small-alert--badge:is(:hover, :focus-visible) {
   width: 28px;
+  max-width: none;
   height: 28px;
   border-color: color-mix(in srgb, var(--alert-edge) 70%, white 30%);
   background: var(--alert-edge);

@@ -75,6 +75,9 @@
   min-width: 0;
 }
 
-.album-details-header__quality-alert {
-  flex: 0 0 auto;
-}
+/* UI-ARTQ: art-quality warning anchored to the art's (mobile: the page body's) top-right corner,
+   so the shared SmallAlert grows leftward to its text on hover or focus. */
+.track-modal-cover-shell > .album-details-art-quality-alert,
+#track-modal.is-mobile-page .track-modal-body > .album-details-art-quality-alert { position: absolute; top: 8px; right: 8px; z-index: 2; }
+#track-modal.is-mobile-page .track-modal-body:has(> .album-details-art-quality-alert) { position: relative; }
+:root[data-album-art-quality-alert="disabled"] .album-details-art-quality-alert { display: none; }

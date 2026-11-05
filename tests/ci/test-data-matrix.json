@@ -10361,6 +10361,51 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "desktop poor-art warning sits on the art top-right and expands leftward to its text with no dead space",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop-poor-art-warning-sits-on-the-art-top-right-and-expands-leftward-to-its-text-with-no-dead-space"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "the Album page setting hides the poor-art warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the-album-page-setting-hides-the-poor-art-warning"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "mobile poor-art warning sits on the page body top-right, not in the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-poor-art-warning-sits-on-the-page-body-top-right-not-in-the-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,

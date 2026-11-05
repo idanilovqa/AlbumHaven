@@ -1930,7 +1930,6 @@ function renderTrackModalRelease(album) {
       releaseType: album.release_type || 'ALBUM',
       sourceMarkersHtml: coverSourceMarkersHtml,
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -2063,6 +2062,7 @@ function renderTrackModalRelease(album) {
     `;
   }
   if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  if (typeof renderAlbumArtQualityAlert === 'function') renderAlbumArtQualityAlert(els.cover, albumMissing ? null : album);
   const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
     ? '' : buildAlbumServiceLinksHtml(album.external_links);
   if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);

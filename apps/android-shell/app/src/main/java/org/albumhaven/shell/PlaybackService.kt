@@ -118,7 +118,6 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var restoreStore: PlaybackRestoreStore
     private lateinit var audioManager: AudioManager
     private lateinit var focusRequest: AudioFocusRequest
-    private var noisyRegistered = false
     private var lastSavedMs = 0L
 
     // When the applied queue's references were issued at the latest, and the last revision refreshed for a failure.
@@ -488,8 +487,6 @@ class PlaybackService : MediaLibraryService() {
     private fun requestFocus() = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
 
     private fun watchNoisy(enabled: Boolean) {
-        if (enabled == noisyRegistered) return
-        noisyRegistered = enabled
         if (enabled) {
             ContextCompat.registerReceiver(
                 this,

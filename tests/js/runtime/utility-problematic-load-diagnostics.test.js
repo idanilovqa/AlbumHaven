@@ -513,6 +513,47 @@ test('a render-suppressed complete load paints the refreshed detail that replace
   assert.ok(calls.renders >= 1, 'the refreshed detail replaced the clicked request, so it must paint');
 });
 
+test('a changed complete summary keeps the loaded off-page detail usable until its refresh lands', async () => {
+  const fullResponse = createDeferred();
+  const refreshedDetail = createDeferred();
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const detail = (name) => ({ key: 'off-page', name, detail_loaded: true, tracks: [],
+    repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] });
+  let detailRequests = 0;
+  const { context } = loadHelper({
+    async fetch(url) {
+      const target = String(url);
+      if (target.endsWith('?limit=50')) {
+        return json({ complete: false, items: [{ key: 'first-page', name: 'First page', detail_loaded: false }] });
+      }
+      if (target.includes('/detail?')) {
+        detailRequests += 1;
+        return detailRequests === 1 ? json(detail('Clicked detail')) : refreshedDetail.promise;
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, { render: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.state.utility.problematicFiles.push({ key: 'off-page', name: 'Off page', detail_loaded: false });
+  context.state.utility.selectedProblematicKey = 'off-page';
+  await context.loadProblematicAlbumDetail('off-page', true);
+  fullResponse.resolve(json({ items: [
+    { key: 'first-page', name: 'First page', detail_loaded: false },
+    { key: 'off-page', name: 'Off page', issue_count: 2, detail_loaded: false },
+  ] }));
+  for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+
+  const visible = context.state.utility.problematicFiles.find((item) => item.key === 'off-page');
+  assert.equal(detailRequests, 2, 'a changed summary still refreshes the selected detail');
+  assert.equal(visible.detail_loaded, true, 'problem controls stay usable while the refresh is in flight');
+  assert.equal(visible.name, 'Clicked detail');
+  refreshedDetail.resolve(json(detail('Refreshed detail')));
+  await load;
+  assert.equal(context.state.utility.problematicFiles.find((item) => item.key === 'off-page').name, 'Refreshed detail');
+});
+
 test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
   const fullResponse = createDeferred();
   const requestedUrls = [];

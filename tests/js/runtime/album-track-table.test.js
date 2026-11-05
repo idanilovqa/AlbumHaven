@@ -94,8 +94,9 @@ test('AlbumTrackTable names the track problem on the Problematic Files icon', ()
     }],
   });
 
-  const label = 'Year mismatch, Missing album artist. Open this track in Problematic Files';
-  assert.match(html, new RegExp(`class="track-problem-link"[^>]*title="${label}"[^>]*aria-label="${label}"`));
+  // The hover names the problems; the accessible name stays the stable action name.
+  const title = 'Year mismatch, Missing album artist. Open this track in Problematic Files';
+  assert.match(html, new RegExp(`class="track-problem-link"[^>]*title="${title}"[^>]*aria-label="Open this track in Problematic Files"`));
 });
 
 test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {

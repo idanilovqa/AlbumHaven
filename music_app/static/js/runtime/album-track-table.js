@@ -87,11 +87,11 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
     .map((reason) => String(reason || '').trim()).filter(Boolean);
   // The reasons arrive with Album Details, so hovering never loads Problematic Files.
-  const problemLabel = problemReasons.length
+  const problemTitle = problemReasons.length
     ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
     : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemLabel)}" aria-label="${escapeHtml(problemLabel)}">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {

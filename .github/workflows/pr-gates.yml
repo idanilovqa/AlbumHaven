@@ -212,6 +212,15 @@ jobs:
           PLAYWRIGHT_PYTHON: ${{ env.pythonLocation }}/bin/python
         run: npm run test:js:all
 
+      # Records web-only, existing-bridge or native-impact for the whole pull request and fails a
+      # site the latest or previous stable APK cannot run (docs/android-release-signing.md).
+      - name: Classify Android release and enforce release order
+        if: ${{ !cancelled() }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/android-release-compatibility.cjs
+
       - name: Upload portable foundation version manifest
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

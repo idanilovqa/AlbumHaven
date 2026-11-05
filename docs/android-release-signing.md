@@ -108,6 +108,46 @@ gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-h
 Approve the `android-<channel>` deployment when the sign job waits. Promote and
 accept sandbox before stable.
 
+## Web and APK release order
+
+Production web releases support the latest and the immediately previous stable
+APK. `tests/fixtures/android-bridge/stable-shells.json` records both: version
+code, source commit, bridge protocol range and stable capabilities. Sandbox may
+require its latest promoted APK.
+
+The JavaScript job of every pull request runs
+`scripts/ci/android-release-compatibility.cjs`, which records one class in the
+job summary:
+
+| Class | Meaning | Release |
+| --- | --- | --- |
+| `web-only` | No bridge use, bridge contract or APK route changed. | Deploy the web. |
+| `existing-bridge` | Bridge web code, the stable record or a route the APK calls changed, using capabilities the latest stable APK has. | Deploy the web after the latest and previous stable fixture tests pass. |
+| `native-impact` | Shell or native source, a shared contract fixture or the bridge protocol range changed, or the site uses a capability the latest stable APK lacks. | Promote and accept a sandbox APK; publish stable before the web relies on it. |
+
+The same step fails the pull request when the latest or the previous stable APK
+cannot run the site: no shared bridge protocol, or a capability the site marks
+`required` in `ANDROID_BRIDGE_CAPABILITY_USE` (`android-bridge-client.js`) is
+missing from either. A capability marked `optional` may ship first; the site
+hides that feature until the shell advertises it. A shell missing a required
+capability refuses the handshake and shows its Update required screen.
+
+To make web code depend on a new capability:
+
+1. Add the capability to the shell and gate the web feature on it (`optional`).
+2. Promote and accept a sandbox APK, then promote and publish stable.
+3. Record that promotion in `stable-shells.json`: the new APK becomes `latest`
+   and the old `latest` becomes `previous`. CI checks each promoted entry
+   against its `android/stable/<code>` tag, that commit's fixture capabilities
+   and its bridge range, and fails while the record still describes unpromoted
+   shells after a stable tag exists.
+4. Only once both recorded shells have the capability may the site mark it
+   `required`.
+
+A new bridge protocol adds `tests/fixtures/android-bridge/v<N>.json`. The site
+keeps the previous stable protocol in its range until that APK leaves the
+record.
+
 ## Rollback
 
 Roll forward only: promote the last good commit again. It receives a higher

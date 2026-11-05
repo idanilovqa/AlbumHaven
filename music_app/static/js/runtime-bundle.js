@@ -11860,6 +11860,8 @@ const androidNativePlayback = {
   // Android may hold a queue this document sent or adopted, answered or superseded; only
   // `playback.stop` releases it.
   holdsQueue: false,
+  // The unanswered start that replaces Android's current item; a pause supersedes it.
+  startingRevision: 0,
   items: [],
   index: 0,
   generation: 0,
@@ -12045,6 +12047,7 @@ async function startAndroidNativePlaybackTrack(track, {
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
+  native.startingRevision = keepCurrent ? 0 : revision;
   native.ownerIntent = Boolean(autoplay);
   const queueWindow = androidNativeQueueWindow(track);
   // A refused reference may be stale; the retry asks for fresh ones.
@@ -12054,6 +12057,8 @@ async function startAndroidNativePlaybackTrack(track, {
   try {
     const refs = await requestAndroidNativePlaybackRefs(queueWindow.items);
     if (revision !== native.revision) return null;
+    // A pause or play while the references were fetched decides whether the kept item plays.
+    if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
@@ -12061,6 +12066,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // Nothing Android plays came from this start, so it acquires nothing for it.
     if (revision === native.revision) native.ownerIntent = false;
     throw error;
+  } finally {
+    if (revision === native.revision) native.startingRevision = 0;
   }
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
@@ -12190,6 +12197,11 @@ function sendAndroidNativeTransport(name, payload = {}) {
 
 function pauseAndroidNativePlayback() {
   const native = androidNativePlayback;
+  // As the web engine's pause supersedes its pending start, a pause stops a pending switch, so
+  // Android never plays the track the web does not show. The next play restarts the shown one.
+  if (native.startingRevision && native.startingRevision === native.revision) {
+    return stopAndroidNativePlayback('paused', { preserveSnapshot: true });
+  }
   native.ownerIntent = false;
   native.snapshot.paused = true;
   if (native.mode !== 'error') native.mode = 'paused';

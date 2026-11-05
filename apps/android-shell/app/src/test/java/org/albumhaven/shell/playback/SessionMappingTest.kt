@@ -45,10 +45,19 @@ class SessionMappingTest {
         assertEquals("$origin/static/cover-a.jpg", view.items[0].artworkUri)
         assertNull(view.items[1].artworkUri)
         assertEquals(
-            Triple("Signal B", "Android Acceptance", "Playback Ownership"),
+            Triple("Signal B", "Android Acceptance · Playback Ownership", "Playback Ownership"),
             view.items[1].let { Triple(it.title, it.artist, it.album) },
         )
         assertFalse(view.items.toString().contains("ref-"))
+    }
+
+    @Test
+    fun theCardLineJoinsTheAlbumToTheArtistUnlessItAddsNothing() {
+        assertEquals("Artist · Album", mediaCardArtistLine("Artist", "Album"))
+        assertEquals("Artist", mediaCardArtistLine("Artist", ""))
+        assertEquals("Artist", mediaCardArtistLine("Artist", "  "))
+        assertEquals("Same", mediaCardArtistLine("Same", "same"))
+        assertEquals("Album", mediaCardArtistLine("", "Album"))
     }
 
     @Test
@@ -123,7 +132,7 @@ class SessionMappingTest {
         val failed = SessionMapping.restoredView(restored, failed = true)
         assertEquals(SessionPlaybackState.READY to false, failed.state to failed.playWhenReady)
         val noticed = SessionMapping.withNotice(view, "Sign in")
-        assertEquals(listOf("A", "Sign in", "A"), noticed.items.map { it.artist })
+        assertEquals(listOf("A · B", "Sign in", "A · B"), noticed.items.map { it.artist })
         assertEquals(view, SessionMapping.withNotice(view, null))
         assertTrue(SessionMapping.restoredView(restored.copy(items = listOf(item("a", 0, "rt-a"), item("b", 0, null)))).controls.isEmpty())
     }

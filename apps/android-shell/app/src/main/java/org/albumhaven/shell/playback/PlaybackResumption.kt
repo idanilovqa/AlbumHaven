@@ -114,7 +114,7 @@ object Resumption {
         val items = queue.items.mapIndexed { position, item ->
             val metadata = MediaMetadata.Builder()
                 .setTitle(item.title)
-                .setArtist(item.artist)
+                .setArtist(mediaCardArtistLine(item.artist, item.album))
                 .setAlbumTitle(item.album)
                 .setArtworkUri(item.artworkUrl?.let(artworkUri))
                 .setDurationMs(item.durationMs.takeIf { it > 0 })

@@ -8,7 +8,19 @@ enum class SessionPlaybackState { IDLE, BUFFERING, READY, ENDED }
 /** Transport controls the notification, lock screen, media buttons and Bluetooth may use. */
 enum class SystemControl { PLAY_PAUSE, STOP, SEEK_IN_ITEM, PREVIOUS_ITEM, NEXT_ITEM }
 
-/** One playlist entry as system media controls show it; [artworkUri] is absolute and same-origin. */
+/**
+ * The line under the title on system media cards. Android's card has no album line, so the
+ * album joins the artist ("Artist · Album") unless it is blank or the same as the artist.
+ */
+fun mediaCardArtistLine(artist: String, album: String): String =
+    if (album.isBlank() || album.equals(artist, ignoreCase = true)) artist
+    else if (artist.isBlank()) album
+    else "$artist · $album"
+
+/**
+ * One playlist entry as system media controls show it; [artist] is the card's line under the
+ * title (see [mediaCardArtistLine]) and [artworkUri] is absolute and same-origin.
+ */
 data class SessionItem(
     val uid: String,
     val title: String,
@@ -61,7 +73,7 @@ object SessionMapping {
             SessionItem(
                 uid = "${snapshot.queueRevision}:$position",
                 title = item.title,
-                artist = item.artist,
+                artist = mediaCardArtistLine(item.artist, item.album),
                 album = item.album,
                 artworkUri = item.artworkUrl?.let { origin + it },
                 durationMs = item.durationMs,
@@ -120,7 +132,7 @@ object SessionMapping {
                 SessionItem(
                     uid = "restored:$position",
                     title = item.title,
-                    artist = item.artist,
+                    artist = mediaCardArtistLine(item.artist, item.album),
                     album = item.album,
                     artworkUri = item.artworkUrl?.let { queue.origin + it },
                     durationMs = item.durationMs,

@@ -63,7 +63,7 @@ class ResumptionTest {
         // System UI's boot-time browse keeps the start item: a playable, titled description with its cover.
         val current = resumed.mediaItems[resumed.startIndex].mediaMetadata
         assertEquals(
-            listOf("Signal b", "Android Acceptance", "Playback Ownership"),
+            listOf("Signal b", "Android Acceptance · Playback Ownership", "Playback Ownership"),
             listOf(current.title, current.artist, current.albumTitle).map { it.toString() },
         )
         assertEquals(true to false, current.isPlayable to current.isBrowsable)

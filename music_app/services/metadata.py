@@ -96,6 +96,13 @@ def read_apev2_tags(path: Path) -> dict[str, object]:
         with path.open("rb") as handle:
             handle.seek(0, 2)
             file_size = handle.tell()
+            # An APEv2 footer ends the file or precedes the 128-byte ID3v1 tag.
+            # Probe those 160 bytes before reading the 64 KB tag window: a
+            # scan does this for every file and most files have no APE tag.
+            probe_size = min(file_size, 160)
+            handle.seek(file_size - probe_size)
+            if b"APETAGEX" not in handle.read(probe_size):
+                return {}
             read_size = min(file_size, 65536)
             handle.seek(file_size - read_size)
             tail = handle.read(read_size)
@@ -169,7 +176,14 @@ def read_tags(path: Path) -> dict[str, object]:
         return read_apev2_tags(path)
     try:
         data: dict[str, object] = {}
-        audio_full = MutagenFile(path)
+        from music_app.services.art_free_tag_reader import open_art_free
+
+        art_free = open_art_free(path)
+        try:
+            audio_full = MutagenFile(art_free if art_free is not None else path)
+        finally:
+            if art_free is not None:
+                art_free.close()
         if audio_full is not None and getattr(audio_full, "tags", None):
             for key, value in audio_full.tags.items():
                 data[str(key).lower()] = value

@@ -328,6 +328,14 @@ class NativePlaybackController(
     fun interrupt() = post(CommandSource.SYSTEM) { if (!startGate.holdsFocus()) pauseNow() }
 
     /**
+     * Focus came back: the start the gate held for it plays. If a pause, stop or loss dropped it,
+     * a player already stopped reported nothing new, so the gate hears of the stop now.
+     */
+    fun resumeHeldStart() = post(CommandSource.SYSTEM) {
+        if (startGate.takeResume()) requestPlay() else if (!state.wanted) startGate.stopped(state)
+    }
+
+    /**
      * A new document of the same origin re-attaches to the running queue: playback, the claim and
      * the applied revision continue, so the document can adopt them from its handshake snapshot.
      * A document counts revisions from one, so its first queue replaces this one whatever its revision.
@@ -1096,7 +1104,8 @@ class NativePlaybackController(
             ClaimEvent.Lost -> "lost"
         }
         if (event == ClaimEvent.Lost) {
-            // Another client owns playback now; this one must fall silent at once.
+            // Another client owns playback now; this one must fall silent at once, and stay silent.
+            startGate.dropHeldStart()
             releasePending = false
             measureListening()
             if (loaded) heldPositionMs = positionMs()

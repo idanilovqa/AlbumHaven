@@ -196,8 +196,12 @@ class AudioFocusPolicyTest {
     private val second = SyntheticTrack(tag = 2, frames = 2L * RATE)
 
     /** The controller with [policy] as its start gate; every state and effect is applied as the service applies them. */
-    private inner class Focused(vararg tracks: SyntheticTrack, claimIo: Executor = Executor { it.run() }) {
-        val harness = ControllerHarness(*tracks, claimIo = claimIo, startGate = policy)
+    private inner class Focused(
+        vararg tracks: SyntheticTrack,
+        claimIo: Executor = Executor { it.run() },
+        realTime: Boolean = false,
+    ) {
+        val harness = ControllerHarness(*tracks, realTime = realTime, claimIo = claimIo, startGate = policy)
         val controller get() = harness.controller
         private var seen = 0
 
@@ -208,7 +212,7 @@ class AudioFocusPolicyTest {
             when (effect) {
                 FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.PauseForUnplug -> controller.pause(CommandSource.SYSTEM)
-                FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
+                FocusEffect.Resume -> controller.resumeHeldStart()
                 is FocusEffect.WatchNoisy -> watchingNoisy = effect.enabled
             }
         }
@@ -552,25 +556,123 @@ class AudioFocusPolicyTest {
         assertEquals(1, abandons)
     }
 
-    @Test
-    fun aPauseAndPlayQueuedBeforeAPermanentLossEndPlayingOnlyWhenThePlayRegainedFocus() {
-        for (regained in listOf(false, true)) {
-            granted = true
-            val focused = Focused(first)
-            val harness = focused.harness
-            focused.playing()
-            val loss = policy.onFocusChange(FocusChange.LOSS)
-            harness.controller.pause()
-            harness.controller.play(1)
-            granted = regained
-            focused.apply(loss)
-            val written = focused.written()
-            val expected = if (regained) NativePlaybackState.PLAYING else NativePlaybackState.PAUSED
-            focused.runUntil { harness.state() == expected && (!regained || focused.written() > written) }
-            repeat(20) { focused.step() }
+    private fun assertPauseAndPlayQueuedBeforeAPermanentLoss(regained: Boolean) {
+        val focused = Focused(first)
+        val harness = focused.harness
+        focused.playing()
+        val loss = policy.onFocusChange(FocusChange.LOSS)
+        harness.controller.pause()
+        harness.controller.play(1)
+        granted = regained
+        focused.apply(loss)
+        val written = focused.written()
+        val expected = if (regained) NativePlaybackState.PLAYING else NativePlaybackState.PAUSED
+        focused.runUntil { harness.state() == expected && (!regained || focused.written() > written) }
+        repeat(20) { focused.step() }
 
-            assertEquals("regained=$regained", expected, harness.state())
-            assertEquals("regained=$regained", regained, policy.holdsFocus())
-        }
+        assertEquals(expected, harness.state())
+        assertEquals(regained, policy.holdsFocus())
+    }
+
+    @Test
+    fun aPauseAndPlayQueuedBeforeAPermanentLossEndPausedWhenThePlayIsRefusedFocus() =
+        assertPauseAndPlayQueuedBeforeAPermanentLoss(regained = false)
+
+    @Test
+    fun aPauseAndPlayQueuedBeforeAPermanentLossEndPlayingWhenThePlayRegainsFocus() =
+        assertPauseAndPlayQueuedBeforeAPermanentLoss(regained = true)
+
+    private val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+
+    /** A long track plays in real time, so a claim renewal comes while it is heard. */
+    private fun Focused.playingLong() {
+        harness.load(1, long)
+        runUntil { harness.state() == NativePlaybackState.PLAYING && written() > 0 }
+    }
+
+    @Test
+    fun aShortInterruptionWhosePauseRanBeforeFocusReturnedResumes() {
+        val focused = Focused(long, realTime = true)
+        val harness = focused.harness
+        focused.playingLong()
+        // Focus goes and comes back while the main thread lags: the pause runs, its report waits.
+        focused.apply(policy.onFocusChange(FocusChange.LOSS_TRANSIENT))
+        harness.step()
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        focused.apply(policy.onFocusChange(FocusChange.GAIN))
+        val written = focused.written()
+        focused.runUntil { harness.state() == NativePlaybackState.PLAYING && focused.written() > written }
+        assertEquals(0, abandons)
+    }
+
+    @Test
+    fun aShortInterruptionWhosePauseHadNotRunKeepsPlayingAndALaterLostClaimIsNeverRestarted() {
+        val focused = Focused(long, realTime = true)
+        val harness = focused.harness
+        focused.playingLong()
+        // Focus goes and comes back before the playback thread runs the pause.
+        focused.apply(policy.onFocusChange(FocusChange.LOSS_TRANSIENT))
+        focused.apply(policy.onFocusChange(FocusChange.GAIN))
+        val written = focused.written()
+        repeat(20) { focused.step() }
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertTrue(focused.written() > written)
+
+        // Another device takes playback over; focus is given up and nothing restarts it.
+        harness.claims.renewResponse = { ClaimResponse.Conflict }
+        focused.runUntil { harness.ownership().contains("lost") }
+        repeat(5) { focused.step() }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(1, abandons)
+        val acquires = focused.acquires()
+        val silent = focused.written()
+        focused.apply(policy.onFocusChange(FocusChange.LOSS_TRANSIENT))
+        focused.apply(policy.onFocusChange(FocusChange.GAIN))
+        repeat(20) { focused.step() }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(acquires, focused.acquires())
+        assertEquals(silent, focused.written())
+    }
+
+    @Test
+    fun aClaimLostDuringACallIsNotRestartedWhenTheCallEnds() {
+        val focused = Focused(long, realTime = true)
+        val harness = focused.harness
+        focused.playingLong()
+        // The call's pause is still queued when another device takes playback over.
+        val call = policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        harness.claims.renewResponse = { ClaimResponse.Conflict }
+        harness.runUntil { harness.ownership().contains("lost") }
+        focused.apply(call)
+        repeat(5) { focused.step() }
+        val acquires = focused.acquires()
+        val silent = focused.written()
+
+        focused.apply(policy.onFocusChange(FocusChange.GAIN))
+        repeat(20) { focused.step() }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(acquires, focused.acquires())
+        assertEquals(silent, focused.written())
+        assertEquals(1, abandons)
+    }
+
+    @Test
+    fun aPauseQueuedBeforeTheCallEndsIsNotUndoneByTheResume() {
+        val focused = Focused(first, second)
+        val harness = focused.harness
+        focused.interruptedByACall()
+        harness.controller.play(1, CommandSource.SYSTEM)
+        repeat(5) { focused.step() }
+        // The user pauses, and the call ends before the playback thread runs that pause.
+        harness.controller.pause(CommandSource.SYSTEM)
+        focused.apply(policy.onFocusChange(FocusChange.GAIN))
+        val acquires = focused.acquires()
+        repeat(20) { focused.step() }
+
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(acquires, focused.acquires())
+        // Nothing waits for focus any more, so it is given up.
+        assertEquals(1, abandons)
+        assertFalse(policy.holdsFocus())
     }
 }

@@ -10,6 +10,7 @@ sealed interface FocusEffect {
     /** Output was lost: playback pauses as if the user had paused. */
     data object PauseForUnplug : FocusEffect
 
+    /** Focus came back: the playback thread plays a start held for it, unless one was dropped since. */
     data object Resume : FocusEffect
     data class WatchNoisy(val enabled: Boolean) : FocusEffect
 }
@@ -28,13 +29,17 @@ interface StartGate {
     /** Whether focus is held and heard now, so a focus pause posted before a start that took it back is skipped. */
     fun holdsFocus(): Boolean
 
+    /** Takes a start held for focus to return, once; false when a pause, stop or loss dropped it. */
+    fun takeResume(): Boolean
+
     companion object {
         val OPEN = object : StartGate {
             override fun mayStart() = true
             override fun dropHeldStart() = Unit
             override fun stopped(state: NativePlaybackState) = Unit
-            // Holding no focus, every focus pause pauses.
+            // Holding no focus, every focus pause pauses and nothing waits for it.
             override fun holdsFocus() = false
+            override fun takeResume() = false
         }
     }
 }
@@ -87,6 +92,9 @@ class AudioFocusPolicy(
 
     @Synchronized
     override fun holdsFocus() = held && !transientlyLost
+
+    @Synchronized
+    override fun takeResume() = resumeOnGain.also { resumeOnGain = false }
 
     private fun release() {
         transientlyLost = false
@@ -142,9 +150,10 @@ class AudioFocusPolicy(
         FocusChange.LOSS_TRANSIENT_CAN_DUCK -> emptyList()
         FocusChange.GAIN -> {
             transientlyLost = false
-            if (resumeOnGain && !active) {
-                // Output stays watched: the resume makes playback active again.
-                resumeOnGain = false
+            // The interruption's pause may not have been reported, or may not have run, so a pending
+            // resume is posted either way: the playback thread takes it in order with any pause or
+            // stop since, and a player still playing ignores it.
+            if (resumeOnGain) {
                 listOf(FocusEffect.Resume)
             } else {
                 // A pause during the call left nothing to resume, so focus is given up now.

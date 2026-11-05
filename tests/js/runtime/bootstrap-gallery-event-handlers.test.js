@@ -5417,12 +5417,15 @@ test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
   };
 
   context.state.ui.pendingViewTransition = pendingTransition;
+  let galleryControlRefreshes = 0;
+  context.updateGalleryMainControls = () => { galleryControlRefreshes += 1; };
   context.syncSearchClear();
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, true);
 
   context.handleGalleryBootstrapSearchBlur();
   submitSearch(context, '');
+  assert.ok(galleryControlRefreshes >= 1, 'clearing search refreshes the Loose Tracks search dot');
 
   assert.equal(calls.applyViewPayload.length, 1);
   const restoredPayload = calls.applyViewPayload[0].payload;

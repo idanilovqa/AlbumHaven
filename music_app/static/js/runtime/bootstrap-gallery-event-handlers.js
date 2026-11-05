@@ -2547,6 +2547,9 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     state.ui.pendingViewTransitionRequestId = 0;
     if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();
+    // The mounted gallery is kept, so refresh its controls explicitly: the
+    // Loose Tracks search dot must disappear with the query.
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     pushBrowserViewState(nextView);
     return true;
   }

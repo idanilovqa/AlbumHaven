@@ -5198,3 +5198,15 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
 
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(track_path)}
+
+
+@pytest.mark.parametrize(("size", "poor"), [(400, True), (1400, False)])
+def test_saved_cover_recomputes_the_album_details_poor_art_alert(tmp_path, size, poor):
+    from PIL import Image
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (size, size), (10, 20, 30)).save(cover, format="JPEG")
+    album = {"key": "artist::album", "poor_art_quality": True, "tracks": [{"path": str(tmp_path / "01.flac")}]}
+    payload = routes._authoritative_local_cover_album_payload(album, cover_path=cover, cover_revision="rev")
+    assert payload["poor_art_quality"] is poor

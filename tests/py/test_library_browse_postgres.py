@@ -18414,3 +18414,12 @@ def test_search_artist_tree_is_alphabetical_while_ranked_groups_choose_the_match
         "ABBA", "IQ", "Lost Frequencies", "Lostprophets", "M", "Oak", "Sia", "T", "Ten", "VA",
     ]
     assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked)][:2] == ["Lost Frequencies", "Lostprophets"]
+
+
+@pytest.mark.parametrize(("category", "kept"), [("main_library", True), ("hoard", True), ("new_arrivals", False)])
+def test_deleted_main_and_hoard_albums_stay_as_missing_cards_until_confirmed(category, kept):
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [_missing_browse_row(album_id=7, title="F♯ A♯ ∞", category=category)]
+    payloads = library_browse._missing_album_projection_payloads(rows)
+    assert bool(payloads) is kept

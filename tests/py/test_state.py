@@ -5641,3 +5641,10 @@ def test_startup_metadata_repair_is_an_explicit_operator_opt_in(monkeypatch, set
 
     assert required is (setting == "1")
     assert checked == ([True] if setting == "1" else [])
+
+
+def test_user_requested_scan_retries_cover_searches_once(config):
+    library_state = {"user_requested_cover_retry": True}
+    assert state_module.background_cover_negative_cache_ttl_seconds(library_state, config) == 0.0
+    assert "user_requested_cover_retry" not in library_state
+    assert state_module.background_cover_negative_cache_ttl_seconds(library_state, config) > 0

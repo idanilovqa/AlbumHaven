@@ -590,6 +590,18 @@ def hydrate_runtime_scan_metadata_on_startup(app) -> None:
             app.library_state["last_scan"] = last_scan
 
 
+def background_cover_negative_cache_ttl_seconds(
+    library_state: dict[str, object],
+    config: dict[str, object],
+) -> float:
+    """Skip recent "nothing better found" results once after a user-requested scan."""
+    with _CACHE_LOCK:
+        user_requested = bool(library_state.pop("user_requested_cover_retry", False))
+    if user_requested:
+        return 0.0
+    return float(config.get("BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", _BULK_NEGATIVE_CACHE_TTL_SECONDS))
+
+
 def file_metadata_repair_required_on_startup(app) -> bool:
     """Postgres keeps file entries read by older metadata readers until rescanned.
 
@@ -1375,9 +1387,8 @@ def refresh_library_for_state(
                 build_cover_jobs=build_cover_refresh_jobs,
                 run_cover_jobs=run_cover_jobs,
                 log_cover_refresh_completion=log_cover_refresh_completion,
-                bulk_negative_cache_ttl_seconds=config.get(
-                    "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS",
-                    _BULK_NEGATIVE_CACHE_TTL_SECONDS,
+                bulk_negative_cache_ttl_seconds=background_cover_negative_cache_ttl_seconds(
+                    library_state, config,
                 ),
                 job_workers=config.get("BULK_COVER_JOB_WORKERS", _BULK_COVER_JOB_WORKERS),
             ),

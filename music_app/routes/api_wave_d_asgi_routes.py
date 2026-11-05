@@ -140,6 +140,8 @@ def _authoritative_local_cover_album_payload(
     width, height = image_dimensions(cover_path)
     authoritative_album["local_cover_width"] = width or None
     authoritative_album["local_cover_height"] = height or None
+    # The Album Details header alert follows the saved art, like Problematic Files.
+    authoritative_album["poor_art_quality"] = bool(width and height and (width < 600 or height < 600))
     for field in remote_fields:
         authoritative_album[field] = None
     authoritative_tracks: list[JsonDict] = []

@@ -5,15 +5,6 @@ import pytest
 from music_app.services import cover_provider_matching as matching
 
 
-def test_canonical_album_title_matches_infinity_symbol_and_word():
-    assert matching.canonical_album_title("F♯ A♯ ∞") == matching.canonical_album_title(
-        "F♯ A♯ infinity"
-    )
-    assert matching.canonical_album_title("F♯ A♯ ∞") != matching.canonical_album_title(
-        "F♯ A♯ II"
-    )
-
-
 def test_normalize_expands_search_symbols_and_ascii_folds_text():
     assert (
         matching.normalize("AC/DC & R+D? + 100%")

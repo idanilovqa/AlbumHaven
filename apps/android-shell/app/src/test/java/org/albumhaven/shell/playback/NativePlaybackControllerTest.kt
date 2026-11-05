@@ -376,6 +376,29 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aTrackChangeAtAnUnknownPositionAndDurationTakesTheIncomingItemsAsTheWebDoes() {
+        val long = SyntheticTrack(tag = 3, frames = 40L * RATE)
+        val harness = ControllerHarness(long, first)
+        harness.controller.loadQueue(QueueLoad(1, listOf(harness.item(long).copy(durationMs = 0)), 0, 0, null, true))
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        // Back to the start, then another track before anything more is heard: the outgoing
+        // position reads zero and its duration is unknown.
+        harness.sinks.last().acceptFrames = 0
+        harness.controller.seek(1, 0)
+        harness.runUntil { harness.controller.snapshot.positionMs == 0L }
+        harness.controller.loadQueue(QueueLoad(2, listOf(harness.item(first)), 0, 1_500, null, true))
+        repeat(10) { harness.step() }
+
+        val complete = harness.writes().single { it.first == ListenEffect.COMPLETE }.second
+        assertEquals(long.pcm.playbackRef, complete.getString("playbackRef"))
+        assertEquals(3.0, complete.getDouble("duration_seconds"), 0.0)
+        val segments = complete.getJSONArray("segments")
+        val last = segments.getJSONObject(segments.length() - 1)
+        assertEquals(0.0, last.getDouble("start_seconds"), 0.0)
+        assertEquals(1.5, last.getDouble("end_seconds"), 0.0)
+    }
+
+    @Test
     fun aRefreshedReferenceContinuesTheSameListenAndLaterWritesNameIt() {
         val long = SyntheticTrack(tag = 3, frames = 40L * RATE)
         // The same track under a fresh reference, as a reference retry or expiry reload sends it.

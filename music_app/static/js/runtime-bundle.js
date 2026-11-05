@@ -43975,7 +43975,7 @@ async function handleUtilityBootstrapClick(event) {
     renderProblemFilterControls(getUtilityModalElements());
   }
   if (
-    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal')
+    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal')
     && state.coverLookup.drawerOpen
   ) {
     state.coverLookup.drawerOpen = false;

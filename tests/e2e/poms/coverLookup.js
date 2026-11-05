@@ -15,7 +15,10 @@ export class CoverLookup extends BasePage {
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
     this.albumDetailsLink = this.modalSubtitle.locator("[data-open-cover-lookup-album-details]");
-    this.currentReleaseChoices = this.modalBody.locator('[data-cover-lookup-current-release]');
+    // A split notification asks for its current release in the shared app-form dialog (NavigationTree wide items).
+    this.splitChoiceDialog = this.page.locator('#app-form-modal');
+    this.currentReleaseChoices = this.splitChoiceDialog.locator('[data-cover-lookup-split-release]');
+    this.openChosenReleaseButton = this.splitChoiceDialog.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalStatus = page.locator(this.modalStatusSelector);
     this.modalStatusTitle = this.modalStatus.locator('.on-page-alert__title');
     this.modalStatusMessage = this.modalStatus.locator('.on-page-alert__message');

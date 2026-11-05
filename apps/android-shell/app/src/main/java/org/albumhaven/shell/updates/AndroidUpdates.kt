@@ -104,6 +104,12 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
 
     override fun nowMs() = System.currentTimeMillis()
 
+    override fun after(delayMs: Long, task: () -> Unit): () -> Unit {
+        val runnable = Runnable(task)
+        main.postDelayed(runnable, delayMs)
+        return { main.removeCallbacks(runnable) }
+    }
+
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {
             val result = http.fetchManifest(url)

@@ -87,6 +87,9 @@ sealed interface UpdateState {
 object UpdateSchedule {
     const val PASSIVE_INTERVAL_MS = 6L * 60 * 60 * 1000
 
+    /** An installation with no status for its session this long returns to ready, so it can be retried. */
+    const val INSTALL_TIMEOUT_MS = 2L * 60 * 1000
+
     /** A clock that moved backwards makes the check due rather than suppressing it indefinitely. */
     fun passiveCheckDue(nowMs: Long, lastCheckedAtMs: Long?): Boolean =
         lastCheckedAtMs == null || nowMs < lastCheckedAtMs || nowMs - lastCheckedAtMs >= PASSIVE_INTERVAL_MS
@@ -147,6 +150,9 @@ interface UpdatePorts {
 
     /** Whether Android still holds the install session: awaiting its confirmation, or installing. */
     fun sessionExists(sessionId: Int): Boolean
+
+    /** Runs [task] on the main thread after [delayMs]; the returned function cancels it. */
+    fun after(delayMs: Long, task: () -> Unit): () -> Unit
 }
 
 /**
@@ -170,8 +176,16 @@ class Updater(
     /** Shows the committed session's confirmation again until Android reports anything else for it. */
     private var confirm: (() -> Unit)? = null
 
+    /** Counts install requests, so a stage or timeout of a superseded one changes nothing. */
+    private var installAttempt = 0
+
+    /** Whether the current attempt's session was committed, so Android may already be installing it. */
+    private var committed = false
+    private var cancelInstallTimeout: (() -> Unit)? = null
+
     var state: UpdateState = restore()
         private set(value) {
+            if (value !is UpdateState.Installing) clearInstallTimeout()
             field = value
             listeners.toList().forEach { it(value) }
         }
@@ -318,13 +332,37 @@ class Updater(
         sessionId?.let(ports::abandon)
         sessionId = null
         confirm = null
+        committed = false
+        val attempt = ++installAttempt
         state = UpdateState.Installing(manifest)
-        ports.stage(manifest) { result -> staged(manifest, result, prepare) }
+        cancelInstallTimeout = ports.after(UpdateSchedule.INSTALL_TIMEOUT_MS) { installTimedOut(attempt) }
+        ports.stage(manifest) { result -> staged(attempt, manifest, result, prepare) }
         return true
     }
 
-    private fun staged(manifest: UpdateManifest, result: StageResult, prepare: (done: () -> Unit) -> Unit) {
-        if ((state as? UpdateState.Installing)?.manifest != manifest) {
+    /**
+     * No status came for the session in time. A session not yet committed cannot be installing and
+     * is abandoned; a committed one may be, so it is left for its later status, which the session
+     * ID still matches until a retry replaces it.
+     */
+    private fun installTimedOut(attempt: Int) {
+        val current = state as? UpdateState.Installing ?: return
+        if (attempt != installAttempt) return
+        val id = sessionId
+        if (id != null && !committed) {
+            if (ports.sessionExists(id)) ports.abandon(id)
+            sessionId = null
+        }
+        state = UpdateState.Ready(current.manifest)
+    }
+
+    private fun clearInstallTimeout() {
+        cancelInstallTimeout?.invoke()
+        cancelInstallTimeout = null
+    }
+
+    private fun staged(attempt: Int, manifest: UpdateManifest, result: StageResult, prepare: (done: () -> Unit) -> Unit) {
+        if (attempt != installAttempt || state !is UpdateState.Installing) {
             (result as? StageResult.Staged)?.let { ports.abandon(it.sessionId) }
             return
         }
@@ -332,9 +370,12 @@ class Updater(
             is StageResult.Staged -> {
                 sessionId = result.sessionId
                 prepare {
-                    if (sessionId == result.sessionId && !ports.commit(result.sessionId)) {
-                        sessionId = null
-                        fail(UpdateError.INSTALL_FAILED, null, manifest)
+                    if (sessionId == result.sessionId) {
+                        committed = ports.commit(result.sessionId)
+                        if (!committed) {
+                            sessionId = null
+                            fail(UpdateError.INSTALL_FAILED, null, manifest)
+                        }
                     }
                 }
             }
@@ -349,6 +390,7 @@ class Updater(
      */
     fun onInstallStatus(statusSessionId: Int, status: InstallStatus) {
         if (statusSessionId != sessionId) return
+        clearInstallTimeout()
         val manifest = when (val current = state) {
             is UpdateState.Installing -> current.manifest
             is UpdateState.Ready -> current.manifest
@@ -365,7 +407,7 @@ class Updater(
                 sessionId = null
                 store.stagedManifest = null
             }
-            // The verified file stays, so Install update can ask Android again.
+            // The verified file stays, so Update can ask Android again.
             InstallStatus.Cancelled -> {
                 sessionId = null
                 state = UpdateState.Ready(manifest)
@@ -381,7 +423,7 @@ class Updater(
      * The user came back to the app: from system Settings, a granted install source makes the
      * update ready again. From Android's confirmation, an approved installation is still running,
      * so the update stays installing while Android holds the session; once the session is gone
-     * without a status, as when its confirmation was left and dropped, Install update asks again.
+     * without a status, as when its confirmation was left and dropped, Update asks again.
      */
     fun onForeground() {
         when (val current = state) {

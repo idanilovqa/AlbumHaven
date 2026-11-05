@@ -72,6 +72,18 @@ class UpdaterTest {
             liveSessions -= sessionId
         }
         override fun sessionExists(sessionId: Int) = sessionId in liveSessions
+
+        /** Pending timers by due time; [advance] runs the ones it reaches. */
+        val timers = mutableListOf<Pair<Long, () -> Unit>>()
+        override fun after(delayMs: Long, task: () -> Unit): () -> Unit {
+            val timer = now + delayMs to task
+            timers += timer
+            return { timers.remove(timer) }
+        }
+        fun advance(ms: Long) {
+            now += ms
+            timers.filter { it.first <= now }.forEach { timer -> if (timers.remove(timer)) timer.second() }
+        }
     }
 
     private val ports = FakePorts()
@@ -354,7 +366,7 @@ class UpdaterTest {
     }
 
     @Test
-    fun `a confirmation left with Home is shown again by Install update`() {
+    fun `a confirmation left with Home is shown again by Update`() {
         val updater = ready()
         updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
@@ -377,6 +389,84 @@ class UpdaterTest {
     }
 
     @Test
+    fun `an installation with no status for two minutes becomes ready again, abandoning only an uncommitted session`() {
+        val updater = ready()
+        var prepared: (() -> Unit)? = null
+        updater.install { done -> prepared = done }
+        ports.stageDone!!(StageResult.Staged(3))
+        ports.liveSessions += 3
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS - 1)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.advance(1)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+        assertEquals(listOf(3), ports.abandoned)
+        // Playback stopping late commits nothing for the abandoned session.
+        prepared!!()
+        assertTrue(ports.committed.isEmpty())
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+    }
+
+    @Test
+    fun `a committed installation that times out is left to Android and its later status still counts`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+        assertTrue(ports.abandoned.isEmpty())
+        assertTrue(ports.timers.isEmpty())
+
+        updater.onInstallStatus(3, InstallStatus.Failed)
+        assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, null, manifest(), store.lastCheckedAtMs), updater.state)
+    }
+
+    @Test
+    fun `a stage that times out is abandoned when it finishes and never answers a retry`() {
+        val updater = ready()
+        updater.install { it() }
+        val stale = ports.stageDone!!
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+
+        // The retry restarts the timer; the old stage finishing now is not taken for it.
+        ports.advance(60_000)
+        assertTrue(updater.install { it() })
+        stale(StageResult.Staged(3))
+        assertEquals(listOf(3), ports.abandoned)
+        assertTrue(ports.committed.isEmpty())
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS - 1)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.stageDone!!(StageResult.Staged(4))
+        assertEquals(listOf(4), ports.committed)
+    }
+
+    @Test
+    fun `any status for the session stops the installation timeout`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        // A status for another session leaves the timer running.
+        updater.onInstallStatus(9, InstallStatus.Failed)
+        assertEquals(1, ports.timers.size)
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        assertTrue(ports.timers.isEmpty())
+        ports.advance(10 * UpdateSchedule.INSTALL_TIMEOUT_MS)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+    }
+
+    @Test
+    fun `a restored update has no installation timeout`() {
+        ready().install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        val restored = updater()
+        assertEquals(UpdateState.Ready(manifest()), restored.state)
+        // The process that set the old timer is gone.
+        ports.timers.clear()
+        ports.advance(UpdateSchedule.INSTALL_TIMEOUT_MS)
+        assertEquals(UpdateState.Ready(manifest()), restored.state)
+    }
+
+    @Test
     fun `a confirmation Android dropped makes the update ready again on return`() {
         val updater = ready()
         updater.install { it() }
@@ -386,7 +476,7 @@ class UpdaterTest {
         updater.onForeground()
         assertEquals(UpdateState.Ready(manifest()), updater.state)
 
-        // Install update asks Android again with a fresh session in place of the dropped one.
+        // Update asks Android again with a fresh session in place of the dropped one.
         assertTrue(updater.install { it() })
         assertEquals(listOf(3), ports.abandoned)
         assertEquals(UpdateState.Installing(manifest()), updater.state)

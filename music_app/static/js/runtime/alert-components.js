@@ -57,6 +57,14 @@ function buildAlertLabelHtml(config = {}) {
   return `<button class="${escapeAlertHtml(classes)}" data-alert-label="${severity}" type="button"${attributes} aria-pressed="${pressed ? 'true' : 'false'}"${disabled ? ' aria-disabled="true" disabled' : ''}>${escapeAlertHtml(message)}</button>`;
 }
 
+// Optional determinate progress below the actions: `{ value: 0-100, label }`.
+function buildAlertProgressHtml(progress) {
+  if (!progress) return '';
+  const value = Math.max(0, Math.min(100, Math.round(Number(progress.value) || 0)));
+  const label = escapeAlertHtml(String(progress.label || ''));
+  return `<label class="on-page-alert__progress">${label}<progress max="100" value="${value}" aria-label="${label}"></progress></label>`;
+}
+
 function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
@@ -65,7 +73,7 @@ function buildOnPageAlertHtml(config = {}) {
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}${buildAlertProgressHtml(config.progress)}</div></section>`;
 }
 
 if (typeof window !== 'undefined') {

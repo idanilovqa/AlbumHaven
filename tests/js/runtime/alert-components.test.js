@@ -183,3 +183,16 @@ test('OnPageAlert supports the approved success severity with its own icon', () 
   assert.match(html, /data-on-page-alert="success"/);
   assert.match(html, /m7 12 3 3 7-7/);
 });
+
+test('OnPageAlert renders optional determinate progress below its actions', () => {
+  const context = loadAlertComponents();
+  const plain = context.buildOnPageAlertHtml({ severity: 'info', title: 'Downloading', message: 'Wait.', actionsHtml: '<button>Go</button>' });
+  assert.doesNotMatch(plain, /progress/);
+  const html = context.buildOnPageAlertHtml({
+    severity: 'info', title: 'Downloading', message: 'Wait.', actionsHtml: '<button>Go</button>',
+    progress: { value: 142.4, label: 'Download <progress>' },
+  });
+  assert.match(html, /<\/div><label class="on-page-alert__progress">Download &lt;progress&gt;<progress max="100" value="100" aria-label="Download &lt;progress&gt;"><\/progress><\/label><\/div><\/section>$/);
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
+  assert.match(css, /\.on-page-alert__progress \{ display: grid;/);
+});

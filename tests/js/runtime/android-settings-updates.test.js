@@ -1,0 +1,203 @@
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const repoRoot = path.join(__dirname, '..', '..', '..');
+const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'android-bridge-v1.json'), 'utf8'));
+const runtimeDir = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime');
+const handshakePayload = fixture.handshakeResponse.payload;
+const HOUR = 60 * 60 * 1000;
+
+// The real alert and button components, so the rendered markup is the shipped markup.
+function loadRuntime({ bridge, now = Date.now() } = {}) {
+  const listeners = [];
+  const holder = { innerHTML: '', contains: () => false, querySelector: () => null };
+  const context = {
+    window: { crypto },
+    document: {
+      activeElement: null,
+      addEventListener: (type, listener) => listeners.push({ type, listener }),
+      querySelector: selector => (selector === '[data-android-update]' ? holder : null),
+    },
+    state: { utility: { activeTab: 'appearance' } },
+    Date: class extends Date { static now() { return now; } },
+    setTimeout,
+    clearTimeout,
+    escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;'),
+    module: undefined,
+  };
+  if (bridge) context.window.AlbumHavenBridge = bridge;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js'), 'utf8'), context);
+  for (const file of ['alert-components.js', 'android-bridge-client.js', 'android-settings.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
+  }
+  vm.runInContext(`globalThis.api = { androidBridge, androidSettings, buildAndroidSettingsHtml, connectAndroidBridge,
+    formatAndroidCheckedAgo, handleAndroidSettingsClick, initAndroidSettings };`, context);
+  context.listeners = listeners;
+  context.holder = holder;
+  return context;
+}
+
+function fakeBridge(respond) {
+  const bridge = {
+    sent: [],
+    postMessage(raw) {
+      const message = JSON.parse(raw);
+      bridge.sent.push(message);
+      const payload = respond(message);
+      if (payload) queueMicrotask(() => bridge.onmessage({ data: JSON.stringify({ ...message, type: 'response', payload }) }));
+    },
+    event(name, payload) {
+      bridge.onmessage({ data: JSON.stringify({ protocol: 1, id: crypto.randomUUID(), type: 'event', name, payload }) });
+    },
+  };
+  return bridge;
+}
+
+const update = (changes = {}) => ({ ...handshakePayload.updates, ...changes });
+
+async function connected(updates, options = {}) {
+  const bridge = fakeBridge(message => (message.name === 'bridge.handshake'
+    ? { ...handshakePayload, updates } : options.respond?.(message)));
+  const context = loadRuntime({ bridge, now: options.now });
+  context.api.initAndroidSettings();
+  await context.api.connectAndroidBridge();
+  await new Promise(setImmediate);
+  return { ...context, bridge };
+}
+
+function text(html) {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function button(html) {
+  const match = html.match(/<button[^>]*>[\s\S]*?<\/button>/);
+  assert.ok(match, 'the update alert has its action button');
+  return {
+    label: text(match[0]),
+    disabled: /\sdisabled(\s|>|=)/.test(match[0]),
+    action: match[0].match(/data-android-update-action="([a-z]+)"/)?.[1] ?? null,
+  };
+}
+
+function alertOf(html) {
+  return html.match(/<section class="on-page-alert on-page-alert--(\w+)[\s\S]*?<\/section>/);
+}
+
+test('the shared fixture advertises updates.manual.v1 and reports the update state', () => {
+  assert.ok(fixture.capabilities.stable.includes('updates.manual.v1'));
+  assert.ok(fixture.capabilities.sandbox.includes('updates.manual.v1'));
+  assert.equal(handshakePayload.updates.state, 'idle');
+  assert.deepEqual(Object.keys(fixture.updateStateEvent.payload).sort(),
+    ['checkedAt', 'error', 'progress', 'reason', 'state', 'versionCode', 'versionName']);
+});
+
+test('relative check times read like the approved card', () => {
+  const { api } = loadRuntime();
+  const now = 10 * 24 * HOUR;
+  assert.equal(api.formatAndroidCheckedAgo(now - 20 * 1000, now), 'just now');
+  assert.equal(api.formatAndroidCheckedAgo(now - 60 * 1000, now), '1 minute ago');
+  assert.equal(api.formatAndroidCheckedAgo(now - 59 * 60 * 1000, now), '59 minutes ago');
+  assert.equal(api.formatAndroidCheckedAgo(now - 6 * HOUR, now), '6 hours ago');
+  assert.equal(api.formatAndroidCheckedAgo(now - 49 * HOUR, now), '2 days ago');
+  assert.equal(api.formatAndroidCheckedAgo(now + HOUR, now), 'just now');
+});
+
+const now = 1_800_000_000_000;
+const ready = { versionName: '0.10.0-sandbox.763af93', versionCode: 2 };
+const STATES = [
+  [update({ checkedAt: now - 6 * HOUR }), 'info', 'Android app', 'Sandbox · 0.9.50 (1) · Last checked 6 hours ago', 'Check for updates', 'check'],
+  [update(), 'info', 'Android app', 'Sandbox · 0.9.50 (1)', 'Check for updates', 'check'],
+  [update({ state: 'checking' }), 'info', 'Checking for updates…', 'Keep this screen open.', 'Checking…', null],
+  [update({ state: 'upToDate', checkedAt: now }), 'success', 'Album Haven is up to date.', 'Sandbox · 0.9.50 (1) · Checked just now', 'Check again', 'check'],
+  [update({ state: 'available', ...ready }), 'warning', 'Album Haven 0.10.0-sandbox.763af93 is available.', 'Download starts only when you ask.', 'Download update', 'download'],
+  [update({ state: 'downloading', progress: 42, ...ready }), 'info', 'Downloading update · 42%', 'Android will confirm installation after verification.', 'Downloading…', null],
+  [update({ state: 'verifying', ...ready }), 'info', 'Verifying update…', 'Android will confirm installation after verification.', 'Verifying…', null],
+  [update({ state: 'ready', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Install update', 'install'],
+  [update({ state: 'installing', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Installing…', null],
+  [update({ state: 'authorization', ...ready }), 'warning', 'Allow Album Haven to install updates.', 'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'],
+  [update({ state: 'failed', error: 'check_failed' }), 'error', 'Update check failed.', 'Check your connection and try again.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'manifest_rejected', reason: 'wrong_certificate' }), 'error', 'Update check failed.', 'The published update doesn’t match this app. Try again later.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'manifest_rejected', reason: 'unsupported_android' }), 'error', 'Update check failed.', 'This update needs a newer version of Android.', 'Retry', 'check'],
+  [update({ state: 'failed', error: 'download_failed', ...ready }), 'error', 'Download failed.', 'Check your connection and try again.', 'Retry download', 'download'],
+  [update({ state: 'failed', error: 'verification_failed', reason: 'hash_mismatch', ...ready }), 'error', 'Update couldn’t be verified.', 'The downloaded app did not match Album Haven’s signed release. Download it again.', 'Retry download', 'download'],
+  [update({ state: 'failed', error: 'install_failed', ...ready }), 'error', 'Update couldn’t be installed.', 'Android didn’t install the update. Download it again.', 'Retry download', 'download'],
+];
+
+for (const [state, severity, title, message, label, action] of STATES) {
+  test(`update card: ${state.state}${state.error ? ` ${state.error}` : ''}${state.reason ? ` ${state.reason}` : ''} → ${title}`, async () => {
+    const { api } = await connected(state, { now });
+    const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
+    const alert = alertOf(html.slice(html.indexOf('data-android-update')));
+    assert.equal(alert[1], severity);
+    assert.match(text(alert[0]), new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ${message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.deepEqual(button(alert[0]), { label, disabled: action === null, action });
+  });
+}
+
+test('downloading shows the approved progress label and bar', async () => {
+  const { api } = await connected(update({ state: 'downloading', progress: 42, ...ready }));
+  const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
+  assert.match(html, /<label class="on-page-alert__progress">Download progress: 42%<progress max="100" value="42" aria-label="Download progress: 42%"><\/progress><\/label>/);
+});
+
+test('without updates.manual.v1 the card shows only the version', async () => {
+  const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['playback.native.v1'] }));
+  const { api } = loadRuntime({ bridge });
+  api.initAndroidSettings();
+  await api.connectAndroidBridge();
+  const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
+  const card = alertOf(html.slice(html.indexOf('data-android-update')))[0];
+  assert.match(card, /Sandbox · 0\.9\.50 \(1\)/);
+  assert.doesNotMatch(card, /<button|Check for updates/);
+});
+
+test('a card action sends its bridge command and shows the returned state', async () => {
+  const { api, bridge, holder } = await connected(update(), {
+    respond: message => ({ ok: true, updates: update({ state: 'checking' }), echo: message.name }),
+  });
+  const target = { disabled: false, getAttribute: () => 'check' };
+  api.handleAndroidSettingsClick({ target: { closest: selector => (selector === '[data-android-update-action]' ? target : null) }, preventDefault() {} });
+  assert.equal(target.disabled, true);
+  await new Promise(setImmediate);
+  const sent = bridge.sent.at(-1);
+  assert.equal(sent.name, 'updates.check');
+  assert.deepEqual(sent.payload, {});
+  assert.equal(api.androidSettings.update.state, 'checking');
+  assert.match(holder.innerHTML, /Checking for updates…/);
+});
+
+test('every card action maps to its own update command', async () => {
+  for (const action of ['check', 'download', 'install']) {
+    const { api, bridge } = await connected(update(), { respond: () => ({ ok: true, updates: update() }) });
+    const target = { getAttribute: () => action };
+    api.handleAndroidSettingsClick({ target: { closest: selector => (selector === '[data-android-update-action]' ? target : null) }, preventDefault() {} });
+    await new Promise(setImmediate);
+    assert.equal(bridge.sent.at(-1).name, `updates.${action}`);
+  }
+});
+
+test('a refused command keeps the current state for the next event', async () => {
+  const { api, holder } = await connected(update({ state: 'available', ...ready }), {
+    respond: () => ({ ok: false, error: { code: 'update_unavailable', message: 'Not available' } }),
+  });
+  const target = { getAttribute: () => 'download' };
+  api.handleAndroidSettingsClick({ target: { closest: selector => (selector === '[data-android-update-action]' ? target : null) }, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(api.androidSettings.update.state, 'available');
+  assert.match(holder.innerHTML, /data-android-update-action="download"/);
+});
+
+test('updates.state events from the shell replace the card state', async () => {
+  const { api, bridge, holder } = await connected(update());
+  bridge.event('updates.state', fixture.updateStateEvent.payload);
+  assert.equal(api.androidSettings.update.progress, 42);
+  assert.match(holder.innerHTML, /Downloading update · 42%/);
+  bridge.event('updates.state', { nonsense: true });
+  assert.equal(api.androidSettings.update.progress, 42);
+});

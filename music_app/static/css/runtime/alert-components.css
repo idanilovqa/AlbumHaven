@@ -175,6 +175,8 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   white-space: nowrap;
 }
 .on-page-alert__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.on-page-alert__progress { display: grid; gap: 8px; margin-top: 16px; color: var(--muted, var(--appearance-muted, #b8c7d6)); }
+.on-page-alert__progress progress { width: 100%; height: 8px; accent-color: var(--text, #f9fafb); }
 .on-page-alert__actions .ui-button {
   min-height: 44px;
   padding: 0 16px;

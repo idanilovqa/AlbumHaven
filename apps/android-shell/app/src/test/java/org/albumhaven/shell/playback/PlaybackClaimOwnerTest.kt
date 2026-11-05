@@ -23,6 +23,21 @@ class PlaybackClaimOwnerTest {
     }
 
     @Test
+    fun aHeldClaimIsDueAtItsNextHeartbeatThenAtTheEndOfItsLease() {
+        assertNull(owner.nextDeadlineMs())
+        owner.acquire(track) {}
+        drain()
+        assertEquals(PlaybackClaimOwner.HEARTBEAT_MS, owner.nextDeadlineMs())
+
+        now = PlaybackClaimOwner.HEARTBEAT_MS
+        owner.tick()
+        // The heartbeat is in flight; only the lease can end before it answers.
+        assertEquals(PlaybackClaimOwner.LEASE_MS, owner.nextDeadlineMs())
+        drain()
+        assertEquals(2 * PlaybackClaimOwner.HEARTBEAT_MS, owner.nextDeadlineMs())
+    }
+
+    @Test
     fun concurrentRequestsShareOneAcquisition() {
         val outcomes = mutableListOf<ClaimOutcome>()
         owner.acquire(track, outcomes::add)

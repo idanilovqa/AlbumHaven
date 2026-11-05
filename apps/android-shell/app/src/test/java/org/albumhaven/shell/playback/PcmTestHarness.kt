@@ -191,7 +191,11 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
 
     override fun heardFrames() = (writtenFrames - pendingFrames()).toLong()
 
+    /** Fails like an [android.media.AudioTrack] whose audio server died: every write and play throws. */
+    var dead = false
+
     override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
+        check(!dead) { "AudioTrack write failed: -32" }
         val accepted = minOf(frames, acceptFrames)
         while ((writtenFrames + accepted) * 2 > trace.size) trace = trace.copyOf(trace.size * 2)
         System.arraycopy(samples, offsetSamples, trace, writtenFrames * 2, accepted * 2)
@@ -200,7 +204,10 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
         return accepted
     }
 
-    override fun play() { operations += "play" }
+    override fun play() {
+        check(!dead) { "play() called on an uninitialized AudioTrack" }
+        operations += "play"
+    }
     override fun pause() { operations += "pause" }
     override fun flush() { operations += "flush" }
     override fun release() { operations += "release" }

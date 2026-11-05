@@ -176,10 +176,15 @@ class NativePlaybackController(
     /** This installation's listen device, kept like the browser's per-profile one. */
     deviceId: String = UUID.randomUUID().toString(),
     wallClockMs: () -> Long = System::currentTimeMillis,
+    /** Starts the playback thread; the Android service runs it at audio priority. */
+    private val startThread: (Runnable) -> Unit = { Thread(it, "AlbumHavenPlayback").start() },
 ) {
     private val tasks = LinkedBlockingQueue<Runnable>()
 
     @Volatile private var running = false
+
+    /** Set once [shutdown] let go of everything; later work, such as a late claim answer, is dropped. */
+    @Volatile private var retired = false
 
     private val revisionLock = Any()
     private var acceptedRevision = 0L
@@ -245,7 +250,8 @@ class NativePlaybackController(
     private var shutdownDeadlineMs: Long? = null
     private var shutdownFinished: () -> Unit = {}
 
-    private var warmEnabled = false
+    // Connections stay warm for a while after the handshake and after this client last owned playback.
+    private var warmUntilMs: Long? = null
     private var lastWarmMs = 0L
 
     // Measured listening of the current item, in the sink's accepted-frame coordinates.
@@ -294,7 +300,7 @@ class NativePlaybackController(
 
     fun pause(from: CommandSource = CommandSource.WEB) = post(from) { pauseNow() }
 
-    fun stop(from: CommandSource = CommandSource.WEB) = post(from) { stopNow(NativePlaybackState.IDLE) }
+    fun stop(from: CommandSource = CommandSource.WEB) = post(from) { stopNow() }
 
     /**
      * A new document of the same origin re-attaches to the running queue: playback, the claim and
@@ -310,17 +316,21 @@ class NativePlaybackController(
 
     /** Warms the connections a first start needs, then keeps them warm while nothing plays. */
     fun warmConnections() = post {
-        warmEnabled = true
+        warmUntilMs = clock() + KEEP_WARM_FOR_MS
         warm()
     }
 
     fun start() {
         if (running) return
         running = true
-        Thread({
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-            while (running) runOnce(IDLE_WAIT_MS)
-        }, "AlbumHavenPlayback").start()
+        startThread(
+            Runnable {
+                while (!retired) {
+                    val waitMs = runOnce()
+                    if (waitMs > 0 && !retired) tasks.poll(waitMs, TimeUnit.MILLISECONDS)?.let(::guarded)
+                }
+            },
+        )
     }
 
     /**
@@ -334,33 +344,59 @@ class NativePlaybackController(
         if (wantPlay && claims.owned) {
             listens.unload(positionMs() / 1000.0, (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0)
         }
-        stopNow(NativePlaybackState.IDLE)
+        stopNow(keepPosition = true)
         releasePending = false
-        warmEnabled = false
+        warmUntilMs = null
         shutdownFinished = finished
         shutdownDeadlineMs = clock() + SHUTDOWN_CHECKPOINT_MS
     }
 
     // ---- Playback thread ----
 
-    /** Runs queued work and one render pass; waits up to [waitMs] for work when nothing rendered. */
-    fun runOnce(waitMs: Long) {
+    /**
+     * Runs queued work and one render pass, then returns how long the thread may wait for new
+     * work: not at all after a render, briefly while it feeds the output, otherwise until the next
+     * heartbeat, keep-warm or shutdown deadline.
+     */
+    fun runOnce(): Long {
         var task: Runnable? = tasks.poll()
-        while (task != null) {
-            task.run()
+        while (task != null && !retired) {
+            guarded(task)
             task = tasks.poll()
         }
-        claims.tick()
-        maybeRecoverStalledStart()
-        // A stream may buffer while the claim is requested; only an owner is heard.
-        val written = if (loaded && claims.owned) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
-        maybeFinishDrainedQueue()
-        maybeEmitPosition()
-        maybeRelease()
-        maybeKeepWarm()
-        maybeFinishShutdown()
-        if (written == 0 && waitMs > 0) {
-            tasks.poll(waitMs, TimeUnit.MILLISECONDS)?.run()
+        if (retired) return Long.MAX_VALUE
+        var written = 0
+        guarded {
+            claims.tick()
+            maybeRecoverStalledStart()
+            // A stream may buffer while the claim is requested; only an owner is heard.
+            written = if (loaded && claims.owned) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            maybeFinishDrainedQueue()
+            maybeEmitPosition()
+            maybeRelease()
+            maybeKeepWarm()
+            maybeFinishShutdown()
+        }
+        return if (written > 0) 0 else waitMs()
+    }
+
+    private fun waitMs(): Long {
+        if (retired) return Long.MAX_VALUE
+        if (loaded && claims.owned) return RENDER_WAIT_MS
+        val next = listOfNotNull(
+            claims.nextDeadlineMs(),
+            shutdownDeadlineMs,
+            warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
+        ).minOrNull() ?: return Long.MAX_VALUE
+        return (next - clock()).coerceAtLeast(1)
+    }
+
+    /** A failure on the playback thread, such as a dead audio output, stops playback rather than the process. */
+    private fun guarded(task: Runnable) {
+        try {
+            task.run()
+        } catch (_: RuntimeException) {
+            outputFailed()
         }
     }
 
@@ -538,10 +574,7 @@ class NativePlaybackController(
     private fun engineFor(rate: Int): NativePcmEngine {
         val current = engine
         if (current != null && sink?.sampleRate == rate) return current
-        current?.let {
-            lastGeneration = maxOf(lastGeneration, it.generation)
-            it.release()
-        }
+        releaseOutput()
         val newSink = sinks(rate)
         sink = newSink
         preferredRate = rate
@@ -698,12 +731,40 @@ class NativePlaybackController(
         setState(NativePlaybackState.PAUSED)
     }
 
-    private fun stopNow(finalState: NativePlaybackState) {
+    /** [keepPosition] holds the heard position, so the queue a shutdown leaves resumes there. */
+    private fun stopNow(keepPosition: Boolean = false) {
+        val position = if (keepPosition) positionMs() else 0
         unload("stopped")
         wantPlay = false
-        heldPositionMs = 0
+        heldPositionMs = position
         retireClaim()
-        setState(finalState)
+        setState(NativePlaybackState.IDLE)
+    }
+
+    /** The output failed: it is let go at the heard position, and the next play opens a new one. */
+    private fun outputFailed() {
+        if (loaded) heldPositionMs = runCatching(::positionMs).getOrDefault(heldPositionMs)
+        measuring = false
+        loaded = false
+        releaseOutput()
+        if (retired) return
+        wantPlay = false
+        retireClaim()
+        setState(NativePlaybackState.ERROR)
+        emit { NativePlaybackEvent.Error(it, "output_failed", "Playback stopped unexpectedly. Press play to try again.") }
+    }
+
+    /** Frees the engine's PCM rings and its sink; a later engine continues the same socket's generations. */
+    private fun releaseOutput() {
+        val current = engine ?: return
+        engine = null
+        sink = null
+        lastGeneration = maxOf(lastGeneration, current.generation)
+        try {
+            current.release()
+        } catch (_: RuntimeException) {
+            // A dead output may refuse even its release; nothing more can be done with it.
+        }
     }
 
     private fun seekTo(positionMs: Long) {
@@ -849,7 +910,8 @@ class NativePlaybackController(
         shutdownDeadlineMs = null
         claims.release()
         closeTransport()
-        running = false
+        releaseOutput()
+        retired = true
         shutdownFinished()
     }
 
@@ -917,7 +979,13 @@ class NativePlaybackController(
     }
 
     private fun maybeKeepWarm() {
-        if (warmEnabled && !claims.owned && clock() - lastWarmMs >= KEEP_WARM_MS) warm()
+        val until = warmUntilMs ?: return
+        val now = clock()
+        when {
+            claims.owned -> warmUntilMs = now + KEEP_WARM_FOR_MS
+            now >= until -> warmUntilMs = null
+            now - lastWarmMs >= KEEP_WARM_MS -> warm()
+        }
     }
 
     // ---- Measured listening ----
@@ -1022,12 +1090,16 @@ class NativePlaybackController(
         /** Most albums are CD audio; a wrong guess costs one refused open, as on the web. */
         const val DEFAULT_RATE = 44_100
         const val RENDER_CHUNK_FRAMES = 4_096
-        const val IDLE_WAIT_MS = 5L
+        /** How long the thread waits for work while it feeds the output. */
+        const val RENDER_WAIT_MS = 5L
         const val POSITION_INTERVAL_MS = 250L
         const val MAX_KNOWN_RATES = 512
 
         /** OkHttp keeps an idle pooled connection for five minutes. */
         const val KEEP_WARM_MS = 4L * 60 * 1000
+
+        /** How long connections stay warm after the handshake or after this client last owned playback. */
+        const val KEEP_WARM_FOR_MS = 30L * 60 * 1000
         const val END_DRAIN_MARGIN_MS = 500L
         /** How long an owned start may wait for its first PCM before it is reopened, then failed. */
         const val START_STALL_MS = 15_000L

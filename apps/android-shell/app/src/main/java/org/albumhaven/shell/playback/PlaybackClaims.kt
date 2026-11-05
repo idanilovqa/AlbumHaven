@@ -127,6 +127,13 @@ class PlaybackClaimOwner(
         }
     }
 
+    /** When [tick] next has work for a held claim: its next heartbeat, or the end of its lease. */
+    fun nextDeadlineMs(): Long? = when {
+        token == null -> null
+        renewing -> leaseEndsMs
+        else -> minOf(leaseEndsMs, lastRenewSentMs + HEARTBEAT_MS)
+    }
+
     /** Gives the claim back now; an expired claim needs no answer. The owner calls it once listen writes drain. */
     fun release() {
         val held = token

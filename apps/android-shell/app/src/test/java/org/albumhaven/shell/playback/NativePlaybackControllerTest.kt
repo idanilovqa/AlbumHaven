@@ -75,6 +75,9 @@ class ControllerHarness(
     var connects = 0
     var closes = 0
 
+    /** Android refuses every new output, as `AudioTrack.Builder.build()` can. */
+    var outputUnavailable = false
+
     val controller = NativePlaybackController(
         transports = { socketListener ->
             connects += 1
@@ -90,6 +93,7 @@ class ControllerHarness(
         claimApi = claims,
         listenApi = listen,
         sinks = { rate ->
+            if (outputUnavailable) throw UnsupportedOperationException("Cannot create AudioTrack")
             RecordingSink(rate, if (realTime) rate * STEP_MS.toInt() / 1000 else Int.MAX_VALUE).also(sinks::add)
         },
         io = claimIo,
@@ -129,7 +133,7 @@ class ControllerHarness(
     fun step(ms: Long = STEP_MS) {
         now += ms
         deliver()
-        controller.runOnce(0)
+        controller.runOnce()
         deliver()
     }
 
@@ -663,7 +667,7 @@ class NativePlaybackControllerTest {
         val before = sinks.last().operations.size
         val writtenBefore = sinks.last().writtenFrames
         command()
-        controller.runOnce(0)
+        controller.runOnce()
         // Nothing of the outgoing track may be written in the pass that applied the change.
         assertEquals(writtenBefore, sinks.last().writtenFrames)
         return sinks.last().operations.drop(before) to controller.snapshot

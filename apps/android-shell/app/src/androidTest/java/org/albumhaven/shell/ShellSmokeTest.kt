@@ -1,6 +1,7 @@
 package org.albumhaven.shell
 
 import android.view.View
+import android.widget.Button
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -108,8 +109,10 @@ class ShellSmokeTest {
     private fun recoveryVisible(scenario: ActivityScenario<ShellActivity>): Boolean =
         onActivity(scenario) { it.findViewById<View>(R.id.recovery_root).visibility == View.VISIBLE }
 
-    private fun retryVisible(scenario: ActivityScenario<ShellActivity>): Boolean =
-        onActivity(scenario) { it.findViewById<View>(R.id.recovery_retry).visibility == View.VISIBLE }
+    private fun actionLabel(scenario: ActivityScenario<ShellActivity>): String? =
+        onActivity(scenario) { activity ->
+            activity.findViewById<Button>(R.id.recovery_action).takeIf { it.visibility == View.VISIBLE }?.text?.toString()
+        }
 
     private fun alertVisible(scenario: ActivityScenario<ShellActivity>): Boolean =
         onActivity(scenario) { it.findViewById<View>(R.id.recovery_alert).visibility == View.VISIBLE }
@@ -126,7 +129,7 @@ class ShellSmokeTest {
         assumeTrue(!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER))
         ActivityScenario.launch(ShellActivity::class.java).use { scenario ->
             assertTrue(recoveryVisible(scenario))
-            assertFalse(retryVisible(scenario))
+            assertEquals(null, actionLabel(scenario))
             assertEquals(null, onActivity(scenario) { it.findViewById<WebView>(R.id.shell_web_view).url })
         }
     }
@@ -153,7 +156,8 @@ class ShellSmokeTest {
         serve(protocolMin = 9, protocolMax = 9)
         ActivityScenario.launch(ShellActivity::class.java).use { scenario ->
             waitUntil("update required") { alertVisible(scenario) }
-            assertFalse(retryVisible(scenario))
+            // Debug builds trust the debug key, so they carry an updater and offer Check for update.
+            assertEquals("Check for update", actionLabel(scenario))
         }
     }
 
@@ -161,9 +165,9 @@ class ShellSmokeTest {
     fun connectionFailureRecoversThroughRetry() {
         requireBridgeSupport()
         ActivityScenario.launch(ShellActivity::class.java).use { scenario ->
-            waitUntil("recovery") { alertVisible(scenario) && retryVisible(scenario) }
+            waitUntil("recovery") { alertVisible(scenario) && actionLabel(scenario) == "Retry" }
             serve()
-            scenario.onActivity { it.findViewById<View>(R.id.recovery_retry).performClick() }
+            scenario.onActivity { it.findViewById<View>(R.id.recovery_action).performClick() }
             waitUntil("page after retry") { webTitle(scenario) == "replied" && !recoveryVisible(scenario) }
         }
     }

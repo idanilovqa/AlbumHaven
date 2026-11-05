@@ -8,5 +8,6 @@
     <color name="border">#666666</color>
     <color name="warning">#E0AA50</color>
     <color name="success">#2EBA70</color>
+    <color name="info">#55C7FF</color>
     <color name="error">#E06F78</color>
 </resources>

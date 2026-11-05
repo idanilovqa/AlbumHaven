@@ -20,7 +20,9 @@ interface BridgeHost {
     fun selectedSandboxSlot(): Int
     fun takeConnectedSandboxSlot(): Int?
     fun selectSandbox(slot: Int, onResult: (connected: Boolean) -> Unit)
-    fun onIncompatibleWeb()
+
+    /** This app cannot run the site offering [webProtocols]: no shared protocol, or a required capability is missing. */
+    fun onIncompatibleWeb(webProtocols: IntRange)
 }
 
 /** The APK updater as the bridge sees it (`updates.manual.v1`). Each call returns false when it does not apply now. */
@@ -118,14 +120,20 @@ class BridgeController(
     private fun handshake(message: BridgeMessage, reply: (String) -> Unit) {
         val webMin = message.payload.opt("protocolMin") as? Int
         val webMax = message.payload.opt("protocolMax") as? Int
-        if (webMin == null || webMax == null || webMin > webMax) {
-            reply(BridgeCodec.failure(message, PROTOCOL_MAX, "invalid_payload", "Invalid protocol range"))
+        val required = requiredCapabilities(message.payload)
+        if (webMin == null || webMax == null || webMin > webMax || required == null) {
+            reply(BridgeCodec.failure(message, PROTOCOL_MAX, "invalid_payload", "Invalid handshake"))
             return
         }
         val selected = minOf(PROTOCOL_MAX, webMax)
         if (selected < maxOf(PROTOCOL_MIN, webMin)) {
             reply(BridgeCodec.failure(message, PROTOCOL_MAX, "incompatible_bridge", "No shared protocol"))
-            host.onIncompatibleWeb()
+            host.onIncompatibleWeb(webMin..webMax)
+            return
+        }
+        if (!capabilities().containsAll(required)) {
+            reply(BridgeCodec.failure(message, PROTOCOL_MAX, "update_required", "Missing required capability"))
+            host.onIncompatibleWeb(webMin..webMax)
             return
         }
         negotiatedProtocol = selected
@@ -134,6 +142,15 @@ class BridgeController(
         reply(BridgeCodec.success(message, selected, handshakePayload(selected)))
         // A document that can play is connected; its first start should not pay for cold connections.
         playback.warmConnections()
+    }
+
+    /** The capabilities the site cannot run without; absent means none. Null when malformed. */
+    private fun requiredCapabilities(payload: JSONObject): Set<String>? {
+        val names = payload.opt("requiredCapabilities") ?: return emptySet()
+        if (names !is JSONArray || names.length() > MAX_REQUIRED_CAPABILITIES) return null
+        return (0 until names.length()).map { index ->
+            (names.get(index) as? String)?.takeIf(CAPABILITY::matches) ?: return null
+        }.toSet()
     }
 
     private fun handshakePayload(selected: Int): JSONObject {
@@ -216,5 +233,7 @@ class BridgeController(
         private const val UPDATE_STATE_EVENT = "updates.state"
         private const val HANDSHAKE = "bridge.handshake"
         private const val SANDBOX_SELECT = "sandbox.select"
+        private const val MAX_REQUIRED_CAPABILITIES = 64
+        private val CAPABILITY = Regex("^[a-z][a-z_]*(\\.[a-z][a-z_]*)*\\.v[1-9][0-9]*$")
     }
 }

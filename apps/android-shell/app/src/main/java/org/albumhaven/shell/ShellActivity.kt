@@ -63,7 +63,16 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var pendingWebState: Bundle? = null
     private val playbackEvents: (NativePlaybackEvent) -> Unit = { event -> bridge.emit(event) }
     private var updater: Updater? = null
-    private val updateEvents: (UpdateState) -> Unit = { state -> bridge.emit(state) }
+    private val updateEvents: (UpdateState) -> Unit = { state ->
+        bridge.emit(state)
+        updateRequired?.let { flow ->
+            flow.onState(state)
+            showUpdateRequired()
+        }
+    }
+
+    /** Set while the native Update required screen covers a site this app cannot run. */
+    private var updateRequired: UpdateRequiredFlow? = null
     private val playbackConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val service = (binder as PlaybackService.LocalBinder).service
@@ -110,11 +119,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         updater?.addListener(updateEvents)
         // Once per process: a cold launch checks when the last successful check is six hours old.
         updater?.passiveCheckIfDue()
-        recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
+        recovery = RecoveryPanel(findViewById(R.id.recovery_root))
         webView = findViewById(R.id.shell_web_view)
 
+        // The system WebView is too old for the bridge; updating this app cannot fix that.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            recovery.show(RecoveryState.UPDATE_REQUIRED, originHost())
+            recovery.showUpdate(UpdateRequiredView(UpdateStep.REQUIRED), onAction = null)
             return
         }
         configureWebView()
@@ -124,7 +134,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         pendingWebState = savedInstanceState
             ?.takeIf { it.getString(STATE_ORIGIN) == selectedOrigin }
             ?.getBundle(STATE_WEB_VIEW)
-        recovery.show(RecoveryState.LOADING, originHost())
+        recovery.showLoading(originHost())
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -174,9 +184,17 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     override fun takeConnectedSandboxSlot(): Int? = preferences.takeConnectedSandboxSlot()
 
-    override fun onIncompatibleWeb() {
+    override fun onIncompatibleWeb(webProtocols: IntRange) {
         incompatibleWeb = true
-        recovery.show(RecoveryState.UPDATE_REQUIRED, originHost())
+        updateRequired = updater?.let { UpdateRequiredFlow(ShellUpdatePort(it), webProtocols) }
+        showUpdateRequired()
+    }
+
+    /** A build without an update certificate offers no update, so its screen has no action. */
+    private fun showUpdateRequired() {
+        if (!incompatibleWeb) return
+        val flow = updateRequired
+        recovery.showUpdate(flow?.view ?: UpdateRequiredView(UpdateStep.REQUIRED), flow?.let { { it.act() } })
     }
 
     override fun selectSandbox(slot: Int, onResult: (connected: Boolean) -> Unit) {
@@ -233,7 +251,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private fun reload() {
         mainFrameFailed = false
-        recovery.show(RecoveryState.LOADING, originHost())
+        recovery.showLoading(originHost())
         webView.visibility = View.VISIBLE
         webView.loadUrl(selectedOrigin)
     }
@@ -313,7 +331,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         if (BuildConfig.DEBUG) Log.w(TAG, "Main frame failed: $cause")
         mainFrameFailed = true
         webView.visibility = View.INVISIBLE
-        recovery.show(RecoveryState.ERROR, originHost())
+        recovery.showError { reload() }
     }
 
     private inner class ShellWebViewClient : WebViewClient() {
@@ -334,6 +352,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             // The same origin's next document re-attaches to the running queue from its handshake.
             playbackService?.controller?.documentStarted()
             incompatibleWeb = false
+            updateRequired = null
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {

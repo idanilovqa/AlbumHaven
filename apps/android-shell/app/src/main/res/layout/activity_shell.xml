@@ -99,7 +99,7 @@
                         android:gravity="start" />
 
                     <Button
-                        android:id="@+id/recovery_retry"
+                        android:id="@+id/recovery_action"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
@@ -107,10 +107,27 @@
                         android:minHeight="48dp"
                         android:paddingHorizontal="16dp"
                         android:stateListAnimator="@null"
-                        android:text="@string/recovery_retry"
                         android:textAllCaps="false"
-                        android:textColor="@color/text"
+                        android:textColor="@color/button_text"
                         android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/recovery_progress_label"
+                        style="@style/RecoveryMessage"
+                        android:layout_marginTop="12dp"
+                        android:gravity="start"
+                        android:importantForAccessibility="no"
+                        android:visibility="gone" />
+
+                    <ProgressBar
+                        android:id="@+id/recovery_progress"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:max="100"
+                        android:progressTint="@color/text"
+                        android:visibility="gone" />
                 </LinearLayout>
             </LinearLayout>
         </LinearLayout>

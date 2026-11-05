@@ -30,7 +30,7 @@ class BridgeControllerTest {
 
     private class FakeHost : BridgeHost {
         var connected: Int? = null
-        var incompatibleCalls = 0
+        val incompatible = mutableListOf<IntRange>()
         var selectedSlot: Int? = null
         var nextSelectResult = true
 
@@ -41,8 +41,8 @@ class BridgeControllerTest {
             selectedSlot = slot
             onResult(nextSelectResult)
         }
-        override fun onIncompatibleWeb() {
-            incompatibleCalls++
+        override fun onIncompatibleWeb(webProtocols: IntRange) {
+            incompatible += webProtocols
         }
     }
 
@@ -161,14 +161,42 @@ class BridgeControllerTest {
     @Test
     fun incompatibleRangeFailsClosed() {
         assertEquals("incompatible_bridge", errorCode(send(sandbox, handshake(min = 2, max = 3))))
-        assertEquals(1, host.incompatibleCalls)
+        assertEquals(listOf(2..3), host.incompatible)
         assertEquals("handshake_required", errorCode(send(sandbox, command("sandbox.select", """{"slot":3}"""))))
     }
 
     @Test
     fun malformedRangeIsNotTreatedAsIncompatibleWeb() {
         assertEquals("invalid_payload", errorCode(send(sandbox, handshake(min = 3, max = 1))))
-        assertEquals(0, host.incompatibleCalls)
+        assertEquals(emptyList<IntRange>(), host.incompatible)
+    }
+
+    private fun requiring(capabilities: String) =
+        command("bridge.handshake", """{"protocolMin":1,"protocolMax":2,"requiredCapabilities":$capabilities}""")
+
+    @Test
+    fun aSiteRequiringOnlyAdvertisedCapabilitiesNegotiates() {
+        assertTrue(ok(send(sandbox, requiring("""["playback.native.v1","updates.manual.v1"]"""))))
+        assertTrue(ok(send(sandbox, requiring("[]"))))
+        assertEquals(emptyList<IntRange>(), host.incompatible)
+    }
+
+    @Test
+    fun aMissingRequiredCapabilityRefusesTheSiteAndAsksForAnUpdate() {
+        val stable = controller(ShellChannel.STABLE, "org.albumhaven.app")
+        assertEquals("update_required", errorCode(send(stable, requiring("""["sandbox.select.v1"]"""))))
+        assertEquals("update_required", errorCode(send(sandbox, requiring("""["playback.native.v1","playback.lyrics.v1"]"""))))
+        assertEquals(listOf(1..2, 1..2), host.incompatible)
+        assertEquals("handshake_required", errorCode(send(sandbox, command("playback.snapshot"))))
+    }
+
+    @Test
+    fun malformedRequiredCapabilitiesAreRejectedWithoutAskingForAnUpdate() {
+        listOf("\"playback.native.v1\"", "[1]", "[\"Bad Name\"]", "[\"playback.native\"]", "{}",
+            "[" + List(65) { "\"playback.native.v1\"" }.joinToString(",") + "]").forEach {
+            assertEquals(it, "invalid_payload", errorCode(send(sandbox, requiring(it))))
+        }
+        assertEquals(emptyList<IntRange>(), host.incompatible)
     }
 
     @Test

@@ -17,7 +17,9 @@ sealed interface UpdateState {
     data class Checking(val checkedAtMs: Long?) : UpdateState
     data class UpToDate(val checkedAtMs: Long) : UpdateState
     data class Available(val manifest: UpdateManifest) : UpdateState
-    data class Downloading(val manifest: UpdateManifest, val bytes: Long) : UpdateState
+    data class Downloading(val manifest: UpdateManifest, val bytes: Long) : UpdateState {
+        val percent: Int get() = (bytes.coerceIn(0, manifest.apkSize) * 100 / manifest.apkSize).toInt()
+    }
     data class Verifying(val manifest: UpdateManifest) : UpdateState
     data class Ready(val manifest: UpdateManifest) : UpdateState
 
@@ -59,7 +61,7 @@ sealed interface UpdateState {
             .put("versionCode", manifest?.versionCode ?: JSONObject.NULL)
             .put(
                 "progress",
-                if (this is Downloading) (bytes.coerceIn(0, manifest!!.apkSize) * 100 / manifest.apkSize).toInt() else JSONObject.NULL,
+                if (this is Downloading) percent else JSONObject.NULL,
             )
             .put("checkedAt", checkedAt ?: JSONObject.NULL)
             .put("error", (this as? Failed)?.error?.wireName ?: JSONObject.NULL)

@@ -1375,46 +1375,51 @@ def test_asgi_home_data_hydrates_empty_state_with_explicit_config(app, asgi_app,
     assert hydrate_calls == [(asgi_library_state, app.config, False, False, False, False)]
 
 
-def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, asgi_app, monkeypatch):
+def _install_postgres_home_fakes(app, monkeypatch, *, repository_calls, threadpool_state):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
-    repository_calls: list[dict[str, object]] = []
-    threadpool_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-    threadpool_active = False
-
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        nonlocal threadpool_active
-        threadpool_calls.append((function, args, kwargs))
-        threadpool_active = True
+        threadpool_state["functions"].append(function.__name__)
+        threadpool_state["active"] = True
         try:
             return function(*args, **kwargs)
         finally:
-            threadpool_active = False
+            threadpool_state["active"] = False
 
-    def fake_build_home_payload(**_kwargs) -> dict[str, object]:
-        return {
-            "kind": "home",
-            "recent_listens": [{"album": "Preserved home content"}],
-            "artists_sidebar": [
-                {"artist": "Stale runtime artist", "artist_display": "Stale runtime artist", "count": 1},
-            ],
-            "artist_count": 1,
-            "album_count": 99,
-            "show_all_artists_sidebar_link": False,
-        }
+    def forbidden_legacy_builder(**_kwargs):
+        raise AssertionError("Postgres Home must never rebuild the whole in-memory library view")
 
-    class FakePostgresSidebarRepository:
+    class FakePostgresHomeRepository:
         def __init__(self, config):
             assert config is app.config
 
+        def _record(self, name, query_params):
+            assert threadpool_state["active"] is True, f"{name} ran on the event loop"
+            repository_calls.append({
+                "call": name,
+                "surface": query_params.get("surface"),
+                "gallery_page_size": query_params.get("gallery_page_size"),
+                "gallery_display": query_params.get("gallery_display"),
+                "omit_sidebar": query_params.get("omit_sidebar"),
+                "include_library_wide_non_album": query_params.get("include_library_wide_non_album"),
+                "categories": query_params.getlist("category"),
+            })
+
+        def build_root_startup_preview_payload(self, *, query_params=None, library_state=None):
+            self._record("root_preview", query_params)
+            library_wide = query_params.get("include_library_wide_non_album") == "1"
+            return {
+                "surface": {"active": "albums"},
+                "artist_groups": [{"artist": "Page artist", "albums": []}],
+                "gallery_page": {"cursor": "next"},
+                "artists_sidebar": [],
+                "album_count": 99,
+                "non_album_tracks_deferred": not library_wide,
+                **({"library_non_album_tracks": [{"path": "loose.mp3"}]} if library_wide else {}),
+            }
+
         def build_root_sidebar_payload(self, *, query_params=None):
-            assert threadpool_active is True
-            repository_calls.append(
-                {
-                    "gallery_display": query_params.get("gallery_display"),
-                    "categories": query_params.getlist("category"),
-                }
-            )
+            self._record("sidebar", query_params)
             return {
                 "artists_sidebar": [
                     {"artist": "Frank Churchill", "artist_display": "Frank Churchill", "count": 1},
@@ -1423,44 +1428,53 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
                 "artist_count": 2,
                 "album_count": 2,
                 "show_all_artists_sidebar_link": True,
-                "persistence_backend": "postgres",
-                "view_data_source": "postgres_library_browse",
             }
 
+        def build_root_counts_payload(self, *, query_params=None):
+            self._record("counts", query_params)
+            return {"artist_count": 2, "album_count": 3, "show_all_artists_sidebar_link": True}
+
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
-    monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
-    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
+    monkeypatch.setattr(asgi_read_routes, "build_home_payload", forbidden_legacy_builder)
+    monkeypatch.setattr(asgi_read_routes, "build_view_payload", forbidden_legacy_builder)
     monkeypatch.setattr(
         asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
+        "build_recent_listen_payloads",
+        lambda _config, _albums: {
+            "recent_local_albums": [{"album": "Preserved home content"}],
+            "recent_not_local_albums": [],
+        },
     )
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresHomeRepository)
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool, raising=False)
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
-        lambda seam_id, _config: type(
-            "Selection",
-            (),
-            {"seam_id": seam_id, "effective_backend": "postgres"},
-        )(),
+        lambda seam_id, _config: type("Selection", (), {"seam_id": seam_id, "effective_backend": "postgres"})(),
     )
     monkeypatch.setattr(asgi_read_routes, "_log_view_data_request_from_asgi", lambda *_args: None)
+
+
+def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, asgi_app, monkeypatch):
+    repository_calls: list[dict[str, object]] = []
+    threadpool_state = {"functions": [], "active": False}
+    _install_postgres_home_fakes(
+        app, monkeypatch, repository_calls=repository_calls, threadpool_state=threadpool_state,
+    )
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
         "GET",
         "/home-data",
-        query={
-            "gallery_display": "covers",
-            "category": ["main_library", "new_arrivals"],
-        },
+        query={"gallery_display": "covers", "category": ["main_library", "new_arrivals"]},
     )
 
     payload = _decode_json(body)
     assert status == 200
-    assert payload["kind"] == "home"
-    assert payload["recent_listens"] == [{"album": "Preserved home content"}]
+    assert payload["surface"]["active"] == "home"
+    assert payload["artist_groups"] == []
+    assert "gallery_page" not in payload
+    assert payload["recent_local_albums"] == [{"album": "Preserved home content"}]
     assert payload["artists_sidebar"] == [
         {"artist": "Frank Churchill", "artist_display": "Frank Churchill", "count": 1},
         {"artist": "Larry Morey", "artist_display": "Larry Morey", "count": 1},
@@ -1468,17 +1482,13 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     assert payload["artist_count"] == 2
     assert payload["album_count"] == 2
     assert payload["show_all_artists_sidebar_link"] is True
-    assert repository_calls == [
-        {
-            "gallery_display": "covers",
-            "categories": ["main_library", "new_arrivals"],
-        }
-    ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
-    assert threadpool_function.__name__ == "build_root_sidebar_payload"
-    assert threadpool_args == ()
-    assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
+    assert [call["call"] for call in repository_calls] == ["root_preview", "sidebar"]
+    assert repository_calls[0]["surface"] == "albums"
+    assert repository_calls[0]["gallery_page_size"] == "1"
+    assert repository_calls[0]["gallery_display"] == "covers"
+    assert repository_calls[0]["categories"] == ["main_library", "new_arrivals"]
+    # One threadpool hop owns every synchronous builder; the event loop stays free.
+    assert threadpool_state["functions"] == ["_build_home_data_payload"]
 
 
 def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_sidebar(
@@ -1486,74 +1496,17 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     asgi_app,
     monkeypatch,
 ):
-    from music_app.routes import api_read_asgi_routes as asgi_read_routes
-
-    repository_queries: list[dict[str, object]] = []
-    threadpool_functions: list[str] = []
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        threadpool_functions.append(function.__name__)
-        return function(*args, **kwargs)
-
-    def fake_build_home_payload(**kwargs) -> dict[str, object]:
-        assert kwargs["query_args"].get("omit_sidebar") == "1"
-        return {
-            "kind": "home",
-            "artist_count": 1,
-            "album_count": 99,
-            "show_all_artists_sidebar_link": False,
-        }
-
-    class FakePostgresSidebarRepository:
-        def __init__(self, config):
-            assert config is app.config
-
-        def build_root_sidebar_payload(self, *, query_params=None):
-            raise AssertionError("omit_sidebar must not build the full Postgres sidebar payload")
-
-        def build_root_counts_payload(self, *, query_params=None):
-            repository_queries.append(
-                {
-                    "omit_sidebar": query_params.get("omit_sidebar"),
-                    "gallery_display": query_params.get("gallery_display"),
-                    "categories": query_params.getlist("category"),
-                }
-            )
-            return {
-                "artist_count": 2,
-                "album_count": 3,
-                "show_all_artists_sidebar_link": True,
-            }
-
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
-    monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
-    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
+    repository_calls: list[dict[str, object]] = []
+    threadpool_state = {"functions": [], "active": False}
+    _install_postgres_home_fakes(
+        app, monkeypatch, repository_calls=repository_calls, threadpool_state=threadpool_state,
     )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "select_runtime_persistence_adapter",
-        lambda seam_id, _config: type(
-            "Selection",
-            (),
-            {"seam_id": seam_id, "effective_backend": "postgres"},
-        )(),
-    )
-    monkeypatch.setattr(asgi_read_routes, "_log_view_data_request_from_asgi", lambda *_args: None)
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
         "GET",
         "/home-data",
-        query={
-            "omit_sidebar": "1",
-            "gallery_display": "list",
-            "category": ["main_library", "new_arrivals"],
-        },
+        query={"omit_sidebar": "1", "gallery_display": "list", "category": ["main_library", "new_arrivals"]},
     )
 
     payload = _decode_json(body)
@@ -1562,14 +1515,35 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     assert payload["artist_count"] == 2
     assert payload["album_count"] == 3
     assert payload["show_all_artists_sidebar_link"] is True
-    assert repository_queries == [
-        {
-            "omit_sidebar": "1",
-            "gallery_display": "list",
-            "categories": ["main_library", "new_arrivals"],
-        }
-    ]
-    assert threadpool_functions == ["build_root_counts_payload"]
+    assert [call["call"] for call in repository_calls] == ["root_preview", "counts"]
+    assert repository_calls[1]["omit_sidebar"] == "1"
+    assert repository_calls[1]["gallery_display"] == "list"
+    assert threadpool_state["functions"] == ["_build_home_data_payload"]
+
+
+def test_asgi_home_loose_tracks_use_bounded_postgres_root_not_whole_library_view(app, asgi_app, monkeypatch):
+    """Home > Loose Tracks once rebuilt every album and loose track (130 s, event loop blocked)."""
+    repository_calls: list[dict[str, object]] = []
+    threadpool_state = {"functions": [], "active": False}
+    _install_postgres_home_fakes(
+        app, monkeypatch, repository_calls=repository_calls, threadpool_state=threadpool_state,
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/home-data",
+        query={"omit_sidebar": "1", "include_non_album": "1", "include_library_wide_non_album": "1"},
+    )
+
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["library_non_album_tracks"] == [{"path": "loose.mp3"}]
+    assert payload["non_album_tracks_deferred"] is False
+    assert repository_calls[0]["call"] == "root_preview"
+    assert repository_calls[0]["include_library_wide_non_album"] == "1"
+    assert repository_calls[0]["gallery_page_size"] == "1"
+    assert threadpool_state["functions"] == ["_build_home_data_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):
@@ -5049,6 +5023,11 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
+        def build_problematic_file_detail_payload_for_track_path(self, track_path):
+            if track_path == "missing.flac":
+                return None
+            return {"key": "track-album", "focused_path": track_path, "detail_loaded": True}
+
         def build_problematic_file_detail_payload(self, album_key):
             if album_key == "missing":
                 return None
@@ -5114,12 +5093,28 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "GET",
         "/utilities/problematic-files/detail",
     )
+    track_detail_status, _track_detail_headers, track_detail_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"track_path": "D:/Music/Art Zoyd/01.flac"},
+    )
+    missing_track_status, _missing_track_headers, missing_track_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"track_path": "missing.flac"},
+    )
     missing_album_status, _missing_album_headers, missing_album_body = _run_asgi_request(
         asgi_app,
         "GET",
         "/utilities/problematic-files/missing",
     )
 
+    # Album Details opens a track's album without the full list.
+    assert track_detail_status == 200
+    assert _decode_json(track_detail_body)["focused_path"] == "D:/Music/Art Zoyd/01.flac"
+    assert missing_track_status == 404
     assert list_status == 200
     list_payload = _decode_json(list_body)
     assert list_payload == {
@@ -5185,7 +5180,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config, app.config, app.config, app.config, app.config]
+    assert repository_configs == [app.config] * 7
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

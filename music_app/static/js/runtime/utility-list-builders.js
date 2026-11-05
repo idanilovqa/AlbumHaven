@@ -3099,6 +3099,23 @@ function getProblematicAlbumForTrackPath(trackPath) {
   ) || null;
 }
 
+// One pass for a whole track list: per-row lookups scanned every problematic
+// album, so a long Loose Tracks list multiplied into millions of comparisons.
+// Matches getProblematicAlbumForTrackPath: the first album in list order wins.
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of state.utility.problematicFiles || []) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
+}
+
 async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
@@ -3171,6 +3188,33 @@ async function openUtilityModalForTrack(trackPath) {
     if (optimisticDetailPromise) {
       await Promise.allSettled([optimisticDetailPromise]);
       if (!ownsNavigation()) return;
+    }
+    if (!pendingTasks.length && !getProblematicAlbumForTrackPath(trackPath)) {
+      const directAlbum = await loadProblematicAlbumDetailForTrackPath(trackPath);
+      if (!ownsNavigation()) return;
+      if (directAlbum) {
+        const directKey = String(directAlbum.key || '').trim();
+        state.utility.problematicFiles = [
+          ...(state.utility.problematicFiles || []).filter((item) => String(item?.key || '').trim() !== directKey),
+          { ...directAlbum, detail_loaded: true, detail_load_failed: false },
+        ];
+        state.utility.pinnedProblematicKey = directKey;
+        const completeListPending = state.utility.problematicFilesComplete === false
+          && Boolean(state.utility.completeLoadPromise);
+        state.utility.loaded = true;
+        state.utility.selectedProblematicKey = directKey;
+        state.utility.focusedTrackPath = String(trackPath || '');
+        state.utility.showRepairedDisplay = true;
+        state.utility.deferProblematicAutoSelection = false;
+        state.utility.selectedProblemFilters = [];
+        state.utility.problemDropdownOpen = false;
+        setUtilityActiveTab('problematic-files');
+        openedCanonicalTarget = true;
+        openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+        // Fill in the rest of the list behind the open album.
+        if (!completeListPending) void loadProblematicFiles(true);
+        return;
+      }
     }
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (

@@ -66,6 +66,9 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.playlist_read_seams import build_view_surface_payload
+from music_app.services.recent_listen_read_seams import build_recent_listen_payloads
+from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
@@ -971,54 +974,110 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
     return False
 
 
+_HOME_POSTGRES_PARAMS = frozenset({
+    "gallery_scope", "gallery_display", "gallery_display_mode", "gallery_scale_percent",
+    "category", "omit_sidebar", "include_non_album", "include_library_wide_non_album",
+    "client_surface", "client_surface_class",
+})
+
+
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+    # Every builder below is synchronous library work. Running it on the event
+    # loop stalled every other request (search, covers, status) until it ended.
     request_started_at = time.perf_counter()
+    try:
+        payload = await run_in_threadpool(_build_home_data_payload, request)
+    except GalleryProjectionPending:
+        return JSONResponse(
+            {"ok": False, "code": "gallery_projection_pending", "error": "Gallery is being prepared."},
+            status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+        )
+    _log_view_data_request_from_asgi(request, payload, request_started_at)
+    return JSONResponse(payload)
+
+
+def _build_home_data_payload(request: Request) -> dict[str, object]:
     library_state = _library_state(request)
-    browse_state = resolve_active_scan_browse_state(library_state)
-    payload = build_home_payload(
+    if (
+        not library_state.get("scan_in_progress")
+        and select_runtime_persistence_adapter("library_browse", _app_config(request)).effective_backend
+        == PERSISTENCE_BACKEND_POSTGRES
+    ):
+        return _build_postgres_home_payload(request)
+    _hydrate_cached_library_for_asgi(request)
+    return build_home_payload(
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
-        library_state=browse_state,
-        client_surface_class=resolve_client_surface_class(
-            request.query_params.get("client_surface")
-            or request.query_params.get("client_surface_class")
-            or request.headers.get("X-Album-Haven-Client-Surface")
-            or request.headers.get("X-Album-Haven-Client-Surface-Class")
-        ),
+        library_state=resolve_active_scan_browse_state(library_state),
+        client_surface_class=_home_client_surface_class(request),
     )
-    if not library_state.get("scan_in_progress"):
-        selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
-        if selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES:
-            omit_sidebar = _request_flag_value(request.query_params.get("omit_sidebar"))
-            repository = PostgresLibraryBrowseRepository(_app_config(request))
-            payload_builder = (
-                repository.build_root_counts_payload
-                if omit_sidebar
-                else repository.build_root_sidebar_payload
-            )
-            root_sidebar_payload = await run_in_threadpool(
-                payload_builder,
-                query_params=request.query_params,
-            )
-            authoritative_fields = [
-                "artist_count",
-                "album_count",
-                "show_all_artists_sidebar_link",
-            ]
-            if not omit_sidebar:
-                authoritative_fields.insert(0, "artists_sidebar")
-            payload.update(
-                {
-                    field: root_sidebar_payload[field]
-                    for field in authoritative_fields
-                    if field in root_sidebar_payload
-                }
-            )
-    _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse(payload)
+
+
+def _home_client_surface_class(request: Request) -> str:
+    return resolve_client_surface_class(
+        request.query_params.get("client_surface")
+        or request.query_params.get("client_surface_class")
+        or request.headers.get("X-Album-Haven-Client-Surface")
+        or request.headers.get("X-Album-Haven-Client-Surface-Class")
+    )
+
+
+def _build_postgres_home_payload(request: Request) -> dict[str, object]:
+    """Home is a shell over the bounded Postgres root, never a whole-library rebuild.
+
+    The legacy builder computed every root artist group and every loose-track
+    candidate (over two minutes at library scale) only to discard the groups.
+    """
+    from starlette.datastructures import QueryParams
+
+    config = _app_config(request)
+    repository = PostgresLibraryBrowseRepository(config)
+    omit_sidebar = _request_flag_value(request.query_params.get("omit_sidebar"))
+    root_params = QueryParams([
+        ("surface", "albums"),
+        ("gallery_page_size", "1"),
+        *(
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key in _HOME_POSTGRES_PARAMS and key not in {"client_surface", "client_surface_class"}
+        ),
+    ])
+    payload = repository.build_root_startup_preview_payload(
+        query_params=root_params,
+        library_state=_postgres_browse_library_state(request),
+    )
+    payload.pop("gallery_page", None)
+    payload.update({
+        "surface": build_view_surface_payload("home"),
+        "shell_layout": build_shell_layout_payload(
+            active_surface="home", selected_artist="", local_tree_submode="",
+        ),
+        "artist_groups": [],
+        "primary_artist_groups": [],
+        "family_artist_groups": [],
+        "selected_artist": "",
+        "all_artists_active": False,
+        "payload_tier": "full",
+        "initial_view_partial": False,
+    })
+    sidebar_payload = (
+        repository.build_root_counts_payload(query_params=request.query_params)
+        if omit_sidebar
+        else repository.build_root_sidebar_payload(query_params=request.query_params)
+    )
+    for field in ("artists_sidebar", "artist_count", "album_count", "show_all_artists_sidebar_link"):
+        if field in sidebar_payload and (field != "artists_sidebar" or not omit_sidebar):
+            payload[field] = sidebar_payload[field]
+    if omit_sidebar:
+        payload.pop("artists_sidebar", None)
+    _hydrate_cached_library_for_asgi(request)
+    payload.update(build_recent_listen_payloads(config, _library_state(request).get("albums", []) or []))
+    payload["inventory_mutation_revision"] = int(
+        _library_state(request).get("inventory_mutation_revision") or 0
+    )
+    return payload
 
 
 @router.get("/album-details")
@@ -1270,6 +1329,18 @@ def utilities_problematic_files(
 @router.get("/utilities/problematic-files/detail")
 def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
     album_key = str(request.query_params.get("album_key", "") or "")
+    track_path = str(request.query_params.get("track_path", "") or "")
+    if not album_key and track_path and _is_postgres_utility_projection_request(request):
+        payload = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_problematic_file_detail_payload_for_track_path(track_path)
+        if payload is None:
+            return JSONResponse(
+                {"ok": False, "error": "Problematic album not found."},
+                status_code=404,
+            )
+        _project_missing_album_actions_for_request(request, payload)
+        return JSONResponse(payload)
     if not album_key:
         return JSONResponse({"ok": False, "error": "Missing album_key."}, status_code=400)
     if _is_postgres_utility_projection_request(request):

@@ -82,6 +82,23 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
   assert.match(html, /data-cdt-row-key="clean\.flac"[\s\S]*data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
 });
 
+test('AlbumTrackTable names the track problem on the Problematic Files icon', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{
+      discNumber: 1,
+      tracks: [{
+        path: 'problem.flac', title: 'Problem Track', trackNumber: 1, duration: '4:05',
+        isProblematic: true, problemReasons: ['Year mismatch', 'Missing album artist'],
+      }],
+    }],
+  });
+
+  // The hover names the problems; the accessible name stays the stable action name.
+  const title = 'Year mismatch, Missing album artist. Open this track in Problematic Files';
+  assert.match(html, new RegExp(`class="track-problem-link"[^>]*title="${title}"[^>]*aria-label="Open this track in Problematic Files"`));
+});
+
 test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({
@@ -298,4 +315,49 @@ test('row double-click clears its word highlight and starts playback without tog
   context.handleAlbumTrackRowDoubleClick(event);
   assert.equal(plays,1);
   assert.equal(cleared,2);
+});
+
+test('Loose Tracks credit motion reads every row before writing and pans only visible rows', () => {
+  const log = [];
+  const rows = Array.from({ length: 4 }, (_, index) => {
+    const classes = new Set();
+    const text = { get scrollWidth() { log.push(`read-text-${index}`); return 300; } };
+    return {
+      index,
+      firstElementChild: text,
+      get clientWidth() { log.push(`read-row-${index}`); return 100; },
+      classList: {
+        toggle(name, force) { log.push(`write-${index}`); if (force) classes.add(name); else classes.delete(name); },
+        remove(name) { classes.delete(name); },
+        contains: (name) => classes.has(name),
+      },
+    };
+  });
+  let frameCallback = null;
+  let intersect = null;
+  const context = {
+    window: { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) },
+    document: {},
+    requestAnimationFrame: (callback) => { frameCallback = callback; return 1; },
+    cancelAnimationFrame() {},
+    ResizeObserver: class { observe() {} disconnect() {} },
+    IntersectionObserver: class {
+      constructor(callback) { intersect = callback; }
+      observe() {}
+      disconnect() {}
+    },
+    resolveCompactPlayerMetadataRowMotion: ({ clientWidth, scrollWidth }) => ({ overflowing: scrollWidth > clientWidth }),
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js'), 'utf8'), context);
+  context.syncAlbumTrackCreditMotion({ querySelectorAll: () => rows });
+  intersect([{ target: rows[0], isIntersecting: true }, { target: rows[2], isIntersecting: true }]);
+  log.length = 0;
+  frameCallback();
+
+  const firstWrite = log.findIndex((entry) => entry.startsWith('write-'));
+  const lastRead = log.map((entry) => entry.startsWith('read-')).lastIndexOf(true);
+  assert.ok(firstWrite > lastRead, `layout reads interleaved with class writes: ${log.join(', ')}`);
+  assert.deepEqual(rows.map((row) => row.classList.contains('is-credit-overflowing')), [true, false, true, false]);
+  assert.ok(!log.includes('read-row-1') && !log.includes('read-row-3'), 'off-screen rows must not be measured');
 });

@@ -13,23 +13,37 @@ function syncAlbumTrackCreditMotion(root) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   let frame = 0;
   let disposed = false;
+  // Only on-screen credits pan; hundreds of off-screen infinite animations
+  // (long Loose Tracks lists) kept the compositor and style engine busy.
+  const visible = new Set();
   const refresh = () => {
     frame = 0;
-    for (const row of rows) {
-      const text = row.firstElementChild;
-      const motion = resolveCompactPlayerMetadataRowMotion({
-        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
-      });
-      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
-    }
+    // Read every width before writing any class: interleaving forced one
+    // synchronous layout per row.
+    const overflowing = rows.map((row) => !reduced.matches && visible.has(row)
+      && resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth,
+      }).overflowing);
+    rows.forEach((row, index) => row.classList.toggle('is-credit-overflowing', overflowing[index]));
   };
   const schedule = () => {
     if (!disposed && !frame) frame = requestAnimationFrame(refresh);
   };
   const observer = new ResizeObserver(schedule);
+  const visibility = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target);
+        else visible.delete(entry.target);
+      }
+      schedule();
+    })
+    : null;
   for (const row of rows) {
     observer.observe(row);
     observer.observe(row.firstElementChild);
+    if (visibility) visibility.observe(row);
+    else visible.add(row);
   }
   reduced.addEventListener('change', schedule);
   document.fonts?.ready.then(schedule);
@@ -37,6 +51,7 @@ function syncAlbumTrackCreditMotion(root) {
     disposed = true;
     cancelAnimationFrame(frame);
     observer.disconnect();
+    visibility?.disconnect();
     reduced.removeEventListener('change', schedule);
     for (const row of rows) row.classList.remove('is-credit-overflowing');
   });
@@ -69,8 +84,14 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean);
+  // The reasons arrive with Album Details, so hovering never loads Problematic Files.
+  const problemTitle = problemReasons.length
+    ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
+    : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {

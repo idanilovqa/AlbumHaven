@@ -12298,15 +12298,15 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   return request.promise;
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
+  const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
-    const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
-    const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
+    const problematicAlbum = problematicIndex.get(trackPath) || null;
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -12334,6 +12334,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
       isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
     };
   });
@@ -12371,6 +12372,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
+  const problematicIndex = buildProblematicAlbumTrackPathIndex();
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       exceptionType(item) === section.exceptionType
@@ -12380,7 +12382,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       )
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
@@ -16445,6 +16447,28 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+// The last automatic reverse prepend: a prepend must push the viewport down by
+// about its own height. When it does not, the next one re-exposes the top and
+// the chain walks the whole library backwards with no user input.
+let rootGalleryPreviousPrepend = null;
+
+function readRootGalleryUserScrollGeneration() {
+  return typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.getUserScrollIntentGeneration?.() ?? null;
+}
+
+function rootGalleryPreviousPrependStalled(scroll) {
+  const last = rootGalleryPreviousPrepend;
+  if (!last) return false;
+  if (last.userScrollGeneration !== readRootGalleryUserScrollGeneration()) {
+    rootGalleryPreviousPrepend = null;
+    return false;
+  }
+  const grown = Number(scroll.scrollHeight || 0) - last.scrollHeight;
+  return grown > 0 && Number(scroll.scrollTop || 0) - last.scrollTop < grown / 2;
+}
+
 async function loadPreviousRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -16452,7 +16476,8 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT
+    || rootGalleryPreviousPrependStalled(scroll)) return false;
 
   const request = {
     controller: new AbortController(),
@@ -16492,6 +16517,11 @@ async function loadPreviousRootGalleryPage() {
       || data.gallery_page?.previous_cursor === request.cursor) return false;
 
     const currentPage = state.view.gallery_page;
+    rootGalleryPreviousPrepend = {
+      scrollTop: Number(scroll.scrollTop || 0),
+      scrollHeight: Number(scroll.scrollHeight || 0),
+      userScrollGeneration: readRootGalleryUserScrollGeneration(),
+    };
     applyViewPayload({
       ...state.view,
       artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
@@ -19748,23 +19778,37 @@ function syncAlbumTrackCreditMotion(root) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   let frame = 0;
   let disposed = false;
+  // Only on-screen credits pan; hundreds of off-screen infinite animations
+  // (long Loose Tracks lists) kept the compositor and style engine busy.
+  const visible = new Set();
   const refresh = () => {
     frame = 0;
-    for (const row of rows) {
-      const text = row.firstElementChild;
-      const motion = resolveCompactPlayerMetadataRowMotion({
-        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
-      });
-      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
-    }
+    // Read every width before writing any class: interleaving forced one
+    // synchronous layout per row.
+    const overflowing = rows.map((row) => !reduced.matches && visible.has(row)
+      && resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth,
+      }).overflowing);
+    rows.forEach((row, index) => row.classList.toggle('is-credit-overflowing', overflowing[index]));
   };
   const schedule = () => {
     if (!disposed && !frame) frame = requestAnimationFrame(refresh);
   };
   const observer = new ResizeObserver(schedule);
+  const visibility = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target);
+        else visible.delete(entry.target);
+      }
+      schedule();
+    })
+    : null;
   for (const row of rows) {
     observer.observe(row);
     observer.observe(row.firstElementChild);
+    if (visibility) visibility.observe(row);
+    else visible.add(row);
   }
   reduced.addEventListener('change', schedule);
   document.fonts?.ready.then(schedule);
@@ -19772,6 +19816,7 @@ function syncAlbumTrackCreditMotion(root) {
     disposed = true;
     cancelAnimationFrame(frame);
     observer.disconnect();
+    visibility?.disconnect();
     reduced.removeEventListener('change', schedule);
     for (const row of rows) row.classList.remove('is-credit-overflowing');
   });
@@ -19804,8 +19849,14 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean);
+  // The reasons arrive with Album Details, so hovering never loads Problematic Files.
+  const problemTitle = problemReasons.length
+    ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
+    : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
@@ -23031,6 +23082,23 @@ function getProblematicAlbumForTrackPath(trackPath) {
   ) || null;
 }
 
+// One pass for a whole track list: per-row lookups scanned every problematic
+// album, so a long Loose Tracks list multiplied into millions of comparisons.
+// Matches getProblematicAlbumForTrackPath: the first album in list order wins.
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of state.utility.problematicFiles || []) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
+}
+
 async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
@@ -23103,6 +23171,33 @@ async function openUtilityModalForTrack(trackPath) {
     if (optimisticDetailPromise) {
       await Promise.allSettled([optimisticDetailPromise]);
       if (!ownsNavigation()) return;
+    }
+    if (!pendingTasks.length && !getProblematicAlbumForTrackPath(trackPath)) {
+      const directAlbum = await loadProblematicAlbumDetailForTrackPath(trackPath);
+      if (!ownsNavigation()) return;
+      if (directAlbum) {
+        const directKey = String(directAlbum.key || '').trim();
+        state.utility.problematicFiles = [
+          ...(state.utility.problematicFiles || []).filter((item) => String(item?.key || '').trim() !== directKey),
+          { ...directAlbum, detail_loaded: true, detail_load_failed: false },
+        ];
+        state.utility.pinnedProblematicKey = directKey;
+        const completeListPending = state.utility.problematicFilesComplete === false
+          && Boolean(state.utility.completeLoadPromise);
+        state.utility.loaded = true;
+        state.utility.selectedProblematicKey = directKey;
+        state.utility.focusedTrackPath = String(trackPath || '');
+        state.utility.showRepairedDisplay = true;
+        state.utility.deferProblematicAutoSelection = false;
+        state.utility.selectedProblemFilters = [];
+        state.utility.problemDropdownOpen = false;
+        setUtilityActiveTab('problematic-files');
+        openedCanonicalTarget = true;
+        openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+        // Fill in the rest of the list behind the open album.
+        if (!completeListPending) void loadProblematicFiles(true);
+        return;
+      }
     }
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
@@ -25161,6 +25256,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
+      // A refresh can move the track's album; keep it in view until the user scrolls.
+      if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
@@ -27362,13 +27459,21 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
+        // A track-opened album stays listed until the complete list can confirm it.
+        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedAlbum = pinnedKey && data.complete === false
+          && !summaryItems.some((item) => item.key === pinnedKey)
+          ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
+          : null;
+        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
-        });
+          // Visible problem controls stay usable until the forced refresh replaces them.
+          return item === selectedSummary ? selectedDetail : item;
+        }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
@@ -27405,7 +27510,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
-        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        // This forced refresh supersedes any clicked detail request, so it must
+        // paint whenever this load will not render its own final state.
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, {
+          render: options.render === false && !navigationOwnsRendering(),
+        });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -27679,6 +27788,24 @@ function validateProblematicSummaryPayload(payload) {
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
   };
+}
+
+// Album Details opens a track's album directly: waiting for the complete list
+// took tens of seconds on a large library whenever the album was off page one.
+async function loadProblematicAlbumDetailForTrackPath(trackPath) {
+  const path = String(trackPath || '').trim();
+  if (!path) return null;
+  try {
+    const response = await fetch(`/utilities/problematic-files/detail?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return validateProblematicDetailPayload(data, String(data?.key || '').trim());
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to load the problematic album for a track.', error);
+    return null;
+  }
 }
 
 function validateProblematicDetailPayload(payload, requestedKey) {
@@ -33266,7 +33393,7 @@ async function finishCoverLookupMutation(mutationKey, session) {
 }
 
 async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true } = {}) {
-  clearTimeout(coverLookupLocalInventoryTimer);
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   const album = state.coverLookup.modal.album;
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
@@ -33300,7 +33427,7 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
     applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
-    if (state.coverLookup.modal.localInventoryPending) {
+    if (state.coverLookup.modal.localInventoryPending && typeof setTimeout === 'function') {
       coverLookupLocalInventoryTimer = setTimeout(() => {
         if (isCurrent()) void refreshCoverLookupGallery(false);
       }, 1000);
@@ -33432,7 +33559,7 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
-  clearTimeout(coverLookupLocalInventoryTimer);
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();
@@ -33639,7 +33766,6 @@ function selectLocalCoverFromLookup(sourcePath) {
 
 async function saveLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
-  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
@@ -33652,7 +33778,9 @@ async function saveLocalCoverFromLookup(sourcePath) {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
     applyOptimisticLocalCoverSelection(album, sourcePath);
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
+    // The optimistic cover is already visible and a failure rolls back with an
+    // error alert, so Save closes at once instead of waiting for promotion.
+    closeCoverLookupModal();
     markTrackModalCoverTransitionPending(album);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
@@ -33679,7 +33807,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
-    if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
       ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
       : false;
@@ -33848,7 +33975,8 @@ async function saveRemoteCoverFromLookup() {
   let optimisticAlbum = null;
   let optimisticEntry = null;
   try {
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
+    // Remote saves continue as a task; Save closes at once on every layout.
+    closeCoverLookupModal();
     optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
     optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
       .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
@@ -33903,7 +34031,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.manualBusy = false;
       state.coverLookup.modal.pendingLocalPath = '';
       state.coverLookup.modal.selectedRemoteId = '';
-      closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
@@ -36423,6 +36550,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
+        problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
       };
     });

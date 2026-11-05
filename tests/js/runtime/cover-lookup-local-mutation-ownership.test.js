@@ -33,12 +33,13 @@ for (const identity of ['key', 'album_id']) {
       const reads = h.galleries.length;
       await h.settle(0);
       await first;
-      assert.equal(h.context.state.coverLookup.modal.album.name, 'B');
-      assert.equal(h.context.isCoverLookupMutationPending(), true, 'A must not release B');
+      // Save closes its modal on click (owner decision 2026-11-04); Delete keeps it open.
+      if (kind === 'delete') assert.equal(h.context.state.coverLookup.modal.album.name, 'B');
+      assert.equal(h.context.isCoverLookupMutationPending(b), true, 'A must not release B');
       assert.equal(h.galleries.length, reads, 'A must not refresh B');
       await h.settle(1);
       await second;
-      assert.equal(h.context.isCoverLookupMutationPending(), false);
+      assert.equal(h.context.isCoverLookupMutationPending(b), false);
     });
   }
 }
@@ -233,16 +234,14 @@ for (const outcome of ['success', 'error']) {
     const token = h.context.state.coverRefreshTokens['/B/source.jpg'];
     await h.settle(0, outcome);
     await first;
-    assert.equal(h.context.state.coverLookup.modal.saving, true);
-    assert.equal(h.context.isCoverLookupMutationPending(), true);
-    assert.equal(h.save.disabled, true);
-    assert.equal(h.overlay.hidden, false);
+    // B's Save already closed its modal on click; A must still not release B.
+    assert.equal(h.overlay.hidden, true);
+    assert.equal(h.context.isCoverLookupMutationPending(album('B')), true);
     assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/B/track.mp3'], optimistic);
     assert.equal(h.context.state.coverRefreshTokens['/B/source.jpg'], token);
     await h.settle(1);
     await second;
-    assert.equal(h.context.state.coverLookup.modal.saving, false);
-    assert.equal(h.context.isCoverLookupMutationPending(), false);
+    assert.equal(h.context.isCoverLookupMutationPending(album('B')), false);
     assert.equal(h.painted.get('B'), 'B-settled');
   });
 }
@@ -373,15 +372,14 @@ test('a reopened reconciliation read cannot overwrite a subsequently admitted lo
   assert.equal(typeof settleGallery, 'function');
   const second = h.context.saveLocalCoverFromLookup('/A/newer.jpg');
   assert.equal(h.requests.length, 2);
-  const cards = clone(h.context.state.coverLookup.modal.localCovers);
   const optimistic = h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'];
   settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ path: '/A/stale.jpg' }] }) });
   await first;
-  assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), cards);
+  // Save closed the modal on click; the stale read must not touch the admitted save.
+  assert.equal(h.overlay.hidden, true);
+  assert.notDeepEqual(clone(h.context.state.coverLookup.modal.localCovers || []), [{ path: '/A/stale.jpg' }]);
   assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'], optimistic);
-  assert.equal(h.context.state.coverLookup.modal.saving, true);
-  assert.equal(h.context.isCoverLookupMutationPending(), true);
-  assert.equal(h.save.disabled, true);
+  assert.equal(h.context.isCoverLookupMutationPending(a), true);
   await h.settle(1);
   await second;
 });

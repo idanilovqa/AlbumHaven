@@ -9,6 +9,7 @@ const classifierPath = path.resolve(__dirname, '..', '..', 'scripts', 'ci', 'cla
 const {
   classifyPipelineLabels,
   classifyReviewScope,
+  changesAndroidJobs,
   isAndroidPath,
   isUsableBaseline,
   isDocumentationPath,
@@ -401,11 +402,36 @@ test('Android paths cover the shell, native modules and shared contract fixtures
   ]) assert.equal(isAndroidPath(filePath), true, filePath);
   for (const filePath of [
     'apps/android-shell/README.md', 'docs/android-update-artifacts.md', 'music_app/static/js/runtime/android-bridge-client.js',
-    'tests/fixtures/android-attestation/akita-tee-ec.pem', 'apps/android-shell-other/x.kt', '.github/workflows/android-promote.yml',
+    'tests/fixtures/android-attestation/akita-tee-ec.pem', 'apps/android-shell-other/x.kt', '.github/workflows/pr-gates.yml',
   ]) assert.equal(isAndroidPath(filePath), false, filePath);
+  assert.equal(isAndroidPath('.github/workflows/android-promote.yml'), true);
 });
 
-function runScopeCli({ labels = [], numstatByBase, focusedBody = '' }) {
+const WORKFLOW = [
+  'jobs:', //                                   1
+  '  test_android:', //                         2
+  '    runs-on: ubuntu-latest', //              3
+  '', //                                        4
+  '  test_android_instrumentation:', //         5
+  '    runs-on: ubuntu-latest', //              6
+  '  test_js:', //                              7
+  '    runs-on: ubuntu-latest', //              8
+  '', //                                        9
+].join('\n');
+
+test('editing an Android job definition runs the Android jobs; other pipeline edits do not', () => {
+  const hunk = (header) => `diff --git a/x b/x\n${header}\n`;
+  for (const header of ['@@ -3 +3 @@', '@@ -3,0 +4 @@', '@@ -6,2 +6,0 @@', '@@ -1,2 +1,3 @@', '@@ -5,1 +5,1 @@']) {
+    assert.equal(changesAndroidJobs(hunk(header), WORKFLOW), true, header);
+  }
+  for (const header of ['@@ -1 +1 @@', '@@ -8 +8 @@', '@@ -8,0 +9 @@', '@@ -7,0 +7,0 @@']) {
+    assert.equal(changesAndroidJobs(hunk(header), WORKFLOW), false, header);
+  }
+  assert.equal(changesAndroidJobs('', WORKFLOW), false);
+  assert.equal(changesAndroidJobs(hunk('@@ -3 +3 @@'), WORKFLOW.replace(/\n/g, '\r\n')), true);
+});
+
+function runScopeCli({ labels = [], numstatByBase, focusedBody = '', workflowDiff = '', workflow = WORKFLOW }) {
   const filename = classifierPath;
   const localRequire = createRequire(filename);
   let output = '';
@@ -421,6 +447,8 @@ function runScopeCli({ labels = [], numstatByBase, focusedBody = '' }) {
       };
       if (name === 'node:child_process') return { execFileSync: (_command, args) => {
         if (args[0] === 'merge-base') return 'a'.repeat(40);
+        if (args[0] === 'diff' && args[1] === '--unified=0') return workflowDiff;
+        if (args[0] === 'show') return workflow;
         if (args[0] === 'diff') return numstatByBase[args[3]];
         return '';
       } };
@@ -453,4 +481,7 @@ test('Android jobs follow the whole pull request even when the review is increme
   assert.equal(runScopeCli({
     labels: ['ci:focused-e2e', 'ci:e2e:metadata-mutations'], numstatByBase: { [mergeBase]: android },
   }).run_android, 'false', 'focused runs never authorize and skip Android jobs');
+  const pipeline = { [mergeBase]: '2\t1\t.github/workflows/pr-gates.yml\n' };
+  assert.equal(runScopeCli({ numstatByBase: pipeline, workflowDiff: '@@ -3 +3 @@\n' }).run_android, 'true');
+  assert.equal(runScopeCli({ numstatByBase: pipeline, workflowDiff: '@@ -8 +8 @@\n' }).run_android, 'false');
 });

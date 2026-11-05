@@ -34,9 +34,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout
+      # The head commit itself, not its merge with the base: android-promote builds exactly this
+      # commit, so the APK it signs is the one these jobs verified (docs/android-release-signing.md).
+      - name: Checkout the pull request head
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Set up JDK 17
@@ -69,14 +72,7 @@ jobs:
         working-directory: apps/android-shell
         run: ./gradlew --no-daemon --console=plain testStableDebugUnitTest testSandboxDebugUnitTest
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Browser side of the shared Android contract fixtures
-        run: node --test --test-concurrency=1 tests/js/runtime/android-*.test.js tests/js/runtime/listen-session-parity.test.js
-
+      # The browser side of the shared contract fixtures runs in test_js (npm run test:js:all).
       # The repository is public, so APKs are never uploaded (owner decision,
       # November 4, 2026); only their checksums are kept as build evidence.
       - name: Record unsigned evidence APK checksums
@@ -113,9 +109,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout
+      # The head commit android-promote builds, as in test_android.
+      - name: Checkout the pull request head
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Set up JDK 17

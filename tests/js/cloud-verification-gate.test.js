@@ -280,12 +280,15 @@ test('workflow runs the Android jobs behind reviews only for Android changes and
     assert.match(block, /^      - review_prerequisites\r?$/m);
     assert.match(block, /if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success' && needs\.review_scope\.result == 'success' && needs\.review_scope\.outputs\.skip_tests != 'true' && needs\.review_scope\.outputs\.pipeline_mode == 'full' && needs\.review_scope\.outputs\.run_android == 'true' \}\}/);
     assert.doesNotMatch(block, /secrets\./);
+    // android-promote builds the head commit, so the Android jobs verify exactly it, not the merge.
+    assert.match(block, /uses: actions\/checkout@v5\r?\n {8}with:\r?\n {10}ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\r?\n/);
   }
   const unit = workflow.slice(workflow.indexOf('  test_android:'), workflow.indexOf('  test_android_instrumentation:'));
   for (const task of ['assembleStableRelease', 'assembleSandboxRelease', 'lintStableRelease', 'lintSandboxRelease', 'testStableDebugUnitTest', 'testSandboxDebugUnitTest']) {
     assert.match(unit, new RegExp(task));
   }
-  assert.match(unit, /listen-session-parity\.test\.js/);
+  // The browser side of the shared fixtures runs once, in test_js's complete Node suite.
+  assert.doesNotMatch(unit, /setup-node|node --test/);
   // The repository is public: APKs are never uploaded, only their checksums.
   assert.doesNotMatch(unit, /\.apk\s*$/m);
   assert.doesNotMatch(unit, /android-unsigned-apks-/);

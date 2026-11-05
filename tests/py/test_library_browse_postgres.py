@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
@@ -233,6 +234,9 @@ class _EmptyMissingAlbumConnection:
         return False
 
     def execute(self, sql, params=None):
+        from music_app.services.album_release_candidates import _release_candidates_sql
+        if sql == _release_candidates_sql():
+            return _InventoryCursor()
         if any(marker in str(sql) for marker in (
             "transaction_timestamp() as observed_at", "select distinct albums.id as album_id",
             "requested_identities as materialized",
@@ -4263,7 +4267,7 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
     assert [group["artist"] for group in payload["artist_groups"]] == [
         "Signal Artist", *expected_family,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Signal Artist"]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Signal Artist", "Signal Family"]
     assert payload["show_all_artists_sidebar_link"] is False
 
 
@@ -5507,7 +5511,8 @@ def test_postgres_selected_artist_payload_applies_category_filter_params():
     }
 
 
-def test_postgres_library_browse_builds_direct_album_search_payload():
+@pytest.mark.parametrize("include_library_wide", [False, True])
+def test_postgres_library_browse_builds_direct_album_search_payload(monkeypatch, include_library_wide):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[object] = []
@@ -5578,10 +5583,20 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
 
+    if include_library_wide:
+        def load_entries(**kwargs):
+            assert kwargs["include_library_wide"] is True
+            assert kwargs["query"] == "tender"
+            assert kwargs["visible_artist_names"] == ["Tender Forever"]
+            return [], [{"title": "Tender loose track", "artist": "Broadcast"}]
+        monkeypatch.setattr(repository, "_load_non_album_entries", load_entries)
+        monkeypatch.setattr("music_app.services.library_browse_postgres.build_non_album_track_list", lambda entries, **kwargs: entries)
+
     payload = repository.build_search_payload(
         query_params={
             "surface": "albums",
             "q": "tender",
+            **({"include_non_album": "1", "include_library_wide_non_album": "1"} if include_library_wide else {}),
             "gallery_display": "list",
             "category": ["main_library"],
         },
@@ -5609,6 +5624,8 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     assert payload["listen_through_scope_candidates"]["artist"]["artist_ref"] == "Tender Forever"
     assert payload["listen_through_scope_candidates"]["artist_family"]["selected_artist_ref"] == "Tender Forever"
     assert payload["non_album_tracks"] == []
+    if include_library_wide:
+        assert payload["library_non_album_tracks"] == [{"title": "Tender loose track", "artist": "Broadcast"}]
     assert payload["album_count"] == 1
     assert payload["artist_count"] == 2
     assert [group["artist"] for group in payload["artist_groups"]] == ["Tender Forever"]
@@ -5659,16 +5676,16 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     assert "visible_album_ids as materialized" in sql.lower()
     assert "matched_album_ids as materialized" in sql.lower()
     assert "lower(btrim(coalesce(library.local_albums.title, ''))) like lower(%(query_like)s)" in sql
-    assert "lower(btrim(coalesce(library.local_artists.name, ''))) like lower(%(query_like)s)" in sql
+    assert "library.fold_search_accents(library.local_artists.name) like library.fold_search_accents(%(query_like)s)" in sql
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'album_artist') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert "credited_album_artist_matches as materialized" in sql.lower()
     assert "credited_raw_artist_matches as materialized" in sql.lower()
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'artists', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'artists') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert "lower(btrim(coalesce(library.local_tracks.title, ''))) like lower(%(query_like)s)" in sql
     assert "like lower(%(query_like)s)" in sql
@@ -8224,8 +8241,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse"]
-    assert payload["artist_count"] == 1
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Cosmic Cathedral"]
+    assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
@@ -10627,7 +10644,8 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
 
     sql = " ".join(_search_preview_sql().split())
 
-    assert sql.count("like lower(%(query_like)s)") == 8
+    assert sql.count("like lower(%(query_like)s)") == 4
+    assert sql.count("like library.fold_search_accents(%(query_like)s)") == 4
     assert "album_title_matches as materialized (" in sql
     assert "display_artist_matches as materialized (" in sql
     assert "credited_album_artist_matches as materialized (" in sql
@@ -10637,10 +10655,10 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
     assert "file_basename_matches as materialized (" not in sql
     assert "file_stem_matches as materialized (" not in sql
     assert "from library.local_albums where lower(btrim(coalesce(library.local_albums.title, '')))" in sql
-    assert "from library.local_artists where lower(btrim(coalesce(library.local_artists.name, '')))" in sql
+    assert "from library.local_artists where library.fold_search_accents(library.local_artists.name)" in sql
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'album_artist') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert (
         "lower(btrim(coalesce(library.local_tracks.title, ''))) "
@@ -17127,11 +17145,13 @@ def test_exact_artist_search_sidebar_keeps_direct_artist_album_and_track_matches
     ("Ария", [2], False, True),
     ("Ария", [], True, True),
     ("Bella Ramsey", [1], False, False),
+    ("Neal Morse", [1], False, False),
 ])
-def test_exact_artist_search_keeps_own_matches_without_sibling_credit_leakage(
+def test_exact_artist_search_keeps_rendered_family_and_own_matches_without_sibling_credit_leakage(
     monkeypatch, missing_album_browse_repository, query, matched_ids, title_match, expected_extra,
 ):
     repository = missing_album_browse_repository
+    family_artist = "Transatlantic" if query == "Neal Morse" else "Family Only"
     primary = _browse_album_row(artist=query, album_id=1, album_key="primary", title="Primary")
     extra = _browse_album_row(artist="БИ-2", album_id=2, album_key="other", title="Аллилуйя")
     extra.update(search_matched_track_artist_ids=matched_ids, search_album_title_match=title_match)
@@ -17146,11 +17166,15 @@ def test_exact_artist_search_keeps_own_matches_without_sibling_credit_leakage(
     })
     monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **kwargs: {
         "selected_artist": query, "primary_artist_groups": [{"artist": query, "albums": [{"key": "primary"}]}],
-        "family_artist_groups": [{"artist": "Family Only", "albums": [{"key": "family"}]}], "search_context": {},
+        "family_artist_groups": [{"artist": family_artist, "albums": [{"key": "family"}]}], "search_context": {},
     })
     payload = repository.build_search_payload(query_params={"q": query})
-    assert {row["artist"] for row in payload["artists_sidebar"]} == {query, *(["БИ-2"] if expected_extra else [])}
-    assert payload["family_artist_groups"][0]["artist"] == "Family Only"
+    expected = {query, family_artist, *(["БИ-2"] if expected_extra else [])}
+    assert {row["artist"] for row in payload["artists_sidebar"]} == expected
+    assert payload["artist_count"] == len(expected)
+    assert payload["family_artist_groups"][0]["artist"] == family_artist
+    assert payload["selected_artist"] == query
+    assert payload["show_all_artists_sidebar_link"] is expected_extra
 
 
 def test_search_preview_carries_eligible_track_identity_for_sidebar_matching():
@@ -18400,3 +18424,13 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
 
+
+
+def test_relation_alias_query_materializes_one_normalized_snapshot():
+    from music_app.services.library_browse_postgres import _relation_alias_maps_sql
+
+    sql = " ".join(_relation_alias_maps_sql().split())
+    assert "relation_snapshot as materialized (" in sql
+    assert sql.count("library.local_relation_views(") == 1
+    assert sql.count("relation_snapshot.relation_views ->") == 9
+    assert "from relation_snapshot limit 1" in sql

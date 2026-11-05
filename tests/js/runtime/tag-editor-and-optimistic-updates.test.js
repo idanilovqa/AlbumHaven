@@ -4907,3 +4907,56 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
 });
+
+
+test('release candidates remain symmetric when the gallery only contains Helloween 1985', () => {
+  const ep = { key: 'helloween::helloween::year::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, preview_only: true };
+  const studio = { key: 'helloween::helloween::year::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, preview_only: true };
+  const context = loadHelper([ep]);
+  const candidates = [ep, studio];
+  const fromEp = context.getAlbumReleaseSet({ ...ep, release_candidates: candidates });
+  const fromStudio = context.getAlbumReleaseSet({ ...studio, release_candidates: candidates });
+  const expected = [ep.key, studio.key];
+  assert.deepEqual(Array.from(fromEp.releases, release => release.key), expected);
+  assert.deepEqual(Array.from(fromStudio.releases, release => release.key), expected);
+  assert.equal(fromEp.selectedIndex, 0);
+  assert.equal(fromStudio.selectedIndex, 1);
+});
+
+
+test('release base title fixtures match the server candidate contract', () => {
+  const context = loadHelper([]);
+  const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'album-release-base-titles.json'), 'utf8'));
+  vectors.forEach(([title, expected]) => assert.equal(context.normalizeAlbumBaseName(title), expected, title));
+});
+
+test('authoritative release candidates preserve ignore and manual-family rules outside the gallery', () => {
+  const original = { key: 'artist::original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'artist::deluxe', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const manual = { key: 'other::bonus', name: 'Different Title', album_artist: 'Other', year: 2021 };
+  const context = loadHelper([]);
+  context.state.view.ignored_version_keys = [edition.key];
+  context.state.view.manual_version_links = { [manual.key]: original.key };
+  const result = context.getAlbumReleaseSet({ ...original, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(result.releases, release => release.key), [original.key, manual.key]);
+  const ignored = context.getAlbumReleaseSet({ ...edition, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(ignored.releases, release => release.key), [edition.key]);
+});
+
+test('details rule snapshot covers empty-shell opening until current rules arrive', () => {
+  const original = { key: 'original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'edition', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const bonus = { key: 'bonus', name: 'Bonus', album_artist: 'Other', year: 2021 };
+  const album = { ...original, release_candidates: [original, edition, bonus],
+    release_candidate_rules: { ignored_version_keys: [edition.key], manual_version_links: { [bonus.key]: original.key } } };
+  const context = loadHelper([]);
+  context.state.view.version_rules_loaded = { ignored: false, manual: false };
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, bonus.key]);
+  context.state.view.version_rules_loaded.manual = true;
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key]);
+  context.state.view.version_rules_loaded = { ignored: true, manual: true };
+  context.state.view.ignored_version_keys = [];
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
+});

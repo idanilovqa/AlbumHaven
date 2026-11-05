@@ -20,7 +20,8 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _BOOTSTRAP_OWNER_KEY = "local-bootstrap-owner"
 _BOOTSTRAP_LIBRARY_NAME = "Local Library"
-_RELATIONSHIP_SOURCE = "folder_derived_runtime"
+_LEGACY_RELATIONSHIP_SOURCE = "folder_derived_runtime"
+_RELATIONSHIP_SOURCE = "folder_derived_current_v11"
 _RESOLUTION_SAMPLE_LIMIT = 5
 _RESOLUTION_SAMPLE_TEXT_LIMIT = 80
 
@@ -148,6 +149,7 @@ def replace_artist_family_projection_in_transaction(
     relation_views: Mapping[str, object],
     *,
     relations_last_built: float | None = None,
+    legacy: bool = False,
 ) -> int:
     """Replace only runtime projection-owned family links on the caller transaction."""
     if not isinstance(relation_views, Mapping):
@@ -155,6 +157,7 @@ def replace_artist_family_projection_in_transaction(
     rows = _projection_rows(
         relation_views,
         relations_last_built=relations_last_built,
+        relationship_source=_LEGACY_RELATIONSHIP_SOURCE if legacy else _RELATIONSHIP_SOURCE,
     )
     params = {
         "rows": _jsonb(rows),
@@ -177,10 +180,10 @@ def replace_artist_family_projection_in_transaction(
                 f"({resolved_count}/{len(rows)}); {mismatch_diagnostics}."
             )
     connection.execute(
-        _replace_artist_family_projection_sql(),
+        _replace_artist_family_projection_sql(legacy=legacy),
         {
             **params,
-            "relationship_source": _RELATIONSHIP_SOURCE,
+            "relationship_source": _LEGACY_RELATIONSHIP_SOURCE if legacy else _RELATIONSHIP_SOURCE,
         },
     )
     return len(rows)
@@ -308,6 +311,7 @@ def _projection_rows(
     relation_views: Mapping[str, object],
     *,
     relations_last_built: float | None = None,
+    relationship_source: str = _RELATIONSHIP_SOURCE,
 ) -> list[dict[str, object]]:
     folder_related = relation_views.get("folder_related") or {}
     if not isinstance(folder_related, Mapping):
@@ -339,7 +343,7 @@ def _projection_rows(
                     "artist_key": selected_key,
                     "family_artist_key": related_key,
                     "metadata": {
-                        "source": _RELATIONSHIP_SOURCE,
+                        "source": relationship_source,
                         "selected_artist": selected_name,
                         "family_artist": related_name,
                         "relations_last_built": relations_last_built,
@@ -349,8 +353,8 @@ def _projection_rows(
     return rows
 
 
-def _replace_artist_family_projection_sql() -> str:
-    return """
+def _replace_artist_family_projection_sql(*, scoped: bool = False, legacy: bool = False) -> str:
+    query = """
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -366,6 +370,12 @@ def _replace_artist_family_projection_sql() -> str:
           using bootstrap_context
           where library.local_artist_family_links.library_id = bootstrap_context.library_id
             and library.local_artist_family_links.source_family = %(relationship_source)s
+    """ + ("""
+            and library.local_artist_family_links.artist_id in (
+              select id from library.local_artists
+              where library_id=bootstrap_context.library_id and artist_key=any(%(affected_keys)s::text[])
+            )
+    """ if scoped else "") + """
         ),
         input_row as (
           select
@@ -414,6 +424,8 @@ def _replace_artist_family_projection_sql() -> str:
           set source_ref = excluded.source_ref,
               metadata = library.local_artist_family_links.metadata || excluded.metadata;
     """
+    return query if legacy else query.replace(
+        'library.local_artist_family_links', 'library.local_artist_family_links_current')
 
 
 def _count_artist_family_projection_replacement_rows_sql() -> str:
@@ -543,18 +555,23 @@ def _load_selected_artist_family_projection_sql() -> str:
              , family_artist.name as family_artist_name
              , family_artist.artist_key as family_artist_key
              , coalesce(
-                    nullif(library.local_artist_family_links.metadata->>'relations_last_built', '')::double precision,
+                    nullif(family_links.metadata->>'relations_last_built', '')::double precision,
                     0
                 ) as relations_last_built
         from target_artist
-        left join library.local_artist_family_links
-          on library.local_artist_family_links.artist_id = target_artist.id
-         and library.local_artist_family_links.library_id = (select library_id from bootstrap_context)
-        left join bootstrap_context on bootstrap_context.library_id = library.local_artist_family_links.library_id
-        left join library.local_artists as family_artist on family_artist.id = library.local_artist_family_links.related_artist_id
+        left join (
+          select * from library.local_artist_family_links_current
+          union all
+          select * from library.local_artist_family_links where source_family <> 'folder_derived_runtime'
+        ) as family_links
+          on family_links.artist_id = target_artist.id
+          and family_links.source_family <> 'folder_derived_runtime'
+         and family_links.library_id = (select library_id from bootstrap_context)
+        left join bootstrap_context on bootstrap_context.library_id = family_links.library_id
+        left join library.local_artists as family_artist on family_artist.id = family_links.related_artist_id
         order by lower(family_artist.name),
                  family_artist.name,
-                 case when library.local_artist_family_links.source_family = %(relationship_source)s then 0 else 1 end;
+                 case when family_links.source_family = %(relationship_source)s then 0 else 1 end;
     """
 
 

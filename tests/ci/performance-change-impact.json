@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "migrations/postgres/0108_add_scoped_relation_projection.sql",
+    "music_app/services/scoped_relation_projection.py",
+    "migrations/postgres/0109_add_incremental_gallery_membership.sql",
+    "migrations/postgres/0110_journal_gallery_metadata_changes.sql",
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/relation_projection_postgres.py",
@@ -9,6 +13,7 @@
     "music_app/routes/web_asgi.py",
     "music_app/services/library_hydration.py",
     "music_app/services/library_browse_postgres.py",
+    "music_app/services/album_release_candidates.py",
     "music_app/services/non_album_view_payloads.py",
     "music_app/services/selected_artist_membership.py",
     "music_app/services/view_payloads.py",
@@ -62,20 +67,63 @@
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
-    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
+    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "music_app/services/local_cover_inventory.py",
+    "music_app/services/cover_workflow.py",
+    "music_app/services/cache.py"
   ],
   "rules": [
     {
-      "paths": ["music_app/services/runtime_asset_versions.py"],
-      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
+      "paths": [
+        "migrations/postgres/0108_add_scoped_relation_projection.sql",
+        "music_app/services/scoped_relation_projection.py",
+        "migrations/postgres/0109_add_incremental_gallery_membership.sql",
+        "migrations/postgres/0110_journal_gallery_metadata_changes.sql",
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "targets": [
+        "root-album-browse",
+        "artist-tree-scroll-navigation",
+        "edit-tags-post-edit",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/runtime_asset_versions.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
+      ],
+      "targets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
     },
     {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
         "music_app/services/relation_projection_postgres.py",
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
-      "targets": ["artist-family", "search-all-artists", "search-browse"]
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse"
+      ]
     },
     {
       "paths": [
@@ -83,6 +131,7 @@
         "music_app/routes/web_asgi.py",
         "music_app/services/library_hydration.py",
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/album_release_candidates.py",
         "music_app/services/non_album_view_payloads.py",
         "music_app/services/selected_artist_membership.py",
         "music_app/services/view_payloads.py",
@@ -92,7 +141,12 @@
         "music_app/static/js/runtime/core-state-and-helpers.js",
         "music_app/static/js/runtime/gallery-main-state.js",
         "music_app/static/js/runtime/response-state-helpers.js",
-        "music_app/static/js/runtime/view-state-helpers.js"
+        "music_app/static/js/runtime/view-state-helpers.js",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
       "targets": [
         "all-artists",
@@ -141,7 +195,12 @@
     {
       "paths": [
         "music_app/static/js/navigation-tree.js",
-        "music_app/static/js/runtime/discovery-center-navigation.js"
+        "music_app/static/js/runtime/discovery-center-navigation.js",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
       "targets": [
         "search-browse",
@@ -185,6 +244,7 @@
     {
       "paths": [
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/album_release_candidates.py",
         "music_app/services/problematic_albums.py",
         "music_app/routes/api_problematic_albums.py",
         "music_app/routes/api_read_asgi_routes.py",
@@ -209,7 +269,10 @@
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
-        "music_app/services/album_local_membership.py"
+        "music_app/services/album_local_membership.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py"
       ],
       "targets": [
         "utility-problematic-files",

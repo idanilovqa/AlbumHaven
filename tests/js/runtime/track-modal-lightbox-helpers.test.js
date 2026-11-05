@@ -3247,3 +3247,15 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+
+test('release candidate cache follows changes to the manual version family', () => {
+  const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist', preview_only: false,
+    tracks: [{ path: 'one.flac' }], release_candidate_family_keys: ['artist::album'] };
+  const { context } = loadHelper({ initialAlbums: [album] });
+  context.getManualVersionFamilyKeys = () => new Set([album.key]);
+  context.cacheHydratedTrackModalAlbum(album.key, album);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), album);
+  context.getManualVersionFamilyKeys = () => new Set([album.key, 'artist::bonus']);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), null);
+});

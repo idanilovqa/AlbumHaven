@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Collection, Mapping
+from itertools import chain
 from pathlib import Path
 
-from music_app.services.cover_workflow import resolve_album_root_from_track_paths
+from music_app.services.cover_workflow import _is_explicit_release_part_layout, resolve_album_root_from_track_paths
 from music_app.services.library_roots import configured_library_root_paths_snapshot
 from music_app.services.metadata import read_editable_tag_values
 
@@ -70,6 +71,22 @@ def load_tag_editor_folder_files(
     )
     folder = resolved_album_root or source.parent
     entries = folder.rglob("*") if resolved_album_root is not None else folder.iterdir()
+    release_root = folder.parent
+    if (
+        _is_explicit_release_part_layout(release_root, [folder])
+        and _is_within_any_root(release_root, roots)
+        and all(release_root != root.resolve(strict=False) for root in roots)
+    ):
+        children = list(release_root.iterdir())
+        discs = {child.resolve(strict=True) for child in children if child.is_dir()
+                 and _is_explicit_release_part_layout(release_root, [child])
+                 and _is_explicit_release_part_layout(release_root, [child.resolve(strict=True)])}
+        if len(discs) > 1 and folder in discs:
+            folder = release_root
+            # The explicit folder action may add sibling discs; artwork stays
+            # scoped to represented tracks. Do not traverse other release folders.
+            entries = chain((child for child in children if child.is_file()),
+                            *(disc.rglob("*") for disc in discs))
     candidates = sorted(
         (
             candidate

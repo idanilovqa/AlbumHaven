@@ -2075,7 +2075,7 @@ export class GalleryActions {
   async expectAlbumAbsentFromSettledGallery(expected) {
     const deadline = Date.now() + 30000;
     await expect.poll(async () => {
-      const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      const snapshot = await this.galleryPage.readAlbumTargetState(expected, { fullProjection: true });
       const settled = !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
         && !snapshot.startupHydrating && snapshot.canonicalApplied
         && snapshot.inputQuery === snapshot.expectedQuery

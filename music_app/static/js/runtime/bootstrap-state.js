@@ -93,6 +93,10 @@ const appBootstrap = (() => {
   const cloneInitialView = (value) => ({
     ...defaultInitialView,
     ...(isObject(value) ? value : {}),
+    version_rules_loaded: {
+      ignored: value?.version_rules_loaded?.ignored ?? Array.isArray(value?.ignored_version_keys),
+      manual: value?.version_rules_loaded?.manual ?? isObject(value?.manual_version_links),
+    },
   });
 
   const cloneBootstrap = (value) => ({

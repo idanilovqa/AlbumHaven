@@ -1191,6 +1191,23 @@ export class CoverLookupActions {
     return drawerScrollTop;
   }
 
+  async waitForCurrentReleaseChoices(albumNames) {
+    await expect(this.coverLookup.modal.getByRole('heading', {
+      name: 'This album was split—choose the current release', exact: true,
+    })).toBeVisible();
+    await expect(this.coverLookup.currentReleaseChoices).toHaveCount(albumNames.length);
+    for (const album of albumNames) {
+      await expect(this.coverLookup.currentReleaseChoices.filter({ hasText: album })).toHaveCount(1);
+    }
+  }
+
+  async chooseCurrentRelease(albumName) {
+    const choice = this.coverLookup.currentReleaseChoices.filter({ hasText: albumName });
+    await expect(choice).toHaveCount(1);
+    await choice.click();
+    await this.waitForModalResultsReady();
+  }
+
   async scrollDrawerAwayFromEdges() {
     await this.coverLookup.drawerBody.hover();
     await this.coverLookup.page.mouse.wheel(0, 100000);

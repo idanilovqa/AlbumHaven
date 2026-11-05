@@ -856,11 +856,13 @@ class PostgresLibraryBrowseRepository:
             projection_stale = bool(cached_page and cached_page[3].get("projection_stale"))
             refresh_projection = bool(
                 paged and projection_context and (cached_page is None or projection_stale)
-                and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                and (not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                     or projection_context.get("incremental_membership"))
             )
             if refresh_projection and queue_projection_refresh:
                 schedule_gallery_projection_refresh(
                     self._config, connect=self._connect, view_state=view_state,
+                    incremental_membership=bool(projection_context.get("incremental_membership")),
                 )
             if refresh_projection and cached_page is None:
                 raise GalleryProjectionPending("Gallery is being prepared.")
@@ -1847,6 +1849,11 @@ class PostgresLibraryBrowseRepository:
             "Poor art quality" in _problematic_album_reasons(detail_album)
         )
         detail_album.pop("_text_problem_reason_cache", None)
+        from music_app.services.album_release_candidates import load_release_candidates
+        detail_album.update(load_release_candidates(
+            connection, detail_album, self._inventory_repository.load_support_state(connection=connection),
+            resolved_releases=albums,
+        ))
 
         from music_app.services.album_details import _attach_album_detail_track_rows
 
@@ -2259,7 +2266,11 @@ class PostgresLibraryBrowseRepository:
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
                     sidebar_artist_groups,
-                    artists=[exact_artist_match, *matching_sidebar_artists],
+                    artists=[
+                        exact_artist_match,
+                        *(group.get("artist") for group in rendered_artist_groups),
+                        *matching_sidebar_artists,
+                    ],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups
@@ -5216,7 +5227,9 @@ def _missing_album_search_artist_keys(
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
 ) -> list[str]:
-    normalized_query = local_inventory_identity_key(query)
+    from music_app.services.view_search import fold_search_accents
+
+    normalized_query = fold_search_accents(local_inventory_identity_key(query))
     query_pattern = (
         _missing_album_query_pattern(query)
         if "%" in query or "_" in query
@@ -5224,7 +5237,7 @@ def _missing_album_search_artist_keys(
     )
 
     def matches(name: str) -> bool:
-        normalized_name = name.casefold() if query_pattern is not None else local_inventory_identity_key(name)
+        normalized_name = name.casefold() if query_pattern is not None else fold_search_accents(local_inventory_identity_key(name))
         return (
             bool(query_pattern.fullmatch(normalized_name))
             if query_pattern is not None
@@ -9188,6 +9201,7 @@ def _artist_search_projection_authority_sql() -> str:
     return """
         with bootstrap_context as (
           select
+            library.libraries.id as library_id,
             library.libraries.metadata #>>
               '{scan_cache,relation_projection,status}' as projection_status,
             library.libraries.metadata #>>
@@ -9205,7 +9219,14 @@ def _artist_search_projection_authority_sql() -> str:
           limit 1
         )
         select (
-          to_regclass('library.local_artist_search_projection') is not null
+          to_regclass('library.local_artist_search_projection_current') is not null
+          and exists(select 1 from library.local_relation_compatibility_state compatibility
+            join library.local_relation_projection_state state using(library_id)
+            where state.library_id=bootstrap_context.library_id
+              and compatibility.current_semantics='current-v11-explicit-collaboration'
+              and compatibility.legacy_semantics='legacy-v11-broad-aliases'
+              and compatibility.source_fingerprint=state.source_fingerprint
+              and compatibility.last_publication_xid=state.last_publication_xid)
           and bootstrap_context.projection_status in ('ready', 'stale')
           and bootstrap_context.builder_version = %(builder_version)s
           and bootstrap_context.source_fingerprint <> ''
@@ -9775,8 +9796,8 @@ def _search_preview_sql(
             library.local_artists.library_id,
             library.local_artists.id as artist_id
           from library.local_artists
-          where lower(btrim(coalesce(library.local_artists.name, '')))
-                  like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_artists.name)
+                  like library.fold_search_accents(%(query_like)s) escape ''
              or library.local_artists.artist_key
                   = any(%(search_artist_keys)s::text[])
         ),
@@ -9785,16 +9806,16 @@ def _search_preview_sql(
             library.local_albums.library_id,
             library.local_albums.id as album_id
           from library.local_albums
-          where lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', '')))
-                like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_albums.metadata ->> 'album_artist')
+                like library.fold_search_accents(%(query_like)s) escape ''
         ),
         credited_raw_artist_matches as materialized (
           select
             library.local_albums.library_id,
             library.local_albums.id as album_id
           from library.local_albums
-          where lower(btrim(coalesce(library.local_albums.metadata ->> 'artists', '')))
-                like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_albums.metadata ->> 'artists')
+                like library.fold_search_accents(%(query_like)s) escape ''
             and exists (
                   select 1
                   from jsonb_array_elements_text(
@@ -9804,8 +9825,8 @@ def _search_preview_sql(
                       else '[]'::jsonb
                     end
                   ) as search_raw_artist(name)
-                  where lower(btrim(search_raw_artist.name))
-                    like lower(%(query_like)s) escape ''
+                  where library.fold_search_accents(search_raw_artist.name)
+                    like library.fold_search_accents(%(query_like)s) escape ''
                 )
         ),
         track_title_matches as materialized (
@@ -10525,47 +10546,51 @@ def _relation_alias_maps_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ), relation_snapshot as materialized (
+          select library.libraries.id, library.libraries.metadata,
+            library.local_relation_views(library.libraries.id) as relation_views
+          from library.libraries
+          join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         )
     select
-      library.libraries.id as library_id,
+      relation_snapshot.id as library_id,
       md5(coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_projection}',
+        relation_snapshot.metadata #> '{scan_cache,relation_projection}',
         '{}'::jsonb
       )::text) as relation_alias_fingerprint,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
+        relation_snapshot.relation_views -> 'alias_to_canonical',
         '{}'::jsonb
       ) as alias_to_canonical,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}',
+        relation_snapshot.relation_views -> 'canonical_to_aliases',
         '{}'::jsonb
       ) as canonical_to_aliases,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_projection}',
+        relation_snapshot.metadata #> '{scan_cache,relation_projection}',
         '{}'::jsonb
       ) as relation_projection,
           (
             not jsonb_path_exists(
-              library.libraries.metadata,
+              relation_snapshot.metadata,
               '$.scan_cache.relation_views'
             )
             and not jsonb_path_exists(
-              library.libraries.metadata,
+              relation_snapshot.metadata,
               '$.scan_cache.relation_projection'
             )
           ) as projection_snapshot_missing,
       coalesce(
-        jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,family_to_artists}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,folder_related}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists}') = 'array'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists_sidebar}') = 'array'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
+        jsonb_typeof(relation_snapshot.relation_views -> 'alias_to_canonical') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'canonical_to_aliases') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'family_to_artists') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'folder_related') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'artists') = 'array'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'artists_sidebar') = 'array'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'sidebar_families') = 'array',
         false
       ) as projection_structure_complete
-        from library.libraries
-        join bootstrap_context on bootstrap_context.library_id = library.libraries.id
+        from relation_snapshot
         limit 1;
     """
 
@@ -10615,6 +10640,7 @@ def _missing_albums_sql(
           join library.local_tracks stale_tracks on stale_tracks.id = stale_files.track_id
           join bootstrap_context on bootstrap_context.library_id = stale_tracks.library_id
           where stale_files.scan_cache_stale is true
+          __STALE_ALBUM_SCOPE__
         ),
         missing_albums as (
           select
@@ -10702,7 +10728,12 @@ def _missing_albums_sql(
           ''
         ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         order by library.local_albums.album_key, library.local_tracks.id;
-    """.replace("__ARTIST_SCOPE__", artist_scope + (
+    """.replace("__STALE_ALBUM_SCOPE__", """
+            and exists (select 1 from library.local_albums scoped_album
+              where scoped_album.id = stale_tracks.album_id
+                and scoped_album.library_id = stale_tracks.library_id
+                and scoped_album.album_key = any(%(album_keys)s::text[]))
+    """ if scoped_albums else "").replace("__ARTIST_SCOPE__", artist_scope + (
         " and library.local_albums.album_key = any(%(album_keys)s::text[])" if scoped_albums else ""
     )).replace("__BOUNDED_ORDER__", bounded_order)
 
@@ -11734,7 +11765,7 @@ def _utility_rules_sql() -> str:
           select
             library.libraries.id as library_id,
             coalesce(
-              library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
+              library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
               '{}'::jsonb
             ) as alias_to_canonical
           from library.libraries

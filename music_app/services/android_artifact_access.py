@@ -102,7 +102,7 @@ def revoked_serials(environ=None) -> frozenset[str]:
         return frozenset()
     try:
         with open(path, "rb") as handle:
-            entries = json.load(handle).get("entries") or {}
+            entries = json.load(handle).get("entries", {})
     except (OSError, ValueError, AttributeError):
         entries = None
     if not isinstance(entries, dict):

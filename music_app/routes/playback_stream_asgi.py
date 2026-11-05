@@ -34,11 +34,11 @@ from music_app.services.playback_pcm import (
     pack_pcm_frame,
     read_native_sample_rate,
 )
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.waveform_peaks import (
     WAVEFORM_ANALYZER_VERSION,
     WaveformPeaksBusyError,
 )
-from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.policy_asgi import require_action
 
 

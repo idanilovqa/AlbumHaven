@@ -630,8 +630,9 @@ def test_a_chain_with_a_listed_certificate_cannot_attest(world, tmp_path):
 
 @pytest.mark.parametrize(
     "content",
-    [None, "not json", "[]", '{"entries": 5}', '{"entries": "01F2E"}'],
-    ids=["missing", "garbage", "not-an-object", "entries-not-an-object", "entries-a-string"],
+    [None, "not json", "[]", '{"entries": 5}', '{"entries": "01F2E"}', '{"entries": null}', '{"entries": []}'],
+    ids=["missing", "garbage", "not-an-object", "entries-not-an-object", "entries-a-string", "entries-null",
+         "entries-empty-list"],
 )
 def test_an_unreadable_status_list_fails_closed_before_the_challenge_is_spent(world, tmp_path, content):
     if content is None:

@@ -18004,8 +18004,13 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
         assert f"library.local_track_files.{column}" in active_rows
     duplicates = _cte_body(sql, "duplicate_album_ids")
     assert "file_album_identity" in duplicates
-    # The broad non-ASCII year superset still guards reasons other branches miss.
-    assert "octet_length(file_album) <> length(file_album)" in duplicates
+    # The broad non-ASCII year superset stays a candidate source (it guards
+    # reasons other branches miss) but no longer makes every album in those
+    # years a duplicate-source check on PostgreSQL 18: on the owner's library
+    # that ran the duplicate lookup for all 14.6k albums for minutes.
+    assert "octet_length(file_album) <> length(file_album)" in _cte_body(sql, "non_ascii_year_album_ids")
+    assert "server_version_num')::integer < 180000" in duplicates
+    assert "select non_ascii_year_album_ids.album_id from non_ascii_year_album_ids" in sql
     for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
         assert "count(distinct" not in _cte_body(sql, cte)
     # A join on the union re-scanned every candidate per album (5 s at 9k candidates).

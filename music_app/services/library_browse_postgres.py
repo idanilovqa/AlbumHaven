@@ -11234,10 +11234,10 @@ def _problematic_files_sql(
         """
     duplicate_album_ids_cte = """
         duplicate_album_ids as (
-          -- Exact NFC + casefold identities (duplicate_identity_text), plus the
-          -- broad non-ASCII year superset. Problem reasons that no other branch
-          -- prefilters still depend on it (FTC-TAGS-020 split releases); narrowing
-          -- it needs those reasons covered first.
+          -- Duplicate-source checks run only for these albums. PostgreSQL 18
+          -- duplicate_identity_text is Python's NFC + casefold identity, so equal
+          -- identities are complete; older servers only lower(), so they keep the
+          -- broad superset as duplicate candidates too.
           select distinct candidate.album_id
           from active_problem_rows candidate
           join (
@@ -11253,6 +11253,17 @@ def _problematic_files_sql(
             on identity_candidates.file_year = candidate.file_year
            and identity_candidates.file_album_identity = candidate.file_album_identity
           union
+          select candidate.album_id
+          from active_problem_rows candidate
+          where current_setting('server_version_num')::integer < 180000
+            and candidate.file_year in (
+              select file_year from active_problem_rows
+              where octet_length(file_album) <> length(file_album)
+            )
+        ),
+        non_ascii_year_album_ids as (
+          -- Broad candidate superset: problem reasons that no other branch
+          -- prefilters still depend on it (FTC-TAGS-020 split releases).
           select candidate.album_id
           from active_problem_rows candidate
           where candidate.file_year in (
@@ -11449,6 +11460,8 @@ def _problematic_files_sql(
           from required_text_missing_album_ids
           union
           select duplicate_album_ids.album_id from duplicate_album_ids
+          union
+          select non_ascii_year_album_ids.album_id from non_ascii_year_album_ids
           union
           select active_track_order_rollup.album_id
           from active_track_order_rollup

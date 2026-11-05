@@ -664,7 +664,7 @@ test('buffered forward seek accepts the final unread frame through known EOS con
   });
   markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 255 });
   play(fixture);
-  renderQuantum(fixture);
+  assertRenderedStereo(fixture, Array.from({ length: QUANTUM_FRAMES }, (_value, index) => index + 1));
   fixture.send({
     type: 'reserve-buffered-seek', generation: fixture.generation,
     requestId: 2, streamId: 41, timelineFrame: 254,
@@ -823,7 +823,7 @@ test('buffered forward seek rejects if queued continuity becomes current first',
   });
 
   fixture.processor.promoteContinuity();
-  renderQuantum(fixture);
+  assertRenderedStereo(fixture, Array(QUANTUM_FRAMES).fill(-0.25));
 
   assert.equal(fixture.processor.current.streamId, 42);
   assert.equal(fixture.events('buffered-seek-boundary').length, 0);

@@ -50,7 +50,7 @@ function receivePcmAndAssertEnqueue(harness, messageOptions = {}, expectations =
   const samples = messageOptions.samples || [0.25, -0.5, 0.75, -1];
   const before = harness.portMessages('enqueue').length;
   const wirePcm = createPcmMessage({ ...messageOptions, samples });
-  harness.sockets[0].receive(wirePcm);
+  (expectations.socket || harness.sockets[0]).receive(wirePcm);
   const enqueues = harness.portMessages('enqueue');
   const expectedEnqueue = expectations.expectedEnqueue !== false;
   assert.equal(
@@ -3686,10 +3686,10 @@ test('explicit Play after lease loss reopens the real current stream at its reta
     socket.receive({ type: 'metadata', generation: reopened.generation, streamId: reopened.streamId,
       role: 'current', sampleRate: 48_000, channels: 2, provisionalTotalFrames: 11_520_000,
       requestedStartFrame: reopened.startFrame, timelineStartFrame: reopened.startFrame });
-    socket.receive(createPcmMessage({ generation: reopened.generation, streamId: reopened.streamId,
-      samples: new Array(48_000 * 2).fill(0.75) }));
-    socket.receive(createPcmMessage({ generation: reopened.generation, streamId: reopened.streamId,
-      sequence: 1, samples: new Array(48_000 * 2).fill(0.75) }));
+    receivePcmAndAssertEnqueue(harness, { generation: reopened.generation, streamId: reopened.streamId,
+      samples: new Array(48_000 * 2).fill(0.75) }, { socket });
+    receivePcmAndAssertEnqueue(harness, { generation: reopened.generation, streamId: reopened.streamId,
+      sequence: 1, samples: new Array(48_000 * 2).fill(0.75) }, { socket });
     assert.ok(harness.nodes.at(-1).render()[0].every(sample => sample === 0.75),
       'the recovered current stream must render actual non-silent PCM');
     harness.nodes.at(-1).deliverEvents();

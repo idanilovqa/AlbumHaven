@@ -97,6 +97,18 @@ class PlaybackNetworkTest {
     }
 
     @Test
+    fun anOverloadedServerKeepsTheClaimForRetriesWithinItsLease() {
+        val api = HttpPlaybackClaimApi(client, session())
+        server.enqueue(MockResponse.Builder().code(503).body("<html>unavailable</html>").build())
+        server.enqueue(MockResponse.Builder().code(502).body("bad gateway").build())
+        server.enqueue(MockResponse.Builder().code(429).addHeader("Retry-After", "5").body("{}").build())
+        server.enqueue(MockResponse.Builder().code(401).body("{}").build())
+
+        repeat(3) { assertEquals(ClaimResponse.Unreachable, api.acquire(TEST_CLIENT_ID, "held", track)) }
+        assertEquals(ClaimResponse.Rejected(401), api.acquire(TEST_CLIENT_ID, "held", track))
+    }
+
+    @Test
     fun releaseDeletesOnlyTheCallersClaim() {
         server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1}""").build())
         HttpPlaybackClaimApi(client, session()).release(TEST_CLIENT_ID, "held")

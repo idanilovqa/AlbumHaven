@@ -21,7 +21,7 @@ sealed interface ClaimResponse {
     /** The session, CSRF token, reference or claim token was refused. */
     data class Rejected(val status: Int) : ClaimResponse
 
-    /** No answer; the lease may still be valid. */
+    /** No answer, or one from an overloaded server (5xx, 429); the lease may still be valid. */
     data object Unreachable : ClaimResponse
 }
 

@@ -76,6 +76,8 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
             execute("PUT", body).use { response ->
                 when {
                     response.code == 409 -> ClaimResponse.Conflict
+                    // An overloaded or restarting server says nothing about the claim, which its lease still holds.
+                    response.code == 429 || response.code >= 500 -> ClaimResponse.Unreachable
                     !response.isSuccessful -> ClaimResponse.Rejected(response.code)
                     else -> {
                         val answer = JSONObject(response.body.string())

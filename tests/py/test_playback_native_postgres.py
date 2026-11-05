@@ -2004,9 +2004,17 @@ def _provider_calls(monkeypatch):
     return calls
 
 
+def _member_allowed(fixture, *library_actions):
+    """A library member with app access and only the named library-scoped actions."""
+    return replace(create_member(fixture), capability_grants=(
+        CapabilityGrant("app.access", "global", None),
+        *(CapabilityGrant(action, "library", fixture.actor.current_library_id) for action in library_actions),
+    ))
+
+
 def test_a_handoff_completion_requires_the_listen_completion_action(playback_inventory, playback_app, monkeypatch):
     fixture = playback_inventory
-    member = create_member(fixture)
+    member = _member_allowed(fixture, "library.media.read")
     configure_native_app(playback_app, fixture, member)
     request = _completion_handoff(fixture, playback_app, member)
     calls = _provider_calls(monkeypatch)
@@ -2027,10 +2035,7 @@ def test_a_handoff_completion_without_the_scrobble_action_records_the_listen_but
     playback_inventory, playback_app, monkeypatch,
 ):
     fixture = playback_inventory
-    member = replace(create_member(fixture), capability_grants=tuple(
-        CapabilityGrant(action, "library", fixture.actor.current_library_id)
-        for action in ("library.media.read", "integration.lastfm.complete")
-    ))
+    member = _member_allowed(fixture, "library.media.read", "integration.lastfm.complete")
     configure_native_app(playback_app, fixture, member)
     request = _completion_handoff(fixture, playback_app, member)
     calls = _provider_calls(monkeypatch)

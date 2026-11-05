@@ -302,17 +302,20 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private fun enqueueSameOriginDownload(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
         if (!originPolicy.isSameOrigin(url, selectedOrigin)) return
-        val request = DownloadManager.Request(url.toUri())
-            .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url).orEmpty())
-            .addRequestHeader("User-Agent", userAgent)
-            .setMimeType(mimeType)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(
-                this,
-                Environment.DIRECTORY_DOWNLOADS,
-                URLUtil.guessFileName(url, contentDisposition, mimeType),
-            )
-        getSystemService(DownloadManager::class.java).enqueue(request)
+        // Without a working Download Manager the page simply stays where it is.
+        downloadManagerOrNull {
+            val request = DownloadManager.Request(url.toUri())
+                .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url).orEmpty())
+                .addRequestHeader("User-Agent", userAgent)
+                .setMimeType(mimeType)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalFilesDir(
+                    this,
+                    Environment.DIRECTORY_DOWNLOADS,
+                    URLUtil.guessFileName(url, contentDisposition, mimeType),
+                )
+            getSystemService(DownloadManager::class.java).enqueue(request)
+        }
     }
 
     private fun openExternally(url: String) {

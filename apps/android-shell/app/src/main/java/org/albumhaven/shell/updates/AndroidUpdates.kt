@@ -23,6 +23,7 @@ import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellChannel
 import org.albumhaven.shell.ShellPreferences
+import org.albumhaven.shell.downloadManagerOrNull
 import org.albumhaven.shell.playback.ShellSession
 import java.io.File
 import java.io.IOException
@@ -136,37 +137,32 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
             .setMimeType(APK_MIME)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
             .setDestinationInExternalFilesDir(context, null, "$UPDATES_DIR/$APK_NAME")
-        val id = try {
-            downloads.enqueue(request)
-        } catch (_: IllegalStateException) {
-            done(DownloadResult.Failed)
-            return
-        } catch (_: SecurityException) {
-            done(DownloadResult.Failed)
-            return
-        }
+        val id = downloadManagerOrNull { downloads.enqueue(request) } ?: return done(DownloadResult.Failed)
         downloadId = id
+        // Each progress read is a ContentResolver query, so it runs on [io] and answers on the main thread.
         val tick = object : Runnable {
             override fun run() {
                 if (downloadId != id) return
-                when (val progress = query(id)) {
-                    null -> finish(id, DownloadResult.Failed, done)
+                io.execute {
+                    val progress = query(id)
+                    main.post { if (downloadId == id) progressed(progress) }
+                }
+            }
+
+            private fun progressed(progress: Pair<Int, Long>?) {
+                val (status, bytes) = progress ?: return finish(id, DownloadResult.Failed, done)
+                when {
+                    bytes > manifest.apkSize -> finish(id, DownloadResult.Refused(Rejection.SIZE_MISMATCH), done)
+                    status == DownloadManager.STATUS_SUCCESSFUL -> {
+                        onProgress(bytes)
+                        downloadId = null
+                        completedId = id
+                        done(DownloadResult.Completed)
+                    }
+                    status == DownloadManager.STATUS_FAILED -> finish(id, DownloadResult.Failed, done)
                     else -> {
-                        val (status, bytes) = progress
-                        when {
-                            bytes > manifest.apkSize -> finish(id, DownloadResult.Refused(Rejection.SIZE_MISMATCH), done)
-                            status == DownloadManager.STATUS_SUCCESSFUL -> {
-                                onProgress(bytes)
-                                downloadId = null
-                                completedId = id
-                                done(DownloadResult.Completed)
-                            }
-                            status == DownloadManager.STATUS_FAILED -> finish(id, DownloadResult.Failed, done)
-                            else -> {
-                                onProgress(bytes)
-                                main.postDelayed(this, POLL_MS)
-                            }
-                        }
+                        onProgress(bytes)
+                        main.postDelayed(this, POLL_MS)
                     }
                 }
             }
@@ -177,23 +173,26 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
 
     private fun finish(id: Long, result: DownloadResult, done: (DownloadResult) -> Unit) {
         downloadId = null
-        downloads.remove(id)
+        remove(id)
         done(result)
     }
 
-    private fun query(id: Long): Pair<Int, Long>? =
+    private fun query(id: Long): Pair<Int, Long>? = downloadManagerOrNull {
         downloads.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
-            if (!cursor.moveToFirst()) return null
+            if (!cursor.moveToFirst()) return@use null
             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
             val bytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
             status to bytes
         }
+    }
+
+    private fun remove(id: Long) = io.execute { downloadManagerOrNull { downloads.remove(id) } }
 
     override fun cancelDownload() {
         val id = downloadId ?: return
         downloadId = null
         poll?.let(main::removeCallbacks)
-        downloads.remove(id)
+        remove(id)
     }
 
     override fun inspect(done: (DownloadInspection) -> Unit) {
@@ -209,7 +208,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 -1L to ""
             } finally {
                 downloaded.delete()
-                completedId?.let { downloads.remove(it) }
+                completedId?.let { downloadManagerOrNull { downloads.remove(it) } }
                 completedId = null
             }
             val inspection = DownloadInspection(

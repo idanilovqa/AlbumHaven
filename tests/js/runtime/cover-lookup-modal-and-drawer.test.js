@@ -3681,7 +3681,9 @@ require('node:test')('rejected remote save restores the cover replaced before se
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
 });
 
-require('node:test')('remote save closes only after the server accepts the queued mutation', async () => {
+require('node:test')('remote save closes on click, runs once in the background, and alerts a readable failure', async () => {
+  // Owner decision 2026-11-04: Save closes the modal immediately; the save
+  // finishes in the background and a failure shows a readable error alert.
   const album = {
     key: 'artist::album::2001',
     tracks: [{ path: 'C:/music/Remote/01.flac' }],
@@ -3689,10 +3691,10 @@ require('node:test')('remote save closes only after the server accepts the queue
   let resolveResponse;
   let closeCount = 0;
   let fetchCount = 0;
-  let refreshCount = 0;
+  const toasts = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
-    showToast: () => {},
+    showToast: (...args) => toasts.push(args),
   });
   const advanceModalSession = context.closeCoverLookupModal;
   context.state.coverLookup.modal = {
@@ -3709,7 +3711,7 @@ require('node:test')('remote save closes only after the server accepts the queue
   context.closeCoverLookupModal = () => { closeCount += 1; };
   context.markAlbumCoverPathsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
-  context.refreshCoverLookupAlbumArtwork = () => { refreshCount += 1; };
+  context.refreshCoverLookupAlbumArtwork = () => {};
   context.fetch = () => {
     fetchCount += 1;
     return new Promise((resolve) => { resolveResponse = resolve; });
@@ -3720,12 +3722,10 @@ require('node:test')('remote save closes only after the server accepts the queue
 
   const pending = context.saveRemoteCoverFromLookup();
   await Promise.resolve();
-
-  assert.equal(closeCount, 0);
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+  assert.equal(closeCount, 1, 'Save closes before the server answers');
   const duplicate = context.saveRemoteCoverFromLookup();
   await Promise.resolve();
-  assert.equal(fetchCount, 1);
+  assert.equal(fetchCount, 1, 'a pending save is never sent twice');
   await duplicate;
 
   resolveResponse({
@@ -3733,10 +3733,8 @@ require('node:test')('remote save closes only after the server accepts the queue
     json: async () => ({ ok: false, error: 'Save was rejected.' }),
   });
   await pending;
-
-  assert.equal(closeCount, 0);
-  assert.equal(refreshCount, 0);
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+  assert.equal(closeCount, 1);
+  assert.deepEqual(toasts.map(([message, tone]) => [message, tone]), [['Save was rejected.', 'error']]);
 
   const accepted = context.saveRemoteCoverFromLookup();
   await Promise.resolve();
@@ -3745,8 +3743,7 @@ require('node:test')('remote save closes only after the server accepts the queue
     json: async () => ({ ok: true, queued: true, task: { id: 'remote-save-acceptance' } }),
   });
   await accepted;
-
-  assert.equal(closeCount, 1);
+  assert.equal(closeCount, 2, 'an accepted save closes once, on click');
 
   const replacementAlbum = {
     key: 'replacement::album::2002',
@@ -3779,7 +3776,7 @@ require('node:test')('remote save closes only after the server accepts the queue
 
   assert.strictEqual(context.state.coverLookup.modal.album, replacementAlbum);
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'replacement-candidate');
-  assert.equal(closeCount, 1);
+  assert.equal(closeCount, 3);
 });
 
 require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {

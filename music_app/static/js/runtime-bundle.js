@@ -3136,7 +3136,12 @@ function shouldRunImmediateStartupHydration(view, bootstrap = {}) {
     bootstrap?.scanInProgress
     || bootstrap?.relationsInProgress
   );
-  return !startupWorkActive || !isEffectivelyEmptyView(view);
+  // A cold scan's empty library waits for scan completion, but a pasted search
+  // or artist URL renders an empty shell that only its hydration can fill.
+  const requestsSpecificView = Boolean(
+    String(view?.query || '').trim() || String(view?.selected_artist || '').trim()
+  );
+  return !startupWorkActive || requestsSpecificView || !isEffectivelyEmptyView(view);
 }
 
 function deepCloneJson(value) {

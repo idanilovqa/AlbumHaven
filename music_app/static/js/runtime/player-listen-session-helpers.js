@@ -98,7 +98,9 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  const listened = Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0);
+  // A measured listen is judged on its measured audio alone, as the server judges it.
+  const listened = session?.measurement ? Number(session.measurement.total) || 0
+    : Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session));
   if (listened > MIN_RECORDED_LISTEN_SECONDS) return true;
   // A track of ten seconds or less is recorded once it was heard to its end.
   const duration = getListenSessionDuration(session);

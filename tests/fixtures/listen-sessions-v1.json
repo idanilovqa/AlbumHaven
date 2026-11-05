@@ -3594,6 +3594,155 @@
           }
         }
       ]
+    },
+    {
+      "name": "a listen is recorded on its measured audio, not its playback position: a tiny track whose position reached its end but whose measured audio did not writes no history, and one whose measured audio reached its end does",
+      "steps": [
+        {
+          "at": 0,
+          "do": "select",
+          "track": "tiny"
+        },
+        {
+          "at": 0,
+          "do": "begin",
+          "position": 0
+        },
+        {
+          "at": 7800,
+          "do": "heard",
+          "seconds": 7.7
+        },
+        {
+          "at": 7800,
+          "do": "position",
+          "position": 7.8
+        },
+        {
+          "at": 7800,
+          "do": "unload",
+          "position": 7.8
+        },
+        {
+          "at": 9000,
+          "do": "select",
+          "track": "tiny"
+        },
+        {
+          "at": 9000,
+          "do": "begin",
+          "position": 0
+        },
+        {
+          "at": 16700,
+          "do": "heard",
+          "seconds": 7.8
+        },
+        {
+          "at": 16700,
+          "do": "position",
+          "position": 7.7
+        },
+        {
+          "at": 16700,
+          "do": "unload",
+          "position": 7.7
+        }
+      ],
+      "writes": [
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 0,
+            "max_measured_contiguous_seconds": 0,
+            "title": "Tiny Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 8,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "5",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-tiny.sig"
+          }
+        },
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 0,
+            "max_measured_contiguous_seconds": 0,
+            "title": "Tiny Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 8,
+            "started_at": "2026-11-02T10:00:09.000Z",
+            "started_at_unix": 1793613609,
+            "track_number": "5",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-tiny.sig"
+          }
+        },
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "sequence": 1,
+            "finalized": true,
+            "measured_listened_seconds": 7.8,
+            "max_measured_contiguous_seconds": 7.8,
+            "title": "Tiny Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 8,
+            "started_at": "2026-11-02T10:00:09.000Z",
+            "started_at_unix": 1793613609,
+            "track_number": "5",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:00:16.700Z",
+            "total_listened_seconds": 7.7,
+            "max_contiguous_seconds": 7.7,
+            "finished_fully": false,
+            "skipped": true,
+            "completion_reason": "pagehide",
+            "scrobble_eligible": false,
+            "scrobbled": false,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 7.7
+              }
+            ],
+            "playbackRef": "ref-tiny.sig"
+          }
+        }
+      ]
     }
   ]
 }

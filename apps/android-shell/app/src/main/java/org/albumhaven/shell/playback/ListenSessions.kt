@@ -242,7 +242,8 @@ class ListenSessions(
     }
 
     private fun shouldPersist(session: Session): Boolean {
-        val listened = maxOf(session.listenedSeconds(), session.longestSegmentSeconds(), session.measuredTotal)
+        // Every listen here is measured, and the server judges a measured listen on its measured audio alone.
+        val listened = session.measuredTotal
         if (listened > MIN_RECORDED_LISTEN_SECONDS) return true
         // A track of ten seconds or less is recorded once it was heard to its end.
         val duration = duration(session)

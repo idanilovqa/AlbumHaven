@@ -15,9 +15,8 @@ sealed interface FocusEffect {
  * Media3's audio-focus and becoming-noisy defaults for a music player, kept pure: focus is held
  * while playback is wanted; a permanent loss pauses; a transient loss (a call, an alarm) pauses
  * and resumes only when the platform gives focus back, and a start meanwhile waits for it too, so
- * nothing plays over a call; a may-duck loss is ducked by the platform
- * itself because the request does not pause when ducked; headphones unplugging or Bluetooth
- * audio dropping pauses.
+ * nothing plays over a call; a may-duck loss is ducked by the platform itself because the request
+ * does not pause when ducked; headphones unplugging or Bluetooth audio dropping pauses.
  */
 class AudioFocusPolicy {
     private var held = false

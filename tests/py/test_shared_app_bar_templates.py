@@ -93,7 +93,7 @@ def render():
             playback_allowed_actions=AllowedActions(()),
             account_menu_csrf_token="library-csrf",
             allowed_actions=actions,
-            csrf_token="settings-csrf",
+            **({"csrf_token": "settings-csrf"} if name != "index.html" else {}),
             profile={"username": "Listener", "sessions": []},
             roster={"library_name": "Test library", "members": []},
             member=None,
@@ -112,6 +112,25 @@ def assert_home_brand(bar):
     link = links[0]
     assert link.attrs.get("aria-label"), "The image-only home link needs an accessible name"
     assert link.one("img").attrs["src"].endswith("/album-haven-cloud-vinyl.png")
+
+
+@pytest.mark.parametrize("template", ["index.html", "admin-members.html", "admin-account-detail.html", "admin-server.html", "account.html"])
+def test_complete_document_account_menus_have_unique_ids_and_valid_logout_tokens(render, template):
+    document = render(template)
+    identifiers = [element.attrs["id"] for element in document.find_all(id=None)]
+    assert len(identifiers) == len(set(identifiers)), "Hidden shell chrome must not duplicate document IDs"
+    components = document.find_all(**{"data-account-menu-component": None})
+    assert len(components) == (2 if template == "index.html" else 1)
+    expected_token = "library-csrf" if template == "index.html" else "settings-csrf"
+    for component in components:
+        trigger = component.one("button", **{"data-account-menu-trigger": None})
+        menu = component.one("div", **{"data-account-menu": None})
+        assert trigger.attrs["aria-controls"] == menu.attrs["id"]
+        assert document.one(id=trigger.attrs["aria-controls"]) is menu
+        logout = menu.one("form", action="/logout")
+        assert logout.one("input", name="csrf_token").attrs["value"] == expected_token
+    if template == "index.html":
+        document.one("button", id="settings-button")
 
 
 def test_library_app_bar_is_above_both_sidebar_and_main_content(render):
@@ -191,6 +210,9 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
+    split_albums = album_types.one("button", **{"data-gallery-split-albums": "1"})
+    assert split_albums.attrs["aria-pressed"] == "true"
+    assert split_albums.text.strip().endswith("Show Split Albums")
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
     customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
     assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"
@@ -322,3 +344,13 @@ def test_search_component_appends_custom_actions_and_supports_multiple_instances
     assert custom.parent.children[-1] is custom
     second_field = document.one("input", id="second-search")
     assert second_field.parent.one("button", type="submit").attrs["aria-label"] == "Find tracks"
+
+
+@pytest.mark.parametrize("template", ["admin-members.html", "admin-account-detail.html", "admin-server.html", "account.html"])
+def test_standalone_app_bar_keeps_settings_and_logout(render, template):
+    document = render(template)
+    menu = document.one("div", **{"data-account-menu": None})
+    assert menu.one("a", **{"data-account-menu-settings": None}).attrs["href"] == "/?settings=appearance"
+    assert not menu.find_all(**{"data-account-menu-admin": None})
+    assert menu.one("form").attrs["action"] == "/logout"
+    assert menu.one("input", name="csrf_token").attrs["value"] == "settings-csrf"

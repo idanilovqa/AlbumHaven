@@ -149,6 +149,7 @@ function placeFloatingNotifications() {
 }
 
 function registerFloatingNotification(node, options = {}) {
+  if (options.fixedViewport) { options.onPlaced?.(); return; }
   // Keep notification delivery available when the host has no geometry APIs.
   if (!node?.getBoundingClientRect || !document.querySelectorAll) { options.onPlaced?.(); return; }
   const lane = options.lane || 'top-right';
@@ -321,11 +322,12 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
     'toast',
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
+    options.fixedViewport ? 'is-viewport-fixed' : '',
   ].filter(Boolean).join(' ');
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');

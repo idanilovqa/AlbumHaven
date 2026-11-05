@@ -42,6 +42,7 @@ function searchHarness(value = '') {
   input.id = 'search-input'; input.value = value;
   input.closest = () => ({ querySelector: () => clear });
   input.focus = () => { document.activeElement = input; };
+  input.setSelectionRange = (start, end) => { input.selectionStart = start; input.selectionEnd = end; };
   input.blur = () => { document.activeElement = null; };
   const context = vm.createContext({ document, window: { innerWidth: 390 },
     CustomEvent: class {}, closeRecentSearchPopover() {} });
@@ -66,6 +67,28 @@ test('mobile search collapses without clearing its query and exposes retained-qu
   assert.equal(input.value, 'Sixteen Horizons');
   assert.equal(input.inert, false);
   assert.equal(document.activeElement, input);
+});
+
+test('every mobile search reopen places the caret at the end of the retained query', () => {
+  const { context, input, document } = searchHarness('Sixteen Horizons');
+  for (const selection of [[0, 0], [2, 7], [4, 4]]) {
+    input.setSelectionRange(...selection);
+    context.setMobileSearchOpen(false);
+    context.handleMobileSearchSubmit();
+    assert.equal(document.activeElement, input);
+    assert.equal(input.selectionStart, input.value.length);
+    assert.equal(input.selectionEnd, input.value.length);
+    assert.equal(input.value, 'Sixteen Horizons');
+  }
+});
+
+test('synchronizing an already open search preserves the user caret position', () => {
+  const { context, input } = searchHarness('Sixteen Horizons');
+  context.setMobileSearchOpen(true);
+  input.setSelectionRange(2, 5);
+  context.setMobileSearchOpen(true);
+  assert.equal(input.selectionStart, 2);
+  assert.equal(input.selectionEnd, 5);
 });
 
 for (const query of ['', 'Northlight']) {

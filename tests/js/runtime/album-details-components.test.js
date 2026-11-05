@@ -60,7 +60,7 @@ test('Album Details renders the backend poor-art classification as a focusable S
   );
 });
 
-test('Album Details renders noninteractive source markers below the cover', () => {
+test('Album Details renders readable noninteractive source labels', () => {
   const context = loadComponents();
   const html = context.buildAlbumCoverSourceMarkersHtml({
     root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
@@ -88,57 +88,20 @@ test('Album Details source markers reuse the gallery source glyphs and obey the 
   assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
 });
 
-test('Album Details render path places source markers after the cover shell', () => {
-  const source = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
-    'utf8',
-  );
-  const renderStart = source.indexOf('function renderTrackModalRelease(album)');
-  const renderEnd = source.indexOf('\nfunction ', renderStart + 1);
-  const render = source.slice(renderStart, renderEnd < 0 ? undefined : renderEnd);
-  assert.doesNotMatch(render, /sourceCategories:\s*resolveAlbumSourceMarkerCategories\(album\)/);
-  assert.match(render, /const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml\(album\)/);
-  assert.match(render, /track-modal-cover-shell[\s\S]*?<\/div>\s*\$\{coverSourceMarkersHtml\}/);
-  assert.equal([...render.matchAll(/\$\{coverSourceMarkersHtml\}/g)].length, 3);
-});
-
-test('mobile Album Details keeps source markers with the cover instead of either header', () => {
-  const navigation = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js'),
-    'utf8',
-  );
-  const components = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-details-components.js'),
-    'utf8',
-  );
-  const mobileCss = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'),
-    'utf8',
-  );
-  const trackModalCss = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'),
-    'utf8',
-  );
-
-  assert.doesNotMatch(navigation, /mobile-album-source-markers|buildAlbumSourceMarkerItemsHtml/);
-  assert.doesNotMatch(components, /mobile-album-overview__source-markers/);
-  assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers/);
-  assert.match(components, /overview\.prepend\(rail\)/);
-  assert.match(components, /rail\.appendChild\(sourceMarkers\)/);
-  assert.match(navigation, /mobile-album-overview__rail/);
-  assert.match(
-    mobileCss,
-    /mobile-album-overview__rail[^}]*grid-column:\s*1[^}]*grid-row:\s*1[^}]*flex-direction:\s*column[^}]*gap:\s*8px/s,
-  );
-  assert.doesNotMatch(mobileCss, /mobile-album-overview\s*>\s*\.album-details-cover-source-markers[^}]*grid-row:\s*1/s);
-  assert.match(mobileCss, /album-details-cover-source-markers[^}]*flex-direction:\s*column/s);
-  assert.match(mobileCss, /\.album-details-cover-source-markers/);
-  assert.match(mobileCss, /mobile-album-overview \.track-modal-cover[^}]*aspect-ratio:\s*auto/);
-  assert.match(trackModalCss, /\.track-modal-cover:has\(> \.album-details-cover-source-markers\)[^}]*aspect-ratio:\s*auto/);
-  assert.match(
-    mobileCss,
-    /data-mobile-album-layout="stacked_bar"[^}]*\.mobile-album-identity[^}]*align-self:\s*start/s,
-  );
+test('Album Details places source labels in the header and never under artwork', () => {
+  const context = loadComponents();
+  const labels = context.buildAlbumCoverSourceMarkersHtml({root_provenance: {categories: ['hoard', 'new_arrivals']}});
+  for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+    const html = context.buildAlbumDetailsHeaderHtml({layout, album: 'G_d’s Pee AT STATE’S END!', releaseType: 'ALBUM', sourceMarkersHtml: labels});
+    assert.match(html, /album-details-header__release-type[^>]*>ALBUM/);
+    assert.match(html, /album-details-header__tag album-details-source-marker/);
+    assert.ok(html.includes('>Hoard</span>'));
+    assert.ok(html.includes('>New Arrivals</span>'));
+    assert.ok(html.indexOf('>ALBUM<') < html.indexOf('>Hoard<'));
+  }
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.match(source, /sourceMarkersHtml: coverSourceMarkersHtml/);
+  assert.equal(source.includes('$' + '{coverSourceMarkersHtml}'), false);
 });
 
 test('AlbumDetailsHeader supports the three approved layouts and fat-dot identity separators', () => {
@@ -304,6 +267,22 @@ test('Editorial Album Details aligns the track table with its title and metadata
   );
 });
 
+test('Editorial Album Details wraps long titles without covering header actions', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/album-details-components.css'),
+    'utf8',
+  );
+
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__primary\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__actions\s*\{[^}]*grid-column:\s*2;/s,
+  );
+});
+
 test('Editorial mobile stacking wins the same-selector cascade after desktop layout rules', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/track-modal-and-lightbox.css'), 'utf8');
   const dialog = '.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"])';
@@ -324,4 +303,18 @@ test('missing Album Details host does not draw a second alert surface', () => {
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*padding:\s*0\s*;/s);
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*border:\s*0\s*;/s);
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*background:\s*transparent\s*;/s);
+});
+
+test('Album Details callers use presentation-only title and year values', () => {
+  const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
+  const tagEditorSource = fs.readFileSync(
+    path.join(runtimeRoot, 'tag-editor-and-optimistic-updates.js'),
+    'utf8',
+  );
+  const mobileSource = fs.readFileSync(path.join(runtimeRoot, 'album-details-components.js'), 'utf8');
+
+  assert.match(tagEditorSource, /album:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
+  assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
 });

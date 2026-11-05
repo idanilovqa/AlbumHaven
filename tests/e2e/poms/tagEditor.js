@@ -57,6 +57,7 @@ export class TagEditor extends BasePage {
     this.autoNumberHelp = this.overlay.locator('#tag-editor-auto-number-help');
     this.autoNumberStatus = this.overlay.locator('#tag-editor-auto-number-status');
     this.applyButton = this.overlay.getByRole('button', { name: 'Apply', exact: true });
+    this.closeButton = this.overlay.getByRole('button', { name: 'Close tag editor', exact: true });
     this.cancelButton = this.overlay.getByRole('button', { name: 'Cancel', exact: true });
     this.confirmOverlay = page.locator('#tag-edit-confirm-modal');
     this.confirmDialog = this.confirmOverlay.getByRole('dialog', {
@@ -169,7 +170,7 @@ export class TagEditor extends BasePage {
   }
 
   get cancelButtonSelector() {
-    return '[data-close-tag-editor="1"].button';
+    return '#tag-editor-footer [data-close-tag-editor="1"]';
   }
 
   get applyButtonSelector() {

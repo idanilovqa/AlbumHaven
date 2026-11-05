@@ -52,6 +52,41 @@ test('cancel refresh retains the task until its terminal state is persisted', ()
     /\.finally\(\(\) => loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\)\);/,
   );
 });
+
+test('dismissing an interrupted cover lookup notice clears and rerenders it', () => {
+  assert.match(
+    helperSource,
+    /data-dismiss-cover-lookup-notice[\s\S]*?failureNotice = '';[\s\S]*?renderCoverLookupModal\(\);/,
+  );
+});
+
+test('split release choices use the shared Cover Lookup rebind action', () => {
+  assert.match(
+    helperSource,
+    /closest\('\[data-cover-lookup-current-release\]'\)[\s\S]*?chooseCoverLookupCurrentRelease\([\s\S]*?getAttribute\('data-cover-lookup-current-release'\)/,
+  );
+});
+
+test('Album Details split choices use the current-release selector action', () => {
+  assert.match(
+    helperSource,
+    /closest\('\[data-track-modal-current-release\]'\)[\s\S]*?preventDefault\(\)[\s\S]*?selectTrackModalCurrentRelease\([\s\S]*?getAttribute\('data-track-modal-current-release'\)/,
+  );
+});
+
+test('Cover Lookup album link uses the shared album-details navigation action', () => {
+  assert.match(
+    helperSource,
+    /closest\('\[data-open-cover-lookup-album-details="1"\]'\)[\s\S]*?openCoverLookupAlbumDetails\(\)/,
+  );
+});
+test('Cover Lookup lightbox passes the already-loaded preview fallback', () => {
+  assert.match(
+    helperSource,
+    /openImageLightbox\([\s\S]*?getAttribute\('data-cover-src'\)[\s\S]*?previewSrc:\s*coverLookupLightboxButton\.getAttribute\('data-cover-preview-src'\)/,
+  );
+});
+
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
 const utilityRenderersSource = fs.readFileSync(path.join(
@@ -417,6 +452,28 @@ test('switching Settings tabs paints selected navigation before loading panel co
   assert.deepEqual(events, ['select:rules', 'shell', 'load', 'render']);
 });
 
+test('switching from Rules clears its tree before Problematic Files data arrives', () => {
+  const list = { dataset: { utilityNavigationOwner: 'rules' }, innerHTML: 'Rules tree', scrollTop: 120 };
+  const detail = { innerHTML: 'Rule detail', classList: { remove() {} }, setAttribute() {} };
+  const count = { textContent: '7' };
+  const sidebarLabel = { textContent: 'Rules' };
+  const tab = { textContent: 'Problematic Files', getAttribute: () => 'problematic-files',
+    classList: { toggle() {} }, setAttribute() {} };
+  const context = vm.createContext({
+    state: { utility: { activeTab: 'problematic-files' } },
+    getUtilityModalElements: () => ({ list, detail, count, sidebarLabel, tabs: [tab] }),
+  });
+  vm.runInContext(utilityRenderersSource, context);
+  context.syncUtilityTabAlignment = () => {};
+  context.renderUtilityModalContent({ shellOnly: true });
+  assert.doesNotMatch(list.innerHTML, /Rules tree/);
+  assert.match(list.innerHTML, /Loading/);
+  assert.match(detail.innerHTML, /Loading/);
+  assert.equal(sidebarLabel.textContent, 'Problematic Files');
+  assert.equal(count.textContent, '');
+  assert.equal(list.scrollTop, 0);
+});
+
 test('Settings shell-only render stops before active panel rendering', () => {
   const shellReturn = utilityRenderersSource.indexOf('if (options.shellOnly === true) {');
   const problematicRender = utilityRenderersSource.indexOf('renderProblematicFiles(options);');
@@ -510,7 +567,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
-test('applying a problem filter waits for the complete Problematic Files snapshot', async () => {
+test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {
   let releaseComplete;
   const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
   const { context, calls } = createContext({
@@ -532,8 +589,8 @@ test('applying a problem filter waits for the complete Problematic Files snapsho
 
   const click = context.handleUtilityBootstrapClick(event);
   await Promise.resolve();
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
-  assert.equal(calls.renders, 0);
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
+  assert.equal(calls.renders, 1);
 
   context.state.utility.problematicFiles = [
     { key: 'canonical', problem_reasons: ['Poor art quality'] },
@@ -1036,8 +1093,11 @@ test('applying the base incomplete-order filter preserves a selection after deta
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
 });
 
-test('opening a cover lookup task from inside the drawer closes the drawer before opening the task modal', async () => {
+test('opening a cover lookup task keeps the drawer open behind the task modal', async () => {
   const { context } = createContext();
+  context.document.getElementById = (id) => (
+    id === 'cover-lookup-drawer-body' ? { scrollTop: 71 } : null
+  );
   const albumPayload = {
     album: 'Kill Em All',
     artist: 'Metallica',
@@ -1054,27 +1114,43 @@ test('opening a cover lookup task from inside the drawer closes the drawer befor
   context.renderCoverLookupDrawer = () => {
     transitions.push(`render:${context.state.coverLookup.drawerOpen}`);
   };
-  context.openCoverLookupModal = (album, options) => {
+    context.openCoverLookupModal = (album, options) => {
     transitions.push(
-      `open:${context.state.coverLookup.drawerOpen}:${album.artist}:${album.album}:${options.taskId}`,
+        `open:${context.state.coverLookup.drawerOpen}:${album.artist}:${album.album}:${options.taskId}:${options.mobileSheet}`,
     );
   };
   const taskButton = createElement({
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 1 });
 
   await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(context.state.coverLookup.drawerScrollTop, 71);
   assert.deepEqual(transitions, [
-    'render:false',
-    'open:false:Metallica:Kill Em All:cover-task-12',
+      'open:true:Metallica:Kill Em All:cover-task-12:true',
   ]);
+});
+
+test('Album Details interactions do not close Notifications behind it', async () => {
+  const { context } = createContext();
+  context.state.coverLookup.drawerOpen = true;
+  let renders = 0;
+  context.renderCoverLookupDrawer = () => { renders += 1; };
+  const trackModal = createElement();
+  const { event } = createEvent({
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': trackModal,
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(context.state.coverLookup.drawerOpen, true);
+  assert.equal(renders, 0);
 });
 
 test('keyboard activation opens a selectable cover lookup task trigger', () => {
@@ -1157,7 +1233,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   });
   taskButton.contains = (node) => node === selectedTextNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1180,7 +1256,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   await context.handleUtilityBootstrapClick(secondClick.event);
 
   assert.equal(secondClick.wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 
@@ -1224,7 +1300,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   });
   taskButton.contains = (node) => node === anchorNode || node === focusNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1238,7 +1314,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 
@@ -1277,7 +1353,7 @@ test('a moved notification-title drag suppresses its immediate card click when m
     'data-open-cover-lookup-task': 'cover-task-drag',
   });
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1327,14 +1403,14 @@ test('keyboard activation opens a cover lookup task while unrelated page text re
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 0 });
 
   await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), true);
-  assert.equal(context.state.coverLookup.drawerOpen, false);
+  assert.equal(context.state.coverLookup.drawerOpen, true);
   assert.equal(modalOpenCount, 1);
 });
 
@@ -1428,4 +1504,22 @@ test('tag editor backdrop closes only when the editor has no changed updates', a
     0,
     'a backdrop click should leave a dirty tag editor open',
   );
+});
+
+test('confirming local cover deletion forwards the retained path exactly once', async () => {
+  const { context } = createContext();
+  const deleteButton = createElement({ 'data-confirm-cover-lookup-delete': '1' });
+  const paths = [];
+  context.state.coverLookup.modal = { pendingDeletePath: 'C:\\Music\\Artist\\Album\\Front.jpg' };
+  context.deleteLocalCoverFromLookup = async (sourcePath) => {
+    paths.push(sourcePath);
+  };
+  const { event, wasPrevented } = createEvent({
+    '[data-confirm-cover-lookup-delete="1"]': deleteButton,
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.deepEqual(paths, ['C:\\Music\\Artist\\Album\\Front.jpg']);
 });

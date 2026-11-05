@@ -216,6 +216,8 @@ def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[
             "track_number": entry.get("track_number"),
             "disc_number": entry.get("disc_number"),
             "disc_number_raw": entry.get("disc_number_raw"),
+            "total_discs": entry.get("total_discs"),
+            "disc_subtitle": entry.get("disc_subtitle"),
             "artist": str(entry.get("artist") or artist),
             "album": bucket_name if bucket_kind == "album" else "",
             "album_artist": artist,
@@ -305,6 +307,9 @@ def build_non_album_track_list(
             "year_label": str(year) if year is not None else "Unknown",
             "track_number": entry.get("track_number"),
             "disc_number": entry.get("disc_number"),
+            "disc_number_raw": entry.get("disc_number_raw"),
+            "total_discs": entry.get("total_discs"),
+            "disc_subtitle": entry.get("disc_subtitle"),
             "exception_type": exception_type or "",
             **(
                 {"custom_collection_name": str(entry.get("custom_collection_name") or "").strip()}

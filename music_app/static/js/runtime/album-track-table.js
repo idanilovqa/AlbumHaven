@@ -1,3 +1,48 @@
+const albumTrackCreditMotion = new WeakMap();
+
+function disposeAlbumTrackCreditMotion(root) {
+  albumTrackCreditMotion.get(root)?.();
+  albumTrackCreditMotion.delete(root);
+}
+
+function syncAlbumTrackCreditMotion(root) {
+  disposeAlbumTrackCreditMotion(root);
+  if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
+  const rows = Array.from(root.querySelectorAll('.album-track-table__secondary'));
+  if (!rows.length) return;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+  let disposed = false;
+  const refresh = () => {
+    frame = 0;
+    for (const row of rows) {
+      const text = row.firstElementChild;
+      const motion = resolveCompactPlayerMetadataRowMotion({
+        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
+      });
+      row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+    }
+  };
+  const schedule = () => {
+    if (!disposed && !frame) frame = requestAnimationFrame(refresh);
+  };
+  const observer = new ResizeObserver(schedule);
+  for (const row of rows) {
+    observer.observe(row);
+    observer.observe(row.firstElementChild);
+  }
+  reduced.addEventListener('change', schedule);
+  document.fonts?.ready.then(schedule);
+  albumTrackCreditMotion.set(root, () => {
+    disposed = true;
+    cancelAnimationFrame(frame);
+    observer.disconnect();
+    reduced.removeEventListener('change', schedule);
+    for (const row of rows) row.classList.remove('is-credit-overflowing');
+  });
+  schedule();
+}
+
 function buildAlbumTrackPlayButtonHtml(track = {}) {
   const trackPath = String(track.path || '');
   const title = String(track.playbackTitle || track.title || 'Track');
@@ -22,7 +67,8 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
   if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
+  if (secondary) classes.push('album-track-table__row--secondary');
+  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -43,6 +89,12 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
     },
   };
+}
+
+function matchesAlbumTrackSearch(query, title, secondaryArtist) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  return Boolean(normalizedQuery && [title, secondaryArtist]
+    .some(value => String(value || '').toLocaleLowerCase().includes(normalizedQuery)));
 }
 
 function buildAlbumTrackTableHtml(config = {}) {

@@ -133,6 +133,7 @@ function loadRuntime(overrides = {}) {
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;'),
     console,
+    hasHydratedLibraryNonAlbumTracks: () => false,
     albumHasDisplayCover: album => Boolean(album?.cover_url),
     buildAlbumDisplayCoverUrl: album => album?.cover_url || '',
     buildAlbumLightboxCoverUrl: album => album?.cover_url || '',
@@ -194,6 +195,69 @@ test('Artist Family controls follow selected artist and close without focusing a
   assert.equal(trigger.hidden, true);
   assert.equal(panel.hidden, true);
   assert.equal(focusCount, 0);
+});
+
+test('an open Album Types menu hydrates deferred loose tracks after navigation changes the view', async () => {
+  let hydrationCount = 0;
+  const view = {};
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => id === 'gallery-album-types-menu' ? surface : null,
+      body: { appendChild() {} },
+    },
+  });
+  context.ensureGalleryMainState = () => ({ albumTypes: [], sources: {} });
+  context.focusGalleryMainSurface = () => {};
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+  context.openGalleryMainSurface('album-types', anchor, surface);
+
+  view.non_album_tracks_deferred = true;
+  vm.runInContext('galleryMainSurfaceController = createAnchoredSurfaceController()', context);
+  context.updateGalleryMainControls();
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
+});
+
+test('opening Sources hydrates deferred loose tracks', async () => {
+  let hydrationCount = 0;
+  const view = { non_album_tracks_deferred: true };
+  const anchor = { setAttribute() {}, contains: () => false };
+  const surface = {
+    hidden: true,
+    matches: () => false,
+    setAttribute() {},
+    contains: () => false,
+    classList: { add() {}, remove() {} },
+  };
+  const context = loadRuntime({
+    state: { view },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: () => null,
+      body: { appendChild() {} },
+    },
+  });
+  context.hydrateDeferredNonAlbumTracks = async () => { hydrationCount += 1; };
+
+  context.openGalleryMainSurface('sources', anchor, surface);
+  await Promise.resolve();
+
+  assert.equal(hydrationCount, 1);
 });
 
 test('initial Artist Family markup is hidden only when no effective artist is selected', () => {
@@ -398,6 +462,47 @@ function createStateForContract() {
   };
 }
 
+test('artist non-album tracks stay clickable while deferred without a second gallery request', () => {
+  const requested = [];
+  const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: selector => selector === '[data-open-non-album-tracks]' ? [button] : [],
+      querySelector: () => null,
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.updateGalleryMainControls();
+  assert.equal(requested.length, 0, 'selecting an artist keeps its gallery to one view-data request');
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-disabled'], 'false');
+  context.state.view.non_album_tracks_deferred = false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty artist collection is disabled');
+  button.dataset.libraryWide = '1';
+  context.hasHydratedLibraryNonAlbumTracks = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty library collection is disabled');
+  button.dataset.libraryWide = '';
+  context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(requested.at(-1).libraryWide, true, 'search checks library-wide loose tracks without opening the menu');
+  assert.equal(button.dataset.searchMatch, 'false');
+  context.hasNonAlbumSearchMatches = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.dataset.searchMatch, 'true');
+  assert.equal(button['aria-description'], 'Contains tracks matching your search');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,
@@ -417,11 +522,11 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(button\.dataset\.libraryWide === '1' && state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /Boolean\(state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
   );
   assert.match(
     galleryMainInteractionsSource,
-    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracks\(\{ libraryWide: true \}\)/,
+    /typeAnchor[\s\S]*?openGalleryMainSurface\('album-types'[\s\S]*?hydrateDeferredNonAlbumTracksForAlbumTypes\(\)/,
   );
   assert.match(
     galleryMainCssSource,
@@ -535,6 +640,7 @@ test('client Gallery state defaults to all sources, Studio plus EP and Compilati
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
+    showSplitAlbums: true,
     view: 'cards',
     familyArtists: [],
   });
@@ -565,6 +671,7 @@ test('new primary artist navigation resets filters while preserving the display 
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
+    showSplitAlbums: true,
     view: 'covers',
     familyArtists: [],
   });
@@ -584,6 +691,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
+    showSplitAlbums: true,
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -622,11 +730,16 @@ test('Featured On is a relationship facet conjunctive with source and release fi
   });
 });
 
-test('Featured On control synchronizes and dispatches without enabling release-type controls', () => {
-  const attributes = new Map();
+test('relationship controls synchronize and dispatch without enabling release-type controls', () => {
+  const featuredAttributes = new Map();
   const featured = {
     dataset: { galleryFeaturedOn: '1' },
-    setAttribute(name, value) { attributes.set(name, value); },
+    setAttribute(name, value) { featuredAttributes.set(name, value); },
+  };
+  const splitAttributes = new Map();
+  const split = {
+    dataset: { gallerySplitAlbums: '1' },
+    setAttribute(name, value) { splitAttributes.set(name, value); },
   };
   const releaseType = {
     dataset: { galleryAlbumType: 'studio' },
@@ -637,6 +750,7 @@ test('Featured On control synchronizes and dispatches without enabling release-t
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     showFeaturedOn: false,
+    showSplitAlbums: true,
     view: 'cards',
     familyArtists: [],
   } }, view: {} };
@@ -648,12 +762,14 @@ test('Featured On control synchronizes and dispatches without enabling release-t
       querySelector: () => null,
       querySelectorAll: selector => ({
         '[data-gallery-featured-on]': [featured],
+        '[data-gallery-split-albums]': [split],
         '[data-gallery-album-type]': [releaseType],
       })[selector] || [],
     },
   });
   context.updateGalleryMainControls();
-  assert.equal(attributes.get('aria-pressed'), 'false');
+  assert.equal(featuredAttributes.get('aria-pressed'), 'false');
+  assert.equal(splitAttributes.get('aria-pressed'), 'true');
   assert.equal(featured.disabled, false);
   assert.equal(releaseType.disabled, true);
 
@@ -665,6 +781,16 @@ test('Featured On control synchronizes and dispatches without enabling release-t
   });
   assert.deepEqual(plain(actions), [{ type: 'toggle-featured-on' }]);
   assert.equal(prevented.length, 1);
+
+  context.handleGalleryMainClick({
+    preventDefault: () => prevented.push(true),
+    target: { closest: selector => selector === '[data-gallery-split-albums]' ? split : null },
+  });
+  assert.deepEqual(plain(actions), [
+    { type: 'toggle-featured-on' },
+    { type: 'toggle-split-albums' },
+  ]);
+  assert.equal(prevented.length, 2);
 });
 
 test('the first Artist Family click deselects that artist from the default all-selected state', () => {
@@ -1047,6 +1173,11 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
   assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
+  assert.equal(createGalleryMainState().showSplitAlbums, true);
+  assert.equal(
+    reduceGalleryMainState(createGalleryMainState(), { type: 'toggle-split-albums' }).showSplitAlbums,
+    false,
+  );
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1078,6 +1209,18 @@ test('all unavailable release types remain inert while catalog-backed facts are 
     { key: 'family', albums: ['single'] },
   ]);
   assert.deepEqual(filtered.totals, { artistCount: 2, albumCount: 4 });
+
+  const withoutSplits = plain(filterGalleryModel({
+    groups: [{
+      artist: 'Jordsjø',
+      albums: [
+        { key: 'split', release_type: 'Split', source: 'main_library' },
+        { key: 'studio', release_type: 'Album', source: 'main_library' },
+      ],
+    }],
+    filterState: { ...createGalleryMainState(), showSplitAlbums: false },
+  }));
+  assert.deepEqual(withoutSplits.groups[0].albums.map((album) => album.key), ['studio']);
 });
 
 test('art-only Gallery hover frame covers the complete card edge', () => {
@@ -1460,7 +1603,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
   assert.equal(summary.textContent, '0 artists · 0 albums');
 });
 
-test('gallery bar stays hidden throughout active search transitions', () => {
+test('gallery bar stays visible throughout active search transitions', () => {
   assert.match(bootstrapGalleryEventHandlersSource,
     /function updateGallerySearchDraftQuery\(nextQuery\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
   const name = { textContent: '' };
@@ -1483,12 +1626,12 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'draft query hides stale Gallery context while loading');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.query = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'committed query keeps Gallery context hidden');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.state.view.selected_artist = 'Neal Morse';
@@ -1497,7 +1640,7 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse band';
   context.syncGalleryBarSearchVisibility();
-  assert.equal(bar.hidden, true, 'editing a resolved artist query hides its stale Gallery family controls');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.selected_artist = '';
@@ -1506,9 +1649,9 @@ test('gallery bar stays hidden throughout active search transitions', () => {
   assert.equal(bar.hidden, false, 'clearing search restores Gallery context');
 });
 
-test('server-rendered searches hide the gallery bar only until an artist is resolved', () => {
+test('server-rendered searches retain the gallery bar', () => {
   assert.match(indexTemplateSource,
-    /gallery_bar\('Gallery'[^)]*hidden=query and not effective_selected_artist\)/);
+    /gallery_bar\('Gallery'[^)]*aria_label='Gallery controls'\)/);
 });
 
 test('root gallery summary counts canonical albums once across artist credits after filtering', () => {

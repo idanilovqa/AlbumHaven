@@ -12,6 +12,8 @@ const execFileAsync = promisify(execFile);
 const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library'];
 const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-reconciliation',
+  'watcher-artist-collation-curly',
+  'watcher-grouped-feature-credit',
   'gallery-native-response-overlap',
   'generated-preview-storage',
 ];
@@ -23,23 +25,60 @@ function resolveWatcherFixtureMediaRoot(environment = process.env) {
 const RETAG_SCRIPT = `
 import sys
 from pathlib import Path
-from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
+from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TCMP, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
 
 track = Path(sys.argv[1])
 try:
     tags = ID3(track)
 except ID3NoHeaderError:
     tags = ID3()
-for frame in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
+for frame in ("TALB", "TCMP", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
     tags.delall(frame)
+if sys.argv[8] == "1":
+    tags.delall("APIC")
 tags.add(TPE1(encoding=3, text=[sys.argv[2]]))
-tags.add(TPE2(encoding=3, text=[sys.argv[2]]))
-tags.add(TALB(encoding=3, text=[sys.argv[3]]))
-tags.add(TDRC(encoding=3, text=[sys.argv[4]]))
-tags.add(TIT2(encoding=3, text=[sys.argv[5]]))
-tags.add(TRCK(encoding=3, text=[sys.argv[6]]))
-tags.add(TPOS(encoding=3, text=["1/1"]))
+tags.add(TPE2(encoding=3, text=[sys.argv[3]]))
+tags.add(TALB(encoding=3, text=[sys.argv[4]]))
+tags.add(TDRC(encoding=3, text=[sys.argv[5]]))
+tags.add(TIT2(encoding=3, text=[sys.argv[6]]))
+tags.add(TRCK(encoding=3, text=[sys.argv[7]]))
+tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
+if sys.argv[10] == "1":
+    tags.add(TCMP(encoding=3, text=["1"]))
 tags.save(track)
+if sys.argv[8] == "1" and ID3(track).getall("APIC"):
+    raise RuntimeError("Watcher cover fixture still contains embedded artwork")
+`;
+
+const CREATE_LOCAL_ART_SCRIPT = `
+import sys
+from pathlib import Path
+from PIL import Image
+
+album = Path(sys.argv[1])
+Image.new("RGB", (1200, 1200), "navy").save(album / "front-scan.jpg", format="JPEG")
+Image.new("RGB", (2400, 2400), "red").save(album / "booklet-page.jpg", format="JPEG")
+`;
+
+const REMOVE_SCAN_SOURCE_SCRIPT = `
+import os
+import sys
+
+import psycopg
+
+with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as connection:
+    row = connection.execute(
+        """
+        update library.local_track_files
+        set metadata = metadata #- '{scan_cache,source}'
+        where private_path = %s
+          and scan_cache_stale is false
+        returning id
+        """,
+        (sys.argv[1],),
+    ).fetchall()
+    if len(row) != 1:
+        raise RuntimeError("Expected exactly one active watcher-owned track file")
 `;
 
 const GENERATE_PLAYABLE_MP3_SCRIPT = `
@@ -72,6 +111,13 @@ function assertOwnedPath(mediaRoot, candidate, ownedDirectoryName = 'watcher-rec
   return resolved;
 }
 
+function watcherOwnedRoot(mediaRoot, fixtureDirectory = 'watcher-reconciliation') {
+  if (!WATCHER_FIXTURE_DIRECTORIES.has(fixtureDirectory)) {
+    throw new Error(`Unsupported watcher fixture directory: ${fixtureDirectory}`);
+  }
+  return path.resolve(mediaRoot, 'cases', fixtureDirectory);
+}
+
 export async function cleanupWatchedAlbumFixture({
   mediaRoot, ownedRoot, ownedDirectoryName = 'watcher-reconciliation',
   context, managedAppLifecycle, originalFailure,
@@ -85,7 +131,8 @@ export async function cleanupWatchedAlbumFixture({
   const cleanupFailures = [];
   try { await context.close(); } catch (error) { cleanupFailures.push(error); }
   try {
-    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
+    // On Windows the running app can still hold or write files here for a moment.
+    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true, maxRetries: 10, retryDelay: 200 });
   } catch (error) {
     cleanupFailures.push(error);
   }
@@ -97,6 +144,10 @@ export async function cleanupWatchedAlbumFixture({
     cleanupFailures.push(error);
   }
   if (cleanupFailures.length) {
+    // Error codes only: messages here carry private fixture paths.
+    console.error(`[watcher-fixture-cleanup] ${JSON.stringify(cleanupFailures.map((error) => ({
+      name: error?.name, code: error?.code, syscall: error?.syscall,
+    })))}`);
     const failures = [...(originalFailure ? [originalFailure] : []), ...cleanupFailures];
     try { await managedAppLifecycle.reportFailure(); } catch (reportFailure) { failures.push(reportFailure); }
     if (failures.length > 1) throw new AggregateError(failures, 'Watcher scenario and fixture cleanup failed.');
@@ -105,9 +156,16 @@ export async function cleanupWatchedAlbumFixture({
   if (originalFailure) throw originalFailure;
 }
 
-async function retag(trackPath, { artist, album, year, title, trackNumber }) {
+async function retag(trackPath, {
+  trackArtist, albumArtist, album, year, title, trackNumber,
+  discTag = '1/1', removeEmbeddedArtwork = false, isCompilation = false,
+}) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
-    '-c', RETAG_SCRIPT, trackPath, artist, album, String(year), title, String(trackNumber),
+    '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
+    String(trackNumber),
+    removeEmbeddedArtwork ? '1' : '0',
+    discTag,
+    isCompilation ? '1' : '0',
   ], { encoding: 'utf8', windowsHide: true });
 }
 
@@ -166,10 +224,30 @@ export async function createWatchedAlbumFixture(options = {}) {
   }
 }
 
+// Call only while the managed application is stopped.
+export async function stageLegacyTrackFileWithoutScanSource(trackPath) {
+  const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
+  const ownedPath = assertOwnedPath(mediaRoot, trackPath);
+  await execFileAsync(resolvePlaywrightPython(process.env), [
+    '-c',
+    REMOVE_SCAN_SOURCE_SCRIPT,
+    ownedPath,
+  ], { encoding: 'utf8', windowsHide: true });
+}
+
 async function buildWatchedAlbumFixture({
   artist = 'Watcher Reconciliation Artist',
+  trackArtist = artist,
+  albumArtist = artist,
   album = 'Watcher Reconciliation Album',
+  albumFolderName = album,
   year = 2004,
+  trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
+  trackArtists = null,
+  discNumbers = null,
+  isCompilation = false,
+  removeEmbeddedArtwork = false,
+  createLocalArt = false,
   ownedDirectoryName = 'watcher-reconciliation',
 } = {}) {
   const mediaRoot = resolveWatcherFixtureMediaRoot();
@@ -179,19 +257,26 @@ async function buildWatchedAlbumFixture({
     path.join(mediaRoot, 'cases', normalizedOwnedDirectoryName),
     normalizedOwnedDirectoryName,
   );
-  const albumDirectory = assertOwnedPath(
-    mediaRoot,
-    path.join(ownedRoot, artist, album),
-    normalizedOwnedDirectoryName,
-  );
   if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
-  const createAlbum = async ({ album: albumName, year: albumYear, trackTitles }) => {
+  const createAlbum = async ({
+    album: albumName,
+    folderName = albumName,
+    year: albumYear,
+    trackTitles: titles,
+    trackArtist: defaultTrackArtist = trackArtist,
+    trackArtists: albumTrackArtists = null,
+    albumArtist: albumOwner = albumArtist,
+    discNumbers: albumDiscNumbers = discNumbers,
+    isCompilation: albumCompilation = false,
+  }) => {
     const directory = assertOwnedPath(
       mediaRoot,
-      path.join(ownedRoot, artist, albumName),
+      path.join(ownedRoot, artist, folderName),
       normalizedOwnedDirectoryName,
     );
     const createdTracks = [];
+    const normalizedDiscNumbers = titles.map((_, index) => Number(albumDiscNumbers?.[index]) || 1);
+    const discTotal = Math.max(...normalizedDiscNumbers);
     const sourceRoot = fs.mkdtempSync(path.join(path.dirname(mediaRoot), '.watcher-source-'));
     try {
       const source = path.join(sourceRoot, 'source.mp3');
@@ -200,25 +285,40 @@ async function buildWatchedAlbumFixture({
         stagingParent: path.dirname(mediaRoot),
         destination: directory,
         async buildAlbum(stagedAlbum) {
-          for (const [index, title] of trackTitles.entries()) {
+          if (createLocalArt) {
+            await execFileAsync(resolvePlaywrightPython(process.env), [
+              '-c', CREATE_LOCAL_ART_SCRIPT, stagedAlbum,
+            ], { encoding: 'utf8', windowsHide: true });
+          }
+          for (const [index, title] of titles.entries()) {
+            const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
+            const relativePath = discTotal > 1
+              ? path.join(`CD${discNumber}`, filename)
+              : filename;
             const destination = assertOwnedPath(
               mediaRoot,
-              path.join(directory, filename),
+              path.join(directory, relativePath),
               normalizedOwnedDirectoryName,
             );
+            const stagedDestination = path.join(stagedAlbum, relativePath);
+            fs.mkdirSync(path.dirname(stagedDestination), { recursive: true });
             await materializeTaggedTrack({
               source,
-              destination: path.join(stagedAlbum, filename),
+              destination: stagedDestination,
               metadata: {
-                artist,
+                trackArtist: albumTrackArtists?.[index] || defaultTrackArtist,
+                albumArtist: albumOwner,
                 album: albumName,
                 year: albumYear,
                 title,
                 trackNumber: index + 1,
+                discTag: `${discNumber}/${discTotal}`,
+                removeEmbeddedArtwork,
+                isCompilation: albumCompilation,
               },
             });
-            createdTracks.push({ filename, title, path: destination });
+            createdTracks.push({ filename, title, path: destination, discNumber, discTotal });
           }
         },
       });
@@ -229,9 +329,14 @@ async function buildWatchedAlbumFixture({
   };
   const target = await createAlbum({
     album,
+    folderName: albumFolderName,
     year,
-    trackTitles: ['Watcher First Signal', 'Watcher Second Signal'],
+    trackTitles,
+    trackArtists,
+    discNumbers,
+    isCompilation,
   });
+  const albumDirectory = target.albumDirectory;
   const tracks = target.tracks;
   return {
     mediaRoot,
@@ -242,7 +347,12 @@ async function buildWatchedAlbumFixture({
     tracks,
     async renameTrack(index, title) {
       const track = tracks[index];
-      await retag(track.path, { artist, album, year, title, trackNumber: index + 1 });
+      await retag(track.path, {
+        trackArtist, albumArtist, album, year, title, trackNumber: index + 1,
+        discTag: `${track.discNumber}/${track.discTotal}`,
+        removeEmbeddedArtwork,
+        isCompilation,
+      });
       track.title = title;
     },
     createSiblingAlbum(options) {

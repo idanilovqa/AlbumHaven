@@ -26,6 +26,7 @@ function syncMobilePageShell() {
   header.hidden = !active;
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
+  header.dataset.galleryBarLayout = active?.kind === 'cover-lookup' ? 'mobile-primary' : '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
@@ -354,6 +355,12 @@ function cleanupMobilePage(descriptor) {
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }
+  if (descriptor.kind === 'album' && state.coverLookup?.returnToDrawerAfterAlbumDetails) {
+    state.coverLookup.returnToDrawerAfterAlbumDetails = false;
+    state.coverLookup.drawerOpen = true;
+    renderCoverLookupDrawer();
+    restoreCoverLookupDrawerScroll();
+  }
   return original?.returnFocus;
 }
 function dismissMobilePage(kind) {
@@ -577,6 +584,7 @@ function handleMobileSearchOutsideClick(event) {
   setMobileSearchOpen(false);
 }
 function setMobileSearchOpen(open) {
+  const expanding = Boolean(open) && !mobilePageState.searchOpen;
   mobilePageState.searchSuggestionsReady = false;
   if (typeof closeRecentSearchPopover === 'function') closeRecentSearchPopover();
   if (open) {
@@ -596,7 +604,12 @@ function setMobileSearchOpen(open) {
     input.setAttribute('aria-hidden', String(!open));
   }
   syncMobileSearchQueryIndicator();
-  if (open) input?.focus();
+  if (open) {
+    input?.focus();
+    if (input && expanding && usesMobilePageLayout()) {
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
 }
 function handleMobileSearchSubmit() {
   if (!usesMobilePageLayout()) return false;
@@ -617,7 +630,10 @@ function promoteVisibleMobileDialogs() {
   // Capture visibility before moving surfaces: presenting a child hides its parent.
   const visible = kinds.filter(kind => {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    return element && !element.hidden && !mobilePageState.originals.has(kind);
+    return element
+      && !element.hidden
+      && !(kind === 'cover-lookup' && element.classList.contains('is-mobile-sheet'))
+      && !mobilePageState.originals.has(kind);
   });
   for (const kind of visible) {
     if (kind === 'utilities' && !mobileUtilityTabAllowed(state.utility.activeTab)) {
@@ -865,6 +881,14 @@ function syncMobileAlbumHeader() {
   const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
+  const sourceMarkers = identity?.querySelector?.('.album-details-cover-source-markers')
+    || header.querySelector('.album-details-cover-source-markers');
+  if (sourceMarkers) {
+    const sourceHost = presentation.bodyOwnsIdentity
+      ? identity.querySelector('.album-details-header__copy') : context;
+    if (sourceHost && sourceMarkers.parentElement !== sourceHost) sourceHost.appendChild(sourceMarkers);
+    sourceMarkers.hidden = !albumPage;
+  }
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
   else header.removeAttribute('aria-hidden');

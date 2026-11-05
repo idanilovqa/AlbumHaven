@@ -96,10 +96,10 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     for files in physical_folders.values():
         album_names = {_text(entry.get("album")) for entry in files} - {""}
         if len(album_names) > 1 and any(str(entry["path"]) in rejected for entry in files):
-            rejected.update(
-                (str(entry["path"]), "Mixed album metadata in one folder")
-                for entry in files
-            )
+            for entry in files:
+                path = str(entry["path"])
+                if path in rejected:
+                    rejected[path] = "Mixed album metadata in one folder"
     return rejected
 
 
@@ -128,7 +128,7 @@ def physical_album_root_sql(path_expression: str) -> str:
       then regexp_replace({parent}, '/[^/]*$', '') else {parent} end"""
 
 
-def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
+def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_file_ids: bool = False) -> str:
     """Classify existing inventory without changing tags or deleting files."""
     if not scope_album_key:
         # Scan publication owns full physical classification. Browse reads its
@@ -138,12 +138,13 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
           select files.id as file_id, files.track_id, files.private_path,
             files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
           from library.local_track_files files
+          __FILE_SCOPE__
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
           join bootstrap_context on bootstrap_context.library_id = roots.library_id
           where files.scan_cache_stale is false
             and nullif(files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
         )
-        """
+        """.replace("__FILE_SCOPE__", "join physical_scope_file_ids on physical_scope_file_ids.id = files.id" if scope_file_ids else "")
     seeds = ""
     scope_join = ""
     if scope_album_key:

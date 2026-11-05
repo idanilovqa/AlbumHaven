@@ -294,3 +294,55 @@ def test_posix_distinct_physical_parents_do_not_create_mixed_warnings(physical_c
             selected_rows = [row for row in rows if row["album_id"] == album_id]
             assert selected_rows
             assert all(row["file_mixed_album_folder"] is False for row in selected_rows), modes
+
+
+@pytest.mark.parametrize("override_key", ["track", "path"])
+@pytest.mark.parametrize("exception_type", ["non-album rarity", ""])
+def test_exception_disc_container_preserves_source_boundaries(physical_catalog, override_key, exception_type):
+    connection, album, owned = physical_catalog
+    source = album("Source Disc", "release/CD1")
+    exception = album("Exception Disc", "release/CD2")
+    album("Different Parent", "unrelated/CD1")
+    album("Named Bonus Folder", "release/Bonus")
+    album("Different Root", "release/CD1", root_name="other")
+    album("Different Library", "release/CD1", root_name="foreign")
+    wrong_album = album("Different Album", "release/CD1")
+    wrong_artist = album("Different Artist", "release/CD1")
+    wrong_year = album("Different Year", "release/CD1")
+    ids = [item[0] for item in owned.values()]
+    connection.execute("""
+        update library.local_track_files files set metadata = jsonb_set(
+          files.metadata, '{scan_cache,file_entry}',
+          (files.metadata #> '{scan_cache,file_entry}') ||
+          jsonb_build_object('album', 'Same Release', 'album_artist', 'Same Artist', 'year', '2001'))
+        from library.local_tracks tracks
+        where files.track_id = tracks.id and tracks.album_id = any(%s)
+    """, (ids,))
+    for album_id, field, value in ((wrong_album, "album", "Other"),
+                                   (wrong_artist, "album_artist", "Other"),
+                                   (wrong_year, "year", "2002")):
+        connection.execute("""
+            update library.local_track_files files set metadata = jsonb_set(
+              files.metadata, array['scan_cache','file_entry',%s], to_jsonb(%s::text))
+            from library.local_tracks tracks
+            where files.track_id = tracks.id and tracks.album_id = %s
+        """, (field, value, album_id))
+    item = connection.execute("""
+        select tracks.id, tracks.library_id, files.private_path
+        from library.local_tracks tracks join library.local_track_files files on files.track_id = tracks.id
+        where tracks.album_id = %s
+    """, (exception,)).fetchone()
+    connection.execute("""
+        insert into library.exception_overrides(library_id, track_id, track_key, override_payload)
+        values (%s, %s, %s, %s::jsonb)
+    """, (item["library_id"], item["id"] if override_key == "track" else None,
+          item["private_path"] if override_key == "path" else "owned-override-" + str(item["id"]),
+          json.dumps({"exception_type": exception_type})))
+    sql = browse._problematic_files_sql(candidate_summary=True, candidate_ids_only=True)
+    # Query the actual shared CTE, retaining its complete upstream source scope.
+    prefix, body = sql.split("exception_source_tracks as materialized (", 1)
+    exception_cte = body.split("\n        ),", 1)[0]
+    sources = connection.execute(prefix + "exception_source_tracks as materialized (" +
+                                 exception_cte + ") select source_album_id, id from exception_source_tracks").fetchall()
+    assert {(row["source_album_id"], row["id"]) for row in sources} == (
+        {(source, item["id"]), (exception, item["id"])} if exception_type else set())

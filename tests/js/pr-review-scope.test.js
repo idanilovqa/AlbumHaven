@@ -245,7 +245,7 @@ test('focused E2E labels select only named functional, Phase 7, and performance 
     focusedAreas: [],
     focusedPerformanceTargets: [],
     forceFullReview: false,
-    focusedFunctionalShards: ['gallery-search-visual'],
+    focusedFunctionalShards: ['gallery-search-visual-1', 'gallery-search-visual-2'],
     focusedPhase7Targets: ['phase7-auth'],
     focusedPerformanceShards: ['playback-media'],
   });

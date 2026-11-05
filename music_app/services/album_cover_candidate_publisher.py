@@ -104,22 +104,32 @@ class AlbumCoverCandidatePublisher:
         strongest_by_url = {
             str(candidate["url"]): candidate for candidate in self._published_candidates
         }
+        display_order = list(strongest_by_url)
         for candidate in incoming:
             url = str(candidate["url"])
             incumbent = strongest_by_url.get(url)
+            if incumbent is None:
+                display_order.append(url)
             if incumbent is None or _quality_key(candidate) > _quality_key(incumbent):
                 strongest_by_url[url] = candidate
 
         ranked = sorted(strongest_by_url.values(), key=_ranking_key)[:_MAX_CANDIDATES]
-        self._published_candidates = ranked
+        if self._has_published:
+            retained_urls = {str(candidate["url"]) for candidate in ranked}
+            self._published_candidates = [
+                strongest_by_url[url] for url in display_order if url in retained_urls
+            ]
+        else:
+            self._published_candidates = ranked
+        best_candidate_id = str(ranked[0]["id"])
         accepted = bool(
             self._repository.publish_generation(
                 album_id=self._album_id,
                 search_generation=self._search_generation,
                 search_kind=self._search_kind,
                 search_started_at=started_at,
-                candidates=ranked,
-                best_candidate_id=str(ranked[0]["id"]),
+                candidates=self._published_candidates,
+                best_candidate_id=best_candidate_id,
                 automatic_improvement=(
                     self._search_kind == "automatic" and bool(automatic_improvement)
                 ),
@@ -136,7 +146,8 @@ class AlbumCoverCandidatePublisher:
     def best_candidate_id(self) -> str | None:
         if not self._published_candidates:
             return None
-        return str(self._published_candidates[0].get("id") or "").strip() or None
+        best = min(self._published_candidates, key=_ranking_key)
+        return str(best.get("id") or "").strip() or None
 
     def candidate_id_for(self, candidate: Mapping[str, object]) -> str | None:
         sanitized = _sanitize_candidate(candidate)

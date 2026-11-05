@@ -119,20 +119,20 @@ def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     state = {"gallery_scope": "all", "visible_library_categories": ["hoard", "main_library"]}
     snapshot = browse._prepare_root_gallery_snapshot(rows, missing, aliases, state)
     assert [(row["artist_name"], row["album_key"]) for row in snapshot["ordered"]] == [
-        ("# Artist", "punctuation"), ("2 Artist", "numeric"), ("Before", "lost"),
+        ("2 Artist", "numeric"), ("# Artist", "punctuation"), ("Before", "lost"),
         ("Canonical", "shared"), ("Featured", "shared"), ("Owner", "compound"),
         ("Éclair", "unicode"), ("日本語", "japanese"),
     ]
     assert snapshot["sidebar"] == [
         {"artist": artist, "artist_display": artist, "count": 1}
-        for artist in ["# Artist", "2 Artist", "Before", "Canonical", "Featured", "Owner", "Éclair", "日本語"]
+        for artist in ["2 Artist", "# Artist", "Before", "Canonical", "Featured", "Owner", "Éclair", "日本語"]
     ]
     assert snapshot["album_count"] == 7
     assert snapshot["occurrence_count"] == 8
     page = browse._select_root_gallery_snapshot_page(snapshot, {"gallery_page_size": "2"})
     assert page[3] == {
-        "next_cursor": "WzEsICJmYWQ4YWU0ZTQzNDNiNDFiY2E3ZTI2ZTQzOTBlNmVjNGE0Y2QwYzM1ODUzYzY1Y2NkOGU0ZjI1ODExNDhmNGVhIiwgMl0",
-        "has_more": True, "revision": "fad8ae4e4343b41bca7e26e4390e6ec4a4cd0c35853c65ccd8e4f2581148f4ea", "page_size": 2,
+        "next_cursor": "WzEsICI3MTA3ZmNkYmQ5Y2YzODI3NDZjNTdjNDQzMjY4YmIzMWU4MjZiYzFkY2Y0MDA1ZjQ0NDY4MzlmZTUzMGE1ZDVkIiwgMl0",
+        "has_more": True, "revision": "7107fcdbd9cf382746c57c443268bb31e826bc1dcf4005f4446839fe530a5d5d", "page_size": 2,
     }
     continuation = browse._select_root_gallery_snapshot_page(snapshot, {
         "gallery_page_size": "2", "gallery_cursor": page[3]["next_cursor"]})
@@ -545,7 +545,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
-                assert params["builder_version"] == "root-gallery-v4"
+                assert params["builder_version"] == "root-gallery-v5"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])
@@ -563,7 +563,9 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
     assert metadata["source_generation"] == 9
 
 
-def test_old_gallery_builder_snapshot_uses_computed_fallback():
+@pytest.mark.parametrize("old_builder", ["root-gallery-v1", "root-gallery-v4"])
+@pytest.mark.parametrize("allow_stale", [False, True])
+def test_old_gallery_builder_snapshot_uses_computed_fallback(old_builder, allow_stale):
     from music_app.services import gallery_projection_postgres as projection
 
     class Connection:
@@ -574,12 +576,15 @@ def test_old_gallery_builder_snapshot_uses_computed_fallback():
                     "sidebar": [],
                     "album_count": 1,
                     "occurrence_count": 1,
-                } if params["builder_version"] == "root-gallery-v1" else None)
+                } if params["builder_version"] == old_builder else None)
                 return SimpleNamespace(fetchone=lambda: row)
             raise AssertionError("old projection occurrences must not be loaded")
 
     assert projection.load_gallery_projection_page(
-        Connection(), {}, {}, context={"library_id": 1, "generation": 1},
+        Connection(), {}, {}, context={"library_id": 1, "generation": 1}, allow_stale=allow_stale,
+    ) is None
+    assert projection.load_gallery_projection_sidebar(
+        Connection(), {}, context={"library_id": 1, "generation": 1},
     ) is None
 
 
@@ -644,7 +649,8 @@ def test_full_scan_refresh_scheduled_only_after_successful_commit(monkeypatch, f
 
 @pytest.mark.parametrize("size", [8, 50])
 @pytest.mark.parametrize("missing", [False, True])
-def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, size, missing):
+@pytest.mark.parametrize("deleted_occurrence", [None, "stale", "current"])
+def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, size, missing, deleted_occurrence):
     from music_app.services import gallery_projection_postgres as projection
     from tests.py.test_library_browse_postgres import _browse_album_row, _EmptyAlbumRatingsService
     rows = [_browse_album_row(artist="Artist", album_id=i, album_key=f"album-{i}", title=f"Album {i}")
@@ -657,6 +663,8 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     else:
         for row in snapshot["ordered"]:
             row["album_key"] = f"legacy-{row['album_key']}"
+    if deleted_occurrence:
+        rows.clear()
     calls = []
     class Connection:
         def execute(self, sql, params=None):
@@ -681,8 +689,12 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     load_options = []
     def load_projection(connection, state, params, **kwargs):
         load_options.append(kwargs)
-        return browse._select_root_gallery_snapshot_page(snapshot, params)
+        page = browse._select_root_gallery_snapshot_page(snapshot, params)
+        page[3]["projection_stale"] = deleted_occurrence == "stale"
+        return page
     monkeypatch.setattr(projection, "load_gallery_projection_page", load_projection)
+    refresh = Mock()
+    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", refresh)
     def forbidden(*args, **kwargs):
         pytest.fail("ready page recomputed whole membership or alias readiness")
     monkeypatch.setattr(repository, "_load_relation_alias_maps", forbidden)
@@ -690,6 +702,8 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     missing_calls = []
     def load_missing(*, album_keys, connection):
         missing_calls.append(album_keys)
+        if deleted_occurrence:
+            return []
         return [{"key": key, "name": key, "album_artist": "Artist"} for key in album_keys]
     monkeypatch.setattr(repository, "_load_missing_album_rows", load_missing if missing else forbidden)
     if missing:
@@ -698,6 +712,17 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **kwargs:
                         {"ignored_version_keys": [], "manual_version_links": {}})
     monkeypatch.setattr(browse, "_queue_display_cover_variants_for_groups", lambda *args: None)
+    if deleted_occurrence:
+        expected_error = browse.GalleryProjectionPending if deleted_occurrence == "stale" else ValueError
+        expected_message = "Gallery is being prepared" if deleted_occurrence == "stale" else "restart required"
+        with pytest.raises(expected_error, match=expected_message):
+            repository.build_root_startup_preview_payload(
+                query_params={"gallery_page_size": str(size)},
+                library_state={"scan_in_progress": True},
+            )
+        assert refresh.call_count == (1 if deleted_occurrence == "stale" else 0)
+        assert calls[-2:] == [("rollback", None), ("close", None)]
+        return
     payload = repository.build_root_startup_preview_payload(
         query_params={"gallery_page_size": str(size)},
         library_state={"scan_in_progress": True},

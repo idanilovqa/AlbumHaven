@@ -31,8 +31,8 @@ test('phone menus are exclusive, search is joined, gallery pinch and first-touch
   await expect(app.artistRail.getByRole('button', { name: 'Artists', exact: true })).toBeVisible();
   await app.closeArtistRail.click();
   await phone.artistInfo.click();
-  await phone.expectArtistDialogCentered();
-  await snapshot('61-mobile-artist-dialog');
+  await phone.expectArtistInfoBottomSheet();
+  await snapshot('61-mobile-artist-sheet');
   await phone.artistDialog.getByRole('button', { name: 'Close artist information' }).click();
   await app.openSettings();
   await app.settingsSectionsButton.click();
@@ -88,6 +88,15 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
     await expect(phone.accountHost).not.toBeVisible();
     await phone.expectGalleryHeaderMatches(galleryHeader);
   }
+});
+
+test('Gallery and Admin keep the same desktop shell and page-header geometry', async ({ page, app }) => {
+  const desktop = new MobilePolishPage(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const galleryHeader = await desktop.readGalleryHeaderGeometry(null);
+  await app.openSettings();
+  await desktop.openUsers();
+  await desktop.expectAdminHeaderMatches(galleryHeader, null);
 });
 
 test('Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown', async ({ page, app, snapshot }) => {

@@ -11,6 +11,21 @@ const helperPath = path.resolve(__dirname, '../e2e/helpers/libraryFilesystemWatc
 const load = () => import(pathToFileURL(helperPath).href);
 const mediaRootHelperPath = path.resolve(__dirname, '../e2e/helpers/fixtureMediaRoot.js');
 
+test('watcher fixture forwards custom titles artists and discs through atomic album materialization', () => {
+  const source = fs.readFileSync(helperPath, 'utf8');
+
+  assert.match(source, /trackTitles\s*=\s*\['Watcher First Signal', 'Watcher Second Signal'\]/);
+  assert.match(source, /trackArtists\s*=\s*null/);
+  assert.match(source, /discNumbers\s*=\s*null/);
+  assert.match(source, /removeEmbeddedArtwork\s*=\s*false/);
+  assert.match(source, /createLocalArt\s*=\s*false/);
+  assert.match(source, /if \(createLocalArt\)[\s\S]*?CREATE_LOCAL_ART_SCRIPT/);
+  assert.match(source, /async function retag\(trackPath,\s*\{[\s\S]*?trackArtist,[\s\S]*?albumArtist,[\s\S]*?discTag\s*=\s*'1\/1'/);
+  assert.match(source, /trackTitles:\s*titles[\s\S]*?trackArtist:\s*defaultTrackArtist[\s\S]*?trackArtists:\s*albumTrackArtists[\s\S]*?albumArtist:\s*albumOwner[\s\S]*?discNumbers:\s*albumDiscNumbers/);
+  assert.match(source, /trackArtist:\s*albumTrackArtists\?\.\[index\]\s*\|\|\s*defaultTrackArtist/);
+  assert.match(source, /discTotal\s*>\s*1[\s\S]*?`CD\$\{discNumber\}`/);
+});
+
 function fixture(t, ownedDirectoryName = 'watcher-reconciliation') {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-cleanup-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -121,6 +136,26 @@ test('watched tracks become playable only after their tags are complete', async 
   assert.equal(fs.readFileSync(destination, 'utf8'), 'source audio tagged');
 });
 
+test('watcher fixture writes explicit compilation tags without changing track credits', async (t) => {
+  const { materializeTaggedTrack } = await load();
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-compilation-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const source = path.join(temp, 'source.mp3');
+  fs.writeFileSync(source, 'source audio');
+  for (const isCompilation of [true, false]) {
+    const destination = path.join(temp, `${isCompilation}.mp3`);
+    await materializeTaggedTrack({ source, destination, metadata: {
+      trackArtist: 'Belle Stars', albumArtist: 'Various Artists', album: 'Rain Man',
+      year: 1988, title: 'Featured Signal', trackNumber: 1, isCompilation,
+    } });
+    const tags = JSON.parse(execFileSync(resolvePlaywrightPython(process.env), [
+      '-c', 'import json,sys; from mutagen.id3 import ID3; tags=ID3(sys.argv[1]); print(json.dumps({key: list(tags[key].text) if key in tags else [] for key in ("TCMP", "TPE1", "TPE2")}))',
+      destination,
+    ], { encoding: 'utf8', windowsHide: true }));
+    assert.deepEqual(tags, { TCMP: isCompilation ? ['1'] : [], TPE1: ['Belle Stars'], TPE2: ['Various Artists'] });
+  }
+});
+
 test('watched albums become visible only after every track is complete', async (t) => {
   const { materializeTaggedAlbum } = await load();
   assert.equal(typeof materializeTaggedAlbum, 'function');
@@ -146,9 +181,10 @@ test('watched albums become visible only after every track is complete', async (
   assert.deepEqual(fs.readdirSync(stagingParent), []);
 });
 
-test('watcher cleanup accepts a separately owned case directory', async (t) => {
+for (const ownedDirectoryName of ['gallery-native-response-overlap', 'watcher-artist-collation-curly']) {
+test(`watcher cleanup accepts the separately owned ${ownedDirectoryName} directory`, async (t) => {
   const { cleanupWatchedAlbumFixture } = await load();
-  const paths = fixture(t, 'gallery-native-response-overlap');
+  const paths = fixture(t, ownedDirectoryName);
   const cleanupOwners = [];
 
   await cleanupWatchedAlbumFixture({
@@ -161,10 +197,11 @@ test('watcher cleanup accepts a separately owned case directory', async (t) => {
     },
   });
 
-  assert.deepEqual(cleanupOwners, ['gallery-native-response-overlap']);
+  assert.deepEqual(cleanupOwners, [ownedDirectoryName]);
   assert.equal(fs.existsSync(paths.ownedRoot), false);
   assert.equal(fs.readFileSync(path.join(paths.mediaRoot, 'unrelated.mp3'), 'utf8'), 'untouched');
 });
+}
 
 test('watcher cleanup rejects an unknown case directory before filesystem mutation', async (t) => {
   const { cleanupWatchedAlbumFixture } = await load();

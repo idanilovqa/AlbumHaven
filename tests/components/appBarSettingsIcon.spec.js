@@ -18,7 +18,7 @@ test('Settings glyph is sized and centered on the app-bar action centerline', as
                   <svg class="peer-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/></svg>
                 </span>
               </button>
-              <button class="button ui-button ui-button--icon ui-button--medium action-button" id="settings-button" aria-label="Settings">
+              <button class="button ui-button ui-button--icon ui-button--medium action-button" id="settings-button" aria-label="Settings" data-account-menu-trigger>
                 <span class="ui-button__content action-button__content">
                   <svg class="ui-icon action-button__icon settings-button__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/></svg>
                 </span>

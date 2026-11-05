@@ -209,3 +209,21 @@ def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monk
         assert excluded["initial_detail"] is None
     finally:
         browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+@pytest.mark.parametrize("modes", [{"candidate_summary": True, "candidate_ids_only": True}, {},
+                                   {"duplicate_candidates": True}])
+def test_disc_container_is_computed_once_per_row_not_per_exception_pair(modes):
+    sql = browse._problematic_files_sql(**modes)
+    active_rows = sql.split("active_problem_rows as materialized (", 1)[1].split(
+        "mixed_physical_folders as (", 1)[0]
+    assert browse._physical_album_container_sql(
+        "library.local_track_files.private_path"
+    ) + " as physical_album_container" in active_rows
+    exceptions = sql.split("exception_source_tracks as materialized (", 1)[1].split(
+        "\n        ),", 1)[0]
+    # Per-pair evaluation ran the regex over every exception/source pairing (129k on the scale fixture).
+    assert "(cd|disc|disk)" not in exceptions
+    assert "source_files.physical_album_container = exception_files.physical_album_container" in exceptions
+    assert "source_files.library_root_id = exception_files.library_root_id" in exceptions
+    assert "source_files.library_id = exception_files.library_id" in exceptions

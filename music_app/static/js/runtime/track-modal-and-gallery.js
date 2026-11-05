@@ -32,10 +32,8 @@ function attachUtilityModalEvents() {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
-    searchRenderTimer = setTimeout(async () => {
+    searchRenderTimer = setTimeout(() => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
       if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
     }, 80);
   };

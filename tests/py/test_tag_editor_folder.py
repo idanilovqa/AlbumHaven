@@ -39,6 +39,47 @@ def test_load_folder_files_validates_membership_filters_and_naturally_orders(tmp
     assert [Path(track["path"]).name for track in payload["tracks"]] == ["01.mp3", "2.flac", "10.mp3"]
 
 
+def test_load_folder_files_includes_every_disc_from_the_authoritative_album(tmp_path, monkeypatch):
+    root = tmp_path / "music"
+    album = root / "Artist" / "Album"
+    disc_one = album / "CD1"
+    disc_two = album / "CD2"
+    disc_one.mkdir(parents=True)
+    disc_two.mkdir()
+    source = disc_one / "10.mp3"
+    earlier = disc_one / "2.mp3"
+    second_disc = disc_two / "01.flac"
+    for path in (source, earlier, second_disc):
+        path.write_bytes(b"track")
+
+    def resolve_album_root(_config, paths):
+        assert paths == {str(source), str(earlier), str(second_disc)}
+        return album.resolve()
+
+    monkeypatch.setattr(
+        tag_editor_folder,
+        "resolve_album_root_from_track_paths",
+        resolve_album_root,
+    )
+    monkeypatch.setattr(
+        tag_editor_folder,
+        "read_editable_tag_values",
+        lambda path, _fields: {"title": path.stem, "album": "Album"},
+    )
+
+    payload = tag_editor_folder.load_tag_editor_folder_files(
+        _config(root),
+        str(source),
+        indexed_paths={str(source), str(earlier), str(second_disc)},
+    )
+
+    assert payload["folder_path"] == str(album.resolve())
+    assert [
+        Path(track["path"]).relative_to(album.resolve()).as_posix()
+        for track in payload["tracks"]
+    ] == ["CD1/2.mp3", "CD1/10.mp3", "CD2/01.flac"]
+
+
 def test_load_folder_files_rejects_unindexed_or_outside_source(tmp_path):
     root = tmp_path / "music"
     root.mkdir()

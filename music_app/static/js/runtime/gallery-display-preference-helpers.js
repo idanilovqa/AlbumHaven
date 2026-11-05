@@ -187,21 +187,35 @@ function removeFamilyAlbumDuplicatesFromPrimaryGroups(primaryGroups, familyGroup
     const primaryArtist = normalizeArtistPreferenceKey(group?.artist || group?.artist_display);
     const albums = Array.isArray(group?.albums) ? group.albums : [];
     const uniqueAlbums = albums.filter((album) => {
+      if (String(album?.artist_relationship || '').trim().toLowerCase() === 'featured') return true;
       const albumArtist = normalizeArtistPreferenceKey(album?.album_artist || primaryArtist);
       if (!albumArtist || albumArtist === primaryArtist) return true;
       return !familyAlbumKeysByArtist.get(albumArtist)?.has(getDisplayAlbumDeduplicationKey(album));
     });
     return uniqueAlbums.length === albums.length ? group : { ...group, albums: uniqueAlbums };
-  });
+  }).filter((group) => Array.isArray(group?.albums) && group.albums.length);
 }
 
 function buildSelectedArtistDisplayGroups(primaryGroups, familyGroups, selectedArtist) {
   const canonicalSelectedArtist = normalizeArtistPreferenceKey(selectedArtist);
-  const normalizedFamilyGroups = Array.isArray(familyGroups) ? familyGroups : [];
+  let normalizedFamilyGroups = Array.isArray(familyGroups) ? familyGroups : [];
   const normalizedPrimaryGroups = removeFamilyAlbumDuplicatesFromPrimaryGroups(
     Array.isArray(primaryGroups) ? primaryGroups : [],
     normalizedFamilyGroups,
   );
+  const featuredPrimaryAlbumKeys = new Set(normalizedPrimaryGroups.flatMap((group) => (
+    Array.isArray(group?.albums) ? group.albums : []
+  )).filter((album) => (
+    String(album?.artist_relationship || '').trim().toLowerCase() === 'featured'
+  )).map(getDisplayAlbumDeduplicationKey));
+  if (featuredPrimaryAlbumKeys.size) {
+    normalizedFamilyGroups = normalizedFamilyGroups.map((group) => ({
+      ...group,
+      albums: (Array.isArray(group?.albums) ? group.albums : []).filter((album) => (
+        !featuredPrimaryAlbumKeys.has(getDisplayAlbumDeduplicationKey(album))
+      )),
+    })).filter((group) => group.albums.length);
+  }
   if (
     !canonicalSelectedArtist
     || !normalizedPrimaryGroups.length
@@ -298,6 +312,20 @@ function splitArtistGroupForDisplay(group) {
     ),
     display_artist_key: canonicalArtist || String(group?.artist_display || ''),
   };
+  const selectedArtist = normalizeArtistPreferenceKey(state.view?.selected_artist);
+  if (
+    canonicalArtist && canonicalArtist === selectedArtist
+    && !looksLikeCombinedArtistName(selectedArtist) && !/\s+\/\s+/.test(selectedArtist)
+  ) {
+    // A guest release's owner credit must not create another artist section.
+    return [{
+      ...defaultGroup,
+      albums: [
+        ...albums.filter((album) => album.artist_relationship !== 'featured'),
+        ...albums.filter((album) => album.artist_relationship === 'featured').sort(compareDisplayGroupAlbums),
+      ],
+    }];
+  }
   // Root membership belongs to the canonical sidebar/page inventory. Raw album
   // credits must not split its headings when a later page adds another credit.
   const canonicalRoot = typeof resolveViewSurface === 'function'

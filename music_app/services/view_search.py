@@ -415,7 +415,10 @@ def search_word_matches(query_word: str, candidate_word: str) -> bool:
         return False
     if query_text == candidate_text:
         return True
-    if len(query_text) >= 3 and (query_text in candidate_text or candidate_text in query_text):
+    if len(query_text) >= 3 and (
+        query_text in candidate_text
+        or (len(candidate_text) >= 3 and candidate_text in query_text)
+    ):
         return True
     if query_text[0] != candidate_text[0] and min(len(query_text), len(candidate_text)) >= 4:
         return False
@@ -431,7 +434,10 @@ def search_term_matches_field(term: str, field: str) -> bool:
     if normalized_term in normalized_field:
         return True
     field_words = [word for word in normalized_field.split() if word]
-    if any(search_word_matches(normalized_term, word) for word in field_words):
+    if all(
+        any(search_word_matches(term_word, word) for word in field_words)
+        for term_word in normalized_term.split()
+    ):
         return True
     compact_term = compact_search_key(normalized_term)
     compact_field = compact_search_key(normalized_field)

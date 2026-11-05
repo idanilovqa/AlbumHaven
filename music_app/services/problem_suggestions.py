@@ -8,12 +8,22 @@ import re
 from datetime import date
 
 from music_app.routes.api_rules_helpers import looks_like_collaboration_name
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.utils import (
     _repair_text_candidates, _text_readability_score,
     _is_plausible_utf16_swap_repair, looks_like_mojibake,
 )
 
-_FIELDS = ("album", "album_artist", "artist", "title", "year", "track_number", "disc_number")
+_FIELDS = (
+    "album",
+    "album_artist",
+    "artist",
+    "title",
+    "year",
+    "track_number",
+    "disc_number",
+    "edition",
+)
 _DISC = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])", re.I)
 
 
@@ -64,9 +74,16 @@ def build_problem_suggestions(path, entry, *, alias_to_canonical=None, verified_
     def add(field, updates, reason, evidence):
         revision = _digest({"path": path, "mtime": entry.get("mtime"), "size": entry.get("size"),
                             "tags": {name: _text(entry.get(name)) for name in updates}})
-        original = _text(entry.get("album" if field == "album_disc_marker" else field))
-        corrected = (f"Album: {updates['album']}; Disc number: {updates['disc_number']}"
-                     if field == "album_disc_marker" else updates[field])
+        original = _text(
+            entry.get("album" if field in {"album_disc_marker", "album_edition"} else field)
+        )
+        corrected = (
+            f"Album: {updates['album']}; Disc number: {updates['disc_number']}"
+            if field == "album_disc_marker"
+            else f"Album: {updates['album']}; Edition: {updates['edition']}"
+            if field == "album_edition"
+            else updates[field]
+        )
         identity = _digest([path, field, original, updates, revision, evidence])
         proposals.append({"id": identity, "path": path, "field": field, "type": field,
                           "original": original, "corrected": corrected, "updates": updates,
@@ -97,6 +114,22 @@ def build_problem_suggestions(path, entry, *, alias_to_canonical=None, verified_
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t-_.:|/")
         if number > 0 and cleaned and existing in {"", "0", str(number)}:
             add("album_disc_marker", {"album": cleaned, "disc_number": number}, "Disc marker in album name", ["disc-marker", album, existing])
+
+    existing_edition = _text(entry.get("edition"))
+    edition_candidate = reviewable_edition_title(album, existing_edition)
+    if (
+        edition_candidate is not None
+        and not any("album" in row["updates"] for row in proposals)
+    ):
+        add(
+            "album_edition",
+            {
+                "album": edition_candidate["title"],
+                "edition": edition_candidate["edition"],
+            },
+            "Edition descriptor in album name",
+            ["edition-title", album, existing_edition],
+        )
 
     evidence = verified_metadata or {}
     if evidence.get("track_path") == path and evidence.get("source_id"):

@@ -1998,3 +1998,49 @@ def test_scan_rereads_unchanged_files_from_a_historical_reader_version(tmp_path:
     assert reads == ["a.mp3", "b.mp3"]
     assert entries["a.mp3"]["title"] == entries["b.mp3"]["title"] == "Read"
     assert entries["a.mp3"]["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION
+
+def test_scan_reports_each_album_folder_once_whole_and_each_root_once(tmp_path: Path, monkeypatch):
+    main, empty = tmp_path / "Main", tmp_path / "Empty"
+    tracks = [
+        main / "Artist" / "Box" / "CD1" / "01.mp3", main / "Artist" / "Box" / "CD2" / "01.mp3",
+        main / "Artist" / "Single" / "01.mp3", main / "Artist" / "Single" / "02.mp3",
+    ]
+    for track in tracks:
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"audio")
+    empty.mkdir()
+    unchanged = tracks[3]
+    previous = {str(unchanged): {
+        "path": str(unchanged), "mtime": unchanged.stat().st_mtime, "size": unchanged.stat().st_size,
+        "title": "02", "metadata_schema_version": 6, "release_date": None, "compilation_tag": None,
+    }}
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: {
+        "path": str(path), "title": path.stem, "album": path.parent.name,
+        "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+    })
+    reports = []
+
+    library_indexing.scan_library_file_cache(
+        {"file_cache": previous, "albums": [object()]},
+        roots=[main, empty],
+        supported_extensions={".mp3"},
+        image_extensions=set(),
+        exception_overrides={},
+        root_definitions=[{"id": "main", "path": str(main)}, {"id": "empty", "path": str(empty)}],
+        on_entries_ready=lambda root_id, folders, complete, changed: reports.append(
+            (root_id, {Path(folder).name: sorted(Path(path).parent.name for path in entries)
+                       for folder, entries in folders.items()}, complete, sorted(Path(path).name for path in changed))
+        ),
+    )
+
+    main_reports = [report for report in reports if report[0] == "main"]
+    # The two-disc album arrives once, whole; the reused file is not "changed".
+    assert sorted(
+        ((folders, changed) for _root, folders, _complete, changed in main_reports),
+        key=lambda report: list(report[0]),
+    ) == [
+        ({"Box": ["CD1", "CD2"]}, ["01.mp3", "01.mp3"]),
+        ({"Single": ["Single", "Single"]}, ["01.mp3"]),
+    ]
+    assert [complete for _root, _folders, complete, _changed in main_reports] == [False, True]
+    assert ("empty", {}, True, []) in reports

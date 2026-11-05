@@ -544,6 +544,61 @@ def _discover_music_files_with_stats(
     return discovered_files, len(discovered_album_folders), total_bytes
 
 
+EntriesReady = Callable[[str, dict[str, dict[str, dict[str, object]]], bool, frozenset[str]], None]
+
+
+class _AlbumFolderCompletion:
+    """Report each album folder once all of its files are read or reused.
+
+    Files of one album may sit in disc subfolders (Album/CD1, Album/CD2); they
+    share the album folder of _album_folder_for_track_path, so a multi-disc
+    album is reported once, whole. Each report carries every entry of the
+    folder plus the paths whose metadata was read or whose file changed, and a
+    root is reported complete exactly once, after its last folder.
+    """
+
+    def __init__(self, file_stats, root_id_for_folder: Callable[[Path], str], root_ids, on_ready: EntriesReady):
+        self._on_ready = on_ready
+        self._root_id_for_folder = root_id_for_folder
+        self._remaining_by_folder: dict[Path, int] = {}
+        self._remaining_by_root: dict[str, int] = {root_id: 0 for root_id in root_ids}
+        self._root_by_folder: dict[Path, str] = {}
+        for path, _stat in file_stats:
+            folder = _album_folder_for_track_path(path)
+            if folder not in self._root_by_folder:
+                root_id = root_id_for_folder(folder)
+                self._root_by_folder[folder] = root_id
+                # Roots count folders: one completes per finished folder.
+                self._remaining_by_root[root_id] = self._remaining_by_root.get(root_id, 0) + 1
+            self._remaining_by_folder[folder] = self._remaining_by_folder.get(folder, 0) + 1
+        self._entries_by_folder: dict[Path, dict[str, dict[str, object]]] = {}
+        self._changed_by_folder: dict[Path, set[str]] = {}
+
+    def record(self, path: Path, entry: dict[str, object], changed: bool) -> None:
+        folder = _album_folder_for_track_path(path)
+        self._entries_by_folder.setdefault(folder, {})[str(path)] = entry
+        if changed:
+            self._changed_by_folder.setdefault(folder, set()).add(str(path))
+        self._remaining_by_folder[folder] -= 1
+        if self._remaining_by_folder[folder]:
+            return
+        root_id = self._root_by_folder[folder]
+        self._remaining_by_root[root_id] -= 1
+        self._on_ready(
+            root_id,
+            {str(folder): self._entries_by_folder.pop(folder)},
+            self._remaining_by_root[root_id] == 0,
+            frozenset(self._changed_by_folder.pop(folder, ())),
+        )
+
+    def finish(self) -> None:
+        # Roots that yielded no files still complete, so their absences publish.
+        roots_with_files = set(self._root_by_folder.values())
+        for root_id in self._remaining_by_root:
+            if root_id not in roots_with_files:
+                self._on_ready(root_id, {}, True, frozenset())
+
+
 def _root_disk_key_lookup(roots: list[Path]) -> Callable[[Path], str]:
     """Map each file to the physical disk of its library root."""
     prefixes = sorted(
@@ -750,7 +805,16 @@ def scan_library_file_cache(
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
     record_file_error: Callable[..., None] | None = None,
+    on_entries_ready: EntriesReady | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
+    """Read every root's files; optionally report each completed album folder.
+
+    ``on_entries_ready(root_id, {album_folder: {path: entry}}, root_complete,
+    changed_paths)`` fires once per album folder after all of its files are
+    read or reused, and with ``root_complete`` once per root. The returned
+    cache stays authoritative: finalization still applies cross-folder cover
+    rules to it.
+    """
     publication_target = publication_state if publication_state is not None else library_state
     start_scan_stage(library_state, "discover")
     all_file_stats, album_folders_total, total_bytes = _discover_music_files_with_stats(
@@ -808,6 +872,18 @@ def scan_library_file_cache(
     )]
     configured_root_definitions = list(root_definitions or [])
 
+    def root_id_for(path: Path) -> str:
+        root = root_definition_for_path(configured_root_definitions, path)
+        return str((root or {}).get("id") or "")
+
+    folder_completion = (
+        _AlbumFolderCompletion(
+            all_file_stats, root_id_for,
+            {root_id for root_id in map(root_id_for, roots) if root_id},
+            on_entries_ready,
+        )
+        if on_entries_ready is not None else None
+    )
     disk_key_for = _root_disk_key_lookup(roots)
     ordered_metadata_entries = _ordered_scan_metadata_entries(
         library_state,
@@ -881,6 +957,11 @@ def scan_library_file_cache(
             for key in _LOCAL_COVER_SELECTION_KEYS:
                 entry[key] = cover_authority.get(key)
         updated_file_cache[path_str] = entry
+        if folder_completion is not None:
+            folder_completion.record(
+                path, entry,
+                changed=metadata_was_read or not _file_is_unchanged(existing, stat),
+            )
         library_state["scan_processed"] = index
         bytes_processed += int(stat.st_size or 0)
         _record_scan_progress_metrics(
@@ -908,6 +989,8 @@ def scan_library_file_cache(
             if publish_partial_snapshot is not None:
                 publish_partial_snapshot()
 
+    if folder_completion is not None:
+        folder_completion.finish()
     last_scan = time.time()
     library_state["scan_current_path"] = ""
     library_state["scan_elapsed_seconds"] = max(0.0, last_scan - started_at)

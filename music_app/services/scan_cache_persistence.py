@@ -295,6 +295,26 @@ class PostgresScanCacheAdapter:
             ))
         return bool(_row_mapping(row).get("outdated")) if row is not None else False
 
+    def count_published_files_by_root(self) -> dict[str, int]:
+        """Active published track files per configured root id."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                """
+                select coalesce(nullif(roots.metadata ->> 'root_id', ''),
+                                files.metadata ->> 'library_root_id') as root_id,
+                       count(*)::integer as file_count
+                from library.local_track_files files
+                join library.library_roots roots on roots.id = files.library_root_id
+                where files.scan_cache_stale is false
+                group by 1
+                """
+            ).fetchall()
+        return {
+            str(payload.get("root_id") or ""): int(payload.get("file_count") or 0)
+            for payload in map(_row_mapping, rows)
+            if payload.get("root_id")
+        }
+
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         try:
             return self.load_snapshot_strict(cache_path, root_identity)

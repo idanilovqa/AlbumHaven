@@ -471,7 +471,8 @@ def refresh_library_state(
             "separate_release_keys": new_separate_release_keys,
             "albums": rebuilt_albums,
             "last_error": None,
-            "scan_metadata_repair_required": False,
+            # A root left unchanged as incomplete still needs its repair.
+            "scan_metadata_repair_required": bool(publication_state.get("scan_incomplete_root_ids")),
         })
         publish_current_browse_snapshot()
         with cache_lock:

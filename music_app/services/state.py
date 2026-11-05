@@ -1179,7 +1179,52 @@ def scan_music_incremental(
         observed_root_ids = publication_state.get("observed_library_root_ids")
         if isinstance(observed_root_ids, set):
             observed_root_ids.difference_update(traversal_failed_root_ids)
+    if publication_state is not None:
+        _withdraw_shrunken_roots(cfg, logger, publication_state, result[0])
     return result
+
+
+_SHRUNKEN_ROOT_MIN_PUBLISHED_FILES = 100
+
+
+def _shrunken_root_ids(published: dict[str, int], discovered: dict[str, int]) -> set[str]:
+    """Roots whose walk found none, or under half, of the files they have published.
+
+    A sleeping or flaky drive can enumerate empty without raising; treating that
+    walk as complete would mark the whole root stale (sandbox2 N:, 2026-11-05).
+    The half rule applies only to large roots so a small root's real cleanup
+    still publishes; watcher deletions publish either way.
+    """
+    return {
+        root_id for root_id, count in published.items()
+        if count > 0 and (
+            discovered.get(root_id, 0) == 0
+            or (count >= _SHRUNKEN_ROOT_MIN_PUBLISHED_FILES and discovered.get(root_id, 0) * 2 < count)
+        )
+    }
+
+
+def _withdraw_shrunken_roots(cfg, logger, publication_state, file_cache) -> None:
+    observed_root_ids = publication_state.get("observed_library_root_ids")
+    count_published = getattr(select_scan_cache_adapter(cfg), "count_published_files_by_root", None)
+    if not isinstance(observed_root_ids, set) or not observed_root_ids or count_published is None:
+        return
+    published = {root_id: count for root_id, count in count_published().items() if root_id in observed_root_ids}
+    discovered: dict[str, int] = {}
+    for entry in file_cache.values():
+        root_id = str(entry.get("library_root_id") or "")
+        discovered[root_id] = discovered.get(root_id, 0) + 1
+    shrunken = _shrunken_root_ids(published, discovered)
+    if not shrunken:
+        return
+    observed_root_ids.difference_update(shrunken)
+    publication_state["scan_incomplete_root_ids"] = shrunken
+    for root_id in sorted(shrunken):
+        log_app_event(
+            cfg, logger, "Library root walk found far fewer files than published; root left unchanged",
+            level="warning", root_id=root_id,
+            discovered_file_count=discovered.get(root_id, 0), published_file_count=published[root_id],
+        )
 
 
 def refresh_cover_artwork_for_track_paths_for_state(

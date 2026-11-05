@@ -911,6 +911,21 @@ def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_r
     assert removed == {deleted["path"]}
 
 
+def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    main_a = fixture.entry("Owner/Counted/01.flac", album="Counted")
+    main_b = fixture.entry("Owner/Counted/02.flac", album="Counted")
+    hoard = fixture.entry("Owner/Hoarded/01.flac", root=1, album="Hoarded")
+    fixture.seed(main_a, main_b, hoard)
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 2, "repair-hoard": 1}
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true') where private_path = %s",
+            (main_b["path"],),
+        )
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 1, "repair-hoard": 1}
+
+
 def test_live_full_publication_marker_skips_only_its_own_relation_journal_rows(watcher_repair_inventory):
     # A full publication clears the journal itself, so its rows skip journaling;
     # every other writer, and that writer's next transaction, still journals.

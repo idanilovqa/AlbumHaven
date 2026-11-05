@@ -5648,3 +5648,34 @@ def test_user_requested_scan_retries_cover_searches_once(config):
     assert state_module.background_cover_negative_cache_ttl_seconds(library_state, config) == 0.0
     assert "user_requested_cover_retry" not in library_state
     assert state_module.background_cover_negative_cache_ttl_seconds(library_state, config) > 0
+
+
+@pytest.mark.parametrize(
+    ("discovered_n", "withdrawn"),
+    [
+        pytest.param(0, {"n-root"}, id="empty-walk"),
+        pytest.param(30, {"n-root"}, id="sharp-drop"),
+        pytest.param(90, set(), id="ordinary-deletions"),
+    ],
+)
+def test_scan_leaves_a_root_unobserved_when_its_walk_finds_far_fewer_files(monkeypatch, discovered_n, withdrawn):
+    events = []
+    monkeypatch.setattr(
+        state_module, "select_scan_cache_adapter",
+        lambda _cfg: SimpleNamespace(count_published_files_by_root=lambda: {"n-root": 100, "d-root": 2, "small-root": 3}),
+    )
+    monkeypatch.setattr(
+        state_module, "log_app_event",
+        lambda _cfg, _logger, action, **fields: events.append((action, fields)),
+    )
+    publication_state = {"observed_library_root_ids": {"n-root", "d-root", "small-root"}}
+    file_cache = {f"n{index}": {"library_root_id": "n-root"} for index in range(discovered_n)}
+    file_cache.update({"d0": {"library_root_id": "d-root"}, "d1": {"library_root_id": "d-root"}, "s0": {"library_root_id": "small-root"}})
+
+    state_module._withdraw_shrunken_roots({}, None, publication_state, file_cache)
+
+    # small-root lost 2 of 3 files: below the size floor, a real cleanup still publishes.
+    assert publication_state["observed_library_root_ids"] == {"n-root", "d-root", "small-root"} - withdrawn
+    assert set(publication_state.get("scan_incomplete_root_ids", set())) == withdrawn
+    assert [fields["root_id"] for _action, fields in events] == sorted(withdrawn)
+    assert all("path" not in fields for _action, fields in events)

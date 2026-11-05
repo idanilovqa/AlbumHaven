@@ -15,7 +15,10 @@ const CHANNELS = Object.freeze({
 const ARTIFACT_ORIGIN = 'https://albumhaven.org';
 const PIPELINE_WORKFLOW = '.github/workflows/pr-gates.yml';
 const PROMOTE_WORKFLOW = '.github/workflows/android-promote.yml';
-const PIPELINE_GATE_JOB = 'Cloud Verification Gate';
+// The gate passes when the classifier skipped the Android jobs, so each must also have succeeded.
+const PIPELINE_REQUIRED_JOBS = Object.freeze([
+  'Cloud Verification Gate', 'Android Build, Lint and Unit Tests', 'Android Instrumentation (API 29)',
+]);
 const MIN_ANDROID_API = 29;
 const MAX_VERSION_CODE = 2_100_000_000;
 const MAX_APK_BYTES = 200 * 1024 * 1024;
@@ -132,8 +135,9 @@ function checkStableRelease({ release, releaseVersion, owner, sourceTree, releas
 
 /**
  * A commit's complete pipeline: a successful PR Gates run for exactly that head in this
- * repository whose Cloud Verification Gate job succeeded. The gate fails in focused, skipped-test,
- * draft and fork runs, so a green gate is the authoritative full-pipeline conclusion.
+ * repository whose Cloud Verification Gate and both Android jobs succeeded. The gate fails in
+ * focused, skipped-test, draft and fork runs, so a green gate is the authoritative full-pipeline
+ * conclusion; the Android jobs prove that run built and tested the sources promotion builds.
  */
 async function findCompletePipelineRun({ listRuns, listJobs, repository, commit }) {
   requireCommit(commit);
@@ -147,8 +151,10 @@ async function findCompletePipelineRun({ listRuns, listJobs, repository, commit 
   runs.sort((left, right) => right.id - left.id);
   for (const run of runs) {
     const jobs = await listJobs(run);
-    const gate = jobs.filter((job) => job.name === PIPELINE_GATE_JOB);
-    if (gate.length === 1 && gate[0].conclusion === 'success') {
+    if (PIPELINE_REQUIRED_JOBS.every((name) => {
+      const named = jobs.filter((job) => job.name === name);
+      return named.length === 1 && named[0].conclusion === 'success';
+    })) {
       return { runId: run.id, runAttempt: run.run_attempt, url: run.html_url };
     }
   }

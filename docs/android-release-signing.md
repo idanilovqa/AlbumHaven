@@ -16,9 +16,12 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
    successful `PR Gates` pull-request run for exactly that head whose
    `Cloud Verification Gate` job succeeded. That gate fails for focused,
    `skip_tests`, draft and fork runs, so it is the complete-pipeline proof.
-   The pipeline's Android jobs build and test that exact head commit, not the
-   pull request's merge with its base, so they verified the sources promotion
-   builds.
+   The same run's `Android Build, Lint and Unit Tests` and
+   `Android Instrumentation (API 29)` jobs must also have succeeded; a run that
+   skipped them (no Android change) cannot be promoted. They build and test that
+   exact head commit, not the pull request's merge with its base, so they
+   verified the sources promotion builds. A release bump (`version.py` or
+   `CHANGELOG.md`) always runs them.
    Stable also needs the published GitHub release `v<RELEASE_VERSION>` from the
    commit's `version.py`: not a draft or prerelease, published by the repository
    owner, with release notes, a matching `CHANGELOG.md` section, and a tagged

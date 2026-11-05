@@ -54,23 +54,25 @@ function isDocumentationPath(filePath) {
 
 // The Android shell, its future native modules, and the contract fixtures its Kotlin tests share
 // with the browser. Markdown there is documentation and never needs a Gradle or emulator run.
-// android-promote builds and signs installable APKs with the toolchain the Android jobs verify.
 const ANDROID_PATH_PATTERNS = Object.freeze([
   'apps/android-shell/**',
   'packages/native/**',
   'tests/fixtures/android-bridge/**',
   'tests/fixtures/listen-sessions-v1.json',
   'tests/fixtures/playback-protocol-v1.json',
-  '.github/workflows/android-promote.yml',
 ]);
+// A release bump (scripts/prepare_release.py always writes version.py) names the version stable
+// promotion builds and the changelog it requires; promotion accepts only a head whose own run
+// passed the Android jobs, so a release head always runs them.
+const RELEASE_BUMP_PATHS = Object.freeze(['version.py', 'CHANGELOG.md']);
 // The Android job definitions live in this workflow beside every other job; editing them runs them.
 const PIPELINE_WORKFLOW = '.github/workflows/pr-gates.yml';
 const ANDROID_JOBS = Object.freeze(['test_android', 'test_android_instrumentation']);
 
 function isAndroidPath(filePath) {
   const normalized = normalizePath(filePath);
-  return !normalized.toLowerCase().endsWith('.md')
-    && ANDROID_PATH_PATTERNS.some((pattern) => matchesPattern(normalized, pattern));
+  return RELEASE_BUMP_PATHS.includes(normalized) || (!normalized.toLowerCase().endsWith('.md')
+    && ANDROID_PATH_PATTERNS.some((pattern) => matchesPattern(normalized, pattern)));
 }
 
 /** Whether a zero-context diff of the pipeline workflow changes a line of an Android job definition. */

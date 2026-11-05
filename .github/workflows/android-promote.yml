@@ -98,7 +98,7 @@ jobs:
                 owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
               }),
             });
-            if (!pipeline) throw new Error(`Commit ${commit} has no successful complete PR Gates pipeline`);
+            if (!pipeline) throw new Error(`Commit ${commit} has no successful complete PR Gates pipeline that ran the Android jobs`);
 
             const releaseVersion = promotion.readReleaseVersion(git('show', `${commit}:version.py`));
             const versionName = promotion.versionNameFor(channel, releaseVersion, commit);
@@ -252,7 +252,9 @@ jobs:
     needs:
       - verify
       - build
-    runs-on: ubuntu-latest
+    # Pinned: signing uses the image's preinstalled build-tools 36.0.0 and never downloads tools
+    # beside the keystore; ubuntu-24.04 lists them in actions/runner-images.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: android-${{ inputs.channel }}
     permissions:

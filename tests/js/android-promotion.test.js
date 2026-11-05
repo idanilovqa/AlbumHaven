@@ -100,7 +100,13 @@ function pipelineRun(overrides = {}) {
   };
 }
 
-async function findPipeline(runs, jobs = () => [{ name: 'Cloud Verification Gate', conclusion: 'success' }]) {
+const PIPELINE_JOBS = ['Cloud Verification Gate', 'Android Build, Lint and Unit Tests', 'Android Instrumentation (API 29)'];
+
+function pipelineJobs(conclusions = {}) {
+  return PIPELINE_JOBS.map((name) => ({ name, conclusion: Object.hasOwn(conclusions, name) ? conclusions[name] : 'success' }));
+}
+
+async function findPipeline(runs, jobs = () => pipelineJobs()) {
   const asked = [];
   const found = await promotion.findCompletePipelineRun({
     repository: REPOSITORY, commit: COMMIT, listRuns: async () => runs,
@@ -119,12 +125,16 @@ test('promotion requires a successful complete PR Gates pipeline for exactly tha
     assert.equal(found, null, JSON.stringify(patch));
     assert.deepEqual(asked, []);
   }
-  for (const jobs of [[], [{ name: 'Cloud Verification Gate', conclusion: 'failure' }], [{ name: 'Cloud Verification Gate', conclusion: 'skipped' }],
-    [{ name: 'Cloud Verification Gate', conclusion: 'success' }, { name: 'Cloud Verification Gate', conclusion: 'failure' }]]) {
+  const refused = [[], [...pipelineJobs(), { name: 'Cloud Verification Gate', conclusion: 'failure' }]];
+  for (const name of PIPELINE_JOBS) {
+    refused.push(pipelineJobs().filter((job) => job.name !== name));
+    for (const conclusion of ['failure', 'skipped', 'cancelled', null]) refused.push(pipelineJobs({ [name]: conclusion }));
+  }
+  for (const jobs of refused) {
     assert.equal((await findPipeline([pipelineRun()], () => jobs)).found, null, JSON.stringify(jobs));
   }
   const { found, asked } = await findPipeline([pipelineRun({ id: 5 }), pipelineRun({ id: 9 })],
-    (run) => [{ name: 'Cloud Verification Gate', conclusion: run.id === 5 ? 'success' : 'failure' }]);
+    (run) => pipelineJobs(run.id === 5 ? {} : { 'Android Instrumentation (API 29)': 'skipped' }));
   assert.equal(found.runId, 5);
   assert.deepEqual(asked, [[9, 2], [5, 2]], 'newest runs are checked first');
   await assert.rejects(promotion.findCompletePipelineRun({ repository: REPOSITORY, commit: 'abc', listRuns: async () => [], listJobs: async () => [] }), /40 lowercase/);
@@ -306,6 +316,7 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   assert.match(sign, /ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY: \$\{\{ secrets\.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY \}\}/);
   assert.match(sign, /android-promotion\.cjs decrypt/);
   assert.match(sign, /tools="\$ANDROID_HOME\/build-tools\/36\.0\.0"/);
+  assert.match(sign, /^ {4}runs-on: ubuntu-24\.04$/m, 'the preinstalled build-tools come from a pinned image');
   assert.match(sign, /--ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD/);
   assert.match(sign, /trap 'rm -f "\$keystore"' EXIT/);
   assert.match(sign, /rm -f "\$RUNNER_TEMP\/unsigned\.apk"/);

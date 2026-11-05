@@ -370,3 +370,127 @@ def test_only_album_artists_are_queued_for_delivery_1(monkeypatch: pytest.Monkey
             "select local_artist_id from ops.metadata_enrichment_jobs").fetchall()]
     assert queued == [owner_id]
     assert [row["local_artist_name"] for row in repository.list_present_artist_review()] == ["Neal Morse"]
+
+
+def _seed_present_artist(setup_url, artist_key):
+    _drop_application_schemas(setup_url)
+    _apply_pre_delivery_migrations(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        library_id = connection.execute(
+            "select library.libraries.id from app.bootstrap_owners join library.libraries"
+            " on library.libraries.owner_account_id = app.bootstrap_owners.account_id"
+            " where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'"
+        ).fetchone()["id"]
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name, metadata)"
+            " values (%s, %s, 'Axxis', '{}'::jsonb) returning id",
+            (library_id, artist_key),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
+            " values (%s, %s, %s, 'Kingdom of the Night', '{}'::jsonb) returning id",
+            (library_id, artist_id, f"{artist_key}-album"),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata)"
+            " values (%s, %s, %s, %s, 'Track', '{}'::jsonb)",
+            (library_id, album_id, artist_id, f"{artist_key}-track"),
+        )
+    return library_id, artist_id
+
+
+def _scan_upsert(connection, library_id, artist_key):
+    """The library scan's artist upsert, as in the 03:10 deadlock report."""
+    connection.execute(
+        "insert into library.local_artists (library_id, artist_key, name, sort_name, metadata)"
+        " values (%s, %s, 'Axxis', 'Axxis', '{}'::jsonb)"
+        " on conflict (library_id, artist_key) do update"
+        " set last_seen_at = now(), metadata = library.local_artists.metadata || excluded.metadata",
+        (library_id, artist_key),
+    )
+
+
+def _short_lock_timeout(url):
+    connection = isolatedPostgres._connect(url)
+    connection.execute("set lock_timeout = '2s'")
+    return connection
+
+
+def test_musicbrainz_outcome_never_waits_for_a_scan_upsert_of_the_artist(monkeypatch: pytest.MonkeyPatch):
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "deadlock-scan-first")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=_short_lock_timeout,
+    )
+
+    with isolatedPostgres._connect(setup_url) as scan:
+        with scan.transaction():
+            _scan_upsert(scan, library_id, "deadlock-scan-first")
+            # The scan still holds its row lock; a FOR UPDATE here timed out (or deadlocked).
+            repository.record_automatic_outcome(
+                local_artist_id=artist_id, state="not_found", artist=None, confidence=0,
+                evidence_summary="No MusicBrainz artist has this name.", observed_at=NOW,
+            )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _active(connection, artist_id) == ["musicbrainz_artist_not_found"]
+
+
+def test_scan_upsert_never_waits_for_an_open_musicbrainz_outcome(monkeypatch: pytest.MonkeyPatch):
+    import threading
+
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "deadlock-enrichment-first")
+    holding, release = threading.Event(), threading.Event()
+
+    class HoldAfterOutcome:
+        """Pauses the enrichment transaction after its outcome statement, before commit."""
+
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._connection.__exit__(*exc)
+
+        def execute(self, statement, params=None):
+            cursor = self._connection.execute(statement, params)
+            if "upsert_artist as" in statement:
+                holding.set()
+                release.wait(10)
+            return cursor
+
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda url: HoldAfterOutcome(isolatedPostgres._connect(url)),
+    )
+    errors = []
+
+    def enrich():
+        try:
+            repository.record_automatic_outcome(
+                local_artist_id=artist_id, state="not_found", artist=None, confidence=0,
+                evidence_summary="No MusicBrainz artist has this name.", observed_at=NOW,
+            )
+        except Exception as error:  # pragma: no cover - surfaced below
+            errors.append(error)
+
+    worker = threading.Thread(target=enrich)
+    worker.start()
+    try:
+        assert holding.wait(10), "the enrichment transaction never reached its outcome statement"
+        with _short_lock_timeout(setup_url) as scan:
+            with scan.transaction():
+                _scan_upsert(scan, library_id, "deadlock-enrichment-first")
+    finally:
+        release.set()
+        worker.join(10)
+    assert not worker.is_alive() and errors == []

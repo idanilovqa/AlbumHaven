@@ -15,6 +15,13 @@ _OWNER_SYNC_REASON = "library_menu_sync"
 # Delivery 1 enriches album artists only: an artist that owns a local album with
 # tracks. Track-only artists (Various Artists or guest credits) get their
 # identity from release tracklists in the album-identity delivery.
+# MusicBrainz writers for one artist run one at a time. An advisory lock keeps that
+# off library.local_artists, whose rows are only pinned FOR KEY SHARE: a stronger
+# row lock deadlocked with scan upserts of the same artists.
+_ARTIST_ENRICHMENT_LOCK_SQL = (
+    "select pg_advisory_xact_lock(hashtextextended("
+    "'album-haven:musicbrainz-artist:' || %(local_artist_id)s::text, 0))"
+)
 _PRESENT_ALBUM_ARTIST_SQL = """exists (
           select 1
           from library.local_albums owned_albums
@@ -423,6 +430,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         })
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
+                connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
                 connection.execute(_delete_candidates_sql(), params)
                 connection.execute(_upsert_candidate_artists_sql(), params)
                 connection.execute(_insert_candidates_sql(), params)
@@ -458,6 +466,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         }
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
+                connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
                 row = _row_mapping(connection.execute(_automatic_outcome_sql(), params).fetchone())
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=params["local_artist_id"], observed_at=params["observed_at"],
@@ -498,6 +507,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         )
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
+                connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
                 cursors = [connection.execute(sql, params) for sql in statements]
                 result = _row_mapping(cursors[-1].fetchone())
                 if result.get("assigned"):
@@ -624,7 +634,8 @@ def _authorized_artist_cte() -> str:
                   and capability.scope_id = active_library.library_id
               )
             )
-          for update of artists, actor
+          for key share of artists
+          for update of actor
         )
     """
 
@@ -1234,7 +1245,7 @@ def _delete_candidates_sql() -> str:
           join library.local_artists artists
             on artists.library_id = active_library.library_id
            and artists.id = %(local_artist_id)s
-          for update of artists
+          for key share of artists
         )
         delete from library.local_artist_musicbrainz_candidates candidates
         using active_artist
@@ -1354,7 +1365,7 @@ def _automatic_outcome_sql() -> str:
           join library.local_artists artists
             on artists.library_id = active_library.library_id
            and artists.id = %(local_artist_id)s
-          for update of artists
+          for key share of artists
         ), upsert_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,

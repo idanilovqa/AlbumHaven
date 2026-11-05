@@ -33,6 +33,7 @@ class FakeConnection:
         self._cursors = list(cursors)
         self.calls = []
         self.problem_syncs = []
+        self.artist_locks = []
         self.transaction_count = 0
 
     def __enter__(self):
@@ -46,6 +47,10 @@ class FakeConnection:
         return nullcontext()
 
     def execute(self, sql, params=None):
+        if "pg_advisory_xact_lock" in sql:
+            # The per-artist writer lock must come before any other statement.
+            self.artist_locks.append((len(self.calls), params["local_artist_id"]))
+            return FakeCursor()
         if "insert into library.metadata_enrichment_problems" in sql:
             self.problem_syncs.append(params)
             return FakeCursor()
@@ -281,6 +286,7 @@ def test_candidate_replacement_is_atomic_scoped_and_replaces_the_complete_set():
 
     assert count == 2
     assert connection.transaction_count == 1
+    assert [index for index, _artist in connection.artist_locks] == [0], "writers lock the artist first"
     combined_sql = " ".join(sql.lower() for sql, _params in connection.calls)
     assert "delete from library.local_artist_musicbrainz_candidates" in combined_sql
     assert "insert into integration.musicbrainz_artists" in combined_sql

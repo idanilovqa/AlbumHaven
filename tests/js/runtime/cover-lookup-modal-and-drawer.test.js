@@ -6954,54 +6954,67 @@ require('node:test')('visible service cover previews receive eager browser prior
   assert.doesNotMatch(deferredImage, /\ssrc=/);
 });
 
-require('node:test')('mobile Cover Lookup initially centers the selected cover without fighting later scrolling', () => {
-  const selectedCard = { offsetTop: 820, offsetHeight: 180 };
-  const bodyElement = {
-    innerHTML: '',
-    scrollTop: 0,
-    clientHeight: 500,
-    querySelector: (selector) => selector === '.cover-lookup-art-card.is-active' ? selectedCard : null,
-  };
-  const context = loadHelper({
-    escapeHtml: (value) => String(value || ''),
-    usesMobilePageLayout: () => true,
-    document: {
-      activeElement: null,
-      getElementById: (id) => ({
-        'cover-lookup-modal': { hidden: false },
-        'cover-lookup-modal-body': bodyElement,
-        'cover-lookup-modal-subtitle': { innerHTML: '' },
-        'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
-      }[id] || null),
-    },
-  });
-  context.captureCoverLookupModalScrollAnchor = () => null;
-  context.restoreCoverLookupModalScrollAnchor = () => {};
-  context.state.coverLookup.modal = {
-    album: { album_artist: 'Artist', name: 'Selected Album' },
-    loading: false,
-    initialScrollPending: true,
-    selectedRemoteId: 'selected-cover',
-    localCovers: [],
-    pastedImages: [],
-    otherArt: [],
-    possibleMatches: [{
-      id: 'selected-cover',
-      source: 'discogs',
-      source_label: 'Discogs',
-      lookup_group: 'services',
-      art_kind: 'cover',
-      url: 'https://images.example/selected.jpg',
-    }],
-  };
+require('node:test')('Cover Lookup opens with the selected cover row at the top on web and mobile, then follows the user', () => {
+  for (const mobile of [true, false]) {
+    const selectedCard = { offsetTop: 820, offsetHeight: 180, closest: () => null, getBoundingClientRect: () => ({ top: 900 }) };
+    const bodyElement = {
+      innerHTML: '',
+      scrollTop: 0,
+      clientHeight: 500,
+      getBoundingClientRect: () => ({ top: 80 }),
+      querySelector: (selector) => selector === '.cover-lookup-art-card.is-active' ? selectedCard : null,
+    };
+    const context = loadHelper({
+      escapeHtml: (value) => String(value || ''),
+      usesMobilePageLayout: () => mobile,
+      document: {
+        activeElement: null,
+        getElementById: (id) => ({
+          'cover-lookup-modal': { hidden: false },
+          'cover-lookup-modal-body': bodyElement,
+          'cover-lookup-modal-subtitle': { innerHTML: '' },
+          'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
+        }[id] || null),
+      },
+    });
+    context.captureCoverLookupModalScrollAnchor = () => null;
+    context.restoreCoverLookupModalScrollAnchor = () => {};
+    context.state.coverLookup.modal = {
+      album: { album_artist: 'Artist', name: 'Selected Album' },
+      loading: false,
+      initialScrollPending: true,
+      initialScrollTop: null,
+      selectedRemoteId: 'selected-cover',
+      localCovers: [],
+      pastedImages: [],
+      otherArt: [],
+      possibleMatches: [{
+        id: 'selected-cover', source: 'discogs', source_label: 'Discogs', lookup_group: 'services',
+        art_kind: 'cover', url: 'https://images.example/selected.jpg',
+      }],
+    };
 
-  context.renderCoverLookupModal();
+    context.renderCoverLookupModal();
 
-  assert.equal(bodyElement.scrollTop, 660);
-  assert.equal(context.state.coverLookup.modal.initialScrollPending, false);
-  bodyElement.scrollTop = 120;
-  context.renderCoverLookupModal();
-  assert.equal(bodyElement.scrollTop, 120, 'later renders preserve the user position');
+    assert.equal(bodyElement.scrollTop, 812, `${mobile ? 'mobile' : 'web'}: the selected row is at the top, not centered or at the bottom`);
+    assert.equal(context.state.coverLookup.modal.initialScrollPending, false);
+    bodyElement.scrollTop = 120;
+    context.renderCoverLookupModal();
+    assert.equal(bodyElement.scrollTop, 120, 'later renders preserve the user position');
+  }
+});
+
+require('node:test')('a selected cover in its section first row keeps the section title in view', () => {
+  const section = { getBoundingClientRect: () => ({ top: 96 }) };
+  const gallery = { getBoundingClientRect: () => ({ top: 130 }) };
+  const card = {
+    getBoundingClientRect: () => ({ top: 130 }),
+    closest: (selector) => (selector === '.cover-lookup-gallery' ? gallery : selector === '.cover-lookup-section' ? section : null),
+  };
+  const context = loadHelper();
+  const body = { scrollTop: 0, getBoundingClientRect: () => ({ top: 80 }) };
+  assert.equal(context.resolveCoverLookupInitialScrollTop(body, card), 8);
+  assert.equal(context.resolveCoverLookupInitialScrollTop(body, null), 0);
 });
 
 require('node:test')('staged extracted images retain decoded resolution on their cover card', async () => {
@@ -7895,3 +7908,29 @@ for (const [kind, accepted] of [['local', false], ['remote', false], ['local', t
     if (!accepted) assert.equal(restored.at(-1)[0].key, album.key);
   });
 }
+
+require('node:test')('NEW-003: a local artwork problem is a label beside the LOCAL heading and the section keeps its shape', async () => {
+  const body = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({
+    escapeHtml: value => String(value ?? ''),
+    fetch: async () => ({ ok: true, json: async () => ({
+      ok: true, local_inventory_complete: false, local_inventory_pending: false,
+      local_inventory_error: 'Local artwork storage is unavailable. Checking again shortly.',
+      local_covers: [{ path: 'N:/Album/front.jpg', width: 600, height: 600 }],
+    }) }),
+    setTimeout() { return 1; }, clearTimeout() {},
+    showToast() {}, console: { error() {}, log() {} },
+    getAlbumTrackPaths: () => [], markAlbumCoverPathsFresh() {},
+  });
+  context.getCoverLookupModalElements = () => ({ overlay: {}, body });
+  context.state.coverLookup.modal = { album: { key: 'test', tracks: [{ path: 'N:/Album/01.flac' }] }, loading: true };
+
+  await context.refreshCoverLookupGallery(false);
+
+  const html = body.innerHTML.replace(/\s+/g, ' ');
+  const section = html.indexOf('<section class="cover-lookup-section">');
+  const alert = html.indexOf('Local artwork storage is unavailable');
+  assert.ok(section >= 0 && alert > section, 'the alert is never above the LOCAL section');
+  assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="alert-label alert-label--warning"[^>]*>Local artwork storage is unavailable/);
+  assert.match(html, /<\/div> <div class="cover-lookup-gallery">/, 'the LOCAL gallery keeps its place under the heading');
+});

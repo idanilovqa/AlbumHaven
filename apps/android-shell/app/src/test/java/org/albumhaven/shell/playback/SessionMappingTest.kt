@@ -92,14 +92,15 @@ class SessionMappingTest {
     }
 
     @Test
-    fun aRestoredQueueWithoutResumeTokensIsShownPausedWithoutControls() {
+    fun aRestoredQueueWithoutResumeTokensIsShownIdleWithoutControls() {
         val restored = RestorableQueue(
             origin, TEST_CLIENT_ID, 7, 1, 30_000,
             listOf(RestorableItem("Signal A", "A", "B", "/static/a.jpg", 1_000), RestorableItem("Signal B", "A", "B", null, 2_000)),
         )
         val view = SessionMapping.restoredView(restored)
         assertTrue(view.restored)
-        assertEquals(SessionPlaybackState.READY, view.state)
+        // Idle, so Media3 posts no title-less boot-time notification and answers System UI's resumption browse in full.
+        assertEquals(SessionPlaybackState.IDLE, view.state)
         assertFalse(view.playWhenReady)
         assertTrue(view.controls.isEmpty())
         assertEquals(1, view.currentIndex)
@@ -119,6 +120,8 @@ class SessionMappingTest {
         assertEquals(setOf(SystemControl.PLAY_PAUSE, SystemControl.PREVIOUS_ITEM), view.controls)
         val resuming = SessionMapping.restoredView(restored, resuming = true)
         assertEquals(SessionPlaybackState.BUFFERING to true, resuming.state to resuming.playWhenReady)
+        val failed = SessionMapping.restoredView(restored, failed = true)
+        assertEquals(SessionPlaybackState.READY to false, failed.state to failed.playWhenReady)
         val noticed = SessionMapping.withNotice(view, "Sign in")
         assertEquals(listOf("A", "Sign in", "A"), noticed.items.map { it.artist })
         assertEquals(view, SessionMapping.withNotice(view, null))

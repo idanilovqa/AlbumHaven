@@ -5,6 +5,7 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -51,6 +52,25 @@ class ResumptionTest {
         assertNull(Resumption.load(queue, listOf("ref-a", null, "ref-d"), 10, 1 to 42_000L))
         assertNull(Resumption.load(queue, listOf("ref-a"), 10, 1 to 42_000L))
         assertEquals(180_000L, Resumption.load(queue, listOf("ref-a", "ref-b", "ref-d"), 9, 1 to 999_999L)!!.positionMs)
+    }
+
+    @Test
+    fun theResumptionItemsCarryTheCurrentItemsCompleteDescriptionAndCover() {
+        val cover = byteArrayOf(1, 2, 3)
+        val resumed = Resumption.mediaItems(queue, cover) { null }
+        assertEquals(1 to 42_000L, resumed.startIndex to resumed.startPositionMs)
+        assertEquals(listOf("restored:0", "restored:1", "restored:2", "restored:3"), resumed.mediaItems.map { it.mediaId })
+        // System UI's boot-time browse keeps the start item: a playable, titled description with its cover.
+        val current = resumed.mediaItems[resumed.startIndex].mediaMetadata
+        assertEquals(
+            listOf("Signal b", "Android Acceptance", "Playback Ownership"),
+            listOf(current.title, current.artist, current.albumTitle).map { it.toString() },
+        )
+        assertEquals(true to false, current.isPlayable to current.isBrowsable)
+        assertEquals(180_000L, current.durationMs)
+        assertArrayEquals(cover, current.artworkData)
+        assertNull(resumed.mediaItems[0].mediaMetadata.artworkData)
+        assertNull(Resumption.mediaItems(queue, null) { null }.mediaItems[1].mediaMetadata.artworkData)
     }
 }
 

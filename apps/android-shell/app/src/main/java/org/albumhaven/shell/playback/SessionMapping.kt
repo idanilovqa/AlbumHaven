@@ -101,11 +101,17 @@ object SessionMapping {
     }
 
     /**
-     * The persisted last queue, shown paused. A resumable one offers play, and previous and next
-     * inside its album, which [Resumption] turns into a fresh load; [resuming] shows it buffering
-     * while that load's references are requested. Nothing else it holds can start playback.
+     * The persisted last queue. A resumable one offers play, and previous and next inside its
+     * album, which [Resumption] turns into a fresh load; [resuming] shows it buffering while that
+     * load's references are requested. Nothing else it holds can start playback.
+     *
+     * Until then it is idle, not paused: Media3 posts no notification for an idle player, so a
+     * process started by System UI's boot-time resumption browse shows no second, short-lived
+     * card, and Media3 answers that browse from `onPlaybackResumption` with the item's full
+     * metadata instead of a title-less placeholder. A [failed] resumption shows paused, so its
+     * card can say why.
      */
-    fun restoredView(queue: RestorableQueue, resuming: Boolean = false): SessionView {
+    fun restoredView(queue: RestorableQueue, resuming: Boolean = false, failed: Boolean = false): SessionView {
         val index = queue.currentIndex
         val group = queue.items[index].queueGroup
         fun resumable(position: Int) = queue.items.getOrNull(position)?.let { it.queueGroup == group && it.resumeToken != null } == true
@@ -122,7 +128,11 @@ object SessionMapping {
             },
             currentIndex = index,
             positionMs = queue.positionMs,
-            state = if (resuming) SessionPlaybackState.BUFFERING else SessionPlaybackState.READY,
+            state = when {
+                resuming -> SessionPlaybackState.BUFFERING
+                failed -> SessionPlaybackState.READY
+                else -> SessionPlaybackState.IDLE
+            },
             playWhenReady = resuming,
             playing = false,
             controls = if (!queue.resumable) {

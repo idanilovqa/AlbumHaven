@@ -18,8 +18,6 @@ import android.webkit.CookieManager
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CacheBitmapLoader
@@ -30,6 +28,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
 import com.google.common.util.concurrent.SettableFuture
 import okhttp3.OkHttpClient
 import org.albumhaven.shell.playback.AudioFocusPolicy
@@ -75,6 +74,11 @@ import java.util.concurrent.Executors
  * with the WebView session and start playback without the app; a missing or expired sign-in shows
  * on the card instead, whose tap opens the app. Only trusted controllers (this app, System UI and
  * the platform's media-control holders) may connect.
+ *
+ * A restored queue stays idle until it is played, so after a reboot System UI's resumption browse
+ * builds the card from [MediaLibrarySession.Callback.onPlaybackResumption]'s full metadata and
+ * cover. A force-stop is the platform's: it removes the app's notification and System UI drops the
+ * card until the app's next media session or a reboot; a media key still restarts and resumes playback.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
@@ -354,8 +358,11 @@ class PlaybackService : MediaLibraryService() {
         ): ListenableFuture<SessionResult> = SessionControls.handle(customCommand)
 
         /**
-         * Media3 asks only while the player has no item; the restored queue is otherwise the
-         * player's own playlist, and playing it goes through [resumeFor].
+         * Media3 asks while the player has no item, and for System UI's resumption browse while
+         * the restored queue is idle, as after a reboot: that card is built from the current
+         * item's metadata alone, so it carries the cover, loaded with the WebView session. A
+         * missing cover leaves the card without artwork. Playing the restored queue goes through
+         * [resumeFor].
          */
         override fun onPlaybackResumption(
             mediaSession: MediaSession,
@@ -364,22 +371,17 @@ class PlaybackService : MediaLibraryService() {
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             val queue = restoreStore.load(origin)?.takeIf { it.resumable }
                 ?: return Futures.immediateFailedFuture(UnsupportedOperationException("Nothing to resume"))
-            val items = queue.items.mapIndexed { position, item ->
-                MediaItem.Builder()
-                    .setMediaId("restored:$position")
-                    .setMediaMetadata(
-                        MediaMetadata.Builder()
-                            .setTitle(item.title)
-                            .setArtist(item.artist)
-                            .setAlbumTitle(item.album)
-                            .setArtworkUri(item.artworkUrl?.let { Uri.parse(queue.origin + it) })
-                            .setIsPlayable(true)
-                            .setIsBrowsable(false)
-                            .build(),
-                    )
-                    .build()
+            val coverPath = queue.items[queue.currentIndex].artworkUrl.takeUnless { isForPlayback }
+            val cover: ListenableFuture<ByteArray?> = if (coverPath == null) {
+                Futures.immediateFuture(null)
+            } else {
+                Futures.catching(artwork.fetch(queue.origin + coverPath), Exception::class.java, { null }, MoreExecutors.directExecutor())
             }
-            return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, queue.currentIndex, queue.positionMs))
+            return Futures.transform(
+                cover,
+                { data -> Resumption.mediaItems(queue, data) { path -> Uri.parse(queue.origin + path) } },
+                MoreExecutors.directExecutor(),
+            )
         }
     }
 

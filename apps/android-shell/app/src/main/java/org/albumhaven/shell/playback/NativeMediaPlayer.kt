@@ -80,7 +80,7 @@ class NativeMediaPlayer(
     override fun getState(): State {
         val snapshot = controller().snapshot
         val view = SessionMapping.withNotice(
-            restored?.takeIf { snapshot.items.isEmpty() }?.let { SessionMapping.restoredView(it, resuming) }
+            restored?.takeIf { snapshot.items.isEmpty() }?.let { SessionMapping.restoredView(it, resuming, failed = resumeFailure != null) }
                 ?: SessionMapping.view(snapshot, origin()),
             resumeFailure?.message,
         )

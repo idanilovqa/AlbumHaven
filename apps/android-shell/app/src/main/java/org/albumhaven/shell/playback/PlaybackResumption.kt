@@ -1,5 +1,11 @@
 package org.albumhaven.shell.playback
 
+import android.net.Uri
+import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaSession
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -91,6 +97,36 @@ class HttpResumeApi(client: OkHttpClient, private val session: ShellSession) : R
  * may have expired with no web document left to refresh them.
  */
 object Resumption {
+
+    /**
+     * [queue] as Media3's playback resumption hands it to System UI: every item with its title,
+     * artist, album and artwork, the current one at its saved position. System UI's boot-time
+     * resumption browse keeps only the current item and builds a card only from a playable item
+     * with a title; it draws a card's artwork only from the item's own bitmap, so [artworkData] is
+     * the current item's cover. [artworkUri] makes a saved artwork path absolute.
+     */
+    @OptIn(UnstableApi::class)
+    fun mediaItems(
+        queue: RestorableQueue,
+        artworkData: ByteArray?,
+        artworkUri: (String) -> Uri?,
+    ): MediaSession.MediaItemsWithStartPosition {
+        val items = queue.items.mapIndexed { position, item ->
+            val metadata = MediaMetadata.Builder()
+                .setTitle(item.title)
+                .setArtist(item.artist)
+                .setAlbumTitle(item.album)
+                .setArtworkUri(item.artworkUrl?.let(artworkUri))
+                .setDurationMs(item.durationMs.takeIf { it > 0 })
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+            if (position == queue.currentIndex && artworkData != null) {
+                metadata.setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+            }
+            MediaItem.Builder().setMediaId("restored:$position").setMediaMetadata(metadata.build()).build()
+        }
+        return MediaSession.MediaItemsWithStartPosition(items, queue.currentIndex, queue.positionMs)
+    }
 
     /** The tokens to exchange, in queue order; items without one cannot be resumed. */
     fun tokens(queue: RestorableQueue): List<String> = queue.items.mapNotNull { it.resumeToken }

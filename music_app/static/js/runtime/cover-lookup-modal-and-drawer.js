@@ -2378,6 +2378,18 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
   }).join('');
 }
 
+// The selected cover's row starts the view; a cover in its section's first row keeps that section's title in view.
+function resolveCoverLookupInitialScrollTop(body, card) {
+  if (!card) return 0;
+  const top = (node) => Number(node?.getBoundingClientRect?.().top);
+  const gallery = card.closest?.('.cover-lookup-gallery');
+  const inFirstRow = gallery && Math.abs(top(card) - top(gallery)) < 2;
+  const anchor = inFirstRow ? (card.closest?.('.cover-lookup-section') || gallery) : card;
+  const offset = top(anchor) - top(body);
+  if (!Number.isFinite(offset)) return Math.max(0, Number(card.offsetTop || 0) - 8);
+  return Math.max(0, Number(body.scrollTop || 0) + offset - 8);
+}
+
 function captureCoverLookupModalScrollAnchor(body) {
   if (!body) return null;
   const scrollTop = Number(body.scrollTop || 0);
@@ -2624,18 +2636,18 @@ function renderCoverLookupModal() {
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
+  // NEW-003: a local-art problem is a label beside the LOCAL heading; the section itself never moves or changes shape.
   const galleryErrorMarkup = modalState.galleryError
-    ? buildSmallAlertHtml({ severity: 'error', message: modalState.galleryError }) : '';
-  const hasGalleryCards = localCovers.length || otherArt.length || possibleMatches.length || remoteCover;
+    ? buildAlertLabelHtml({ severity: 'warning', message: modalState.galleryError }) : '';
   const localInventoryUnknown = Boolean((modalState.galleryError || modalState.localInventoryPending) && !modalState.localInventoryLoaded);
-  const galleryLoadingMarkup = modalState.loading
-    ? buildCoverLookupGalleryLoadingMarkup(modalState)
-    : !hasGalleryCards ? galleryErrorMarkup : '';
+  const galleryLoadingMarkup = modalState.loading ? buildCoverLookupGalleryLoadingMarkup(modalState) : '';
   replaceCoverLookupModalMarkup(els.body, `
-    ${hasGalleryCards ? galleryErrorMarkup : ''}
     ${galleryLoadingMarkup || `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
+      <div class="cover-lookup-section-heading">
+        <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
+        ${galleryErrorMarkup}
+      </div>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown ? '' : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
@@ -2689,13 +2701,17 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  if (compact && modalState.initialScrollPending === true && !modalState.loading) {
+  // INT-028: on web and mobile the gallery opens with the selected cover's row at the top. Later renders
+  // (local inventory or candidates arriving) keep placing it there until the user scrolls.
+  const userScrolledSinceOpen = modalState.initialScrollTop != null
+    && Math.abs(Number(els.body.scrollTop || 0) - Number(modalState.initialScrollTop)) > 2;
+  if (modalState.initialScrollPending === true && !modalState.loading && !userScrolledSinceOpen) {
     const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
-    els.body.scrollTop = selectedCard
-      ? Math.max(0, Number(selectedCard.offsetTop || 0) - (Number(els.body.clientHeight || 0) - Number(selectedCard.offsetHeight || 0)) / 2)
-      : 0;
-    modalState.initialScrollPending = false;
+    els.body.scrollTop = resolveCoverLookupInitialScrollTop(els.body, selectedCard);
+    modalState.initialScrollTop = Number(els.body.scrollTop || 0);
+    if (selectedCard || !modalState.localInventoryPending) modalState.initialScrollPending = false;
   } else {
+    if (userScrolledSinceOpen) modalState.initialScrollPending = false;
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
@@ -3537,6 +3553,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.initialScrollPending = true;
   state.coverLookup.modal.refreshedStalledSnapshotToken = '';
+  state.coverLookup.modal.initialScrollTop = null;
   state.coverLookup.modal.galleryError = '';
   state.coverLookup.modal.loading = !cachedGallery
     || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);

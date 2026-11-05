@@ -165,8 +165,9 @@ const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playi
 const androidNativePlayback = {
   revision: 0,
   appliedRevision: 0,
-  // The revision of a `playback.loadQueue` Android has been sent but not yet answered.
-  loadingRevision: 0,
+  // Android may hold a queue this document sent or adopted, answered or superseded; only
+  // `playback.stop` releases it.
+  holdsQueue: false,
   items: [],
   index: 0,
   generation: 0,
@@ -362,14 +363,12 @@ async function startAndroidNativePlaybackTrack(track, {
     const refs = await requestAndroidNativePlaybackRefs(queueWindow.items);
     if (revision !== native.revision) return null;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
-    native.loadingRevision = revision;
+    native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
     // Nothing Android plays came from this start, so it acquires nothing for it.
     if (revision === native.revision) native.ownerIntent = false;
     throw error;
-  } finally {
-    if (native.loadingRevision === revision) native.loadingRevision = 0;
   }
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
@@ -456,6 +455,7 @@ function adoptAndroidNativePlayback(persistedState) {
   const playing = live.state !== 'paused';
   native.revision = live.queueRevision;
   native.appliedRevision = live.queueRevision;
+  native.holdsQueue = true;
   native.items = tracks;
   native.index = live.currentIndex;
   native.generation += 1;
@@ -586,10 +586,7 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   const native = androidNativePlayback;
   // A media session outlives the document: the next document of this origin re-attaches to it.
   if (reason === 'unload' && hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY)) return;
-  // A load Android has been sent may already play; the shell applies the stop after it.
-  const wasLoaded = native.loadingRevision > 0 || (native.appliedRevision > 0 && native.items.length > 0);
   native.revision += 1;
-  native.loadingRevision = 0;
   native.ownerIntent = false;
   native.items = [];
   native.index = 0;
@@ -606,7 +603,10 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
     src: preserveSnapshot ? native.snapshot.src : '',
     readyState: 0,
   });
-  const stopped = wasLoaded ? sendAndroidBridgeCommand('playback.stop') : null;
+  // A load Android has been sent may already play, even unanswered or superseded; the shell
+  // applies the stop after it.
+  const stopped = native.holdsQueue ? sendAndroidBridgeCommand('playback.stop') : null;
+  native.holdsQueue = false;
   // Android releases its claim with the stop; no event of the stopped queue applies any more.
   native.appliedRevision = 0;
   native.ownership = 'none';

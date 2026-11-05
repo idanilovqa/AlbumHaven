@@ -606,6 +606,44 @@ test('a stop while the first queue load is pending stops what Android loads', as
   assert.equal(api.snapshot().paused, true);
 });
 
+test('a stop after a superseded queue load lands still stops what Android loads', async () => {
+  let releaseLoad;
+  let releaseRefs;
+  const heldLoad = new Promise(resolve => { releaseLoad = resolve; });
+  const heldRefs = new Promise(resolve => { releaseRefs = resolve; });
+  let audible = false;
+  const { api, bridge, fetches } = createHarness({
+    refs: (body) => {
+      const issued = { protocol: 1, expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        tracks: body.tracks.map((track, index) => ({ clientKey: track.clientKey, playbackRef: `opaque-ref-${index}` })) };
+      return fetches.length === 1 ? issued : heldRefs.then(() => issued);
+    },
+    respond: (message) => {
+      if (message.name === 'playback.loadQueue') {
+        audible = message.payload.autoplay;
+        return heldLoad.then(() => ({ ok: true, queueRevision: message.payload.queueRevision }));
+      }
+      if (message.name === 'playback.stop') audible = false;
+      return null;
+    },
+  });
+  await api.connectAndroidBridge();
+  const first = api.start(tracks[0], { autoplay: true });
+  while (!commands(bridge, 'playback.loadQueue').length) await settle();
+  // The second pick's references are not held yet, so it waits on them while the first load lands.
+  const second = api.start({ ...tracks[1], path: 'C:/Music/Elsewhere/01 Signal D.flac' }, { autoplay: true });
+  while (fetches.length < 2) await settle();
+  releaseLoad();
+  assert.equal(await first, null);
+  await api.stop('stopped');
+  releaseRefs();
+  assert.equal(await second, null);
+  await settle();
+
+  assert.deepEqual(bridge.sent.slice(1).map(message => message.name), ['playback.loadQueue', 'playback.stop']);
+  assert.equal(audible, false, 'Android plays nothing the web shows stopped');
+});
+
 test('a start whose references or queue load fail leaves Android no owner intent', async () => {
   const refused = createHarness({ refs: () => ({ protocol: 1, tracks: [] }) });
   await assert.rejects(refused.api.start(tracks[0]), /Playback references are unavailable/);

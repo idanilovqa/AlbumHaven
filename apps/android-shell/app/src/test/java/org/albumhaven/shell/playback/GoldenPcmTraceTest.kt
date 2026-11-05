@@ -214,36 +214,4 @@ class GoldenPcmTraceTest {
         assertEquals(emptyList<String>(), harness.server.violations)
         harness.assertOneUninterruptedWrite()
     }
-
-    @Test
-    fun aReplacementPlaysTheOutgoingTrackUntilTheNewStartIsBufferedThenCutsOverWithoutAGap() {
-        val harness = harness(first, second, third)
-        harness.engine.start(first.pcm)
-        harness.engine.setQueuedNext(second.pcm)
-        harness.playUntil { harness.engine.timelineFrame >= 3L * RATE && harness.engine.bufferedFrames(PcmRole.CONTINUITY) > 0 }
-        val replacedAt = harness.engine.timelineFrame
-        // The new start's decoder is slow: the outgoing track has to bridge the wait.
-        harness.server.decoding = false
-        assertTrue(harness.engine.replace(third.pcm, 0, null))
-        repeat(10) { harness.step() }
-        harness.server.decoding = true
-        harness.server.decodeAll()
-        harness.playToEnd()
-
-        val runs = harness.sink.runs()
-        assertEquals(2, runs.size)
-        assertEquals(1, runs[0].tag)
-        assertEquals(0L, runs[0].start)
-        // The outgoing track kept sounding while the new start buffered: nothing silent, nothing repeated.
-        assertTrue(runs[0].length > replacedAt)
-        assertEquals(Run(3, 0, third.frames), runs[1])
-        assertEquals(
-            listOf(PcmEngineEvent.Boundary(PcmBoundaryKind.REPLACEMENT, 1, 3, 0)),
-            harness.emitted<PcmEngineEvent.Boundary>(),
-        )
-        assertEquals(listOf(PcmClientControl.Close(1, 2, "replacement-target")), harness.sent<PcmClientControl.Close>())
-        assertEquals(listOf(PcmEngineEvent.Ended(3, third.frames)), harness.emitted<PcmEngineEvent.Ended>())
-        harness.assertCleanContract()
-        harness.assertOneUninterruptedWrite()
-    }
 }

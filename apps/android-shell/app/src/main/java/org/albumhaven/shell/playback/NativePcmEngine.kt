@@ -32,11 +32,6 @@ data class PcmEngineConfig(
         const val SEEK_PREPARE_SECONDS = 0.25
         const val QUEUED_NEXT_CURRENT_CUSHION_SECONDS = 1.0
 
-        /** `STREAMING_REPLACEMENT_*`: a replacing track buffers 2 s while the outgoing one keeps at least 1 s and at most 2 s. */
-        const val REPLACEMENT_PREPARE_SECONDS = 2.0
-        const val REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1.0
-        const val REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = REPLACEMENT_PREPARE_SECONDS
-
         /** `dispatchActiveStreamingLoop`: a loop of at most five seconds is a `short-loop`. */
         const val SHORT_LOOP_MAX_SECONDS = 5
 
@@ -50,8 +45,7 @@ fun interface PcmControlSender {
     fun send(control: PcmClientControl): Boolean
 }
 
-/** [REPLACEMENT] is a prepared cutover to another start: a new track, or the same one elsewhere. */
-enum class PcmBoundaryKind { QUEUED_NEXT, SEEK, LOOP, REPLACEMENT }
+enum class PcmBoundaryKind { QUEUED_NEXT, SEEK, LOOP }
 
 sealed interface PcmEngineEvent {
     data class FirstFrame(val streamId: Long, val timelineFrame: Long) : PcmEngineEvent
@@ -90,10 +84,7 @@ class NativePcmEngine(
     }
 
     private enum class StreamKind {
-        START, QUEUED_NEXT, SEEK, LOOP, REPLACEMENT;
-
-        /** A prepared start the render cuts over to once it is buffered. */
-        val prepared: Boolean get() = this == SEEK || this == REPLACEMENT
+        START, QUEUED_NEXT, SEEK, LOOP
     }
 
     private class Stream(
@@ -122,11 +113,11 @@ class NativePcmEngine(
         val frames: Int get() = (endFrame - startFrame).toInt()
     }
 
-    private class PendingPromotion(val streamId: Long, val replacement: Boolean) {
+    private class PendingPromotion(val streamId: Long) {
         var requestedSeekFrame: Long? = null
     }
 
-    private class PendingSeek(val streamId: Long, val startFrame: Long, val replacement: Boolean) {
+    private class PendingSeek(val streamId: Long, val startFrame: Long) {
         var ready = false
     }
 
@@ -255,9 +246,9 @@ class NativePcmEngine(
     }
 
     /**
-     * Prepares [frame] on the continuity role and cuts over once its first PCM is buffered. A
-     * pending replacement is prepared again at [frame]. An active loop stays; a short one keeps
-     * replaying its retained PCM until the cutover, as the worklet does.
+     * Prepares [frame] on the continuity role and cuts over once its first PCM is buffered. An
+     * active loop stays; a short one keeps replaying its retained PCM until the cutover, as the
+     * worklet does.
      */
     fun seek(frame: Long) {
         require(frame >= 0) { "seek frame must be nonnegative" }
@@ -267,54 +258,14 @@ class NativePcmEngine(
             if (promotion.streamId == stream.streamId) promotion.requestedSeekFrame = frame
             return
         }
-        pendingSeek?.takeIf { it.replacement }?.let {
-            val track = checkNotNull(continuity).track
-            closeContinuity("seek-replaced")
-            openReplacement(track, frame)
-            return
-        }
         if (seekWithinBuffer(stream, frame)) return
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
-        pendingSeek = PendingSeek(target.streamId, frame, replacement = false)
+        pendingSeek = PendingSeek(target.streamId, frame)
     }
 
     /** The successor a continuity decoder is preparing, if any. */
     val preparedSuccessor: PcmTrack? get() = continuity?.takeIf { it.kind == StreamKind.QUEUED_NEXT }?.track
-
-    /** True while a replacement prepares; the outgoing track is still the one heard. */
-    val replacing: Boolean get() = pendingSeek?.replacement == true
-
-    /** `replacementOutgoingCushionReady`: the outgoing track has one second buffered or has ended. */
-    val outgoingCushionReady: Boolean
-        get() = current?.let {
-            it.eosReceived || currentRing.bufferedFrames >= config.frames(PcmEngineConfig.REPLACEMENT_OUTGOING_CUSHION_SECONDS)
-        } ?: false
-
-    /**
-     * The web's prepared track replacement (`startStreamingTrack`): while playing, [track] buffers
-     * two seconds from [startFrame] on the continuity role while the current track keeps sounding,
-     * then cuts over without silence; [successor] follows it. Returns false where the web starts
-     * afresh instead: nothing heard yet, paused, or another seek or replacement still pending.
-     */
-    fun replace(track: PcmTrack, startFrame: Long, successor: PcmTrack?): Boolean {
-        require(startFrame >= 0) { "start frame must be nonnegative" }
-        val head = current ?: return false
-        val promotion = pendingPromotion
-        val promotionAllows = promotion == null ||
-            (promotion.replacement && promotion.streamId == head.streamId && head.firstFrameRendered)
-        if (failed || !playing || !head.firstFrameRendered || pendingSeek != null || !promotionAllows) return false
-        releaseLoop()
-        if (continuity != null) closeContinuity("replacement-target")
-        queuedNext = successor
-        openReplacement(track, startFrame)
-        return true
-    }
-
-    private fun openReplacement(track: PcmTrack, startFrame: Long) {
-        val stream = open(PcmRole.CONTINUITY, track, StreamKind.REPLACEMENT, startFrame) ?: return
-        pendingSeek = PendingSeek(stream.streamId, startFrame, replacement = true)
-    }
 
     /** The worklet's `set-loop` with `active: false`: a replay in progress resumes the track after the loop. */
     private fun releaseLoop() {
@@ -567,7 +518,7 @@ class NativePcmEngine(
     private fun commitPreparedSeek() {
         val seek = pendingSeek ?: return
         if (!seek.ready || continuity?.streamId != seek.streamId || continuityRing.bufferedFrames <= 0) return
-        promote(if (seek.replacement) PcmBoundaryKind.REPLACEMENT else PcmBoundaryKind.SEEK, seek.startFrame)
+        promote(PcmBoundaryKind.SEEK, seek.startFrame)
     }
 
     private fun promote(kind: PcmBoundaryKind, incomingTimelineFrame: Long) {
@@ -583,14 +534,14 @@ class NativePcmEngine(
         current = incoming
         continuity = null
         timelineFrame = incomingTimelineFrame
-        pendingPromotion = PendingPromotion(incoming.streamId, replacement = kind == PcmBoundaryKind.REPLACEMENT)
+        pendingPromotion = PendingPromotion(incoming.streamId)
         when (kind) {
             PcmBoundaryKind.QUEUED_NEXT -> {
                 // A successor deferred behind the promoted one is prepared once the server confirms.
                 if (queuedNext == incoming.track) queuedNext = null
                 expectContinuity = false
             }
-            PcmBoundaryKind.SEEK, PcmBoundaryKind.REPLACEMENT -> {
+            PcmBoundaryKind.SEEK -> {
                 pendingSeek = null
                 expectContinuity = queuedNext != null
                 // The loop stream the replay was retained from was closed by the seek; it is reopened and retained again.
@@ -599,7 +550,7 @@ class NativePcmEngine(
             PcmBoundaryKind.LOOP -> Unit
         }
         if (!send(PcmClientControl.Promote(incoming.generation, incoming.streamId))) return
-        if (kind != PcmBoundaryKind.QUEUED_NEXT && kind != PcmBoundaryKind.LOOP && !incoming.eosReceived) {
+        if (kind == PcmBoundaryKind.SEEK && !incoming.eosReceived) {
             grantCredit(incoming, capacityFrames(PcmRole.CURRENT))
         }
         events(PcmEngineEvent.Boundary(kind, outgoing.streamId, incoming.streamId, incomingTimelineFrame))
@@ -615,7 +566,7 @@ class NativePcmEngine(
             (event.timelineStartFrame ?: -1) >= 0
         if (!valid) return fail("metadata-protocol-error", "Invalid streaming metadata")
         stream.metadataAccepted = true
-        if (stream.kind.prepared) {
+        if (stream.kind == StreamKind.SEEK) {
             val remaining = checkNotNull(event.provisionalTotalFrames) - checkNotNull(event.timelineStartFrame)
             stream.targetBufferFrames = minOf(stream.targetBufferFrames.toLong(), maxOf(0L, remaining)).toInt()
         }
@@ -663,14 +614,6 @@ class NativePcmEngine(
             events(PcmEngineEvent.StartRateRequired(stream.track, stream.startFrame, rate.toInt()))
             return
         }
-        if (stream === continuity && stream.kind == StreamKind.REPLACEMENT && rate != null) {
-            // As `handleStreamingRateMismatch`: the replacing track starts afresh at its own rate.
-            continuity = null
-            continuityRing.clear()
-            pendingSeek = null
-            events(PcmEngineEvent.StartRateRequired(stream.track, stream.startFrame, rate.toInt()))
-            return
-        }
         if (stream !== continuity || stream.kind != StreamKind.QUEUED_NEXT || rate == null) {
             return fail("rate-mismatch", "The track sample rate changed")
         }
@@ -694,7 +637,7 @@ class NativePcmEngine(
         val desiredTrack = if (desiredKind == StreamKind.LOOP) head.track else queuedNext
         val desiredStart = loop?.startFrame ?: 0L
         continuity?.let { open ->
-            if (open.kind.prepared) return
+            if (open.kind == StreamKind.SEEK) return
             if (open.kind == desiredKind && open.track == desiredTrack && open.startFrame == desiredStart &&
                 open.loopRange == loop?.takeIf { desiredKind == StreamKind.LOOP }
             ) {
@@ -729,7 +672,6 @@ class NativePcmEngine(
         val target = when (kind) {
             StreamKind.QUEUED_NEXT -> config.frames(PcmEngineConfig.QUEUED_NEXT_PREPARE_SECONDS)
             StreamKind.SEEK -> config.frames(PcmEngineConfig.SEEK_PREPARE_SECONDS)
-            StreamKind.REPLACEMENT -> config.frames(PcmEngineConfig.REPLACEMENT_PREPARE_SECONDS)
             // A short loop asks for exactly the frames it retains.
             StreamKind.LOOP -> loop?.takeIf { it.short }?.let { maxOf(1, it.frames) } ?: capacity
             StreamKind.START -> capacity
@@ -750,8 +692,7 @@ class NativePcmEngine(
     private fun grantInitialCredit(stream: Stream) {
         val head = current
         // `continuityCreditNeedsOutgoingRenderCushion`: both cushions are one second.
-        val needsOutgoingCushion = stream.role == PcmRole.CONTINUITY &&
-            (stream.kind == StreamKind.QUEUED_NEXT || stream.kind == StreamKind.REPLACEMENT) &&
+        val needsOutgoingCushion = stream.role == PcmRole.CONTINUITY && stream.kind == StreamKind.QUEUED_NEXT &&
             head != null && !head.eosReceived &&
             currentRing.bufferedFrames < config.frames(PcmEngineConfig.QUEUED_NEXT_CURRENT_CUSHION_SECONDS)
         stream.initialCreditDeferred = needsOutgoingCushion
@@ -769,7 +710,7 @@ class NativePcmEngine(
         if (stream.eosReceived) return
         val missing = stream.targetBufferFrames - ringFor(stream.role).bufferedFrames - stream.inFlightFrames
         if (missing <= 0) return
-        if (stream.role != PcmRole.CURRENT || replacing) {
+        if (stream.role != PcmRole.CURRENT) {
             grantCredit(stream, missing)
             return
         }
@@ -780,22 +721,14 @@ class NativePcmEngine(
 
     private fun grantCredit(stream: Stream, requestedFrames: Int): Int {
         if (requestedFrames <= 0 || stream.eosReceived) return 0
-        var requested = requestedFrames
-        if (stream === current && replacing) {
-            // The outgoing track keeps at most two seconds while it is being replaced.
-            val safety = config.frames(PcmEngineConfig.REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS) -
-                currentRing.bufferedFrames - stream.inFlightFrames
-            requested = minOf(requested, safety)
-            if (requested <= 0 || !playing) return 0
-        }
         if (!playing) {
-            stream.deferredCreditFrames += requested
+            stream.deferredCreditFrames += requestedFrames
             return 0
         }
         val available = committedCapacityFrames(stream.role) - ringFor(stream.role).bufferedFrames -
             stream.inFlightFrames
         val serverAvailable = config.maxCreditFrames - stream.inFlightFrames
-        val frames = minOf(requested, available, serverAvailable)
+        val frames = minOf(requestedFrames, available, serverAvailable)
         if (frames <= 0) return 0
         if (!send(PcmClientControl.Credit(stream.generation, stream.streamId, frames))) return 0
         stream.inFlightFrames += frames

@@ -161,6 +161,9 @@ class SessionMappingTest {
         assertEquals(SystemAction.Next(4), SessionMapping.route(SystemRequest.Seek(2, 0), playing))
         assertEquals(SystemAction.Previous(4), SessionMapping.route(SystemRequest.Seek(0, 0), playing))
         assertNull(SessionMapping.route(SystemRequest.Seek(3, 0), snapshot(NativePlaybackState.PLAYING, index = 0)))
+        // A second press resolved against Media3's pending item before the snapshot followed the first.
+        assertEquals(SystemAction.Next(4), SessionMapping.route(SystemRequest.Seek(2, 0), snapshot(NativePlaybackState.PLAYING, index = 0)))
+        assertEquals(SystemAction.Previous(4), SessionMapping.route(SystemRequest.Seek(0, 0), snapshot(NativePlaybackState.PLAYING, index = 2)))
         assertEquals(SystemAction.Stop, SessionMapping.route(SystemRequest.Stop, playing))
     }
 

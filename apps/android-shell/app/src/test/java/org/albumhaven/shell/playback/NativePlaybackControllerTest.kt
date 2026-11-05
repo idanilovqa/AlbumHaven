@@ -658,30 +658,44 @@ class NativePlaybackControllerTest {
         assertEquals(listOf(Run(2, 0, second.frames), Run(4, 0, third.frames)), harness.sinks.last().runs())
     }
 
+    /** The sink operations from the step that applied [command], and what the snapshot said right after it. */
+    private fun ControllerHarness.applyNow(command: () -> Unit): Pair<List<String>, NativePlaybackSnapshot> {
+        val before = sinks.last().operations.size
+        val writtenBefore = sinks.last().writtenFrames
+        command()
+        controller.runOnce(0)
+        // Nothing of the outgoing track may be written in the pass that applied the change.
+        assertEquals(writtenBefore, sinks.last().writtenFrames)
+        return sinks.last().operations.drop(before) to controller.snapshot
+    }
+
     @Test
-    fun aTrackChangeWhilePlayingKeepsTheOutgoingTrackUntilTheNewStartIsBuffered() {
+    fun aTrackChangeWhilePlayingSilencesTheOutgoingTrackAtOnceAndNamesTheNewOne() {
         val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
         val second = SyntheticTrack(tag = 2, frames = 11L * RATE)
-        val harness = ControllerHarness(long, second)
+        val harness = ControllerHarness(long, second, realTime = true)
         harness.load(1, long)
+        // Long enough to count as a listen, so the skip completes it as a track change.
         harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
-        val heard = harness.sinks.last().writtenFrames
+        val heard = harness.sinks.last().writtenFrames.toLong()
+        // The new start's decoder is slow: the outgoing track must not bridge the wait.
+        harness.server.decoding = false
 
-        harness.controller.loadQueue(QueueLoad(2, listOf(harness.item(second)), 0, 0, null, true))
+        val (operations, snapshot) = harness.applyNow {
+            harness.controller.loadQueue(QueueLoad(2, listOf(harness.item(second)), 0, 0, null, true))
+        }
+        assertEquals(listOf("pause", "flush"), operations.take(2))
+        assertEquals("Signal 2", snapshot.items[snapshot.currentIndex!!].title)
+        assertTrue(snapshot.state == NativePlaybackState.LOADING || snapshot.state == NativePlaybackState.BUFFERING)
+        repeat(200) { harness.step() }
+        assertEquals(heard, harness.sinks.last().runs().single { it.tag == 3 }.length)
+        assertEquals(NativePlaybackState.BUFFERING, harness.state())
+
+        harness.server.decoding = true
+        harness.server.decodeAll()
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
         harness.step()
-
-        val runs = harness.sinks.last().runs()
-        assertEquals(2, runs.size)
-        assertTrue(runs[0].tag == 3 && runs[0].start == 0L && runs[0].length >= heard)
-        assertEquals(Run(2, 0, second.frames), runs[1])
-        // One output, never stopped or flushed between the two tracks.
-        assertEquals(listOf("pause", "flush", "play", "write"), harness.sinks.last().operations.take(4))
-        assertEquals(listOf("write", "pause"), harness.sinks.last().operations.drop(3))
-        val revision2 = harness.events.filterIsInstance<NativePlaybackEvent.State>()
-            .filter { it.snapshot.queueRevision == 2L }.map { it.snapshot.state }
-        assertEquals(NativePlaybackState.LOADING, revision2.first())
-        assertTrue(NativePlaybackState.PLAYING in revision2)
+        assertEquals(listOf(Run(3, 0, heard), Run(2, 0, second.frames)), harness.sinks.last().runs())
         val completes = harness.writes().filter { it.first == ListenEffect.COMPLETE }.map { it.second }
         assertEquals("track-change", completes.first().getString("completion_reason"))
         assertEquals(second.pcm.playbackRef, completes.last().getString("playbackRef"))
@@ -689,7 +703,109 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aPauseDuringAPreparedReplacementNeverCutsOverAndPlayStartsTheNewTrack() {
+    fun aSystemSkipWhilePlayingSilencesTheOutgoingTrackAtOnceAndNamesTheNewOne() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, second, realTime = true)
+        harness.load(1, long, second)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
+        val heard = harness.sinks.last().writtenFrames.toLong()
+        harness.server.decoding = false
+
+        val (operations, snapshot) = harness.applyNow { harness.controller.next(1, CommandSource.SYSTEM) }
+        assertEquals(listOf("pause", "flush"), operations.take(2))
+        assertEquals(1, snapshot.currentIndex)
+        assertTrue(snapshot.state != NativePlaybackState.PLAYING)
+        val step = harness.events.filterIsInstance<NativePlaybackEvent.CurrentItem>().last()
+        assertEquals(CurrentItemReason.NEXT to 1, step.reason to step.snapshot.currentIndex)
+
+        harness.server.decoding = true
+        harness.server.decodeAll()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        assertEquals(listOf(Run(3, 0, heard), Run(2, 0, second.frames)), harness.sinks.last().runs())
+    }
+
+    @Test
+    fun rapidRepeatedNextCommandsLandOnTheLastRequestedItemAndOnlyItIsHeard() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val third = SyntheticTrack(tag = 4, frames = 2L * RATE)
+        val harness = ControllerHarness(long, second, third, realTime = true)
+        harness.load(1, long, second, third)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= RATE }
+        val heard = harness.sinks.last().writtenFrames.toLong()
+
+        // A headset double press repeated: both arrive before the playback thread runs.
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.step()
+        assertEquals(2, harness.controller.snapshot.currentIndex)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+
+        assertEquals(
+            listOf(CurrentItemReason.LOAD to 0, CurrentItemReason.NEXT to 1, CurrentItemReason.NEXT to 2),
+            harness.reasons(),
+        )
+        // The skipped-over track is never heard.
+        assertEquals(listOf(Run(3, 0, heard), Run(4, 0, third.frames)), harness.sinks.last().runs())
+    }
+
+    @Test
+    fun aStartTheServerNeverFeedsIsReopenedOnceThenFailsReadablyAndPlayRetries() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, second, realTime = true)
+        harness.load(1, long, second)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.server.decoding = false
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.step()
+        val skippedAt = harness.now
+
+        val opens = { harness.server.texts.map(::JSONObject).count { it.getString("type") == "open" && it.getString("role") == "current" } }
+        val startOpens = opens()
+        harness.runUntil { opens() == startOpens + 1 }
+        assertTrue(harness.now - skippedAt >= NativePlaybackController.START_STALL_MS)
+        // Still the selected track, still buffering: never the previous title, never "playing".
+        assertEquals(NativePlaybackState.BUFFERING, harness.state())
+        assertEquals(1, harness.controller.snapshot.currentIndex)
+
+        harness.runUntil { harness.state() == NativePlaybackState.ERROR }
+        val error = harness.events.filterIsInstance<NativePlaybackEvent.Error>().single()
+        assertEquals("start_stalled", error.code)
+        assertEquals(1, error.snapshot.currentIndex)
+        assertTrue(
+            harness.events.filterIsInstance<NativePlaybackEvent.State>()
+                .none { it.snapshot.state == NativePlaybackState.PLAYING && it.snapshot.currentIndex == 1 },
+        )
+
+        harness.server.decoding = true
+        harness.controller.play(1)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        assertEquals(Run(2, 0, second.frames), harness.sinks.last().runs().last())
+    }
+
+    @Test
+    fun playOfAStreamPreparedWhilePausedReportsPlayingOnlyFromItsFirstFrame() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, realTime = true)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.controller.pause()
+        harness.step()
+        // A paused seek prepares the new position; the server is slow to feed it.
+        harness.server.decoding = false
+        harness.controller.seek(1, 8_000)
+        repeat(5) { harness.step() }
+
+        harness.controller.play(1)
+        repeat(200) { harness.step() }
+        assertEquals(NativePlaybackState.BUFFERING, harness.state())
+        harness.server.decoding = true
+        harness.server.decodeAll()
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(8L * RATE, harness.sinks.last().runs().last().start)
+    }
+
+    @Test
+    fun aPauseBeforeTheNewTrackIsHeardHoldsItsPlaceAndPlayStartsIt() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
         val harness = ControllerHarness(long, second)
         harness.load(1, long)

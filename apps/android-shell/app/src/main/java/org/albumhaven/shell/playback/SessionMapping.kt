@@ -178,11 +178,14 @@ object SessionMapping {
                 // Media3 convention: an ended or stopped player waits for a seek or a new queue.
                 NativePlaybackState.ENDED, NativePlaybackState.IDLE -> null
             }
-            is SystemRequest.Seek -> when (request.itemIndex) {
-                index -> SystemAction.Seek(revision, request.positionMs.coerceAtLeast(0))
-                index + 1 -> SystemAction.Next(revision)
-                index - 1 -> SystemAction.Previous(revision)
-                else -> null
+            // Media3 resolves a repeated skip against the item its previous one is still moving to,
+            // so a press that arrives before the snapshot follows names an item further along.
+            // Every press is one step from wherever the controller stands when it applies it.
+            is SystemRequest.Seek -> when {
+                request.itemIndex !in snapshot.items.indices -> null
+                request.itemIndex > index -> SystemAction.Next(revision)
+                request.itemIndex < index -> SystemAction.Previous(revision)
+                else -> SystemAction.Seek(revision, request.positionMs.coerceAtLeast(0))
             }
             SystemRequest.Stop -> SystemAction.Stop
         }

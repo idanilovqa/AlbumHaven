@@ -27305,7 +27305,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
-        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        // This forced refresh supersedes any clicked detail request, so it must
+        // paint whenever this load will not render its own final state.
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, {
+          render: options.render === false && !navigationOwnsRendering(),
+        });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -33496,7 +33500,6 @@ function selectLocalCoverFromLookup(sourcePath) {
 
 async function saveLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
-  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
@@ -33509,7 +33512,9 @@ async function saveLocalCoverFromLookup(sourcePath) {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
     applyOptimisticLocalCoverSelection(album, sourcePath);
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
+    // The optimistic cover is already visible and a failure rolls back with an
+    // error alert, so Save closes at once instead of waiting for promotion.
+    closeCoverLookupModal();
     markTrackModalCoverTransitionPending(album);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
@@ -33536,7 +33541,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
-    if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
       ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
       : false;
@@ -33705,7 +33709,8 @@ async function saveRemoteCoverFromLookup() {
   let optimisticAlbum = null;
   let optimisticEntry = null;
   try {
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
+    // Remote saves continue as a task; Save closes at once on every layout.
+    closeCoverLookupModal();
     optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
     optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
       .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
@@ -33760,7 +33765,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.manualBusy = false;
       state.coverLookup.modal.pendingLocalPath = '';
       state.coverLookup.modal.selectedRemoteId = '';
-      closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });

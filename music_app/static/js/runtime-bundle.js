@@ -11691,10 +11691,28 @@ function buildDisplayGroups(groups) {
 
 // Web side of Android bridge v1. `AlbumHavenBridge` exists only inside the APK,
 // injected by the shell for its exact allowed origins.
-const ANDROID_BRIDGE_PROTOCOL = 1;
+// Production keeps the latest and the immediately previous stable shell protocol inside this range
+// (tests/fixtures/android-bridge/stable-shells.json; checked by android-release-compatibility.cjs).
+const ANDROID_BRIDGE_PROTOCOL_MIN = 1;
+const ANDROID_BRIDGE_PROTOCOL_MAX = 1;
 const ANDROID_BRIDGE_TIMEOUT_MS = 15000;
 
-const androidBridge = { info: null, pending: new Map(), connection: null, events: new Map() };
+// Every shell capability this site reads. `optional`: without it the feature hides or fails closed.
+// `required`: the site cannot run without it, so the shell refuses the handshake and shows its
+// Update required screen. CI reads this table to order web releases after the APKs they need.
+const ANDROID_BRIDGE_CAPABILITY_USE = Object.freeze({
+  'playback.native.v1': 'optional',
+  'playback.webview.v1': 'optional',
+  'playback.media_session.v1': 'optional',
+  'playback.resumption.v1': 'optional',
+  'updates.manual.v1': 'optional',
+});
+const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
+  .filter(capability => ANDROID_BRIDGE_CAPABILITY_USE[capability] === 'required').sort();
+
+// `updateRequired` is set when the shell cannot run this site: no shared protocol or a missing
+// required capability. Every bridge feature then stays off, as it does with no shell at all.
+const androidBridge = { info: null, pending: new Map(), connection: null, events: new Map(), updateRequired: false };
 
 function isAndroidShell() {
   return typeof window !== 'undefined' && Boolean(window.AlbumHavenBridge);
@@ -11702,6 +11720,10 @@ function isAndroidShell() {
 
 function hasAndroidCapability(capability) {
   return Boolean(androidBridge.info?.capabilities?.includes(capability));
+}
+
+function isAndroidUpdateRequired() {
+  return androidBridge.updateRequired;
 }
 
 // Fails closed: the APK stays silent until its shell negotiates an audio path,
@@ -11751,10 +11773,19 @@ function sendAndroidBridgeCommand(name, payload = {}) {
       reject(Object.assign(new Error('Android bridge timed out.'), { code: 'timeout' }));
     }, ANDROID_BRIDGE_TIMEOUT_MS);
     androidBridge.pending.set(id, { resolve, reject, timer });
+    // Commands use the negotiated protocol; the handshake offers the newest this site speaks.
     window.AlbumHavenBridge.postMessage(JSON.stringify({
-      protocol: ANDROID_BRIDGE_PROTOCOL, id, type: 'command', name, payload,
+      protocol: androidBridge.info?.bridgeProtocol || ANDROID_BRIDGE_PROTOCOL_MAX, id, type: 'command', name, payload,
     }));
   });
+}
+
+// A shell that negotiated outside this site's range, or lacks a required capability, cannot run it.
+// Current shells refuse such a handshake themselves; this also covers one that did not.
+function canAndroidShellRunSite(info) {
+  const protocol = info?.bridgeProtocol;
+  return Number.isInteger(protocol) && protocol >= ANDROID_BRIDGE_PROTOCOL_MIN && protocol <= ANDROID_BRIDGE_PROTOCOL_MAX
+    && Array.isArray(info.capabilities) && ANDROID_REQUIRED_CAPABILITIES.every(name => info.capabilities.includes(name));
 }
 
 function connectAndroidBridge() {
@@ -11762,12 +11793,20 @@ function connectAndroidBridge() {
   if (!androidBridge.connection) {
     window.AlbumHavenBridge.onmessage = handleAndroidBridgeMessage;
     androidBridge.connection = sendAndroidBridgeCommand('bridge.handshake', {
-      protocolMin: ANDROID_BRIDGE_PROTOCOL, protocolMax: ANDROID_BRIDGE_PROTOCOL,
+      protocolMin: ANDROID_BRIDGE_PROTOCOL_MIN, protocolMax: ANDROID_BRIDGE_PROTOCOL_MAX,
+      requiredCapabilities: ANDROID_REQUIRED_CAPABILITIES,
     }).then((info) => {
+      if (!canAndroidShellRunSite(info)) {
+        androidBridge.updateRequired = true;
+        return null;
+      }
       androidBridge.info = info;
       if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
       return info;
-    }, () => null);
+    }, (error) => {
+      androidBridge.updateRequired = error.code === 'incompatible_bridge' || error.code === 'update_required';
+      return null;
+    });
   }
   return androidBridge.connection;
 }
@@ -26028,6 +26067,11 @@ function buildAndroidSandboxHtml(info) {
 }
 
 function buildAndroidSettingsHtml(info) {
+  // The shell's own Update required screen offers Check for update; this page has no bridge to ask.
+  if (!info && isAndroidUpdateRequired()) {
+    return buildOnPageAlertHtml({ severity: 'warning', title: 'Update required',
+      message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' });
+  }
   if (!info) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
       message: 'This app could not connect to the current site.', role: 'status' });

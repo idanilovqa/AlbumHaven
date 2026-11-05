@@ -27,7 +27,8 @@
     "name": "bridge.handshake",
     "payload": {
       "protocolMin": 1,
-      "protocolMax": 1
+      "protocolMax": 1,
+      "requiredCapabilities": []
     }
   },
   "handshakeResponse": {

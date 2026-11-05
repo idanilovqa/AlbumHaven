@@ -124,6 +124,11 @@ function buildAndroidSandboxHtml(info) {
 }
 
 function buildAndroidSettingsHtml(info) {
+  // The shell's own Update required screen offers Check for update; this page has no bridge to ask.
+  if (!info && isAndroidUpdateRequired()) {
+    return buildOnPageAlertHtml({ severity: 'warning', title: 'Update required',
+      message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' });
+  }
   if (!info) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
       message: 'This app could not connect to the current site.', role: 'status' });

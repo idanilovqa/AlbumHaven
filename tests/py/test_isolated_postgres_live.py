@@ -780,7 +780,10 @@ def test_live_watcher_follows_the_year_split_key_a_full_scan_created(watcher_rep
 def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_albums(watcher_repair_inventory):
     # Owner 2026-11-04: absent artist/album tags never make "Unknown Artist" or
     # "Unknown Album"; those files are loose tracks flagged in Problematic Files.
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
 
     fixture = watcher_repair_inventory
     tagged = fixture.entry("Owner/Real/01.flac", album="Real Album")
@@ -815,6 +818,8 @@ def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_alb
     repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     sidebar = [item["artist"] for item in repository.build_root_sidebar_payload()["artists_sidebar"]]
     assert "Owner" in sidebar and "Unknown Artist" not in sidebar
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
     reasons = {reason for item in repository.build_problematic_files_payload()["items"] for reason in item["problem_reasons"]}
     assert {"Missing artist and album", "Missing album"} <= reasons
 

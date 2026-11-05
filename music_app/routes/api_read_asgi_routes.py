@@ -1075,6 +1075,11 @@ def _build_postgres_home_payload(request: Request) -> dict[str, object]:
         "payload_tier": "full",
         "initial_view_partial": False,
     })
+    if omit_sidebar and _request_flag_value(request.query_params.get("include_non_album")):
+        # Loose Tracks reads only its tracks from this follow-up. Counts,
+        # hydration and recent-listen matching over every track froze it.
+        payload.pop("artists_sidebar", None)
+        return payload
     sidebar_payload = (
         repository.build_root_counts_payload(query_params=request.query_params)
         if omit_sidebar

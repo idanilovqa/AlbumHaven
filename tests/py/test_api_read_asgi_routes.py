@@ -1540,7 +1540,10 @@ def test_asgi_home_loose_tracks_use_bounded_postgres_root_not_whole_library_view
     assert status == 200
     assert payload["library_non_album_tracks"] == [{"path": "loose.mp3"}]
     assert payload["non_album_tracks_deferred"] is False
-    assert repository_calls[0]["call"] == "root_preview"
+    # The client reads only the loose tracks from this response: no counts,
+    # library hydration or recent-listen indexing over every track (INT-033).
+    assert [call["call"] for call in repository_calls] == ["root_preview"]
+    assert "recent_local_albums" not in payload
     assert repository_calls[0]["include_library_wide_non_album"] == "1"
     assert repository_calls[0]["gallery_page_size"] == "1"
     assert threadpool_state["functions"] == ["_build_home_data_payload"]

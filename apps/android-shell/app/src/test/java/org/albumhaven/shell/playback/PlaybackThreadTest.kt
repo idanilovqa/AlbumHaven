@@ -48,6 +48,98 @@ class PlaybackThreadTest {
     }
 
     @Test
+    fun anOutputAtARateThePcmSocketRefusesIsReleasedAndFailsReadably() {
+        // Android opens 4 kHz, which the PCM socket's engine refuses.
+        val low = SyntheticTrack(tag = 5, frames = 4_000L, sampleRate = 4_000)
+        val harness = ControllerHarness(low)
+        harness.load(1, low)
+        repeat(10) { harness.step() }
+
+        assertEquals(NativePlaybackState.ERROR, harness.state())
+        assertEquals("output_failed", harness.events.filterIsInstance<NativePlaybackEvent.Error>().single().code)
+        assertEquals(listOf(NativePlaybackController.DEFAULT_RATE, 4_000), harness.sinks.map { it.sampleRate })
+        assertTrue(harness.sinks.all { it.operations.last() == "release" })
+    }
+
+    @Test
+    fun theFailureThatStoppedPlaybackIsReported() {
+        val failures = mutableListOf<RuntimeException>()
+        val harness = ControllerHarness(long, failures = failures::add)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.sinks.last().dead = true
+        harness.step()
+
+        assertEquals(1, failures.size)
+        assertTrue(failures.single() is IllegalStateException)
+    }
+
+    @Test
+    fun aListenWriteThatCannotBeBuiltNeitherEscapesItsExecutorNorHoldsTheClaim() {
+        val escaped = mutableListOf<Throwable>()
+        val io = Executor { task ->
+            try {
+                task.run()
+            } catch (failure: Throwable) {
+                escaped += failure
+            }
+        }
+        val harness = ControllerHarness(first, claimIo = io, listenIo = io)
+        // As OkHttp refuses a cookie with non-ASCII text.
+        harness.listen.answer = { throw IllegalArgumentException("Unexpected char 0xe9 at 3 in Cookie value") }
+        harness.load(1, first)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        harness.runUntil { "release:token-1" in harness.claims.calls }
+
+        assertEquals(emptyList<Throwable>(), escaped)
+        assertTrue(harness.events.none { it is NativePlaybackEvent.Error })
+        assertEquals(listOf(Run(1, 0, first.frames)), harness.sinks.last().runs())
+    }
+
+    @Test
+    fun aClaimRequestThatCannotBeBuiltFailsReadablyInsideItsExecutor() {
+        val escaped = mutableListOf<Throwable>()
+        val io = Executor { task ->
+            try {
+                task.run()
+            } catch (failure: Throwable) {
+                escaped += failure
+            }
+        }
+        val harness = ControllerHarness(first, claimIo = io)
+        harness.claims.acquireResponse = { throw IllegalArgumentException("Unexpected char 0xe9 at 3 in Cookie value") }
+        harness.load(1, first)
+        repeat(5) { harness.step() }
+
+        assertEquals(emptyList<Throwable>(), escaped)
+        assertEquals(NativePlaybackState.ERROR, harness.state())
+        assertEquals("ownership_unavailable", harness.events.filterIsInstance<NativePlaybackEvent.Error>().single().code)
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
+    }
+
+    @Test
+    fun aSecondShutdownWaitsForTheFirstAndOneAfterRetirementAnswersAtOnce() {
+        val listenIo = ManualExecutor()
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        val finished = mutableListOf<String>()
+        harness.controller.shutdown { finished += "update" }
+        harness.step()
+        harness.controller.shutdown { finished += "origin" }
+        harness.step()
+        // Both wait for the listen writes still in flight.
+        assertEquals(emptyList<String>(), finished)
+
+        harness.settleListening(listenIo)
+        assertEquals(listOf("update", "origin"), finished)
+        assertEquals(1, harness.claims.calls.count { it.startsWith("release:") })
+
+        harness.controller.shutdown { finished += "destroy" }
+        assertEquals(listOf("update", "origin", "destroy"), finished)
+    }
+
+    @Test
     fun aClaimAnswerArrivingAfterShutdownNeverReachesTheRetiredExecutors() {
         val pending = ManualExecutor()
         var retired = false
@@ -66,10 +158,12 @@ class PlaybackThreadTest {
         harness.step()
         assertTrue(finished)
 
-        // The acquisition sent before the shutdown answers now, with a claim nobody wants.
+        // The acquisition sent before the shutdown answers now, with a claim nobody wants: its own
+        // request gives it back, so the server does not hold the old origin's claim for its lease.
         pending.drain()
         harness.step()
         assertEquals(NativePlaybackState.IDLE, harness.state())
+        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
 
         // A media-session command waiting for the retired controller is answered, never left hanging.
         var answered = false
@@ -104,8 +198,24 @@ class PlaybackThreadTest {
         harness.controller.pause()
         repeat(3) { harness.step() }
         assertEquals(listOf("owned", "released"), harness.ownership())
-        // Paused and released: only the next keep-warm read is due.
-        assertEquals(NativePlaybackController.KEEP_WARM_MS - harness.now, harness.controller.runOnce())
+        // Paused and released: only the next keep-warm read is due, counted from when this client last owned playback.
+        val wait = harness.controller.runOnce()
+        assertTrue("waits $wait ms", wait in NativePlaybackController.KEEP_WARM_MS - harness.now..NativePlaybackController.KEEP_WARM_MS)
+    }
+
+    @Test
+    fun anOwnerWaitingForItsListenWritesStillSleepsAfterOwningPlaybackForLong() {
+        val listenIo = ManualExecutor()
+        val harness = ControllerHarness(first, listenIo = listenIo)
+        harness.controller.warmConnections()
+        harness.load(1, first)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        // The claim outlasts the keep-warm interval while the listen writes of the end are in flight.
+        repeat((NativePlaybackController.KEEP_WARM_MS / 5_000 + 2).toInt()) { harness.step(5_000) }
+        assertEquals(listOf("owned"), harness.ownership())
+
+        // Nothing is loaded, so the thread waits for the next heartbeat instead of spinning.
+        assertTrue(harness.controller.runOnce() > 1_000)
     }
 
     @Test

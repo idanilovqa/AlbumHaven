@@ -58,6 +58,16 @@ class AudioFocusPolicy {
         return effects
     }
 
+    /**
+     * Whether a play may reach the player now. While another app has focus for a moment the play
+     * is remembered for the platform's gain instead, so nothing claims or announces playback meanwhile.
+     */
+    fun mayPlay(): Boolean {
+        if (!transientlyLost) return true
+        resumeOnGain = true
+        return false
+    }
+
     /** A refused request (for example during a call) leaves playback paused. */
     fun onRequestResult(granted: Boolean): List<FocusEffect> {
         if (granted) return emptyList()

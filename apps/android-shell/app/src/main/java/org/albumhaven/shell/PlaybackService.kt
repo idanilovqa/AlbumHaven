@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -63,7 +64,7 @@ import org.albumhaven.shell.playback.SystemRequest
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Owns native playback for as long as it may be heard: the controller, its Media3 session and
@@ -92,18 +93,21 @@ class PlaybackService : MediaLibraryService() {
 
     private val binder = PlaybackServiceBinder(Handle())
     private val main = Handler(Looper.getMainLooper())
-    private val client = ShellSession.client()
     private val host: PlaybackHost get() = application as PlaybackHost
+    private val client get() = host.client
     private var eventListener: ((NativePlaybackEvent) -> Unit)? = null
 
     /** Whether a document negotiated the bridge, so it refreshes the references it handed over. */
     private var documentAttached = false
-    private val port = ControllerPlaybackPort({ controller }) { attached -> documentAttached = attached }
     private val focusPolicy = AudioFocusPolicy()
+    private val port = ControllerPlaybackPort({ controller }, focusPolicy::mayPlay) { attached -> documentAttached = attached }
 
     // One executor per controller lifetime, so a retired controller's release reaches its own origin.
     private var playbackIo: ExecutorService = Executors.newSingleThreadExecutor()
     private var listenIo: ExecutorService = Executors.newSingleThreadExecutor()
+
+    /** A package-replacement preparation still waiting for its controller; a destroyed service answers it at once. */
+    private var pendingReplacement: Runnable? = null
 
     @Volatile private lateinit var origin: String
     private lateinit var controller: NativePlaybackController
@@ -156,7 +160,7 @@ class PlaybackService : MediaLibraryService() {
         val restored = restoreStore.load(origin)
         // The restored queue's controller ID lets the document that handed Android that queue adopt it again.
         controller = createController(origin, restored?.clientId)
-        player = NativeMediaPlayer(Looper.getMainLooper(), { controller }, { origin }, ::resumeFor)
+        player = NativeMediaPlayer(Looper.getMainLooper(), { controller }, { origin }, ::resumeFor, focusPolicy::mayPlay)
         player.showRestored(restored)
         artwork = SessionArtworkLoader(client) { session(origin) }
         session = MediaLibrarySession.Builder(this, player, SessionCallback())
@@ -227,6 +231,7 @@ class PlaybackService : MediaLibraryService() {
         override fun selectOrigin(origin: String) {
             if (origin == this@PlaybackService.origin) return
             retireController()
+            newExecutors()
             restoreStore.clear()
             this@PlaybackService.origin = origin
             controller = createController(origin)
@@ -251,28 +256,28 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun prepareForPackageReplacement(done: () -> Unit) {
         val retiring = controller
-        val retiredPlaybackIo = playbackIo
-        val retiredListenIo = listenIo
-        var finished = false
-        val finish = Runnable {
-            if (finished) return@Runnable
-            finished = true
+        val retiredIo = listOf(playbackIo, listenIo)
+        lateinit var finish: Runnable
+        finish = Runnable {
+            if (pendingReplacement !== finish) return@Runnable
+            pendingReplacement = null
+            main.removeCallbacks(finish)
             if (!destroyed && controller === retiring) {
-                playbackIo = Executors.newSingleThreadExecutor()
-                listenIo = Executors.newSingleThreadExecutor()
+                newExecutors()
                 controller = createController(origin, retiring.snapshot.clientId)
             }
             done()
         }
+        pendingReplacement = finish
         main.postDelayed(finish, REPLACEMENT_WAIT_MS)
+        // Each executor's last task runs after the requests queued before it, then the executor stops.
         retiring.shutdown {
-            retiredPlaybackIo.shutdown()
-            retiredListenIo.shutdown()
-            Thread {
-                retiredListenIo.awaitTermination(REPLACEMENT_WAIT_MS, TimeUnit.MILLISECONDS)
-                retiredPlaybackIo.awaitTermination(REPLACEMENT_WAIT_MS, TimeUnit.MILLISECONDS)
-                main.post(finish)
-            }.start()
+            val remaining = AtomicInteger(retiredIo.size)
+            val drained = Runnable { if (remaining.decrementAndGet() == 0) main.post(finish) }
+            retiredIo.forEach { executor ->
+                executor.execute(drained)
+                executor.shutdown()
+            }
         }
     }
 
@@ -281,6 +286,8 @@ class PlaybackService : MediaLibraryService() {
         session.release()
         player.release()
         retireController()
+        // An update waiting for playback to stop is not left waiting for a service that is gone.
+        pendingReplacement?.run()
         artwork.release()
         resumeIo.shutdownNow()
         apply(focusPolicy.onState(NativePlaybackState.IDLE))
@@ -312,6 +319,7 @@ class PlaybackService : MediaLibraryService() {
                     loop.run()
                 }, "AlbumHavenPlayback").start()
             },
+            failures = { failure -> if (BuildConfig.DEBUG) Log.w(TAG, "Playback stopped", failure) },
         )
         return created.also { it.start() }
     }
@@ -326,12 +334,12 @@ class PlaybackService : MediaLibraryService() {
     private fun retireController() {
         // The old controller finishes its last listen writes and claim release on the old
         // executors, against the old origin, without holding up the main thread.
-        val retiredPlaybackIo = playbackIo
-        val retiredListenIo = listenIo
-        controller.shutdown {
-            retiredPlaybackIo.shutdown()
-            retiredListenIo.shutdown()
-        }
+        val retiredIo = listOf(playbackIo, listenIo)
+        controller.shutdown { retiredIo.forEach(ExecutorService::shutdown) }
+    }
+
+    /** The next controller's own executors. */
+    private fun newExecutors() {
         playbackIo = Executors.newSingleThreadExecutor()
         listenIo = Executors.newSingleThreadExecutor()
     }
@@ -522,5 +530,6 @@ class PlaybackService : MediaLibraryService() {
 
         /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */
         private const val REPLACEMENT_WAIT_MS = 8_000L
+        private const val TAG = "AlbumHavenPlayback"
     }
 }

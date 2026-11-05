@@ -113,7 +113,8 @@ class ListenSessionsParityTest {
                 }
                 "lost" -> sessions.ownershipLost(step.getDouble("position"))
                 "refresh" -> {
-                    // As the controller applies a reloaded queue: same listen key, fresh reference, then a start.
+                    // As the controller applies a reloaded queue: same listen key, fresh reference, then a start
+                    // (NativePlaybackControllerTest.aRefreshedReferenceContinuesTheSameListen pins that order).
                     val refreshed = play(step.getString("track")).copy(playbackRef = step.getString("playbackRef"))
                     playing = refreshed
                     sessions.select(refreshed, step.getDouble("position"), duration)

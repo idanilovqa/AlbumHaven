@@ -11,15 +11,22 @@ import java.net.URLDecoder
 class ShellSession(private val origin: () -> String, private val cookies: (url: String) -> String?) {
     fun origin(): String = origin.invoke()
 
-    /** Applies the session cookie, its CSRF header and the page origin the server checks. */
+    /**
+     * Applies the session cookie, its CSRF header and the page origin the server checks. A value
+     * HTTP cannot carry, such as a cookie with non-ASCII text, is left out rather than thrown, so
+     * the server answers as it does a signed-out request.
+     */
     fun authorize(builder: Request.Builder, withCsrf: Boolean): Request.Builder {
         val selected = origin()
-        val cookieHeader = cookies(selected).orEmpty()
+        val cookieHeader = cookies(selected).orEmpty().takeIf(::isHeaderValue).orEmpty()
         builder.header("Origin", selected)
         if (cookieHeader.isNotEmpty()) builder.header("Cookie", cookieHeader)
-        if (withCsrf) csrfToken(cookieHeader)?.let { builder.header(CSRF_HEADER, it) }
+        if (withCsrf) csrfToken(cookieHeader)?.takeIf(::isHeaderValue)?.let { builder.header(CSRF_HEADER, it) }
         return builder
     }
+
+    /** OkHttp's own rule for a header value: tabs and visible ASCII. */
+    private fun isHeaderValue(value: String) = value.all { it == '\t' || it in ' '..'~' }
 
     companion object {
         const val CSRF_HEADER = "X-Album-Haven-CSRF"
@@ -30,7 +37,7 @@ class ShellSession(private val origin: () -> String, private val cookies: (url: 
          * cookie and CSRF headers [authorize] sets to whatever host a redirect names.
          */
         fun client(base: OkHttpClient = OkHttpClient()): OkHttpClient =
-            base.newBuilder().followRedirects(false).followSslRedirects(false).build()
+            base.newBuilder().followRedirects(false).build()
 
         /** Mirrors `readSessionCsrfCookie` in music_app/static/js/runtime/session-csrf-fetch.js. */
         fun csrfToken(cookieHeader: String): String? = cookieHeader.split(';').firstNotNullOfOrNull { part ->

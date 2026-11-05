@@ -2,6 +2,7 @@ package org.albumhaven.shell.playback
 
 import android.app.PendingIntent
 import android.os.Binder
+import okhttp3.OkHttpClient
 
 /** The native player as the web bridge drives it. */
 interface NativePlaybackPort {
@@ -22,14 +23,20 @@ interface NativePlaybackPort {
     fun documentDetached()
 }
 
-/** [controller] names the current origin's controller, which a sandbox switch replaces. */
+/**
+ * [controller] names the current origin's controller, which a sandbox switch replaces. A play
+ * [mayPlay] holds back, as while another app has audio focus for a moment, is accepted and left
+ * for the focus owner to resume.
+ */
 class ControllerPlaybackPort(
     private val controller: () -> NativePlaybackController,
+    private val mayPlay: () -> Boolean = { true },
     private val attachment: (attached: Boolean) -> Unit = {},
 ) : NativePlaybackPort {
     override val snapshot get() = controller().snapshot
     override fun loadQueue(load: QueueLoad) = controller().loadQueue(load)
-    override fun play(queueRevision: Long) = controller().play(queueRevision)
+    override fun play(queueRevision: Long) =
+        if (mayPlay()) controller().play(queueRevision) else CommandResult.ACCEPTED
     override fun pause() = controller().pause()
     override fun stop() = controller().stop()
     override fun next(queueRevision: Long) = controller().next(queueRevision)
@@ -44,7 +51,7 @@ class ControllerPlaybackPort(
 
     override fun documentDetached() {
         attachment(false)
-        controller().documentStarted()
+        controller().documentDetached()
     }
 }
 
@@ -68,6 +75,9 @@ class PlaybackServiceBinder(val handle: PlaybackServiceHandle) : Binder()
 
 /** What the app hosting the playback service provides it; the app's `Application` implements it. */
 interface PlaybackHost {
+    /** The session client ([org.albumhaven.shell.net.ShellSession.client]) every playback request uses. */
+    val client: OkHttpClient
+
     /** The origin playback belongs to when a new process starts. */
     fun initialOrigin(): String
 

@@ -2,6 +2,7 @@ package org.albumhaven.shell.playback
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,6 +15,26 @@ class NativePcmEngineTest {
     private fun metadata(harness: PcmHarness) {
         harness.server.decoding = false
         harness.deliver()
+    }
+
+    @Test
+    fun releaseLetsGoOfTheOutputEvenWhenStoppingItFails() {
+        val operations = mutableListOf<String>()
+        val refusing = object : PcmSink {
+            override val sampleRate = RATE
+            override fun write(samples: FloatArray, offsetSamples: Int, frames: Int) = frames
+            override fun heardFrames() = 0L
+            override fun play() {}
+            override fun pause() {}
+            override fun flush() = throw IllegalStateException("flush() called on an uninitialized AudioTrack")
+            override fun release() {
+                operations += "release"
+            }
+        }
+        val engine = NativePcmEngine(PcmEngineConfig(RATE), refusing, { true }) {}
+
+        assertThrows(IllegalStateException::class.java) { engine.release() }
+        assertEquals(listOf("release"), operations)
     }
 
     @Test

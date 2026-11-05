@@ -182,6 +182,8 @@ class NativePlaybackController(
     wallClockMs: () -> Long = System::currentTimeMillis,
     /** Starts the playback thread; the Android service runs it at audio priority. */
     private val startThread: (Runnable) -> Unit = { Thread(it, "AlbumHavenPlayback").start() },
+    /** Hears each failure that stopped playback on the playback thread, so it can be logged. */
+    private val failures: (RuntimeException) -> Unit = {},
 ) {
     private val tasks = LinkedBlockingQueue<Runnable>()
 
@@ -311,7 +313,7 @@ class NativePlaybackController(
      * the applied revision continue, so the document can adopt them from its handshake snapshot.
      * A document counts revisions from one, so its first queue replaces this one whatever its revision.
      */
-    fun documentStarted() {
+    fun documentDetached() {
         synchronized(revisionLock) { documentRestarted = true }
     }
 
@@ -344,9 +346,17 @@ class NativePlaybackController(
      * Stops playback without waiting: a listen heard mid-play ends with the web's unload checkpoint,
      * and the claim, the socket and the playback thread go once the listen writes drain, or after
      * [SHUTDOWN_CHECKPOINT_MS], so none is refused for a released claim. [finished] then runs on the
-     * playback thread, after the claim release has been handed to its executor.
+     * playback thread, after the claim release has been handed to its executor. A later shutdown
+     * waits for the same moment, and once the controller is retired its [finished] runs at once.
      */
-    fun shutdown(finished: () -> Unit = {}) = post {
+    fun shutdown(finished: () -> Unit = {}) = post(Barrier {
+        if (retired) return@Barrier finished()
+        val earlier = shutdownFinished
+        shutdownFinished = {
+            earlier()
+            finished()
+        }
+        if (shutdownDeadlineMs != null) return@Barrier
         measureListening()
         if (wantPlay && claims.owned) {
             listens.unload(positionMs() / 1000.0, (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0)
@@ -354,9 +364,8 @@ class NativePlaybackController(
         stopNow(keepPosition = true)
         releasePending = false
         warmUntilMs = null
-        shutdownFinished = finished
         shutdownDeadlineMs = clock() + SHUTDOWN_CHECKPOINT_MS
-    }
+    })
 
     // ---- Playback thread ----
 
@@ -405,7 +414,8 @@ class NativePlaybackController(
     private fun guarded(task: Runnable) {
         try {
             task.run()
-        } catch (_: RuntimeException) {
+        } catch (failure: RuntimeException) {
+            failures(failure)
             outputFailed()
         }
     }
@@ -596,16 +606,22 @@ class NativePlaybackController(
         val current = engine
         if (current != null && sink?.sampleRate == rate) return current
         releaseOutput()
-        val newSink = sinks(rate)
-        sink = newSink
-        preferredRate = rate
         val sender = PcmControlSender { control ->
             val open = transport
             transportOpen && open != null && open.send(AhpcControlCodec.encode(control))
         }
-        return NativePcmEngine(PcmEngineConfig(rate), newSink, sender, lastGeneration, ::onEngineEvent).also {
-            engine = it
+        val newSink = sinks(rate)
+        // Android opens rates the PCM socket refuses; such an output is let go before it is ever used.
+        val created = try {
+            NativePcmEngine(PcmEngineConfig(rate), newSink, sender, lastGeneration, ::onEngineEvent)
+        } catch (refused: RuntimeException) {
+            newSink.release()
+            throw refused
         }
+        sink = newSink
+        engine = created
+        preferredRate = rate
+        return created
     }
 
     private fun onEngineEvent(event: PcmEngineEvent) {
@@ -934,7 +950,7 @@ class NativePlaybackController(
         val deadline = shutdownDeadlineMs ?: return
         if (effectsInFlight > 0 && clock() < deadline) return
         shutdownDeadlineMs = null
-        claims.release()
+        claims.close()
         closeTransport()
         releaseOutput()
         retired = true
@@ -945,26 +961,27 @@ class NativePlaybackController(
     /** One listen write as the owner, once a pending claim settles; [done] runs on the playback thread. */
     private fun sendListen(effect: ListenEffect, body: JSONObject, done: (ListenWriteOutcome) -> Unit) {
         effectsInFlight += 1
+        // A write that follows from this one is queued before the claim may go.
+        fun finish(outcome: ListenWriteOutcome) = try {
+            done(outcome)
+        } finally {
+            effectsInFlight -= 1
+        }
         claims.awaitOwnership { outcome ->
             val token = claims.heldToken
-            if (outcome != ClaimOutcome.GRANTED || token == null) {
+            when {
                 // Without a claim the server refuses the write, as it answers the web's with 403.
-                done(ListenWriteOutcome.Refused)
-                effectsInFlight -= 1
-                return@awaitOwnership
-            }
-            if (effect != ListenEffect.COMPLETE && claims.scrobblingAvailable == false) {
+                outcome != ClaimOutcome.GRANTED || token == null -> finish(ListenWriteOutcome.Refused)
                 // Built while the claim was requested; its answer says Last.fm cannot take it.
-                done(ListenWriteOutcome.LastfmUnavailable)
-                effectsInFlight -= 1
-                return@awaitOwnership
-            }
-            listenIo.execute {
-                val result = listenApi.post(effect, clientId, token, body)
-                post {
-                    // A write that follows from this one is queued before the claim may go.
-                    done(ListenWriteOutcome.of(result))
-                    effectsInFlight -= 1
+                effect != ListenEffect.COMPLETE && claims.scrobblingAvailable == false -> finish(ListenWriteOutcome.LastfmUnavailable)
+                else -> listenIo.execute {
+                    // A request that cannot even be built, such as one OkHttp refuses, is as unanswered as a lost one.
+                    val result = try {
+                        listenApi.post(effect, clientId, token, body)
+                    } catch (_: RuntimeException) {
+                        ListenEffectResult.Unreachable
+                    }
+                    post { finish(ListenWriteOutcome.of(result)) }
                 }
             }
         }
@@ -1005,7 +1022,11 @@ class NativePlaybackController(
         val until = warmUntilMs ?: return
         val now = clock()
         when {
-            claims.owned -> warmUntilMs = now + KEEP_WARM_FOR_MS
+            // The owner's own requests keep its connections warm.
+            claims.owned -> {
+                warmUntilMs = now + KEEP_WARM_FOR_MS
+                lastWarmMs = now
+            }
             now >= until -> warmUntilMs = null
             now - lastWarmMs >= KEEP_WARM_MS -> warm()
         }

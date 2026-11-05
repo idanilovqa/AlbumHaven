@@ -219,8 +219,11 @@ class NativePcmEngine(
     }
 
     fun release() {
-        stop("released")
-        sink.release()
+        try {
+            stop("released")
+        } finally {
+            sink.release()
+        }
     }
 
     /**
@@ -443,7 +446,7 @@ class NativePcmEngine(
                 // The retained loop plays from memory; the current ring waits at the loop end.
                 val frames = minOf(maxFrames - written, loopRange.frames - retainedReadFrame)
                 val accepted = sink.write(retained, retainedReadFrame * PcmRing.CHANNELS, frames)
-                check(accepted in 0..frames) { "sink accepted an invalid frame count" }
+                check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
                 retainedReadFrame = (retainedReadFrame + accepted) % loopRange.frames
                 timelineFrame += accepted
                 written += accepted
@@ -457,7 +460,7 @@ class NativePcmEngine(
             var frames = minOf(maxFrames - written, currentRing.contiguousFrames())
             if (loopRange != null) frames = minOf(frames.toLong(), loopRange.endFrame - timelineFrame).toInt()
             val accepted = sink.write(currentRing.samples, currentRing.readFrame * PcmRing.CHANNELS, frames)
-            check(accepted in 0..frames) { "sink accepted an invalid frame count" }
+            check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
             if (accepted == 0) break
             if (!stream.firstFrameRendered) {
                 stream.firstFrameRendered = true

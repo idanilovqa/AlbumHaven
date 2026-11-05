@@ -25,6 +25,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/render-markup-helpers.js',
   'js/runtime/alert-components.js',
   'js/runtime/album-artbox.js',
+  'js/runtime/album-additional-artbox.js',
   'js/runtime/gallery-main-components.js',
   'js/runtime/gallery-main-state.js',
   'js/runtime/gallery-card-component.js',

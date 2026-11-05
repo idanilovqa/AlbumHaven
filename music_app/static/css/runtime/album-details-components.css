@@ -16,6 +16,11 @@
 .album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 0; }
 :root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
+/* Release pages under the album art: one line, official icon, only the name underlines on hover. */
+.album-details-service-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 10px; }
+.album-details-service-link { display: inline-flex; align-items: center; gap: 7px; color: var(--appearance-ink, var(--text)); font-size: .8rem; font-weight: 600; text-decoration: none; }
+.album-details-service-link__icon { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 3px; }
+.album-details-service-link:is(:hover, :focus-visible) .album-details-service-link__label { text-decoration: underline; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__action-icon {
   display: block;

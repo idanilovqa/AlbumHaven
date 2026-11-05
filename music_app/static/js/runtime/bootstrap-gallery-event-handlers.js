@@ -87,6 +87,12 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-additional-artbox="1"]')) {
+    event.preventDefault();
+    openAlbumAdditionalArtboxLookup();
+    return;
+  }
+
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
@@ -103,6 +109,16 @@ function handleGalleryBootstrapClick(event) {
     const album = getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
+
+    if (action === 'add-artbox') {
+      beginAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'remove-artbox') {
+      void removeAlbumAdditionalArtbox();
+      return;
+    }
 
     if (action === 'separate-release') {
       void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);

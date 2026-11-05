@@ -140,6 +140,8 @@
   88% { opacity: .8; filter: brightness(1.2) drop-shadow(0 0 2px var(--album-track-accent)); }
   100% { opacity: 0; transform: rotate(1turn) scale(1); filter: brightness(1); }
 }
+.album-track-table .album-track-table__section-row { min-height: 0; padding-block: 7px; background: color-mix(in srgb, var(--appearance-ink, var(--text)) 6%, transparent); }
+.album-track-table__section-title { font-weight: 750; color: var(--appearance-ink, var(--text)); }
 .album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
 .album-track-table__secondary { container-type: inline-size; overflow: hidden; }

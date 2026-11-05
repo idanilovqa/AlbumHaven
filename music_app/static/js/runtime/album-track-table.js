@@ -154,7 +154,17 @@ function buildAlbumTrackTableHtml(config = {}) {
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: 'var(--album-track-table-columns)',
       columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
+      // A named section (provider tracklist heading) is a shaded full-span row before its first track.
+      rows: tracks.flatMap((track, index) => {
+        const row = buildAlbumTrackTableRow(track, index, config);
+        const sectionTitle = String(track?.sectionTitle || '').trim();
+        return sectionTitle ? [{
+          key: `section:${row.key}`,
+          className: 'album-track-table__section-row',
+          ariaLabel: sectionTitle,
+          fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
+        }, row] : [row];
+      }),
       density: 'compact',
       frame: 'outline',
       overflow: 'none',

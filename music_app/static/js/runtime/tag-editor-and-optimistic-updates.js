@@ -2053,6 +2053,10 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
+  if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
+    ? '' : buildAlbumServiceLinksHtml(album.external_links);
+  if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
@@ -2249,6 +2253,9 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const sectionTitleByFirstTrack = new Map((Array.isArray(album?.track_sections) ? album.track_sections : [])
+    .map((section) => [String(section?.first_track_path || '').trim(), String(section?.title || '').trim()])
+    .filter(([path, title]) => path && title));
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -2291,6 +2298,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
         isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
+        sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
     return {

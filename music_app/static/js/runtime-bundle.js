@@ -4430,14 +4430,21 @@ function buildMissingAlbumMarkHtml() {
 
 function buildAlbumArtboxHtml(config = {}) {
   const requestedState = String(config.state || '').trim().toLowerCase();
-  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+  const state = ['ready', 'loading', 'empty', 'missing', 'add'].includes(requestedState)
     ? requestedState
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
   const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
-  const content = state === 'missing' || state === 'empty'
+  // "add" invites the user to fill an empty artbox; it is the artbox's own action, not a page control.
+  const addAttributes = Object.entries(config.addAttributes || {})
+    .filter(([name]) => /^data-[a-z0-9-]+$/.test(name))
+    .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`)
+    .join('');
+  const content = state === 'add'
+    ? `<button type="button" class="album-artbox__add"${addAttributes}><span class="album-artbox__add-plus" aria-hidden="true">+</span><span>${escapeHtml(config.addLabel || 'Add art')}</span></button>`
+    : state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
       ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'
@@ -4481,6 +4488,200 @@ function handleUtilityAlbumArtboxError(image) {
 }
 
 // END js/runtime/album-artbox.js
+
+// BEGIN js/runtime/album-additional-artbox.js
+
+/* Album Details second artbox (slot 1): one extra user-chosen artwork under the album cover.
+   Slot 0 stays the album cover. The artbox always holds art: an empty "Add art" box exists only
+   until Album Details closes. Both artboxes use the same Cover Look Up. */
+const ALBUM_ADDITIONAL_ARTBOX_SLOT = 1;
+const albumAdditionalArtboxState = { pendingAlbumKey: '' };
+
+function getCurrentAlbumDetailsRelease() {
+  return state.modalReleases?.[state.modalReleaseIndex] || null;
+}
+
+function getAlbumAdditionalArtwork(album) {
+  const artworks = Array.isArray(album?.additional_artworks) ? album.additional_artworks : [];
+  return artworks.find((artwork) => Number(artwork?.slot) === ALBUM_ADDITIONAL_ARTBOX_SLOT) || null;
+}
+
+// Cover URL helpers take an album-shaped source; give it its own identity so the album's
+// optimistic main-cover state never leaks into the second artbox.
+function buildAdditionalArtworkCoverSource(album, artwork) {
+  return {
+    key: `${album?.key || ''}::artbox-${ALBUM_ADDITIONAL_ARTBOX_SLOT}`,
+    name: album?.name || '',
+    album_artist: album?.album_artist || '',
+    tracks: [],
+    cover_path: artwork?.cover_path || '',
+    remote_cover_url: artwork?.remote_cover_url || '',
+    remote_cover_source: 'artbox',
+  };
+}
+
+function buildAlbumAdditionalArtboxHtml(album) {
+  const albumName = String(album?.name || 'Album');
+  const artwork = getAlbumAdditionalArtwork(album);
+  if (artwork) {
+    const source = buildAdditionalArtworkCoverSource(album, artwork);
+    const label = `Second artbox for ${albumName}`;
+    return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
+      state: 'ready',
+      label,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-additional-artbox="1" aria-label="${escapeHtml(`Change ${label}`)}"><img src="${escapeHtml(buildAlbumDisplayCoverUrl(source))}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+    })}</div>`;
+  }
+  if (albumAdditionalArtboxState.pendingAlbumKey && albumAdditionalArtboxState.pendingAlbumKey === String(album?.key || '')) {
+    return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
+      state: 'add',
+      label: `Add art to a second artbox for ${albumName}`,
+      addLabel: 'Add art',
+      addAttributes: { 'data-open-additional-artbox': '1' },
+    })}</div>`;
+  }
+  return '';
+}
+
+function renderAlbumAdditionalArtbox(coverElement, album) {
+  if (!coverElement?.querySelectorAll) return;
+  coverElement.querySelectorAll('.track-modal-additional-artbox').forEach((node) => node.remove());
+  const html = buildAlbumAdditionalArtboxHtml(album);
+  if (html) coverElement.insertAdjacentHTML('beforeend', html);
+}
+
+function rerenderCurrentAlbumDetails() {
+  const release = getCurrentAlbumDetailsRelease();
+  if (release && typeof renderTrackModalRelease === 'function') renderTrackModalRelease(release);
+}
+
+function showAlbumArtboxContextMenu(x, y, slot) {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return false;
+  const items = [];
+  if (slot === ALBUM_ADDITIONAL_ARTBOX_SLOT) {
+    items.push('<button type="button" class="album-card-context-menu-item" data-album-card-action="remove-artbox">Remove artbox</button>');
+  } else if (
+    albumHasDisplayCover(album)
+    && !getAlbumAdditionalArtwork(album)
+    && albumAdditionalArtboxState.pendingAlbumKey !== String(album.key || '')
+  ) {
+    items.push('<button type="button" class="album-card-context-menu-item" data-album-card-action="add-artbox">Add another artbox</button>');
+  }
+  if (!items.length) return false;
+  const menu = ensureAlbumCardContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.albumKey = String(album.key || '');
+  menu.dataset.menuKind = 'artbox';
+  menu.innerHTML = items.join('');
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  return true;
+}
+
+function beginAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album || !albumHasDisplayCover(album) || getAlbumAdditionalArtwork(album)) return;
+  albumAdditionalArtboxState.pendingAlbumKey = String(album.key || '');
+  rerenderCurrentAlbumDetails();
+}
+
+function clearPendingAlbumAdditionalArtbox() {
+  albumAdditionalArtboxState.pendingAlbumKey = '';
+}
+
+function openAlbumAdditionalArtboxLookup() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (album) void openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+}
+
+function applyAlbumAdditionalArtworks(albumKey, artworks) {
+  const key = String(albumKey || '');
+  const list = Array.isArray(artworks) ? artworks : [];
+  for (const release of state.modalReleases || []) {
+    if (String(release?.key || '') === key) release.additional_artworks = list;
+  }
+  if (getAlbumAdditionalArtwork({ additional_artworks: list }) && albumAdditionalArtboxState.pendingAlbumKey === key) {
+    clearPendingAlbumAdditionalArtbox();
+  }
+  if (String(getCurrentAlbumDetailsRelease()?.key || '') === key) rerenderCurrentAlbumDetails();
+}
+
+async function postAlbumAdditionalArtwork(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'The artbox could not be updated.');
+  return data;
+}
+
+async function removeAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return;
+  if (!getAlbumAdditionalArtwork(album)) {
+    clearPendingAlbumAdditionalArtbox();
+    rerenderCurrentAlbumDetails();
+    return;
+  }
+  try {
+    const data = await postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork/remove', {
+      album, slot: ALBUM_ADDITIONAL_ARTBOX_SLOT,
+    });
+    applyAlbumAdditionalArtworks(album.key, data.additional_artworks);
+  } catch (error) {
+    showToast(error.message, 'error', 3200);
+  }
+}
+
+// Cover Look Up opened for the second artbox: the first artbox's art cannot be chosen again.
+function isCoverLookupItemInFirstArtbox(item, kind) {
+  const modal = state.coverLookup?.modal;
+  if (!modal?.artboxSlot) return false;
+  const album = modal.album || {};
+  if (kind === 'saved-remote') return true;
+  if (kind === 'local') {
+    const coverPath = String(album.cover_path || '').trim();
+    return Boolean(coverPath) && String(item?.path || '').trim() === coverPath;
+  }
+  if (kind === 'remote') {
+    const urls = [album.remote_cover_url, album.remote_cover_thumbnail_url]
+      .map((value) => String(value || '').trim()).filter(Boolean);
+    return urls.includes(String(item?.url || '').trim());
+  }
+  return false;
+}
+
+async function saveAdditionalArtworkFromLookup() {
+  const modal = state.coverLookup.modal;
+  const album = modal.album;
+  const remote = modal.selectedRemoteId
+    ? (modal.possibleMatches || []).find((candidate) => String(candidate?.id || '') === String(modal.selectedRemoteId))
+    : null;
+  const selection = remote
+    ? { source_kind: 'remote', remote_url: String(remote.url || '') }
+    : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_path: modal.pendingLocalPath } : null);
+  if (!album || !selection) return;
+  modal.saving = true;
+  syncCoverLookupSaveButton();
+  try {
+    const data = await postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork', {
+      album, slot: modal.artboxSlot, ...selection,
+    });
+    applyAlbumAdditionalArtworks(album.key, data.additional_artworks);
+    closeCoverLookupModal();
+  } catch (error) {
+    showToast(error.message, 'error', 3200);
+  } finally {
+    modal.saving = false;
+    syncCoverLookupSaveButton();
+  }
+}
+
+// END js/runtime/album-additional-artbox.js
 
 // BEGIN js/runtime/gallery-main-components.js
 
@@ -5039,6 +5240,23 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const secondaryHtml = [...secondaryParts, sourceMarkersHtml, ...tagParts].join('');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
   return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+}
+
+const ALBUM_SERVICE_LINK_PROVIDERS = Object.freeze({
+  discogs: Object.freeze({ label: 'Discogs', host: /(^|\.)discogs\.com$/, icon: '/static/images/icons/service-discogs.png' }),
+  musicbrainz: Object.freeze({ label: 'MusicBrainz', host: /(^|\.)musicbrainz\.org$/, icon: '/static/images/icons/service-musicbrainz.png' }),
+});
+
+// Known release pages under the album art. Only HTTPS pages on each service's own host render.
+function buildAlbumServiceLinksHtml(links = []) {
+  const items = (Array.isArray(links) ? links : []).map((link) => {
+    const provider = ALBUM_SERVICE_LINK_PROVIDERS[String(link?.provider || '')];
+    let url = null;
+    try { url = new URL(String(link?.url || '')); } catch { url = null; }
+    if (!provider || !url || url.protocol !== 'https:' || !provider.host.test(url.hostname)) return '';
+    return `<a class="album-details-service-link" href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer"><img class="album-details-service-link__icon" src="${provider.icon}" alt="" width="16" height="16"><span class="album-details-service-link__label">${provider.label}</span></a>`;
+  }).filter(Boolean);
+  return items.length ? `<div class="album-details-service-links" aria-label="Release pages">${items.join('')}</div>` : '';
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -14460,6 +14678,8 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
@@ -19755,7 +19975,17 @@ function buildAlbumTrackTableHtml(config = {}) {
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: 'var(--album-track-table-columns)',
       columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
+      // A named section (provider tracklist heading) is a shaded full-span row before its first track.
+      rows: tracks.flatMap((track, index) => {
+        const row = buildAlbumTrackTableRow(track, index, config);
+        const sectionTitle = String(track?.sectionTitle || '').trim();
+        return sectionTitle ? [{
+          key: `section:${row.key}`,
+          className: 'album-track-table__section-row',
+          ariaLabel: sectionTitle,
+          fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
+        }, row] : [row];
+      }),
       density: 'compact',
       frame: 'outline',
       overflow: 'none',
@@ -30409,7 +30639,8 @@ function applyCoverLookupCandidateSource(candidateSource) {
   const task = (state.coverLookup.tasks || []).find((item) => (
     String(item?.id || '') === String(modal.taskId || '')
   ));
-  const hasManualChoice = modal.album?.cover_selection_origin === 'user'
+  const hasManualChoice = Boolean(modal.artboxSlot)
+    || modal.album?.cover_selection_origin === 'user'
     || Boolean(task && isActionedCoverLookupNotification(task))
     || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
   modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
@@ -30749,7 +30980,8 @@ function syncCoverLookupSaveButton() {
   const savedRemoteCandidateId = String(currentTask?.selected_candidate_id || '');
   const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
   const hasLocalSelection = hasPendingLocalCoverSelection();
-  const hasPastedSelection = Boolean(pendingPastedImageId);
+  // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
+  const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
   ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
@@ -31961,6 +32193,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isPastedKind = kind === 'pasted';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
+  const inFirstArtbox = typeof isCoverLookupItemInFirstArtbox === 'function' && isCoverLookupItemInFirstArtbox(item, kind);
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
@@ -31981,7 +32214,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
-  const isActive = kind === 'local'
+  const isActive = !inFirstArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
@@ -31998,7 +32231,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
-        && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+        && state.coverLookup.modal.selectedRemoteId === String(item?.id || '')));
   const isSuggested = kind === 'remote'
     && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
@@ -32011,7 +32244,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
   const otherRemoteArtAttr = isOtherRemoteArt ? 'data-cover-lookup-other-remote-art="1"' : '';
-  const selectAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  const selectAttr = inFirstArtbox || (isOtherRemoteArt && !isSelectableOtherRemoteArt)
     ? ''
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
@@ -32036,10 +32269,12 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
+  const actionLabel = inFirstArtbox ? 'In the first artbox' : kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  const roleAttr = inFirstArtbox
+    ? 'role="group" aria-disabled="true"'
+    : isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
     : 'role="button" tabindex="0"';
   const fallbackPreviewHtml = `
@@ -32049,7 +32284,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${inFirstArtbox ? 'is-disabled' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
@@ -32066,7 +32301,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isOtherRemoteArt && !isSelectableOtherRemoteArt && !inFirstArtbox ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -33245,6 +33480,8 @@ async function openCoverLookupModal(album, options = {}) {
     cachedCandidates.length,
   );
   state.coverLookup.modal.album = album;
+  // Slot 1 means the lookup chooses art for the second artbox, not the album cover.
+  state.coverLookup.modal.artboxSlot = Number(options.artboxSlot) || 0;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
   state.coverLookup.modal.localInventoryLoaded = false;
@@ -33324,6 +33561,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
+  state.coverLookup.modal.artboxSlot = 0;
   state.coverLookup.modal.taskId = '';
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
@@ -33925,6 +34163,10 @@ async function savePastedCoverFromLookup(imageId) {
 
 async function saveCoverFromLookup() {
   if (isCoverLookupMutationPending()) return;
+  if (state.coverLookup.modal.artboxSlot) {
+    await saveAdditionalArtworkFromLookup();
+    return;
+  }
   if (String(state.coverLookup.modal.selectedRemoteId || '')) {
     await saveRemoteCoverFromLookup();
     return;
@@ -35997,6 +36239,10 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
+  if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
+    ? '' : buildAlbumServiceLinksHtml(album.external_links);
+  if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
@@ -36193,6 +36439,9 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const sectionTitleByFirstTrack = new Map((Array.isArray(album?.track_sections) ? album.track_sections : [])
+    .map((section) => [String(section?.first_track_path || '').trim(), String(section?.title || '').trim()])
+    .filter(([path, title]) => path && title));
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -36235,6 +36484,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
         isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
+        sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
     return {
@@ -45176,6 +45426,12 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-additional-artbox="1"]')) {
+    event.preventDefault();
+    openAlbumAdditionalArtboxLookup();
+    return;
+  }
+
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
@@ -45192,6 +45448,16 @@ function handleGalleryBootstrapClick(event) {
     const album = getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
+
+    if (action === 'add-artbox') {
+      beginAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'remove-artbox') {
+      void removeAlbumAdditionalArtbox();
+      return;
+    }
 
     if (action === 'separate-release') {
       void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);
@@ -49353,6 +49619,11 @@ document.addEventListener('contextmenu', (event) => {
       event.clientY,
       sidebarArtist.getAttribute('data-sidebar-artist') || '',
     );
+    return;
+  }
+  const artboxShell = event.target.closest('#track-modal-cover .track-modal-cover-shell');
+  if (artboxShell && showAlbumArtboxContextMenu(event.clientX, event.clientY, Number(artboxShell.dataset.artboxSlot || 0))) {
+    event.preventDefault();
     return;
   }
   const versionTab = event.target.closest('[data-version-context-key]');

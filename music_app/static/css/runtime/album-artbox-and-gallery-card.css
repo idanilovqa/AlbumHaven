@@ -36,6 +36,11 @@
 .album-artbox__missing-label { stroke-width: 1.5; opacity: 0.62; }
 .album-artbox__missing-hub { fill: currentColor; stroke: none; }
 .album-artbox__missing-slash { stroke-width: 3.8; }
+.album-artbox--add { border: 1px dashed color-mix(in srgb, var(--muted) 60%, transparent); }
+.album-artbox__add { display: grid; place-content: center; justify-items: center; gap: 6px; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
+.album-artbox__add-plus { font-size: 2.75rem; font-weight: 300; line-height: 1; }
+.album-artbox__add:is(:hover, :focus-visible) { color: var(--appearance-ink, var(--text)); }
+.album-artbox--add:has(.album-artbox__add:is(:hover, :focus-visible)) { border-color: var(--appearance-player-accent, #55c7ff); }
 .album-artbox__action {
   position: absolute;
   right: 10px;

@@ -691,7 +691,19 @@
   .track-modal-cover:has(> .album-details-cover-source-markers) .track-modal-cover-shell {
     height: min(calc(100% - 32px), 100cqw);
   }
+  /* A second artbox stacks under the cover; both stay square and share the column height. */
+  .track-modal-cover:has(> .track-modal-additional-artbox) { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+  .track-modal-cover:has(> .track-modal-additional-artbox) .track-modal-cover-shell {
+    height: min(calc((100% - 12px) / 2), 100cqw);
+  }
+  .track-modal-cover:has(> .album-details-service-links) .track-modal-cover-shell { height: min(calc(100% - 30px), 100cqw); }
+  .track-modal-cover:has(> .album-details-service-links):has(> .track-modal-additional-artbox) .track-modal-cover-shell {
+    height: min(calc((100% - 42px) / 2), 100cqw);
+  }
+  .track-modal-cover:has(> .track-modal-additional-artbox) > .album-details-service-links { margin-top: 0; }
 }
+.track-modal-additional-artbox { margin-top: 12px; }
+@media (min-width: 721px) { .track-modal-additional-artbox { margin-top: 0; } }
 .track-modal-main { min-height: 0; overflow: hidden; }
 .track-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {

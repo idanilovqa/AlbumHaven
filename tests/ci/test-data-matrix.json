@@ -10053,6 +10053,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (new Add art box)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-new-add-art-box"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (saved art with links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-saved-art-with-links"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,

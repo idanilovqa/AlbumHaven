@@ -1038,6 +1038,8 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);

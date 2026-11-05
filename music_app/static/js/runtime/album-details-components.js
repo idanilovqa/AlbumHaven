@@ -50,6 +50,23 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
+const ALBUM_SERVICE_LINK_PROVIDERS = Object.freeze({
+  discogs: Object.freeze({ label: 'Discogs', host: /(^|\.)discogs\.com$/, icon: '/static/images/icons/service-discogs.png' }),
+  musicbrainz: Object.freeze({ label: 'MusicBrainz', host: /(^|\.)musicbrainz\.org$/, icon: '/static/images/icons/service-musicbrainz.png' }),
+});
+
+// Known release pages under the album art. Only HTTPS pages on each service's own host render.
+function buildAlbumServiceLinksHtml(links = []) {
+  const items = (Array.isArray(links) ? links : []).map((link) => {
+    const provider = ALBUM_SERVICE_LINK_PROVIDERS[String(link?.provider || '')];
+    let url = null;
+    try { url = new URL(String(link?.url || '')); } catch { url = null; }
+    if (!provider || !url || url.protocol !== 'https:' || !provider.host.test(url.hostname)) return '';
+    return `<a class="album-details-service-link" href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer"><img class="album-details-service-link__icon" src="${provider.icon}" alt="" width="16" height="16"><span class="album-details-service-link__label">${provider.label}</span></a>`;
+  }).filter(Boolean);
+  return items.length ? `<div class="album-details-service-links" aria-label="Release pages">${items.join('')}</div>` : '';
+}
+
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   const missing = Boolean(config.missing);
   const editLabel = missing ? 'Edit album tags unavailable while album is missing' : 'Edit album tags';

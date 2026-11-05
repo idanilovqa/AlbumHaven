@@ -56,6 +56,7 @@ const expectedRuntimeOrder = [
   'render-markup-helpers.js',
   'alert-components.js',
   'album-artbox.js',
+  'album-additional-artbox.js',
   'gallery-main-components.js',
   'gallery-main-state.js',
   'gallery-card-component.js',

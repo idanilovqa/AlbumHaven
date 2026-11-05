@@ -1490,35 +1490,6 @@
   gap: 4px;
   padding: 10px;
 }
-.tag-editor-track-footer {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
-}
-.tag-editor-folder-load {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255,255,255,0.03);
-  color: var(--muted);
-  cursor: pointer;
-}
-.tag-editor-folder-load:is(:hover, :focus-visible) { color: var(--text); }
-.tag-editor-folder-load:disabled { cursor: wait; opacity: 0.5; }
-.tag-editor-folder-load svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 .tag-editor-track {
   position: relative;
   width: 100%;
@@ -1637,6 +1608,9 @@
   min-height: 58px;
 }
 .tag-editor-folder-location { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tag-editor-folder-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-editor-folder-path {
   min-width: 0;
   max-width: 100%;

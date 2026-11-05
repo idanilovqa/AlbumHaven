@@ -2466,7 +2466,52 @@ function renderTagEditorArtwork(selectedPaths) {
     iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
     attributes: { 'data-open-tag-editor-folder': focusedPath },
   }) : '';
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${openFolderButton}</div>`;
+  const loadFolderButton = state.tagEditor?.folderHasUnloadedTracks === true ? ButtonComponent.renderButton({
+    label: 'Load all tracks from the folder',
+    variant: 'secondary',
+    size: 'small',
+    className: 'tag-editor-folder-load',
+    disabled: Boolean(state.tagEditor.folderLoading),
+    attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-copy"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${loadFolderButton}</div>${openFolderButton}</div>`;
+}
+
+function tagEditorFolderRequestBody(tagEditor, sourcePath, extra = {}) {
+  return JSON.stringify({
+    source_path: sourcePath,
+    album: {
+      key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+      tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+    },
+    ...extra,
+  });
+}
+
+// Shows "Load all tracks from the folder" only when the album folder (every disc) has files not in the editor.
+async function refreshTagEditorFolderCompleteness(tagEditor) {
+  const sourcePath = String(tagEditor?.tracks?.[0]?.path || '');
+  if (!sourcePath) return;
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath, { paths_only: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.tagEditor !== tagEditor || !response.ok || !data.ok) return;
+    const loaded = new Set((tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)));
+    tagEditor.folderHasUnloadedTracks = (Array.isArray(data.paths) ? data.paths : [])
+      .some((path) => !loaded.has(normalizeTagEditorPathKey(path)));
+    if (getTagEditorElements().overlay?.hidden !== true) renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
+  } catch {
+    // Without a folder listing the action stays hidden; editing the loaded tracks is unaffected.
+  }
+}
+
+function getTagEditorTrackFolderName(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 2] : '';
 }
 
 function getTagEditorFocusedPath() {
@@ -2487,25 +2532,15 @@ function normalizeTagEditorPathKey(path) {
 async function loadTagEditorFolderFiles() {
   const tagEditor = state.tagEditor;
   const sourcePath = getTagEditorFocusedPath();
-  const button = document.getElementById('tag-editor-folder-load');
   if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
 
   tagEditor.folderLoading = true;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  }
+  renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
   try {
     const response = await fetch('/utilities/tag-editor/folder-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        source_path: sourcePath,
-        album: {
-          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
-          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
-        },
-      }),
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
@@ -2524,21 +2559,25 @@ async function loadTagEditorFolderFiles() {
       tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
     });
 
+    tagEditor.folderHasUnloadedTracks = false;
     if (!addedTracks.length) {
       showRepairAlert('All supported files from this folder are already loaded.', 'success');
       return;
     }
-    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
-    renderTagEditor();
+    // The folder listing is in disc order (CD1 files, then CD2, ...): keep the editor in that order.
+    const folderOrder = new Map((Array.isArray(data.tracks) ? data.tracks : [])
+      .map((track, index) => [normalizeTagEditorPathKey(track?.path), index]));
+    const position = (track) => folderOrder.get(normalizeTagEditorPathKey(track.path)) ?? Number.MAX_SAFE_INTEGER;
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks]
+      .map((track, index) => ({ track, index }))
+      .sort((a, b) => (position(a.track) - position(b.track)) || (a.index - b.index))
+      .map(({ track }) => track);
   } catch (error) {
     showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
   } finally {
     if (state.tagEditor === tagEditor) {
       tagEditor.folderLoading = false;
-    }
-    if (button && state.tagEditor === tagEditor) {
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      renderTagEditor();
     }
   }
 }
@@ -2629,16 +2668,18 @@ function renderTagEditor(options = {}) {
         ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
+    const showFolderNames = new Set(tracks.map((track) => getTagEditorTrackFolderName(track.path))).size > 1;
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
+      const folderName = showFolderNames ? getTagEditorTrackFolderName(path) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
-            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            <span class="tag-editor-track-name"><span class="tag-editor-track-title">${escapeHtml(filename)}</span>${folderName ? `<span class="tag-editor-track-folder">${escapeHtml(folderName)}</span>` : ''}</span>
             ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
           </button>
         </div>

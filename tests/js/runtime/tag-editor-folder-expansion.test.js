@@ -40,7 +40,7 @@ function loadHelpers(overrides = {}) {
   return context;
 }
 
-test('tag editor shows folder path beside artwork and provides an icon-only folder action', () => {
+test('tag editor shows folder path beside artwork with its open-folder action', () => {
   const template = fs.readFileSync(
     path.join(root, 'music_app', 'templates', 'partials', 'primary-modals.html'),
     'utf8',
@@ -50,9 +50,7 @@ test('tag editor shows folder path beside artwork and provides an icon-only fold
     'utf8',
   );
 
-  assert.match(template, /data-load-tag-editor-folder="1"/);
-  assert.match(template, /aria-label="Load all files from this folder"/);
-  assert.match(template, /data-load-tag-editor-folder="1"[^>]*>\s*<svg[\s\S]*?<\/svg>\s*<\/button>/);
+  assert.doesNotMatch(template, /data-load-tag-editor-folder/, 'the load action is rendered under the folder path, not in the track footer');
   assert.match(css, /\.tag-editor-artwork\s*\{[^}]*display:\s*flex/s);
   assert.match(css, /\.tag-editor-folder-path\s*\{/);
 
@@ -77,7 +75,7 @@ test('tag editor shows folder path beside artwork and provides an icon-only fold
   ]);
   assert.match(artwork.innerHTML, /class="tag-editor-folder-path"/);
   assert.match(artwork.innerHTML, />C:\\Music\\Album<\/div>/);
-  assert.match(artwork.innerHTML, /tag-editor-folder-path[^>]*>[^<]*<\/div><button[^>]*class="[^"]*action-button[^"]*tag-editor-open-folder"[^>]*aria-label="Open this folder in File Explorer"/);
+  assert.match(artwork.innerHTML, /tag-editor-folder-path[^>]*>[^<]*<\/div><\/div><button[^>]*class="[^"]*action-button[^"]*tag-editor-open-folder"[^>]*aria-label="Open this folder in File Explorer"/);
   assert.match(artwork.innerHTML, /data-open-tag-editor-folder="C:\\Music\\Album\\02 - Two\.mp3"/);
   assert.doesNotMatch(artwork.innerHTML, / disabled/);
 
@@ -147,4 +145,55 @@ test('loading folder files preserves selection and pending values while deduplic
   assert.equal(renderCount, 1);
   assert.equal(button.disabled, false);
   assert.equal(button.attributes.has('aria-busy'), false);
+});
+
+test('Load all tracks from the folder sits under the path only while the album folder has unloaded tracks', async () => {
+  const artwork = { innerHTML: '' };
+  const one = 'C:/Music/Album/CD2/01.mp3';
+  const tagEditor = { album: { key: 'a::b' }, anchorPath: one, tracks: [{ path: one }], selectedPaths: [one], values: {} };
+  const context = loadHelpers({
+    state: { tagEditor },
+    getTagEditorElements: () => ({ artwork, overlay: { hidden: false } }),
+    getSelectedTagEditorPaths: () => [one],
+    fetch: async (url, options) => ({ ok: true, async json() {
+      assert.equal(JSON.parse(options.body).paths_only, true);
+      return { ok: true, folder_path: 'C:/Music/Album', paths: ['C:/Music/Album/CD1/01.mp3', one] };
+    } }),
+  });
+  context.renderTagEditorArtwork([one]);
+  assert.doesNotMatch(artwork.innerHTML, /data-load-tag-editor-folder/, 'hidden until the app knows tracks are missing');
+  await context.refreshTagEditorFolderCompleteness(tagEditor);
+  assert.equal(tagEditor.folderHasUnloadedTracks, true, 'only CD2 is loaded, so CD1 is missing');
+  assert.match(artwork.innerHTML, /class="tag-editor-folder-copy"><div class="tag-editor-folder-path"[^>]*>[^<]*<\/div><button[^>]*data-load-tag-editor-folder="1"[^>]*><span class="ui-button__content">Load all tracks from the folder<\/span>/);
+
+  tagEditor.tracks.push({ path: 'C:/Music/Album/CD1/01.mp3' });
+  await context.refreshTagEditorFolderCompleteness(tagEditor);
+  assert.equal(tagEditor.folderHasUnloadedTracks, false);
+  assert.doesNotMatch(artwork.innerHTML, /data-load-tag-editor-folder/);
+});
+
+test('loading the folder puts CD1 files before CD2 files and shows each folder name under its file', async () => {
+  const cd2 = 'C:/Music/Album/CD2/01 - Late.mp3';
+  const cd1a = 'C:/Music/Album/Disc 1/01 - Early.mp3';
+  const cd1b = 'C:/Music/Album/Disc 1/02 - Middle.mp3';
+  const tagEditor = { album: { key: 'a::b' }, anchorPath: cd2, tracks: [{ path: cd2 }], selectedPaths: [cd2], values: {}, folderHasUnloadedTracks: true };
+  const list = { innerHTML: '', setAttribute() {}, querySelectorAll: () => [] };
+  const context = loadHelpers({
+    state: { tagEditor },
+    getTagEditorElements: () => ({ overlay: { hidden: false }, list, form: { querySelectorAll: () => [], querySelector: () => null }, artwork: { innerHTML: '' } }),
+    getSelectedTagEditorPaths: () => [cd2],
+    getTrackTagInitialValues: (track) => ({ title: track.title }),
+    getFileTypeFromPath: () => 'MP3',
+    syncTagEditorCollectionFields() {},
+    syncTagEditorPendingChanges() {},
+    fetch: async () => ({ ok: true, async json() {
+      return { ok: true, folder_path: 'C:/Music/Album', tracks: [{ path: cd1a, title: 'Early' }, { path: cd1b, title: 'Middle' }, { path: cd2, title: 'Late' }] };
+    } }),
+  });
+  await context.loadTagEditorFolderFiles();
+  assert.deepEqual(JSON.parse(JSON.stringify(tagEditor.tracks.map((track) => track.path))), [cd1a, cd1b, cd2]);
+  assert.equal(tagEditor.folderHasUnloadedTracks, false);
+  assert.match(list.innerHTML, /01 - Early\.mp3<\/span><span class="tag-editor-track-folder">Disc 1<\/span>/);
+  assert.match(list.innerHTML, /01 - Late\.mp3<\/span><span class="tag-editor-track-folder">CD2<\/span>/);
+  assert.doesNotMatch(list.innerHTML, /tag-editor-track-folder">C:/, 'the folder name, never its path');
 });

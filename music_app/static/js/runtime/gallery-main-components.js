@@ -51,6 +51,8 @@ function buildLibrarySourceGlyphHtml(category) {
 }
 
 function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  // INT-040: on mobile the sources are colorful icon badges on the album art, never printed names.
+  const presentation = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'badge' : '';
   return normalizeLibrarySourceCategories(categories)
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
@@ -62,6 +64,7 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
         iconHtml: buildLibrarySourceGlyphHtml(category),
         className: `album-details-source-marker album-details-source-marker--${category}`,
         focusable: true,
+        presentation,
       });
     })
     .join('');

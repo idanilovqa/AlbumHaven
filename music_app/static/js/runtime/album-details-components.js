@@ -191,7 +191,8 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (mobile && mobileHeader) mobileHeader.querySelector('.gallery-bar__context').appendChild(sourceMarkers);
+    const artHost = mobile ? cover.querySelector('.track-modal-cover-shell') : null;
+    if (artHost) artHost.appendChild(sourceMarkers);
     else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
   }
   if (identity) {
@@ -208,7 +209,6 @@ function syncMobileAlbumComposition(album) {
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
-      if (sourceMarkers) identity.querySelector('.album-details-header__copy').appendChild(sourceMarkers);
     }
   }
   const freshActions = cover.querySelector('.album-artbox__overlay');

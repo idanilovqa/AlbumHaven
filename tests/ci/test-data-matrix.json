@@ -10083,6 +10083,51 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "mobile Cover Look Up bottom sheet slides up from the bottom edge and rests there",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-cover-look-up-bottom-sheet-slides-up-from-the-bottom-edge-and-rests-there"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "bottom sheets appear without sliding when the device asks for reduced motion",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bottom-sheets-appear-without-sliding-when-the-device-asks-for-reduced-motion"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/duplicateFolderAlert.spec.js",
+    "case": "duplicate album files alert puts numbered folder buttons beside its text with readable numbers",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "duplicate-album-files-alert-puts-numbered-folder-buttons-beside-its-text-with-readable-numbers"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,
@@ -10262,7 +10307,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 320px",
+    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10270,7 +10315,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10278,7 +10323,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 320px",
+    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10286,7 +10331,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10294,7 +10339,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 320px",
+    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10302,7 +10347,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10310,7 +10355,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 390px",
+    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10318,7 +10363,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10326,7 +10371,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 390px",
+    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10334,7 +10379,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10342,7 +10387,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 390px",
+    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10350,7 +10395,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },

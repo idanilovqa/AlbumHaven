@@ -236,7 +236,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       expect(artworkBounds).not.toBeNull();
       expect(pathBounds).not.toBeNull();
       expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
-      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('');
+      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
 
       const pendingTitle = 'Pending folder expansion title';
       await tagEditorActions.setTrackName(pendingTitle);

@@ -290,11 +290,7 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
-  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
-  if (folderLoadButton) {
-    folderLoadButton.disabled = false;
-    folderLoadButton.removeAttribute?.('aria-busy');
-  }
+  if (typeof refreshTagEditorFolderCompleteness === 'function') void refreshTagEditorFolderCompleteness(tagEditor);
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;

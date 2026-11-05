@@ -314,17 +314,10 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-page-header[data-inline-album-layout="true"][data-album-identity-in-body="true"] { visibility: hidden; pointer-events: none; }
   .mobile-album-overview { flex: 0 0 auto; display: grid; align-items: start; gap: 12px; min-width: 0; width: 100%; }
   .mobile-album-overview__rail { grid-column: 1; grid-row: 1; align-self: start; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 32px; }
-  #track-modal.is-mobile-page .album-details-cover-source-markers { flex-wrap: wrap; gap: 4px; margin: 0; }
-  .mobile-album-overview__rail > .album-details-cover-source-markers { margin: 0; }
-  .mobile-page-header > .album-details-cover-source-markers { margin-top: 4px; }
-  .mobile-page-header .gallery-bar__context:has(> .album-details-cover-source-markers:not([hidden])) {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 6px;
+  /* INT-040: library source badges sit on the album art's top-left corner in every Album Details layout. */
+  #track-modal.is-mobile-page .track-modal-cover-shell > .album-details-cover-source-markers {
+    position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 4px; min-height: 0; margin: 0;
   }
-  .mobile-page-header .gallery-bar__context > .album-details-cover-source-markers {
-    grid-column: 2; grid-row: 1; align-self: center; gap: 4px; margin: 0;
-  }
-  .mobile-page-header .gallery-bar__context:has(> .album-details-cover-source-markers:not([hidden])) > .gallery-bar__summary { grid-column: 1 / -1; }
-  .album-details-cover-source-markers[hidden] { display: none; }
   .mobile-album-overview__rail > #mobile-back-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
   .mobile-album-overview__rail > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: auto; container-type: normal; contain-intrinsic-size: none; }
@@ -412,6 +405,16 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */
 .mobile-artists-mode, .mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
+/* Bottom sheets (mobile Artist info, Cover Look Up) slide up from the bottom edge when they open.
+   `translate` leaves `transform` free for a sheet's own drag offset. */
+@keyframes bottom-sheet-enter { from { translate: 0 100%; } }
+@keyframes bottom-sheet-backdrop-enter { from { opacity: 0; } }
+@media (max-width: 900px) and (prefers-reduced-motion: no-preference) {
+  .artist-info-overlay.is-mobile-artist-dialog,
+  .cover-lookup-modal.is-mobile-sheet > .cover-lookup-modal-dialog { animation: bottom-sheet-enter 240ms cubic-bezier(.22, .9, .3, 1); }
+  .mobile-artist-info-backdrop:not([hidden]),
+  .cover-lookup-modal.is-mobile-sheet { animation: bottom-sheet-backdrop-enter 240ms ease-out; }
+}
 @media (max-width: 900px) {
   :is(button, a, [role="button"], .album-track-table__row) { -webkit-tap-highlight-color: transparent; }
   .gallery-bar :is(.action-button, .gallery-action-button, .gallery-info-button) { display: inline-grid; place-items: center; box-sizing: border-box; margin-block: 0; padding: 0; line-height: 0; flex-shrink: 0; }

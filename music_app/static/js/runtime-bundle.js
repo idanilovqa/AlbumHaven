@@ -4359,7 +4359,7 @@ function buildSmallAlertHtml(config = {}) {
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
   // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
   const tone = ['hoard', 'new_arrivals'].includes(String(config.tone || '')) ? String(config.tone) : '';
-  const toneClass = tone ? ` small-alert--tone-${tone}` : '';
+  const toneClass = `${tone ? ` small-alert--tone-${tone}` : ''}${config.presentation === 'badge' ? ' small-alert--badge' : ''}`;
   const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
   return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }
@@ -4739,6 +4739,8 @@ function buildLibrarySourceGlyphHtml(category) {
 }
 
 function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  // INT-040: on mobile the sources are colorful icon badges on the album art, never printed names.
+  const presentation = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'badge' : '';
   return normalizeLibrarySourceCategories(categories)
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
@@ -4750,6 +4752,7 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
         iconHtml: buildLibrarySourceGlyphHtml(category),
         className: `album-details-source-marker album-details-source-marker--${category}`,
         focusable: true,
+        presentation,
       });
     })
     .join('');
@@ -5383,7 +5386,8 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (mobile && mobileHeader) mobileHeader.querySelector('.gallery-bar__context').appendChild(sourceMarkers);
+    const artHost = mobile ? cover.querySelector('.track-modal-cover-shell') : null;
+    if (artHost) artHost.appendChild(sourceMarkers);
     else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
   }
   if (identity) {
@@ -5400,7 +5404,6 @@ function syncMobileAlbumComposition(album) {
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
-      if (sourceMarkers) identity.querySelector('.album-details-header__copy').appendChild(sourceMarkers);
     }
   }
   const freshActions = cover.querySelector('.album-artbox__overlay');
@@ -29795,7 +29798,52 @@ function renderTagEditorArtwork(selectedPaths) {
     iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
     attributes: { 'data-open-tag-editor-folder': focusedPath },
   }) : '';
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${openFolderButton}</div>`;
+  const loadFolderButton = state.tagEditor?.folderHasUnloadedTracks === true ? ButtonComponent.renderButton({
+    label: 'Load all tracks from the folder',
+    variant: 'secondary',
+    size: 'small',
+    className: 'tag-editor-folder-load',
+    disabled: Boolean(state.tagEditor.folderLoading),
+    attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-copy"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${loadFolderButton}</div>${openFolderButton}</div>`;
+}
+
+function tagEditorFolderRequestBody(tagEditor, sourcePath, extra = {}) {
+  return JSON.stringify({
+    source_path: sourcePath,
+    album: {
+      key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+      tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+    },
+    ...extra,
+  });
+}
+
+// Shows "Load all tracks from the folder" only when the album folder (every disc) has files not in the editor.
+async function refreshTagEditorFolderCompleteness(tagEditor) {
+  const sourcePath = String(tagEditor?.tracks?.[0]?.path || '');
+  if (!sourcePath) return;
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath, { paths_only: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.tagEditor !== tagEditor || !response.ok || !data.ok) return;
+    const loaded = new Set((tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)));
+    tagEditor.folderHasUnloadedTracks = (Array.isArray(data.paths) ? data.paths : [])
+      .some((path) => !loaded.has(normalizeTagEditorPathKey(path)));
+    if (getTagEditorElements().overlay?.hidden !== true) renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
+  } catch {
+    // Without a folder listing the action stays hidden; editing the loaded tracks is unaffected.
+  }
+}
+
+function getTagEditorTrackFolderName(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 2] : '';
 }
 
 function getTagEditorFocusedPath() {
@@ -29816,25 +29864,15 @@ function normalizeTagEditorPathKey(path) {
 async function loadTagEditorFolderFiles() {
   const tagEditor = state.tagEditor;
   const sourcePath = getTagEditorFocusedPath();
-  const button = document.getElementById('tag-editor-folder-load');
   if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
 
   tagEditor.folderLoading = true;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  }
+  renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
   try {
     const response = await fetch('/utilities/tag-editor/folder-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        source_path: sourcePath,
-        album: {
-          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
-          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
-        },
-      }),
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
@@ -29853,21 +29891,25 @@ async function loadTagEditorFolderFiles() {
       tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
     });
 
+    tagEditor.folderHasUnloadedTracks = false;
     if (!addedTracks.length) {
       showRepairAlert('All supported files from this folder are already loaded.', 'success');
       return;
     }
-    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
-    renderTagEditor();
+    // The folder listing is in disc order (CD1 files, then CD2, ...): keep the editor in that order.
+    const folderOrder = new Map((Array.isArray(data.tracks) ? data.tracks : [])
+      .map((track, index) => [normalizeTagEditorPathKey(track?.path), index]));
+    const position = (track) => folderOrder.get(normalizeTagEditorPathKey(track.path)) ?? Number.MAX_SAFE_INTEGER;
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks]
+      .map((track, index) => ({ track, index }))
+      .sort((a, b) => (position(a.track) - position(b.track)) || (a.index - b.index))
+      .map(({ track }) => track);
   } catch (error) {
     showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
   } finally {
     if (state.tagEditor === tagEditor) {
       tagEditor.folderLoading = false;
-    }
-    if (button && state.tagEditor === tagEditor) {
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      renderTagEditor();
     }
   }
 }
@@ -29958,16 +30000,18 @@ function renderTagEditor(options = {}) {
         ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
+    const showFolderNames = new Set(tracks.map((track) => getTagEditorTrackFolderName(track.path))).size > 1;
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
+      const folderName = showFolderNames ? getTagEditorTrackFolderName(path) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
-            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            <span class="tag-editor-track-name"><span class="tag-editor-track-title">${escapeHtml(filename)}</span>${folderName ? `<span class="tag-editor-track-folder">${escapeHtml(folderName)}</span>` : ''}</span>
             ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
           </button>
         </div>
@@ -34451,11 +34495,7 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
-  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
-  if (folderLoadButton) {
-    folderLoadButton.disabled = false;
-    folderLoadButton.removeAttribute?.('aria-busy');
-  }
+  if (typeof refreshTagEditorFolderCompleteness === 'function') void refreshTagEditorFolderCompleteness(tagEditor);
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -40327,8 +40367,11 @@ class VirtualArtistGrid {
                 uniqueAlbums[existingIndex] = album;
             }
         });
-        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
-        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
+        // A split release belongs to each of its equally main artists, never under Featured On.
+        const isFeaturedOnly = (album) => album?.artist_relationship === 'featured'
+          && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
+        const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
+        const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {
@@ -48817,14 +48860,6 @@ function syncMobileAlbumHeader() {
   const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
-  const sourceMarkers = identity?.querySelector?.('.album-details-cover-source-markers')
-    || header.querySelector('.album-details-cover-source-markers');
-  if (sourceMarkers) {
-    const sourceHost = presentation.bodyOwnsIdentity
-      ? identity.querySelector('.album-details-header__copy') : context;
-    if (sourceHost && sourceMarkers.parentElement !== sourceHost) sourceHost.appendChild(sourceMarkers);
-    sourceMarkers.hidden = !albumPage;
-  }
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
   else header.removeAttribute('aria-hidden');

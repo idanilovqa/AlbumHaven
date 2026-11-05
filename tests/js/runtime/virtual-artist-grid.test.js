@@ -5865,6 +5865,22 @@ test('artist blocks place owned albums before a counted Featured On subsection',
     ]);
 });
 
+test('a split release stays in the main discography instead of Featured On (Jordsjø / Breidablik)', () => {
+    const { context } = createRuntimeContext();
+    context.isGallerySplitAlbum = (album) => album.is_split_album === true;
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const owned = { key: 'jordsjo::nattfiolen', name: 'Nattfiolen', artist_relationship: 'owned' };
+    const split = { key: 'jordsjo / breidablik::kontraster', name: 'Kontraster', artist_relationship: 'featured', is_split_album: true };
+    const guest = { key: 'va::guest', name: 'Guest spot', artist_relationship: 'featured' };
+    const blocks = virtualGrid.getBlocksForSection({ group: { albums: [owned, split, guest] } });
+    assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+        { kind: 'row', albums: [owned, split] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+});
+
 test('selected Hans Zimmer keeps joint owners and one chronological Featured On section', () => {
   const { context } = createRuntimeContext();
   const preferencePath = path.join(path.dirname(helperPath), 'gallery-display-preference-helpers.js');

@@ -881,14 +881,6 @@ function syncMobileAlbumHeader() {
   const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
-  const sourceMarkers = identity?.querySelector?.('.album-details-cover-source-markers')
-    || header.querySelector('.album-details-cover-source-markers');
-  if (sourceMarkers) {
-    const sourceHost = presentation.bodyOwnsIdentity
-      ? identity.querySelector('.album-details-header__copy') : context;
-    if (sourceHost && sourceMarkers.parentElement !== sourceHost) sourceHost.appendChild(sourceMarkers);
-    sourceMarkers.hidden = !albumPage;
-  }
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
   else header.removeAttribute('aria-hidden');

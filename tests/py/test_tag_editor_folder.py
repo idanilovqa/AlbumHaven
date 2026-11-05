@@ -121,3 +121,28 @@ def test_load_folder_files_skips_unreadable_metadata(tmp_path, monkeypatch):
 
     assert [Path(track["path"]).name for track in payload["tracks"]] == ["one.mp3"]
 
+
+
+def test_a_disc_folder_loads_every_disc_in_disc_order_whatever_the_folder_names(tmp_path, monkeypatch):
+    root = tmp_path / "music"
+    album = root / "Artist" / "Album"
+    first, second = album / "Disc 1", album / "CD2 - Bonus"
+    first.mkdir(parents=True)
+    second.mkdir()
+    source = second / "01.mp3"
+    for path in (source, second / "02.mp3", first / "01.mp3", first / "10.mp3", first / "2.mp3"):
+        path.write_bytes(b"track")
+    monkeypatch.setattr(tag_editor_folder, "resolve_album_root_from_track_paths", lambda *_args: None)
+    monkeypatch.setattr(tag_editor_folder, "read_editable_tag_values", lambda path, _fields: {"title": path.stem})
+
+    payload = tag_editor_folder.load_tag_editor_folder_files(
+        _config(root), str(source), indexed_paths={str(source)},
+    )
+    listed = tag_editor_folder.load_tag_editor_folder_files(
+        _config(root), str(source), indexed_paths={str(source)}, paths_only=True,
+    )
+
+    expected = [first / "01.mp3", first / "2.mp3", first / "10.mp3", second / "01.mp3", second / "02.mp3"]
+    assert payload["folder_path"] == str(album.resolve())
+    assert [track["path"] for track in payload["tracks"]] == [str(path.resolve()) for path in expected]
+    assert listed == {"folder_path": str(album.resolve()), "paths": [str(path.resolve()) for path in expected]}

@@ -720,6 +720,26 @@ def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
     assert track["disc_subtitle"] == "Bonus"
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        # Jordsjø / Breidablik rows persisted before split detection (no is_split_album key).
+        ({"album_artist": "Breidablik / Jordsjø", "artists": ["Breidablik", "Jordsjø"], "is_compilation": True, "edition": "Split"}, True),
+        ({"album_artist": "Jordsjø / Breidablik", "artists": ["Jordsjø", "Breidablik"], "is_compilation": True, "edition": None}, True),
+        # A collaboration credits every track to both artists, so it is not a compilation.
+        ({"album_artist": "Brian Eno / David Byrne", "artists": ["Brian Eno", "David Byrne"], "is_compilation": False}, False),
+        # A various-artists compilation is not credited to exactly its members.
+        ({"album_artist": "Various Artists", "artists": ["A", "B", "C"], "is_compilation": True}, False),
+        # The persisted scan decision always wins.
+        ({"album_artist": "Breidablik / Jordsjø", "artists": ["Breidablik", "Jordsjø"], "is_compilation": True, "is_split_album": False}, False),
+    ],
+)
+def test_split_release_facet_covers_rows_persisted_before_split_detection(metadata, expected):
+    from music_app.services.library_browse_postgres import _album_is_split
+
+    assert _album_is_split(metadata) is expected
+
+
 def test_album_payloads_publish_the_split_release_facet():
     from music_app.services import library_browse_postgres as browse
 

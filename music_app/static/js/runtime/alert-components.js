@@ -24,7 +24,7 @@ function buildSmallAlertHtml(config = {}) {
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
   // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
   const tone = ['hoard', 'new_arrivals'].includes(String(config.tone || '')) ? String(config.tone) : '';
-  const toneClass = tone ? ` small-alert--tone-${tone}` : '';
+  const toneClass = `${tone ? ` small-alert--tone-${tone}` : ''}${config.presentation === 'badge' ? ' small-alert--badge' : ''}`;
   const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
   return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }

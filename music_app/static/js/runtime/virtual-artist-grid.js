@@ -1243,8 +1243,11 @@ class VirtualArtistGrid {
                 uniqueAlbums[existingIndex] = album;
             }
         });
-        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
-        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
+        // A split release belongs to each of its equally main artists, never under Featured On.
+        const isFeaturedOnly = (album) => album?.artist_relationship === 'featured'
+          && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
+        const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
+        const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {

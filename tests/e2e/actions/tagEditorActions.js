@@ -204,17 +204,24 @@ export class TagEditorActions {
   }
 
   async loadAllFilesFromFolder({ expectedTrackCount, timeout = 30000 } = {}) {
-    await expect(this.tagEditor.folderLoadButton).toBeVisible();
-    await expect(this.tagEditor.folderLoadButton).toHaveAttribute(
-      'aria-label',
-      'Load all files from this folder',
-    );
-    await expect(this.tagEditor.folderLoadButtonIcon).toHaveCount(1);
+    // INT-011: a text button directly under the folder path, shown only while folder tracks are missing.
+    await expect(this.tagEditor.folderLoadButton).toBeVisible({ timeout });
+    const [pathBox, buttonBox] = await Promise.all([
+      this.tagEditor.folderPath.boundingBox(),
+      this.tagEditor.folderLoadButton.boundingBox(),
+    ]);
+    expect(buttonBox.y).toBeGreaterThanOrEqual(pathBox.y + pathBox.height - 1);
+    expect(Math.abs(buttonBox.x - pathBox.x)).toBeLessThanOrEqual(1);
     await this.tagEditor.folderLoadButton.click();
     if (expectedTrackCount !== undefined) {
       await expect(this.tagEditor.trackButtons).toHaveCount(Number(expectedTrackCount), { timeout });
     }
-    await expect(this.tagEditor.folderLoadButton).not.toHaveAttribute('aria-busy', 'true');
+    await expect(this.tagEditor.folderLoadButton).toBeHidden({ timeout });
+  }
+
+  async expectFolderFullyLoaded({ timeout = 30000 } = {}) {
+    await expect(this.tagEditor.folderPath).toBeVisible({ timeout });
+    await expect(this.tagEditor.folderLoadButton).toBeHidden({ timeout });
   }
 
   async selectTrackWithModifier(filename, modifier) {

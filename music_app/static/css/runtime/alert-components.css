@@ -78,6 +78,21 @@
   outline: none;
 }
 
+/* presentation: 'badge' — a solid, colorful icon-only marker; its name stays in aria-label and never prints. */
+.small-alert.small-alert--badge,
+.small-alert.small-alert--badge:is(:hover, :focus-visible) {
+  width: 28px;
+  height: 28px;
+  border-color: color-mix(in srgb, var(--alert-edge) 70%, white 30%);
+  background: var(--alert-edge);
+  color: #0b1018;
+  box-shadow: 0 1px 6px rgb(0 0 0 / .45);
+}
+.small-alert--badge:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.small-alert--badge .small-alert__icon { width: 26px; height: 26px; }
+.small-alert--badge .small-alert__icon svg { stroke-width: 2.6; }
+.small-alert--badge .small-alert__text { display: none; }
+
 .alert-label {
   box-sizing: border-box;
   display: inline-flex;

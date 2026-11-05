@@ -2408,6 +2408,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
+        problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
       };
     });

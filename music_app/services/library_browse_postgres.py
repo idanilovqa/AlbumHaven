@@ -2865,6 +2865,57 @@ class PostgresLibraryBrowseRepository:
                 return _problematic_album_detail_payload(album)
         return None
 
+    def build_problematic_file_detail_payload_for_track_path(
+        self,
+        track_path: object,
+    ) -> dict[str, object] | None:
+        """Album Details opens a track's problem without waiting for the full
+        Problematic Files list, which can take tens of seconds on a large library."""
+        path = str(track_path or "").strip()
+        if not path:
+            return None
+        with self._browse_connection_context() as connection:
+            album_keys = [
+                str(_row_mapping(row)["album_key"])
+                for row in connection.execute(
+                    """
+                    select distinct library.local_albums.album_key
+                    from library.local_track_files
+                    join library.local_tracks
+                      on library.local_tracks.id = library.local_track_files.track_id
+                    join library.local_albums
+                      on library.local_albums.id = library.local_tracks.album_id
+                    join app.bootstrap_owners
+                      on app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                    join library.libraries
+                      on library.libraries.id = library.local_tracks.library_id
+                     and library.libraries.owner_account_id = app.bootstrap_owners.account_id
+                     and library.libraries.name = 'Local Library'
+                     and library.libraries.library_kind = 'local'
+                    where library.local_track_files.private_path = %(path)s
+                    """,
+                    {"path": path},
+                ).fetchall()
+            ]
+        for album_key in album_keys:
+            for album in _problematic_album_projection_payloads(
+                self._load_problematic_file_rows(album_key=album_key)
+            ):
+                track_paths = {
+                    str(track.get("path") or "").strip()
+                    for track in album.get("tracks") or []
+                    if isinstance(track, Mapping)
+                }
+                if path not in track_paths:
+                    continue
+                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
+                    "alias_to_canonical", {}
+                )
+                detail = _problematic_album_detail_payload(album)
+                if detail is not None:
+                    return detail
+        return None
+
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
         albums = _problematic_album_projection_payloads(
             self._load_problematic_file_rows(album_key=str(album_key or ""))
@@ -4621,20 +4672,25 @@ def _annotate_album_payload_problematic_tracks(
         and bool(_effective_row_exception_type(row_payload))
         and str(row_payload.get("file_private_path") or "").strip()
     }
-    problematic_track_paths = {
-        str(problem_row.get("path") or "").strip()
-        for problematic_album in _problematic_album_projection_payloads(rows)
-        for problem_row in _problematic_track_problem_rows(problematic_album)
-        if str(problem_row.get("path") or "").strip()
-        and str(problem_row.get("path") or "").strip() not in non_album_track_paths
-    }
+    # Album Details shows these reasons on the track's Problematic Files icon,
+    # so hovering it never needs a Problematic Files request.
+    problem_reasons_by_path: dict[str, list[str]] = {}
+    for problematic_album in _problematic_album_projection_payloads(rows):
+        for problem_row in _problematic_track_problem_rows(problematic_album):
+            path = str(problem_row.get("path") or "").strip()
+            if path and path not in non_album_track_paths:
+                reasons = problem_reasons_by_path.setdefault(path, [])
+                reasons.extend(
+                    str(reason) for reason in problem_row.get("reasons") or []
+                    if str(reason) not in reasons
+                )
     for album in albums:
         for track in album.get("tracks") or []:
             if isinstance(track, dict):
-                track["is_problematic"] = (
-                    str(track.get("path") or "").strip()
-                    in problematic_track_paths
-                )
+                reasons = problem_reasons_by_path.get(str(track.get("path") or "").strip())
+                track["is_problematic"] = reasons is not None
+                if reasons:
+                    track["problem_reasons"] = list(reasons)
 
 
 def _duplicate_sources_for_projected_album(album: Mapping[str, object], result: Mapping[str, object]) -> list[dict[str, object]]:

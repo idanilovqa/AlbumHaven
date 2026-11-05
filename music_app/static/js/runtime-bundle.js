@@ -12360,6 +12360,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
       isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
     };
   });
@@ -19873,8 +19874,14 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean);
+  // The reasons arrive with Album Details, so hovering never loads Problematic Files.
+  const problemLabel = problemReasons.length
+    ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
+    : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemLabel)}" aria-label="${escapeHtml(problemLabel)}">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
@@ -23181,6 +23188,33 @@ async function openUtilityModalForTrack(trackPath) {
     if (optimisticDetailPromise) {
       await Promise.allSettled([optimisticDetailPromise]);
       if (!ownsNavigation()) return;
+    }
+    if (!pendingTasks.length && !getProblematicAlbumForTrackPath(trackPath)) {
+      const directAlbum = await loadProblematicAlbumDetailForTrackPath(trackPath);
+      if (!ownsNavigation()) return;
+      if (directAlbum) {
+        const directKey = String(directAlbum.key || '').trim();
+        state.utility.problematicFiles = [
+          ...(state.utility.problematicFiles || []).filter((item) => String(item?.key || '').trim() !== directKey),
+          { ...directAlbum, detail_loaded: true, detail_load_failed: false },
+        ];
+        state.utility.pinnedProblematicKey = directKey;
+        const completeListPending = state.utility.problematicFilesComplete === false
+          && Boolean(state.utility.completeLoadPromise);
+        state.utility.loaded = true;
+        state.utility.selectedProblematicKey = directKey;
+        state.utility.focusedTrackPath = String(trackPath || '');
+        state.utility.showRepairedDisplay = true;
+        state.utility.deferProblematicAutoSelection = false;
+        state.utility.selectedProblemFilters = [];
+        state.utility.problemDropdownOpen = false;
+        setUtilityActiveTab('problematic-files');
+        openedCanonicalTarget = true;
+        openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+        // Fill in the rest of the list behind the open album.
+        if (!completeListPending) void loadProblematicFiles(true);
+        return;
+      }
     }
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
@@ -27444,13 +27478,20 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
+        // A track-opened album stays listed until the complete list can confirm it.
+        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedAlbum = pinnedKey && data.complete === false
+          && !summaryItems.some((item) => item.key === pinnedKey)
+          ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
+          : null;
+        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
           return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
-        });
+        }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
@@ -27765,6 +27806,24 @@ function validateProblematicSummaryPayload(payload) {
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
   };
+}
+
+// Album Details opens a track's album directly: waiting for the complete list
+// took tens of seconds on a large library whenever the album was off page one.
+async function loadProblematicAlbumDetailForTrackPath(trackPath) {
+  const path = String(trackPath || '').trim();
+  if (!path) return null;
+  try {
+    const response = await fetch(`/utilities/problematic-files/detail?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return validateProblematicDetailPayload(data, String(data?.key || '').trim());
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to load the problematic album for a track.', error);
+    return null;
+  }
 }
 
 function validateProblematicDetailPayload(payload, requestedKey) {
@@ -33762,6 +33821,7 @@ function selectLocalCoverFromLookup(sourcePath) {
 
 async function saveLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
+  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
@@ -33774,9 +33834,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
     applyOptimisticLocalCoverSelection(album, sourcePath);
-    // The optimistic cover is already visible and a failure rolls back with an
-    // error alert, so Save closes at once instead of waiting for promotion.
-    closeCoverLookupModal();
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
     markTrackModalCoverTransitionPending(album);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
@@ -33803,6 +33861,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
+    if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
       ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
       : false;
@@ -33971,8 +34030,7 @@ async function saveRemoteCoverFromLookup() {
   let optimisticAlbum = null;
   let optimisticEntry = null;
   try {
-    // Remote saves continue as a task; Save closes at once on every layout.
-    closeCoverLookupModal();
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
     optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
     optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
       .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
@@ -34027,6 +34085,7 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.manualBusy = false;
       state.coverLookup.modal.pendingLocalPath = '';
       state.coverLookup.modal.selectedRemoteId = '';
+      closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
@@ -36610,6 +36669,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
+        problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
       };
     });

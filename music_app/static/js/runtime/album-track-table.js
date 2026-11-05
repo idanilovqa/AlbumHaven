@@ -84,8 +84,14 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean);
+  // The reasons arrive with Album Details, so hovering never loads Problematic Files.
+  const problemLabel = problemReasons.length
+    ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
+    : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemLabel)}" aria-label="${escapeHtml(problemLabel)}">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {

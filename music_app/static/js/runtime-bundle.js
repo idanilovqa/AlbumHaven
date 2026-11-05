@@ -38259,6 +38259,12 @@ function restorePlayerState() {
 // BEGIN js/runtime/player-listen-session-helpers.js
 
 const MIN_RECORDED_LISTEN_SECONDS = 10;
+// How far short of its duration a track's heard audio may fall and still have been heard to the end.
+const HEARD_TO_END_TOLERANCE_SECONDS = 0.25;
+// Last.fm never scrobbles a track this short, however much of it was heard.
+const MAX_UNSCROBBLABLE_DURATION_SECONDS = 30;
+// Last.fm counts a listen after half the track or four minutes, whichever comes first.
+const MAX_SCROBBLE_THRESHOLD_SECONDS = 240;
 const PLAYBACK_SESSION_REQUEST_TIMEOUT_MS = 10000;
 // Transient now-playing and scrobble failures back off from about five seconds to at most five minutes.
 const LISTEN_WRITE_RETRY_BASE_MS = 5000;
@@ -38334,8 +38340,8 @@ function getListenSessionDuration(session) {
 function getListenScrobbleThreshold(durationSeconds) {
   const duration = Math.max(0, Number(durationSeconds) || 0);
   if (!duration) return 0;
-  if (duration < 600) return duration * 0.5;
-  return 300;
+  if (duration <= MAX_UNSCROBBLABLE_DURATION_SECONDS) return Infinity;
+  return Math.min(duration * 0.5, MAX_SCROBBLE_THRESHOLD_SECONDS);
 }
 
 function totalListenedSeconds(session) {
@@ -38352,7 +38358,12 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0) > MIN_RECORDED_LISTEN_SECONDS;
+  const listened = Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0);
+  if (listened > MIN_RECORDED_LISTEN_SECONDS) return true;
+  // A track of ten seconds or less is recorded once it was heard to its end.
+  const duration = getListenSessionDuration(session);
+  return duration > 0 && duration <= MIN_RECORDED_LISTEN_SECONDS && listened > 0
+    && listened >= duration - HEARD_TO_END_TOLERANCE_SECONDS;
 }
 
 function clearListenPauseMarker(session) {
@@ -38588,8 +38599,7 @@ function maybeRetryNowPlaying(session) {
 async function maybeScrobbleListenSession(session) {
   if (!session) return false;
   if (session.scrobblePromise) return session.scrobblePromise;
-  // The server records no listen of 10 s or less, so a scrobble before then would be ignored.
-  if (session.scrobbled || !canScrobbleListenSession(session) || !shouldPersistListenSession(session)) return false;
+  if (session.scrobbled || !canScrobbleListenSession(session)) return false;
   if (session.scrobblePending || !isListenWriteDue(session, 'scrobble')) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;

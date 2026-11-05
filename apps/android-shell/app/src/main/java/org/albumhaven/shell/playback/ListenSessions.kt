@@ -235,13 +235,20 @@ class ListenSessions(
 
     private fun canScrobble(session: Session): Boolean {
         val duration = duration(session)
-        if (duration <= 0) return false
-        val threshold = if (duration < 600) duration * 0.5 else 300.0
+        // An unknown duration, or a track of 30 s or less, never scrobbles.
+        if (duration <= MAX_UNSCROBBLABLE_DURATION_SECONDS) return false
+        val threshold = minOf(duration * 0.5, MAX_SCROBBLE_THRESHOLD_SECONDS)
         return session.measuredTotal >= threshold || session.longest >= threshold
     }
 
-    private fun shouldPersist(session: Session): Boolean =
-        maxOf(session.listenedSeconds(), session.longestSegmentSeconds(), session.measuredTotal) > MIN_RECORDED_LISTEN_SECONDS
+    private fun shouldPersist(session: Session): Boolean {
+        val listened = maxOf(session.listenedSeconds(), session.longestSegmentSeconds(), session.measuredTotal)
+        if (listened > MIN_RECORDED_LISTEN_SECONDS) return true
+        // A track of ten seconds or less is recorded once it was heard to its end.
+        val duration = duration(session)
+        return duration > 0 && duration <= MIN_RECORDED_LISTEN_SECONDS && listened > 0 &&
+            listened >= duration - HEARD_TO_END_TOLERANCE_SECONDS
+    }
 
     /** `noteListenWriteFailure`. */
     private fun noteFailure(session: Session, effect: ListenEffect, outcome: ListenWriteOutcome) {
@@ -304,8 +311,7 @@ class ListenSessions(
     private fun scrobble(session: Session?): Pending {
         if (session == null) return Pending.settled(false)
         session.scrobbleRequest?.let { return it }
-        // The server records no listen of 10 s or less, so a scrobble before then would be ignored.
-        if (session.scrobbled || !canScrobble(session) || !shouldPersist(session) || session.scrobblePending ||
+        if (session.scrobbled || !canScrobble(session) || session.scrobblePending ||
             !isDue(session, ListenEffect.SCROBBLE) || !canEmit()
         ) {
             return Pending.settled(false)
@@ -508,6 +514,12 @@ class ListenSessions(
     companion object {
         const val MEASUREMENT_VERSION = "rendered-pcm-v1"
         private const val MIN_RECORDED_LISTEN_SECONDS = 10.0
+        /** How far short of its duration a track's heard audio may fall and still have been heard to the end. */
+        private const val HEARD_TO_END_TOLERANCE_SECONDS = 0.25
+        /** Last.fm never scrobbles a track this short, however much of it was heard. */
+        private const val MAX_UNSCROBBLABLE_DURATION_SECONDS = 30.0
+        /** Last.fm counts a listen after half the track or four minutes, whichever comes first. */
+        private const val MAX_SCROBBLE_THRESHOLD_SECONDS = 240.0
         private const val RETRY_BASE_MS = 5_000L
         private const val RETRY_MAX_MS = 300_000L
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)

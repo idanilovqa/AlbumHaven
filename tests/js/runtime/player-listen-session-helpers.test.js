@@ -98,6 +98,32 @@ test('measured eligibility cannot borrow unrendered legacy segment time', () => 
   }), false);
 });
 
+for (const [duration, heard, recorded] of [[8, 8, true], [8, 7.75, true], [8, 7.5, false], [14, 14, true], [30, 30, true]]) {
+  test(`a ${duration} s track heard for ${heard} s is ${recorded ? 'recorded' : 'not recorded'} and never scrobbled`, async () => {
+    const track = { path: 'short.flac', title: 'Short', artist: 'Artist' };
+    const { context, fetchCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: duration, duration }),
+      canEmitPlaybackSessionSideEffects: () => true,
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    context.beginListenSegment(duration - heard);
+    const session = context.state.player.listenSession;
+    context.recordMeasuredStreamingFrames({ role: 'current', track }, { frames: heard * 48000 }, 48000);
+    assert.equal(await context.maybeScrobbleListenSession(session), false);
+    await context.finalizeListenSession('ended', { session, finishedFully: true, currentTime: duration, duration });
+
+    assert.deepEqual(fetchCalls.map(([url]) => url), recorded ? ['/playback/session/complete'] : []);
+    if (recorded) {
+      const completion = JSON.parse(fetchCalls[0][1].body);
+      assert.equal(completion.measured_listened_seconds, heard);
+      assert.equal(completion.scrobble_eligible, false);
+      assert.equal(completion.scrobbled, false);
+    }
+  });
+}
+
 for (const stalledStage of ['headers', 'body']) {
   test(`listen request bounds a stalled ${stalledStage} and releases its claim drain`, async () => {
     const timers = new Map();
@@ -416,8 +442,12 @@ async function run() {
   {
     const { context } = loadHelper();
     assert.equal(context.getListenScrobbleThreshold(0), 0);
+    assert.equal(context.getListenScrobbleThreshold(30), Infinity);
+    assert.equal(context.getListenScrobbleThreshold(30.5), 15.25);
     assert.equal(context.getListenScrobbleThreshold(240), 120);
-    assert.equal(context.getListenScrobbleThreshold(1200), 300);
+    assert.equal(context.getListenScrobbleThreshold(479), 239.5);
+    assert.equal(context.getListenScrobbleThreshold(600), 240);
+    assert.equal(context.getListenScrobbleThreshold(1200), 240);
     assert.equal(context.canScrobbleListenSession({
       duration_seconds: 240,
       segments: [{ start_seconds: 0, end_seconds: 121 }],

@@ -295,7 +295,8 @@ class NativePlaybackControllerTest {
     @Test
     fun aClaimReportingScrobblingUnavailableSendsOnlyTheCompletion() {
         val claimIo = ManualExecutor()
-        val a = SyntheticTrack(tag = 1, frames = 12L * RATE)
+        // Last.fm never scrobbles a track of 30 s or less.
+        val a = SyntheticTrack(tag = 1, frames = 32L * RATE)
         val harness = ControllerHarness(a, claimIo = claimIo)
         harness.claims.acquireResponse = { ClaimResponse.Granted("token-1", scrobblingAvailable = false) }
         harness.claims.renewResponse = { ClaimResponse.Granted(it, scrobblingAvailable = false) }
@@ -333,8 +334,9 @@ class NativePlaybackControllerTest {
 
     @Test
     fun aGaplessAdvanceCompletesTheOutgoingListenWithExactlyItsHeardFrames() {
-        val a = SyntheticTrack(tag = 1, frames = 12L * RATE)
-        val b = SyntheticTrack(tag = 2, frames = 11L * RATE)
+        // Both outlast 30 s, so each can scrobble.
+        val a = SyntheticTrack(tag = 1, frames = 32L * RATE)
+        val b = SyntheticTrack(tag = 2, frames = 31L * RATE)
         val harness = ControllerHarness(a, b)
         harness.load(1, a, b)
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
@@ -343,7 +345,7 @@ class NativePlaybackControllerTest {
         val writes = harness.writes()
         val completes = writes.filter { it.first == ListenEffect.COMPLETE }.map { it.second }
         assertEquals(listOf(a.pcm.playbackRef, b.pcm.playbackRef), completes.map { it.getString("playbackRef") })
-        assertEquals(listOf(12.0, 11.0), completes.map { it.getDouble("measured_listened_seconds") })
+        assertEquals(listOf(32.0, 31.0), completes.map { it.getDouble("measured_listened_seconds") })
         assertTrue(completes.all { it.getString("completion_reason") == "ended" && it.getBoolean("finished_fully") })
         assertEquals(2, completes.map { it.getString("session_id") }.distinct().size)
         assertEquals(

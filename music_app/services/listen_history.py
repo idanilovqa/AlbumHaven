@@ -13,6 +13,8 @@ from music_app.services.listen_history_postgres import (
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
 _MIN_RECORDED_LISTEN_SECONDS = 10.0
+# How far short of its duration a track's heard audio may fall and still have been heard to the end.
+_HEARD_TO_END_TOLERANCE_SECONDS = 0.25
 
 
 def load_listen_history(config: dict) -> list[dict[str, object]]:
@@ -93,10 +95,21 @@ def is_meaningful_listen_session(entry: object) -> bool:
         return False
     if entry.get("measurement_version") == "rendered-pcm-v1":
         value = entry.get("measured_listened_seconds")
-        return type(value) in (int, float) and math.isfinite(value) and value > _MIN_RECORDED_LISTEN_SECONDS
-    total_listened_seconds = round(float(entry.get("total_listened_seconds") or 0), 3)
-    max_contiguous_seconds = round(float(entry.get("max_contiguous_seconds") or 0), 3)
-    return max(total_listened_seconds, max_contiguous_seconds) > _MIN_RECORDED_LISTEN_SECONDS
+        if type(value) not in (int, float) or not math.isfinite(value):
+            return False
+        listened = float(value)
+    else:
+        listened = max(round(float(entry.get("total_listened_seconds") or 0), 3),
+                       round(float(entry.get("max_contiguous_seconds") or 0), 3))
+    if listened > _MIN_RECORDED_LISTEN_SECONDS:
+        return True
+    # A track of ten seconds or less is recorded once it was heard to its end.
+    try:
+        duration = float(entry.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (0 < duration <= _MIN_RECORDED_LISTEN_SECONDS and listened > 0
+            and listened >= duration - _HEARD_TO_END_TOLERANCE_SECONDS)
 
 
 def append_listen_history_entry(config: dict, entry: dict[str, object], *, account_id=None,
@@ -158,7 +171,7 @@ def build_measured_playback_statistics(config, *, account_id, library_id):
         row = connection.execute("""select count(*) as local_playcount,
             coalesce(sum(measured_listened_seconds),0) as total_listening_seconds
             from integration.listen_history where account_id=%s and library_id=%s
-              and measurement_version='rendered-pcm-v1' and finalized=true
-              and measured_listened_seconds>10""", (account_id, library_id)).fetchone()
+              and measurement_version='rendered-pcm-v1' and finalized=true""",
+            (account_id, library_id)).fetchone()
     return {"local_playcount": int(row["local_playcount"]),
             "total_listening_seconds": float(row["total_listening_seconds"])}

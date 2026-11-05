@@ -1145,7 +1145,7 @@ test('Last.fm production path selects its named fixture album before opening or 
   assert.doesNotMatch(spec, /clickFirstAlbumDetails\(/);
   assert.match(
     spec,
-    /selectSidebarArtistByName\(LASTFM_PLAYBACK_TARGET\.artist\)[\s\S]*clickAlbumDetailsByArtistAndAlbum\([\s\S]*LASTFM_PLAYBACK_TARGET\.artist,[\s\S]*LASTFM_PLAYBACK_TARGET\.album,[\s\S]*readTrackAt\(0\)[\s\S]*playTrackAtAndWaitForLastfmJourney\(0/,
+    /selectSidebarArtistByName\(LASTFM_PLAYBACK_TARGET\.artist\)[\s\S]*clickAlbumDetailsByArtistAndAlbum\([\s\S]*LASTFM_PLAYBACK_TARGET\.artist,[\s\S]*LASTFM_PLAYBACK_TARGET\.album,[\s\S]*readTrackAt\(LASTFM_SCROBBLE_TRACK\.index\)[\s\S]*playTrackAtAndWaitForLastfmJourney\(LASTFM_SCROBBLE_TRACK\.index/,
   );
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
 });
@@ -1168,11 +1168,11 @@ test('consecutive Last.fm evidence observes through the stop boundary and proves
   );
   assert.match(
     spec,
-    /expect\(journeys\.completions\)\.toHaveLength\(LASTFM_CONSECUTIVE_PLAYBACK_TRACKS\.length\)/,
+    /expect\(journeys\.completions\)\.toHaveLength\(playedTitles\.length\)/,
   );
   assert.match(
     spec,
-    /completionStartedAt\.every\(\(startedAt\) => startedAt\.length > 0\)[\s\S]*new Set\(completionStartedAt\)\.size[\s\S]*completionStartedAt\)\.toEqual\(scrobbleStartedAt\)/,
+    /completionStartedAt\.every\(\(startedAt\) => startedAt\.length > 0\)[\s\S]*new Set\(completionStartedAt\)\.size[\s\S]*completionStartedAt\.slice\(1\)\)\.toEqual\(scrobbleStartedAt\)/,
   );
 });
 

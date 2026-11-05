@@ -327,6 +327,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/searchDuringScan.spec.js",
+              "case": "FTC-SEARCH-NAV-035 a pasted search URL without an artist loads its results while a full rescan runs",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete",
               "area": "gallery-search"

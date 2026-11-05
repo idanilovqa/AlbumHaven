@@ -109,3 +109,28 @@ class HttpResumeApiTest {
         }
     }
 }
+
+class ResumeProtocolFixtureTest {
+    private val valid = JSONObject(java.io.File("../../../tests/fixtures/playback-protocol-v1.json").readText()).getJSONObject("valid")
+
+    @Test
+    fun theSharedResumeFixtureIsTheShapeTheNativeExchangeSendsAndReads() {
+        val server = MockWebServer().apply { start() }
+        try {
+            val origin = server.url("/").toString().removeSuffix("/")
+            server.enqueue(MockResponse.Builder().code(200).body(valid.getJSONObject("resumeResponse").toString()).build())
+            val api = HttpResumeApi(OkHttpClient(), ShellSession({ origin }) { "__Host-album_haven_session=s; __Host-album_haven_csrf=c" })
+            val token = valid.getJSONObject("resumeRequest").getJSONArray("tracks").getJSONObject(0).getString("resumeToken")
+            assertEquals(ResumeAnswer.Refs(listOf("playback-ref-2")), api.exchange(listOf(token)))
+            val sent = JSONObject(server.takeRequest().body!!.utf8())
+            assertEquals(1, sent.getInt("protocol"))
+            assertEquals(valid.getJSONObject("resumeRequest").keys().asSequence().toSet(), sent.keys().asSequence().toSet())
+            assertEquals(
+                valid.getJSONObject("resumeRequest").getJSONArray("tracks").getJSONObject(0).keys().asSequence().toSet(),
+                sent.getJSONArray("tracks").getJSONObject(0).keys().asSequence().toSet(),
+            )
+        } finally {
+            server.close()
+        }
+    }
+}

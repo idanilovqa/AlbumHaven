@@ -746,6 +746,11 @@ def test_shared_protocol_fixtures_match_live_reference_and_claim_contracts(playb
     assert reference["protocol"] == contract["protocol"]
     assert set(reference["tracks"][0]) == set(valid["refsResponse"]["tracks"][0])
     assert reference["tracks"][0]["clientKey"] == valid["refsResponse"]["tracks"][0]["clientKey"]
+    resumed = reference_service(fixture, clock).exchange_resume_tokens(fixture.actor, [
+        {**valid["resumeRequest"]["tracks"][0], "resumeToken": reference["tracks"][0]["resumeToken"]},
+    ])
+    assert set(resumed) == set(valid["resumeResponse"])
+    assert set(resumed["tracks"][0]) == set(valid["resumeResponse"]["tracks"][0])
     request = valid["claimRequest"]
     service = claims_service(fixture, clock)
     claim = service.acquire(fixture.actor, client_id=request["clientId"], client_surface=request["clientSurface"],

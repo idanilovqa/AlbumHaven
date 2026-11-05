@@ -16,7 +16,27 @@
       "tracks": [
         {
           "clientKey": "track-1",
-          "playbackRef": "playback-ref-1"
+          "playbackRef": "playback-ref-1",
+          "resumeToken": "resume-token-1"
+        }
+      ]
+    },
+    "resumeRequest": {
+      "protocol": 1,
+      "tracks": [
+        {
+          "clientKey": "0",
+          "resumeToken": "resume-token-1"
+        }
+      ]
+    },
+    "resumeResponse": {
+      "protocol": 1,
+      "expiresAt": "2099-10-24T00:00:00Z",
+      "tracks": [
+        {
+          "clientKey": "0",
+          "playbackRef": "playback-ref-2"
         }
       ]
     },

@@ -590,14 +590,16 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  renderTrackModalLoadingState(openAlbum);
+  // Rows this session edited were rendered optimistically, so they stay until canonical details land.
+  const editedLocally = locallyEditedAlbumKeys.has(albumKey);
+  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
+      resolveLineage: !editedLocally,
     });
   } catch (error) {
     loadError = error;

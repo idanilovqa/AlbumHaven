@@ -1078,6 +1078,49 @@ test('inventory mutation refresh hides stale rows while canonical details load',
   assert.equal(await refresh, true);
 });
 
+test('inventory mutation refresh keeps rows and title of an album this session edited', async () => {
+  const edited = {
+    key: 'edited-album',
+    request_key: 'edited-album',
+    name: 'Edited Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Optimistic title' }],
+  };
+  let resolveResponse = null;
+  const { context } = loadHelper({
+    initialAlbums: [edited],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }),
+  });
+  context.state.modalReleases = [edited];
+  context.state.modalReleaseIndex = 0;
+  const elements = context.getTrackModalElements();
+  elements.overlay.hidden = false;
+  elements.title.textContent = 'Artist - Edited Album';
+  elements.subtitle.textContent = '1 track';
+  elements.list.innerHTML = '<li>Optimistic title</li>';
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+  context.rememberLocallyEditedAlbum(edited);
+
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+
+  assert.equal(elements.list.innerHTML, '<li>Optimistic title</li>');
+  assert.equal(elements.title.textContent, 'Artist - Edited Album');
+  assert.equal(elements.subtitle.textContent, '1 track');
+  resolveResponse({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: edited }),
+  });
+  assert.equal(await refresh, true);
+  assert.deepEqual(refreshed, [{ albumKey: 'edited-album', album: edited }]);
+});
+
 test('inventory mutation refresh follows a cached stale child to its merged release', async () => {
   const staleChild = {
     album_id: 17,

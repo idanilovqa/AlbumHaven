@@ -26,7 +26,7 @@ def test_cooperative_scan_yield_releases_request_threads_at_bounded_intervals(mo
     assert sleeps == [0.001, 0.001]
 
 
-def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_discovery_order(
+def test_ordered_scan_metadata_entries_read_each_disk_sequentially_and_disks_in_parallel(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -35,22 +35,27 @@ def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_disc
         (path, SimpleNamespace(st_mtime=1.0, st_size=1))
         for path in paths
     ]
-    barrier = threading.Barrier(4)
+    disk_of = {path: ("usb-a" if int(path.stem) % 2 == 0 else "usb-b") for path in paths}
+    barrier = threading.Barrier(2)
     lock = threading.Lock()
-    active_reads = 0
+    active_by_disk = {"usb-a": 0, "usb-b": 0}
+    peak_by_disk = {"usb-a": 0, "usb-b": 0}
     peak_reads = 0
     completion_order = []
 
     def read_metadata(path):
-        nonlocal active_reads, peak_reads
+        nonlocal peak_reads
+        disk = disk_of[path]
         with lock:
-            active_reads += 1
-            peak_reads = max(peak_reads, active_reads)
-        barrier.wait(timeout=2)
+            active_by_disk[disk] += 1
+            peak_by_disk[disk] = max(peak_by_disk[disk], active_by_disk[disk])
+            peak_reads = max(peak_reads, sum(active_by_disk.values()))
+        if int(path.stem) < 2:
+            barrier.wait(timeout=2)
         time.sleep((4 - int(path.stem)) * 0.03)
         with lock:
             completion_order.append(path.name)
-            active_reads -= 1
+            active_by_disk[disk] -= 1
         return {"path": str(path), "title": path.stem}
 
     monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
@@ -61,10 +66,13 @@ def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_disc
             file_stats,
             {},
             expected_scan_generation=7,
+            disk_key_for=disk_of.__getitem__,
         )
     )
 
-    assert peak_reads == 4
+    # One reader per disk: never two reads on one disk, two disks at once.
+    assert peak_by_disk == {"usb-a": 1, "usb-b": 1}
+    assert peak_reads == 2
     assert completion_order != [path.name for path in paths]
     assert [path for path, _stat, _existing, _entry, _read in entries] == paths
     assert [entry["title"] for _path, _stat, _existing, entry, _read in entries] == [
@@ -1935,3 +1943,26 @@ def test_scan_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: P
     assert all(entry["cover_path"] is None for entry in updated.values())
 
 
+
+
+def test_interleave_by_disk_alternates_disks_and_keeps_each_disk_order(tmp_path: Path):
+    stats = SimpleNamespace(st_mtime=1.0, st_size=1)
+    d_files = [(tmp_path / "d" / f"{index}.mp3", stats) for index in range(3)]
+    n_files = [(tmp_path / "n" / f"{index}.mp3", stats) for index in range(2)]
+    keys = {"d": "disk:6", "n": "disk:7"}
+    disk_key_for = lambda path: keys[path.parent.name]
+
+    interleaved = library_indexing._interleave_by_disk(d_files + n_files, disk_key_for)
+
+    assert [item[0] for item in interleaved] == [
+        d_files[0][0], n_files[0][0], d_files[1][0], n_files[1][0], d_files[2][0],
+    ]
+    assert library_indexing._interleave_by_disk(d_files, disk_key_for) == d_files
+
+
+def test_root_disk_key_lookup_uses_the_longest_matching_root(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(library_indexing, "physical_disk_key", lambda root: f"disk-of:{Path(root).name}")
+    lookup = library_indexing._root_disk_key_lookup([tmp_path, tmp_path / "Nested"])
+    assert lookup(tmp_path / "Nested" / "a.mp3") == "disk-of:Nested"
+    assert lookup(tmp_path / "Other" / "a.mp3") == f"disk-of:{tmp_path.name}"
+    assert lookup(Path("Z:/elsewhere/a.mp3")) == ""

@@ -15,6 +15,7 @@ from music_app.services.library_hydration import find_cover_for_track_folder
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_category_slug, root_definition_for_path
+from music_app.services.storage_devices import physical_disk_key
 from music_app.services.metadata import (
     file_metadata_schema_is_current,
     read_metadata_for_file,
@@ -43,7 +44,6 @@ _SCAN_ESTIMATE_MIN_FILES = 12
 _SCAN_ESTIMATE_EMA_BLEND = 0.28
 _SCAN_FIRST_PARTIAL_ALBUM_PUBLISH_FILES = 250
 _SCAN_PARTIAL_ALBUM_PUBLISH_INTERVAL_FILES = 1000
-_SCAN_METADATA_READ_WORKERS = 4
 _SCAN_METADATA_PREFETCH_ITEMS = 8
 _SCAN_COOPERATIVE_YIELD_INTERVAL_FILES = 5
 _SCAN_COOPERATIVE_YIELD_SECONDS = 0.001
@@ -322,15 +322,25 @@ def _ordered_scan_metadata_entries(
     *,
     expected_scan_generation: int | None,
     record_file_error: Callable[..., None] | None = None,
+    disk_key_for: Callable[[Path], str] = lambda _path: "",
 ) -> Iterator[
     tuple[Path, os.stat_result, dict[str, object] | None, dict[str, object], bool]
 ]:
-    """Read metadata concurrently while publishing scan results in discovery order."""
+    """Read metadata with one sequential reader per disk, yielding in the given order.
 
-    executor = ThreadPoolExecutor(
-        max_workers=_SCAN_METADATA_READ_WORKERS,
-        thread_name_prefix="albumhaven-scan-metadata",
-    )
+    Several readers on one spinning disk thrash its head between files; distinct
+    disks are read in parallel instead.
+    """
+
+    executors: dict[str, ThreadPoolExecutor] = {}
+
+    def executor_for(path: Path) -> ThreadPoolExecutor:
+        key = disk_key_for(path)
+        if key not in executors:
+            executors[key] = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="albumhaven-scan-metadata",
+            )
+        return executors[key]
     pending: deque[
         tuple[
             Path,
@@ -356,7 +366,7 @@ def _ordered_scan_metadata_entries(
         nonlocal next_item_index
         ensure_scan_is_current()
         while (
-            len(pending) < _SCAN_METADATA_PREFETCH_ITEMS
+            len(pending) < _SCAN_METADATA_PREFETCH_ITEMS * max(1, len(executors))
             and next_item_index < len(all_file_stats)
         ):
             path, stat = all_file_stats[next_item_index]
@@ -378,7 +388,7 @@ def _ordered_scan_metadata_entries(
                         stat,
                         existing,
                         None,
-                        executor.submit(read_metadata_for_file, path),
+                        executor_for(path).submit(read_metadata_for_file, path),
                     )
                 )
 
@@ -409,10 +419,8 @@ def _ordered_scan_metadata_entries(
             for _path, _stat, _existing, _entry, future in pending:
                 if future is not None:
                     future.cancel()
-        executor.shutdown(
-            wait=True,
-            cancel_futures=not completed_normally,
-        )
+        for executor in executors.values():
+            executor.shutdown(wait=True, cancel_futures=not completed_normally)
 
 
 # A USB or network disk that resets mid-scan fails reads for a few seconds.
@@ -525,6 +533,41 @@ def _discover_music_files_with_stats(
             library_state["scan_album_folders_total"] = len(discovered_album_folders)
 
     return discovered_files, len(discovered_album_folders), total_bytes
+
+
+def _root_disk_key_lookup(roots: list[Path]) -> Callable[[Path], str]:
+    """Map each file to the physical disk of its library root."""
+    prefixes = sorted(
+        ((os.path.normcase(str(root)).rstrip("\\/") + os.sep, physical_disk_key(root)) for root in roots),
+        key=lambda item: len(item[0]), reverse=True,
+    )
+
+    def disk_key_for(path: Path) -> str:
+        normalized = os.path.normcase(str(path))
+        for prefix, disk_key in prefixes:
+            if normalized.startswith(prefix):
+                return disk_key
+        return ""
+
+    return disk_key_for
+
+
+def _interleave_by_disk(
+    file_stats: list[tuple[Path, os.stat_result]], disk_key_for: Callable[[Path], str],
+) -> list[tuple[Path, os.stat_result]]:
+    """Alternate disks so each disk's reader has work; keep each disk's order."""
+    by_disk: dict[str, deque[tuple[Path, os.stat_result]]] = {}
+    for item in file_stats:
+        by_disk.setdefault(disk_key_for(item[0]), deque()).append(item)
+    if len(by_disk) < 2:
+        return file_stats
+    queues = list(by_disk.values())
+    interleaved: list[tuple[Path, os.stat_result]] = []
+    while queues:
+        queues = [queue for queue in queues if queue]
+        for queue in queues:
+            interleaved.append(queue.popleft())
+    return interleaved
 
 
 def _album_folder_for_track_path(path: Path) -> Path:
@@ -756,12 +799,14 @@ def scan_library_file_cache(
     )]
     configured_root_definitions = list(root_definitions or [])
 
+    disk_key_for = _root_disk_key_lookup(roots)
     ordered_metadata_entries = _ordered_scan_metadata_entries(
         library_state,
-        all_file_stats,
+        _interleave_by_disk(all_file_stats, disk_key_for),
         previous,
         expected_scan_generation=expected_scan_generation,
         record_file_error=record_file_error,
+        disk_key_for=disk_key_for,
     )
     for index, (path, stat, existing, entry, metadata_was_read) in enumerate(
         ordered_metadata_entries,

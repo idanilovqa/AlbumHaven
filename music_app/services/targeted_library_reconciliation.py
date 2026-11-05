@@ -86,7 +86,9 @@ class TargetedLibraryReconciler:
         root_healthy: bool = True,
         publication_guard: object = _DEFAULT_PUBLICATION_GUARD,
         reuse_unchanged_entries: bool = False,
+        interrupted: Callable[[], bool] | None = None,
     ) -> TargetedReconciliationResult:
+        """``interrupted`` stops the read and publication with health "deferred"."""
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
         root_id = str(getattr(request, "root_id", "") or "").strip()
@@ -268,6 +270,8 @@ class TargetedLibraryReconciler:
             ):
                 if self._stop_event.is_set():
                     return TargetedReconciliationResult(0, (), "cancelled")
+                if interrupted is not None and interrupted():
+                    return TargetedReconciliationResult(0, (), "deferred")
                 entry = _unchanged_persisted_entry(persisted_entries.get(str(path)), path)
                 if entry is None:
                     entry = self._metadata_reader(path)
@@ -285,6 +289,8 @@ class TargetedLibraryReconciler:
             clear_ambiguous_folder_covers(active_entries)
             if self._stop_event.is_set():
                 return TargetedReconciliationResult(0, (), "cancelled")
+            if interrupted is not None and interrupted():
+                return TargetedReconciliationResult(0, (), "deferred")
             effective_publication_guard = (
                 self._publication_guard
                 if publication_guard is _DEFAULT_PUBLICATION_GUARD

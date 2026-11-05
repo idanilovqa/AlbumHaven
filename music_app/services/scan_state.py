@@ -16,6 +16,7 @@ from music_app.services.library_indexing import (
     start_scan_stage,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.library_watch_health import FORCED_FULL_SCAN_MODE
 from music_app.services.scan_cache_persistence import (
     ScanCacheInventorySuperseded,
     ScanCachePublicationSuperseded,
@@ -601,8 +602,10 @@ def refresh_library_state(
 
     try:
         if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+            # A forced scan (the startup metadata repair) walks every root
+            # like a manual full rescan; both clear the roots they observed.
             if (
-                requested_scan_mode == "manual_full_rescan"
+                (requested_scan_mode == "manual_full_rescan" or force)
                 and recover_library_watch_health is not None
             ):
                 observed_root_ids = publication_state.get(
@@ -610,7 +613,11 @@ def refresh_library_state(
                 )
                 try:
                     recover_library_watch_health(
-                        scan_mode=requested_scan_mode,
+                        scan_mode=(
+                            requested_scan_mode
+                            if requested_scan_mode == "manual_full_rescan"
+                            else FORCED_FULL_SCAN_MODE
+                        ),
                         scan_started_at=scan_started_at,
                         observed_root_ids=(
                             observed_root_ids

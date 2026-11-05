@@ -1523,3 +1523,36 @@ def test_targeted_reconciliation_rejects_shared_art_for_multiple_releases_in_one
     assert all(entry["cover_path"] is None for entry in entries.values())
 
 
+
+
+def test_catch_up_defers_without_publishing_when_a_full_scan_starts_midway(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    tracks = [root / "Owner" / "Album" / f"0{index}.flac" for index in range(3)]
+    for track in tracks:
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"audio")
+    roots = [{"id": "main", "path": str(root), "category": "main_library_roots"}]
+    repository = RecordingRepository()
+    read = []
+    scan_started = False
+
+    def read_metadata(path):
+        nonlocal scan_started
+        read.append(path)
+        scan_started = True  # the startup repair scan begins after the first file
+        return {"path": str(path), "album": "Album", "album_artist": "Owner", "artist": "Owner", "title": path.stem}
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}}, repository=repository, root_definitions=roots,
+        metadata_reader=read_metadata, stat_path=lambda path: path.stat(), wait=lambda _seconds: None,
+    )
+    result = reconciler.reconcile(
+        _request(paths=(root,), deleted_subtrees=(root,)),
+        interrupted=lambda: scan_started,
+    )
+
+    assert result.health == "deferred"
+    assert len(read) == 1
+    assert repository.calls == []

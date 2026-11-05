@@ -1206,8 +1206,14 @@ def _shrunken_root_ids(published: dict[str, int], discovered: dict[str, int]) ->
 
 def _withdraw_shrunken_roots(cfg, logger, publication_state, file_cache) -> None:
     observed_root_ids = publication_state.get("observed_library_root_ids")
-    count_published = getattr(select_scan_cache_adapter(cfg), "count_published_files_by_root", None)
-    if not isinstance(observed_root_ids, set) or not observed_root_ids or count_published is None:
+    if not isinstance(observed_root_ids, set) or not observed_root_ids:
+        return
+    try:
+        adapter = select_scan_cache_adapter(cfg)
+    except ValueError:
+        return  # no persisted inventory to compare against
+    count_published = getattr(adapter, "count_published_files_by_root", None)
+    if count_published is None:
         return
     published = {root_id: count for root_id, count in count_published().items() if root_id in observed_root_ids}
     discovered: dict[str, int] = {}

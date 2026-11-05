@@ -4,7 +4,6 @@ enum class FocusChange { GAIN, LOSS, LOSS_TRANSIENT, LOSS_TRANSIENT_CAN_DUCK }
 
 /** What the focus policy asks the platform and the player to do, in order. */
 sealed interface FocusEffect {
-    data object Request : FocusEffect
     data object Abandon : FocusEffect
     data object Pause : FocusEffect
     data object Resume : FocusEffect
@@ -46,28 +45,36 @@ class AudioFocusPolicy(private val requestFocus: () -> Boolean) : StartGate {
     /** The request is held but another app has focus for a moment, so nothing may be heard until it returns. */
     private var transientlyLost = false
 
+    /**
+     * The gate let a start through whose active state has not arrived, so a stop reported before
+     * it (a quick pause and play) keeps the focus that start holds.
+     */
+    private var startAllowed = false
+
     @Synchronized
     fun onState(state: NativePlaybackState): List<FocusEffect> {
         val wanted = state == NativePlaybackState.LOADING || state == NativePlaybackState.BUFFERING ||
             state == NativePlaybackState.PLAYING
+        if (wanted) startAllowed = false
         if (wanted && transientlyLost) {
             resumeOnGain = true
             return listOf(FocusEffect.Pause)
         }
+        // Every start passes the gate holding focus, so focus lost since then pauses it.
+        if (wanted && !held) return listOf(FocusEffect.Pause)
         active = wanted
         if (active) {
             // Any start, including the user's own, supersedes a pending resume.
             resumeOnGain = false
-            val effects = mutableListOf<FocusEffect>()
-            if (!held) {
-                held = true
-                effects += FocusEffect.Request
-            }
-            return effects + watchNoisy()
+            return watchNoisy()
         }
         // A transiently interrupted player keeps its request so the platform can give focus back.
         if (state != NativePlaybackState.PAUSED) resumeOnGain = false
         val effects = watchNoisy()
+        if (startAllowed) {
+            startAllowed = false
+            return effects
+        }
         if (resumeOnGain || !held) return effects
         held = false
         transientlyLost = false
@@ -94,20 +101,13 @@ class AudioFocusPolicy(private val requestFocus: () -> Boolean) : StartGate {
             return false
         }
         if (!held) held = requestFocus()
+        startAllowed = held
         return held
     }
 
     @Synchronized
     override fun dropHeldStart() {
         resumeOnGain = false
-    }
-
-    /** A refused request (for example during a call) leaves playback paused. */
-    @Synchronized
-    fun onRequestResult(granted: Boolean): List<FocusEffect> {
-        if (granted) return emptyList()
-        held = false
-        return if (active) listOf(FocusEffect.Pause) else emptyList()
     }
 
     @Synchronized
@@ -134,6 +134,10 @@ class AudioFocusPolicy(private val requestFocus: () -> Boolean) : StartGate {
                 // Output stays watched: the resume makes playback active again.
                 resumeOnGain = false
                 listOf(FocusEffect.Resume)
+            } else if (held && !active) {
+                // A pause during the call left nothing to resume, so focus is given up now.
+                held = false
+                watchNoisy() + FocusEffect.Abandon
             } else {
                 watchNoisy()
             }

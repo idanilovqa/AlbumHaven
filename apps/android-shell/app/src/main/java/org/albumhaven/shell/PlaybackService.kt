@@ -476,7 +476,6 @@ class PlaybackService : MediaLibraryService() {
     private fun apply(effects: List<FocusEffect>) {
         effects.forEach { effect ->
             when (effect) {
-                FocusEffect.Request -> apply(focusPolicy.onRequestResult(requestFocus()))
                 FocusEffect.Abandon -> audioManager.abandonAudioFocusRequest(focusRequest)
                 FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
@@ -485,7 +484,7 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    /** Also asked from the playback thread before a start; the listener answers on the main thread. */
+    /** Asked by the playback thread before every start; the listener answers on the main thread. */
     private fun requestFocus() = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
 
     private fun watchNoisy(enabled: Boolean) {

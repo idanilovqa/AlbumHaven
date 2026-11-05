@@ -165,9 +165,31 @@ def postgres_runtime_fakes(app, monkeypatch):
     app.config["_TEST_COVER_LOOKUP_NOTIFICATIONS"] = persisted_notifications
 
 
+class _FilesystemCoverInventory:
+    """Route tests have no isolated database for the Postgres-backed local cover
+    inventory, so resolve an album's folder from its track paths instead."""
+
+    def __init__(self):
+        self.repository = self
+
+    @staticmethod
+    def root_for_tracks(paths):
+        # The inventory stores the physical album folder: a disc folder's parent.
+        from music_app.services.album_local_membership import _DISC_FOLDER
+
+        roots = set()
+        for path in paths or ():
+            parent = Path(str(path)).parent
+            roots.add(parent.parent if _DISC_FOLDER.search(parent.name) else parent)
+        return roots.pop() if len(roots) == 1 else None
+
+
 def _make_wave_d_app(flask_app):
     from music_app.routes.api_wave_d_asgi_routes import router
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
 
+    if isinstance(flask_app.config.get("_LOCAL_COVER_INVENTORY"), LocalCoverInventoryWorker):
+        flask_app.config["_LOCAL_COVER_INVENTORY"] = _FilesystemCoverInventory()
     asgi_app = FastAPI()
     from tests.py.asgi_testing import configure_test_bootstrap_actor
     configure_test_bootstrap_actor(asgi_app)
@@ -4643,6 +4665,12 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
         lambda _config, task_id: persisted_task if task_id == persisted_task["id"] else None,
         raising=False,
     )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
+    )
 
     status, _headers, body = _run_asgi_request(
         _make_wave_d_app(app),
@@ -5269,6 +5297,12 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
             if task_id == "new-eden-lookup"
             else {}
         ),
+    )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
     )
     monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
     monkeypatch.setattr(

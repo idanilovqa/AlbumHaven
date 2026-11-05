@@ -33264,7 +33264,7 @@ async function finishCoverLookupMutation(mutationKey, session) {
 }
 
 async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true } = {}) {
-  clearTimeout(coverLookupLocalInventoryTimer);
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   const album = state.coverLookup.modal.album;
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
@@ -33298,7 +33298,7 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
     applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
-    if (state.coverLookup.modal.localInventoryPending) {
+    if (state.coverLookup.modal.localInventoryPending && typeof setTimeout === 'function') {
       coverLookupLocalInventoryTimer = setTimeout(() => {
         if (isCurrent()) void refreshCoverLookupGallery(false);
       }, 1000);
@@ -33430,7 +33430,7 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
-  clearTimeout(coverLookupLocalInventoryTimer);
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();

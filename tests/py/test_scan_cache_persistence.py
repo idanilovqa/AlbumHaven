@@ -3017,6 +3017,9 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert any("insert into library.local_tracks" in sql for sql in executed_sql)
     assert any("insert into library.local_track_files" in sql for sql in executed_sql)
     assert any("update library.local_track_files" in sql for sql in executed_sql)
+    # The full publication advances the inventory revision as its last write,
+    # so a whole-library save prepared before it is superseded, not applied.
+    assert executed_sql[-1] == scan_cache_persistence._increment_inventory_mutation_revision_sql()
 
     snapshot_params = [
         params for sql, params in connection.executed if "update library.libraries" in sql

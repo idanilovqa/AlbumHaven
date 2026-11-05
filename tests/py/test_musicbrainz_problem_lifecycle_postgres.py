@@ -310,3 +310,47 @@ def test_background_triggers_cool_off_unresolved_artists_but_owner_sync_retries(
     assert repository.enqueue_eligible_artists(
         reason="periodic_scan", observed_at=NOW + timedelta(days=8),
     ) == {"enqueued_count": 1}
+
+
+def test_only_album_artists_are_queued_for_delivery_1(monkeypatch: pytest.MonkeyPatch):
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    _apply_pre_delivery_migrations(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        library_id = connection.execute(
+            """
+            select library.libraries.id from app.bootstrap_owners
+            join library.libraries on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            """
+        ).fetchone()["id"]
+        owner_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name, metadata) "
+            "values (%s, 'scope-owner', 'Neal Morse', '{}'::jsonb) returning id", (library_id,),
+        ).fetchone()["id"]
+        guest_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name, metadata) "
+            "values (%s, 'scope-guest', 'Guest Singer', '{}'::jsonb) returning id", (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata) "
+            "values (%s, %s, 'scope-album', 'Sola Scriptura', '{}'::jsonb) returning id", (library_id, owner_id),
+        ).fetchone()["id"]
+        for key, artist in (("scope-track-1", owner_id), ("scope-track-2", guest_id)):
+            connection.execute(
+                "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata) "
+                "values (%s, %s, %s, %s, 'Track', '{}'::jsonb)", (library_id, album_id, artist, key),
+            )
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+
+    assert repository.enqueue_eligible_artists(reason="startup_backfill", observed_at=NOW) == {"enqueued_count": 1}
+    with isolatedPostgres._connect(setup_url) as connection:
+        queued = [row["local_artist_id"] for row in connection.execute(
+            "select local_artist_id from ops.metadata_enrichment_jobs").fetchall()]
+    assert queued == [owner_id]
+    assert [row["local_artist_name"] for row in repository.list_present_artist_review()] == ["Neal Morse"]

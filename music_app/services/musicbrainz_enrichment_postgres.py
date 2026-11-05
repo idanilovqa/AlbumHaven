@@ -12,6 +12,18 @@ from music_app.services.postgres_connections import pooled_connection
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _JOB_KIND = "musicbrainz_artist_enrichment"
 _OWNER_SYNC_REASON = "library_menu_sync"
+# Delivery 1 enriches album artists only: an artist that owns a local album with
+# tracks. Track-only artists (Various Artists or guest credits) get their
+# identity from release tracklists in the album-identity delivery.
+_PRESENT_ALBUM_ARTIST_SQL = """exists (
+          select 1
+          from library.local_albums owned_albums
+          join library.local_tracks owned_tracks
+            on owned_tracks.library_id = owned_albums.library_id
+           and owned_tracks.album_id = owned_albums.id
+          where owned_albums.library_id = artists.library_id
+            and owned_albums.artist_id = artists.id
+        )"""
 _MAX_ALIASES = 24
 _MAX_CANDIDATES = 25
 _MAX_TAGS = 64
@@ -82,12 +94,7 @@ class MusicBrainzEnrichmentPostgresRepository:
               left join library.local_artist_musicbrainz_matches matches
                 on matches.library_id = active_library.library_id
                and matches.local_artist_id = artists.id
-              where exists (
-                select 1
-                from library.local_tracks tracks
-                where tracks.library_id = active_library.library_id
-                  and tracks.artist_id = artists.id
-              )
+              where """ + _PRESENT_ALBUM_ARTIST_SQL + """
                 and (
                   matches.id is null
                   or (
@@ -705,12 +712,7 @@ def _artist_attention_sql() -> str:
         join library.local_artists artists
           on artists.library_id = active_library.library_id
          and artists.id = problem.local_artist_id
-        where exists (
-          select 1
-          from library.local_tracks tracks
-          where tracks.library_id = active_library.library_id
-            and tracks.artist_id = artists.id
-        )
+        where {_PRESENT_ALBUM_ARTIST_SQL}
         order by lower(artists.name), artists.id;
     """
 
@@ -798,12 +800,7 @@ def _artist_review_sql(*, single_artist: bool) -> str:
           where local_albums.library_id = active_library.library_id
             and local_albums.artist_id = artists.id
         ) albums on true
-        where exists (
-          select 1
-          from library.local_tracks tracks
-          where tracks.library_id = active_library.library_id
-            and tracks.artist_id = artists.id
-        )
+        where {_PRESENT_ALBUM_ARTIST_SQL}
         order by lower(artists.name), artists.id;
     """
 
@@ -1351,11 +1348,7 @@ def _automatic_outcome_sql() -> str:
     return _active_library_cte() + """
         , active_artist as (
           select artists.id, active_library.library_id,
-                 exists (
-                   select 1 from library.local_tracks tracks
-                   where tracks.library_id = active_library.library_id
-                     and tracks.artist_id = artists.id
-                 ) as is_present
+                 """ + _PRESENT_ALBUM_ARTIST_SQL + """ as is_present
           from active_library
           join library.local_artists artists
             on artists.library_id = active_library.library_id

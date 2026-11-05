@@ -3,6 +3,8 @@
 -- additional artbox currently allowed. Rows are written only by an in-app
 -- selection, never inferred from folder images or existing covers.
 -- Rollback: drop the table; album, track, cover, and media rows are unchanged.
+-- Numbered 0113: production already records 0104-0111 (codex/non-scrolling-bugs-ci-repair) and
+-- 0112 (Performance). Merge this branch after those so numbering is contiguous.
 create table if not exists library.local_album_additional_artworks (
   album_id bigint not null references library.local_albums(id) on delete cascade,
   slot smallint not null,

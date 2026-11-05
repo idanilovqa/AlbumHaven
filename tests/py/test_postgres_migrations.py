@@ -529,7 +529,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0101_create_local_album_identity_transitions.sql",
         "0102_narrow_synthetic_unknown_album_identity_guard.sql",
         "0103_repair_synthetic_unknown_cover_task_identities.sql",
-        "0104_create_local_album_additional_artworks.sql",
+        "0113_create_local_album_additional_artworks.sql",
     ]
 
 

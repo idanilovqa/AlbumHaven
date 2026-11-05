@@ -120,8 +120,9 @@ object SessionMapping {
      * Until then it is idle, not paused: Media3 posts no notification for an idle player, so a
      * process started by System UI's boot-time resumption browse shows no second, short-lived
      * card, and Media3 answers that browse from `onPlaybackResumption` with the item's full
-     * metadata instead of a title-less placeholder. A [failed] resumption shows paused, so its
-     * card can say why.
+     * metadata instead of a title-less placeholder. A [failed] resumption stays idle with its
+     * error, the only state a Media3 player may report an error in; having buffered, it keeps its
+     * card, which says why.
      */
     fun restoredView(queue: RestorableQueue, resuming: Boolean = false, failed: Boolean = false): SessionView {
         val index = queue.currentIndex
@@ -140,11 +141,7 @@ object SessionMapping {
             },
             currentIndex = index,
             positionMs = queue.positionMs,
-            state = when {
-                resuming -> SessionPlaybackState.BUFFERING
-                failed -> SessionPlaybackState.READY
-                else -> SessionPlaybackState.IDLE
-            },
+            state = if (resuming) SessionPlaybackState.BUFFERING else SessionPlaybackState.IDLE,
             playWhenReady = resuming,
             playing = false,
             controls = if (!queue.resumable) {
@@ -156,6 +153,7 @@ object SessionMapping {
                     if (resumable(index + 1)) add(SystemControl.NEXT_ITEM)
                 }
             },
+            failed = failed,
             restored = true,
         )
     }

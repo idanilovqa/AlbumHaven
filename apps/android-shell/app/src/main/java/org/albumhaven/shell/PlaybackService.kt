@@ -1,10 +1,12 @@
 package org.albumhaven.shell
 
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
@@ -16,11 +18,14 @@ import android.os.Looper
 import android.os.SystemClock
 import android.webkit.CookieManager
 import androidx.annotation.OptIn
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.session.CacheBitmapLoader
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -29,7 +34,6 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
-import com.google.common.util.concurrent.SettableFuture
 import okhttp3.OkHttpClient
 import org.albumhaven.shell.playback.AudioFocusPolicy
 import org.albumhaven.shell.playback.AudioTrackPcmSink
@@ -51,6 +55,7 @@ import org.albumhaven.shell.playback.PlaybackRestoreStore
 import org.albumhaven.shell.playback.RestorableQueue
 import org.albumhaven.shell.playback.RestoreStorage
 import org.albumhaven.shell.playback.ResumeAnswer
+import org.albumhaven.shell.playback.ResumeRunner
 import org.albumhaven.shell.playback.Resumption
 import org.albumhaven.shell.playback.SessionArtworkLoader
 import org.albumhaven.shell.playback.ShellSession
@@ -115,6 +120,7 @@ class PlaybackService : MediaLibraryService() {
     private var queueLoadedAtMs = 0L
     private var refreshedRevision = 0L
     private val resumeIo: ExecutorService = Executors.newSingleThreadExecutor()
+    private val resumeRunner = ResumeRunner(resumeIo) { task -> main.post(task) }
 
     // A retired controller may still finish its listen writes after the service is gone.
     private var destroyed = false
@@ -164,6 +170,46 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
+
+    /**
+     * Android starts the service for a media key or Bluetooth play with `startForegroundService`.
+     * A play that resumes shows buffering at once, so Media3 enters the foreground; one that cannot
+     * (nothing saved, nothing resumable) leaves Media3 idle, and the service then meets the start
+     * itself so Android does not end the process.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val result = super.onStartCommand(intent, flags, startId)
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON && foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+            main.removeCallbacks(meetForegroundStart)
+            main.postDelayed(meetForegroundStart, FOREGROUND_START_CHECK_MS)
+        }
+        return result
+    }
+
+    /** As Media3 stops a service it cannot serve: briefly in the foreground with a hidden notification, then out. */
+    private val meetForegroundStart = Runnable {
+        if (destroyed || foregroundServiceType != ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) return@Runnable
+        val notifications = getSystemService(NotificationManager::class.java)
+        Util.ensureNotificationChannel(
+            notifications,
+            DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID,
+            getString(DefaultMediaNotificationProvider.DEFAULT_CHANNEL_NAME_RESOURCE_ID),
+        )
+        val notification = NotificationCompat.Builder(this, DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID)
+            .setSmallIcon(androidx.media3.session.R.drawable.media3_notification_small_icon)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
+            .build()
+        try {
+            Util.setForegroundServiceNotification(
+                this, UNSERVED_START_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK, "mediaPlayback",
+            )
+            Util.stopForeground(this, true)
+        } catch (_: IllegalStateException) {
+            // The media key's foreground allowance has lapsed; Android then no longer expects the start.
+        }
+    }
 
     /** The shell binder goes only to this process's own bind intent; every other bind is Media3's. */
     override fun onBind(intent: Intent?): IBinder? {
@@ -329,30 +375,18 @@ class PlaybackService : MediaLibraryService() {
         resume(queue, refreshedRevision, queue.currentIndex to queue.positionMs)
     }
 
-    /** Exchanges [queue]'s resume tokens off the main thread, then plays [target] of a fresh load. */
+    /** Shows [queue] resuming at once, exchanges its resume tokens off the main thread, then plays [target] of a fresh load. */
     private fun resume(queue: RestorableQueue, revision: Long, target: Pair<Int, Long>): ListenableFuture<*> {
-        val done = SettableFuture.create<Unit>()
         val selected = origin
         val api = HttpResumeApi(client, session(selected))
         val tokens = Resumption.tokens(queue)
-        player.showResumption(true)
-        resumeIo.execute {
-            val answer = api.exchange(tokens)
-            main.post {
-                if (destroyed || origin != selected) {
-                    done.set(Unit)
-                    return@post
-                }
-                val load = (answer as? ResumeAnswer.Refs)?.let { Resumption.load(queue, it.playbackRefs, revision, target) }
-                if (load != null && controller.loadQueue(load) == CommandResult.ACCEPTED) {
-                    controller.afterPendingCommands { main.post { done.set(Unit) } }
-                    return@post
-                }
+        return resumeRunner.start({ api.exchange(tokens) }, { player.showResumption(true) }) { answer ->
+            if (destroyed || origin != selected) return@start
+            val load = (answer as? ResumeAnswer.Refs)?.let { Resumption.load(queue, it.playbackRefs, revision, target) }
+            if (load == null || controller.loadQueue(load) != CommandResult.ACCEPTED) {
                 player.showResumption(false, resumeFailure(answer == ResumeAnswer.SignedOut))
-                done.set(Unit)
             }
         }
-        return done
     }
 
     /** Says why on the media card and offers the app, whose tap is the only way to sign in again. */
@@ -490,6 +524,10 @@ class PlaybackService : MediaLibraryService() {
         private const val LISTEN_PREFERENCES = "listen"
         private const val KEY_DEVICE_ID = "device_id"
         private const val SAVE_INTERVAL_MS = 10_000L
+
+        /** Well inside Android's ten-second start deadline, and after Media3 has handled the key. */
+        private const val FOREGROUND_START_CHECK_MS = 3_000L
+        private const val UNSERVED_START_NOTIFICATION_ID = 1002
 
         /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */
         private const val REPLACEMENT_WAIT_MS = 8_000L

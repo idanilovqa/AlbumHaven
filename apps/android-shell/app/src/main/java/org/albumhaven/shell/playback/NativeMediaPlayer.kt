@@ -50,9 +50,9 @@ class NativeMediaPlayer(
     }
 
     /**
-     * While [resuming], a restored queue shows as buffering. A [failure] is the player error until
-     * the next attempt, and its message replaces the current item's artist line, so the media card
-     * says why playback did not resume.
+     * While [resuming], a restored queue shows as buffering. Until the next attempt a [failure]'s
+     * message replaces the current item's artist line, so the media card says why playback did not
+     * resume, and it is the player error of a failed, idle view.
      */
     fun showResumption(resuming: Boolean, failure: PlaybackException? = null) {
         this.resuming = resuming
@@ -102,9 +102,8 @@ class NativeMediaPlayer(
                     },
                 )
         }
-        val failure = resumeFailure ?: PlaybackException("Playback failed", null, PlaybackException.ERROR_CODE_UNSPECIFIED)
-            .takeIf { view.failed }
-        failure?.let(builder::setPlayerError)
+        // Media3 accepts a player error only while idle; a failure beside a paused queue shows as its notice alone.
+        if (view.failed) builder.setPlayerError(resumeFailure ?: PlaybackException("Playback failed", null, PlaybackException.ERROR_CODE_UNSPECIFIED))
         discontinuityMs?.let { builder.setPositionDiscontinuity(Player.DISCONTINUITY_REASON_INTERNAL, it) }
         return builder.build()
     }

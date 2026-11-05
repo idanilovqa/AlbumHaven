@@ -8,8 +8,13 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 class ResumptionTest {
     private fun item(name: String, group: Int = 0, token: String? = "rt1.$name", durationMs: Long = 180_000) = RestorableItem(
@@ -71,6 +76,34 @@ class ResumptionTest {
         assertArrayEquals(cover, current.artworkData)
         assertNull(resumed.mediaItems[0].mediaMetadata.artworkData)
         assertNull(Resumption.mediaItems(queue, null) { null }.mediaItems[1].mediaMetadata.artworkData)
+    }
+}
+
+class ResumeRunnerTest {
+    @Test
+    fun aSlowExchangeNeitherHoldsBackTheResumingStateNorTheCommandsCompletion() {
+        val io = Executors.newSingleThreadExecutor()
+        val main = LinkedBlockingQueue<Runnable>()
+        val serverAnswers = CountDownLatch(1)
+        val events = mutableListOf<String>()
+        try {
+            val done = ResumeRunner(io, main::add).start(
+                exchange = { serverAnswers.await(); ResumeAnswer.Refs(listOf("ref-a")) },
+                showResuming = { events += "resuming" },
+                answered = { events += "answered $it" },
+            )
+            // Media3 sees buffering before the server answers, so it posts its notification and
+            // enters the foreground; the queue still plays only with the fresh references.
+            assertTrue(done.isDone)
+            assertEquals(listOf("resuming"), events)
+            assertNull(main.poll(100, TimeUnit.MILLISECONDS))
+
+            serverAnswers.countDown()
+            main.poll(5, TimeUnit.SECONDS)!!.run()
+            assertEquals(listOf("resuming", "answered Refs(playbackRefs=[ref-a])"), events)
+        } finally {
+            io.shutdownNow()
+        }
     }
 }
 

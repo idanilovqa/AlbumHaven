@@ -129,8 +129,12 @@ class SessionMappingTest {
         assertEquals(setOf(SystemControl.PLAY_PAUSE, SystemControl.PREVIOUS_ITEM), view.controls)
         val resuming = SessionMapping.restoredView(restored, resuming = true)
         assertEquals(SessionPlaybackState.BUFFERING to true, resuming.state to resuming.playWhenReady)
+        // Media3's SimpleBasePlayer refuses a player error outside STATE_IDLE: a paused, failed view
+        // threw in getState(), so the session never showed the failure and never entered the foreground.
         val failed = SessionMapping.restoredView(restored, failed = true)
-        assertEquals(SessionPlaybackState.READY to false, failed.state to failed.playWhenReady)
+        assertEquals(SessionPlaybackState.IDLE to false, failed.state to failed.playWhenReady)
+        assertTrue(failed.failed)
+        assertEquals(view.controls, failed.controls)
         val noticed = SessionMapping.withNotice(view, "Sign in")
         assertEquals(listOf("A · B", "Sign in", "A · B"), noticed.items.map { it.artist })
         assertEquals(view, SessionMapping.withNotice(view, null))

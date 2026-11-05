@@ -6,6 +6,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -14,6 +16,7 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 /** `POST /playback/refs/resume`'s answer for one batch of resume tokens. */
@@ -88,6 +91,30 @@ class HttpResumeApi(client: OkHttpClient, private val session: ShellSession) : R
         const val TIMEOUT_SECONDS = 10L
         const val MAX_REFERENCE_CHARS = 2_048
         val REFERENCE = Regex("^[A-Za-z0-9_.=-]+$")
+    }
+}
+
+/**
+ * Starts one exchange of resume tokens for the media session. A media key or Bluetooth play may
+ * have started the service with `startForegroundService`, and Media3 enters the foreground only
+ * once its player reports a buffering or playing item; until a command's future completes,
+ * `SimpleBasePlayer` reports its placeholder, the idle restored queue. So [start] shows the queue
+ * resuming and completes at once: a slow or stalled server cannot hold back the notification, and
+ * playback still waits for fresh references, which [exchange] requests on [io] and hands to
+ * [answered] on [main].
+ */
+class ResumeRunner(private val io: Executor, private val main: Executor) {
+    fun start(
+        exchange: () -> ResumeAnswer,
+        showResuming: () -> Unit,
+        answered: (ResumeAnswer) -> Unit,
+    ): ListenableFuture<*> {
+        showResuming()
+        io.execute {
+            val answer = exchange()
+            main.execute { answered(answer) }
+        }
+        return Futures.immediateVoidFuture()
     }
 }
 

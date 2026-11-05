@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from copy import deepcopy
+import functools
 import logging
 from pathlib import Path
 from threading import Event, Thread
@@ -1432,6 +1433,65 @@ def test_successful_current_generation_scan_is_published_with_rating_seed_intent
     )
 
     assert publication_intents == [(True, 41)]
+
+
+@pytest.mark.parametrize(("interleaved", "expected_final_revision"), [(False, 9), (True, 8)])
+def test_scan_publishes_finished_album_folders_before_its_final_publication(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+    interleaved,
+    expected_final_revision,
+):
+    library_state.update({"file_cache": {}, "albums": [], "last_scan": 0.0, "relation_views": {"artists": []}})
+    adapter = _install_scan_cache_adapter(monkeypatch)
+    adapter.load_inventory_mutation_revision = lambda: 7
+    published = []
+    revisions = iter([8, 10] if interleaved else [8, 9])
+
+    def persist_targeted_inventory_mutation(*, root_id, active_file_entries):
+        published.append((root_id, sorted(active_file_entries)))
+        return {"inventory_mutation_revision": next(revisions)}
+
+    adapter.persist_targeted_inventory_mutation = persist_targeted_inventory_mutation
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda _cache, _keys: [SimpleNamespace(key="a")])
+    final_publications = []
+    entries = {
+        "first": {"C:/m/A/01.flac": {"path": "C:/m/A/01.flac"}},
+        "second": {"C:/m/B/01.flac": {"path": "C:/m/B/01.flac"}},
+    }
+
+    def scan_music_incremental(*, on_entries_ready, **_kwargs):
+        for folder, folder_entries in entries.items():
+            on_entries_ready("root-1", {folder: folder_entries}, folder == "second", frozenset(folder_entries))
+        return {path: entry for folder_entries in entries.values() for path, entry in folder_entries.items()}, 55.0
+
+    def refresh_relations(**kwargs):
+        final_publications.append((list(published), kwargs.get("expected_inventory_mutation_revision")))
+
+    monkeypatch.setattr(
+        "music_app.services.scan_state.ProgressiveScanPublisher",
+        functools.partial(scan_state.ProgressiveScanPublisher, max_albums=1),
+    )
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan_music_incremental,
+        refresh_relation_views=refresh_relations,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert final_publications == [(
+        [("root-1", ["C:/m/A/01.flac"]), ("root-1", ["C:/m/B/01.flac"])],
+        expected_final_revision,
+    )]
+    assert library_state["scan_progressive_publication"]["batches"] == 2
 
 
 def test_force_scan_repairs_legacy_rating_metadata_before_guarded_seed_publication(

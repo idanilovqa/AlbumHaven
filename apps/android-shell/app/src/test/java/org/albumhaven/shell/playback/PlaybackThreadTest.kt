@@ -70,6 +70,11 @@ class PlaybackThreadTest {
         pending.drain()
         harness.step()
         assertEquals(NativePlaybackState.IDLE, harness.state())
+
+        // A media-session command waiting for the retired controller is answered, never left hanging.
+        var answered = false
+        harness.controller.afterPendingCommands { answered = true }
+        assertTrue(answered)
     }
 
     @Test

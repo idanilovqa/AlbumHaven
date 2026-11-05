@@ -315,8 +315,11 @@ class NativePlaybackController(
         synchronized(revisionLock) { documentRestarted = true }
     }
 
-    /** Runs [callback] on the playback thread once every command sent before it has been applied. */
-    fun afterPendingCommands(callback: Runnable) = post(callback)
+    /**
+     * Runs [callback] on the playback thread once every command sent before it has been applied; a
+     * retired controller applies none, so it answers at once.
+     */
+    fun afterPendingCommands(callback: Runnable) = post(Barrier(callback))
 
     /** Warms the connections a first start needs, then keeps them warm while nothing plays. */
     fun warmConnections() = post {
@@ -368,7 +371,10 @@ class NativePlaybackController(
             guarded(task)
             task = tasks.poll()
         }
-        if (retired) return Long.MAX_VALUE
+        if (retired) {
+            dropRetiredWork()
+            return Long.MAX_VALUE
+        }
         var written = 0
         guarded {
             claims.tick()
@@ -406,6 +412,17 @@ class NativePlaybackController(
 
     private fun post(task: Runnable) {
         tasks.offer(task)
+        if (retired) dropRetiredWork()
+    }
+
+    private class Barrier(callback: Runnable) : Runnable by callback
+
+    /** A retired controller runs nothing more; only the barriers callers wait on still answer. */
+    private fun dropRetiredWork() {
+        while (true) {
+            val task = tasks.poll() ?: return
+            if (task is Barrier) task.run()
+        }
     }
 
     private fun post(task: () -> Unit) = post(Runnable(task))
@@ -747,7 +764,12 @@ class NativePlaybackController(
 
     /** The output failed: it is let go at the heard position, and the next play opens a new one. */
     private fun outputFailed() {
-        if (loaded) heldPositionMs = runCatching(::positionMs).getOrDefault(heldPositionMs)
+        // What the failed output already played still counts, if it can still say.
+        runCatching {
+            measureListening()
+            if (loaded) heldPositionMs = positionMs()
+            if (measuring) itemHeardBase = itemRenderedFrames()
+        }
         measuring = false
         loaded = false
         releaseOutput()
@@ -916,6 +938,7 @@ class NativePlaybackController(
         closeTransport()
         releaseOutput()
         retired = true
+        dropRetiredWork()
         shutdownFinished()
     }
 

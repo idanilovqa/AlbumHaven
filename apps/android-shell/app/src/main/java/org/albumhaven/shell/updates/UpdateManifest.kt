@@ -7,7 +7,6 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.URI
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.format.DateTimeParseException

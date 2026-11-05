@@ -11,10 +11,10 @@ import com.google.common.util.concurrent.ListeningExecutorService
 import com.google.common.util.concurrent.MoreExecutors
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.albumhaven.shell.net.ShellSession
 import java.io.IOException
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
-import org.albumhaven.shell.net.ShellSession
 
 /**
  * Loads notification and lock-screen artwork with the WebView session, from the selected origin

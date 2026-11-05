@@ -19735,11 +19735,11 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
     .map((reason) => String(reason || '').trim()).filter(Boolean);
   // The reasons arrive with Album Details, so hovering never loads Problematic Files.
-  const problemLabel = problemReasons.length
+  const problemTitle = problemReasons.length
     ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
     : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemLabel)}" aria-label="${escapeHtml(problemLabel)}">!</button>`
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
@@ -25130,6 +25130,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
+      // A refresh can move the track's album; keep it in view until the user scrolls.
+      if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
@@ -27343,7 +27345,8 @@ async function loadProblematicFiles(force = false, options = {}) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
+          // Visible problem controls stay usable until the forced refresh replaces them.
+          return item === selectedSummary ? selectedDetail : item;
         }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail

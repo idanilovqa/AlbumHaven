@@ -101,7 +101,8 @@ async function loadProblematicFiles(force = false, options = {}) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
+          // Visible problem controls stay usable until the forced refresh replaces them.
+          return item === selectedSummary ? selectedDetail : item;
         }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail

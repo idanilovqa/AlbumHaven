@@ -497,6 +497,13 @@ export const test = base.extend({
     }
   }, { auto: true }],
 
+  // A worker's tests share one account, and unload deliberately leaves a playing tab's claim to
+  // expire, so a claim left live would refuse the next test's Play for the rest of its lease.
+  playbackClaimRelease: [async ({ globalPlayerActions }, use) => {
+    await use();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+  }, { auto: true }],
+
   thirdPartyRequestEvidence: async ({ page }, use) => {
     const observer = observeNonLoopbackHttpRequests(page);
     try {

@@ -381,6 +381,17 @@ export class GlobalPlayerActions {
     };
   }
 
+  async pauseToReleasePlaybackClaim() {
+    const player = this.globalPlayer;
+    if (player.page.isClosed() || !await player.playButton.isVisible()
+        || await player.playButton.getAttribute('aria-label') !== 'Pause') return;
+    const released = player.page.waitForResponse(response => (
+      response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/playback/state'
+    ));
+    await this.togglePlaybackWithSpace({ paused: true });
+    expect((await released).ok()).toBe(true);
+  }
+
   async togglePlaybackWithSpace(expectedState, options = {}) {
     await this.globalPlayer.timeline.focus();
     await expect(this.globalPlayer.timeline).toBeFocused();

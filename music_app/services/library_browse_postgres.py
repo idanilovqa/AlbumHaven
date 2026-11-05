@@ -7147,6 +7147,7 @@ def _queue_display_cover_variants_for_groups(
     try:
         from music_app.services.covers import (
             display_cover_variant_cache_root,
+            display_variant_awaits_relocation,
             normalize_cover_variant_revision,
             queue_cover_display_variant_generation,
         )
@@ -7158,6 +7159,8 @@ def _queue_display_cover_variants_for_groups(
         if str(priority or "").strip().casefold() == "background"
         else {"priority": priority}
     )
+    # A running preview move may still hold a preview in its source root.
+    storage_policy = config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
     seen_cover_paths: set[str] = set()
     for group in list(artist_groups or []):
         if not isinstance(group, Mapping):
@@ -7177,24 +7180,28 @@ def _queue_display_cover_variants_for_groups(
                 revision_options = (
                     {"revision": cover_revision} if cover_revision else {}
                 )
-                inventory_options = {}
-                recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                if recorder is not None:
-                    inventory_options["on_published"] = recorder
-                queue_cover_display_variant_generation(
+                if not display_variant_awaits_relocation(
                     source_path,
-                    cache_root=display_cover_variant_cache_root(
-                        source_path,
-                        data_dir=config.get("DATA_DIR") if cover_revision else None,
-                        storage_policy=config.get(
-                            "_GENERATED_PREVIEW_STORAGE_POLICY"
-                        ),
-                    ),
+                    storage_policy=storage_policy,
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
-                    **revision_options,
-                    **priority_options,
-                    **inventory_options,
-                )
+                    revision=cover_revision or None,
+                ):
+                    inventory_options = {}
+                    recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
+                    if recorder is not None:
+                        inventory_options["on_published"] = recorder
+                    queue_cover_display_variant_generation(
+                        source_path,
+                        cache_root=display_cover_variant_cache_root(
+                            source_path,
+                            data_dir=config.get("DATA_DIR") if cover_revision else None,
+                            storage_policy=storage_policy,
+                        ),
+                        max_size=_DISPLAY_COVER_VARIANT_SIZE,
+                        **revision_options,
+                        **priority_options,
+                        **inventory_options,
+                    )
             except Exception:
                 continue
             remaining -= 1

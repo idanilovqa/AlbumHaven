@@ -17930,3 +17930,46 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
 
+
+
+def test_gallery_cover_prewarm_leaves_previews_a_running_move_has_not_reached(monkeypatch, tmp_path):
+    """Gallery payloads during a reverse move must not regenerate a preview at the
+    destination while it still waits in the source root to be moved."""
+    from music_app.services import covers as covers_module
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    revision = "b" * 64
+    custom_root = tmp_path / "Generated Previews"
+    waiting = tmp_path / "Waiting" / "Album" / "cover.jpg"
+    fresh = tmp_path / "Fresh" / "Album" / "cover.jpg"
+    pending = build_cover_variant_base_path(
+        waiting, cache_root=custom_root / "v1", max_size=480, revision=revision
+    ).with_suffix(".jpg")
+    pending.parent.mkdir(parents=True)
+    pending.write_bytes(b"not yet moved")
+    queued = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, **kwargs: queued.append((Path(source_path), Path(kwargs["cache_root"]))),
+    )
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="custom", active_root=custom_root, requested_mode="album_folders", operation_state="running",
+        )
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {"_GENERATED_PREVIEW_STORAGE_POLICY": policy},
+        [{"albums": [
+            {"cover_path": str(waiting), "cover_revision": revision},
+            {"cover_path": str(fresh), "cover_revision": revision},
+        ]}],
+    )
+
+    assert queued == [(fresh, fresh.parent / ".album-haven")]

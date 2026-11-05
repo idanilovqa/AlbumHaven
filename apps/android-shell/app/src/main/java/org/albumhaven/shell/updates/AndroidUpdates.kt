@@ -13,16 +13,16 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.webkit.CookieManager
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
 import androidx.core.net.toUri
-import okhttp3.OkHttpClient
 import org.albumhaven.shell.BuildConfig
 import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
+import org.albumhaven.shell.ShellApplication
 import org.albumhaven.shell.ShellPreferences
 import org.albumhaven.shell.downloadManagerOrNull
+import org.albumhaven.shell.enqueueDownload
 import org.albumhaven.shell.net.ShellSession
 import java.io.File
 import java.io.IOException
@@ -32,6 +32,7 @@ import java.util.concurrent.Executors
 object Updates {
     private var instance: Updater? = null
 
+    /** Read for every check, so artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox. */
     fun policy(context: Context) = UpdatePolicy(
         channel = OriginPolicy.forBuild.channel,
         applicationId = context.packageName,
@@ -47,7 +48,7 @@ object Updates {
         val app = context.applicationContext
         val policy = policy(app)
         if (!policy.enabled) return null
-        return Updater(policy, AndroidUpdatePorts(app, policy), PreferencesUpdateStore(app)).also { instance = it }
+        return Updater({ policy(app) }, AndroidUpdatePorts(app, policy), PreferencesUpdateStore(app)).also { instance = it }
     }
 
     /** For the install receiver, which must never create an updater of its own. */
@@ -80,10 +81,12 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
 private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
+    private val app = context.applicationContext as ShellApplication
+
     // The WebView session is read per request and never stored here.
     private val http = ArtifactHttp(
-        OkHttpClient(),
-        ShellSession(::artifactOrigin) { url -> CookieManager.getInstance().getCookie(url) },
+        app.client,
+        ShellSession({ ShellPreferences(context).selectedOrigin }, app::cookies),
         policy.channel,
         KeystoreDeviceKeys(context),
         PreferencesDeviceKeyIds(context),
@@ -100,9 +103,6 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     private val verifiedApk get() = File(File(context.noBackupFilesDir, UPDATES_DIR), APK_NAME)
 
     override fun nowMs() = System.currentTimeMillis()
-
-    // Artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox.
-    override fun artifactOrigin() = ShellPreferences(context).selectedOrigin
 
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {
@@ -125,14 +125,19 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         }
     }
 
-    private fun enqueue(url: String, manifest: UpdateManifest, onProgress: (Long) -> Unit, done: (DownloadResult) -> Unit) {
-        downloadDir.mkdirs()
-        val request = DownloadManager.Request(url.toUri())
-            .setTitle(context.getString(R.string.app_name))
-            .setMimeType(APK_MIME)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-            .setDestinationInExternalFilesDir(context, null, "$UPDATES_DIR/$APK_NAME")
-        val id = downloadManagerOrNull { downloads.enqueue(request) } ?: return done(DownloadResult.Failed)
+    /** Building the request already asks for external storage, so it is built and enqueued on [io]. */
+    private fun enqueue(url: String, manifest: UpdateManifest, onProgress: (Long) -> Unit, done: (DownloadResult) -> Unit) =
+        enqueueDownload(io, main::post, {
+            downloadDir.mkdirs()
+            val request = DownloadManager.Request(url.toUri())
+                .setTitle(context.getString(R.string.app_name))
+                .setMimeType(APK_MIME)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+                .setDestinationInExternalFilesDir(context, null, "$UPDATES_DIR/$APK_NAME")
+            downloads.enqueue(request)
+        }) { id -> if (id == null) done(DownloadResult.Failed) else watch(id, manifest, onProgress, done) }
+
+    private fun watch(id: Long, manifest: UpdateManifest, onProgress: (Long) -> Unit, done: (DownloadResult) -> Unit) {
         downloadId = id
         // Each progress read is a ContentResolver query, so it runs on [io] and answers on the main thread.
         val tick = object : Runnable {
@@ -337,6 +342,8 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         }
     }
 
+    override fun sessionExists(sessionId: Int) = installer.getSessionInfo(sessionId) != null
+
     private companion object {
         const val UPDATES_DIR = "updates"
         const val APK_NAME = "update.apk"
@@ -349,10 +356,11 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
 class UpdateInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val updater = Updates.current() ?: return
+        val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
         val status = when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 val confirm = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)
-                    ?: return updater.onInstallStatus(InstallStatus.Failed)
+                    ?: return updater.onInstallStatus(sessionId, InstallStatus.Failed)
                 InstallStatus.PendingUserAction {
                     context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
@@ -361,6 +369,6 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_FAILURE_ABORTED -> InstallStatus.Cancelled
             else -> InstallStatus.Failed
         }
-        updater.onInstallStatus(status)
+        updater.onInstallStatus(sessionId, status)
     }
 }

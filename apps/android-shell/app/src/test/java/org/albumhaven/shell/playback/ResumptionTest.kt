@@ -106,6 +106,17 @@ class ResumeRunnerTest {
             io.shutdownNow()
         }
     }
+
+    @Test
+    fun anExchangeThatCannotBeBuiltAnswersUnavailableInsteadOfEndingItsThread() {
+        val answers = mutableListOf<ResumeAnswer>()
+        ResumeRunner({ it.run() }, { it.run() }).start(
+            exchange = { throw IllegalArgumentException("Unexpected char 0xe9 at 3 in Cookie value") },
+            showResuming = {},
+            answered = answers::add,
+        )
+        assertEquals(listOf<ResumeAnswer>(ResumeAnswer.Unavailable), answers)
+    }
 }
 
 class HttpResumeApiTest {

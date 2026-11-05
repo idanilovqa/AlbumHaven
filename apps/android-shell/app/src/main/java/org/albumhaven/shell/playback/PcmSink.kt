@@ -7,7 +7,10 @@ package org.albumhaven.shell.playback
 interface PcmSink {
     val sampleRate: Int
 
-    /** Writes up to [frames] interleaved stereo frames without blocking; returns frames accepted. */
+    /**
+     * Writes up to [frames] interleaved stereo frames without blocking; returns frames accepted, or
+     * a negative error when the output can take no more, as a dead [android.media.AudioTrack] does.
+     */
     fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int
 
     /** Frames written but not yet heard, so a position can name the audible frame. */

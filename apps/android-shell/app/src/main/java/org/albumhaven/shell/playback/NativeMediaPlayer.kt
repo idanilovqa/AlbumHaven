@@ -30,6 +30,8 @@ class NativeMediaPlayer(
     private val controller: () -> NativePlaybackController,
     private val origin: () -> String,
     private val resume: (SystemRequest) -> ListenableFuture<*>? = { null },
+    /** Whether a play may reach the controller now; one held back is the audio focus owner's to resume. */
+    private val mayPlay: () -> Boolean = { true },
 ) : SimpleBasePlayer(looper) {
 
     private val handler = Handler(looper)
@@ -126,7 +128,7 @@ class NativeMediaPlayer(
         val action = SessionMapping.route(request, target.snapshot) ?: return Futures.immediateVoidFuture()
         val from = CommandSource.SYSTEM
         when (action) {
-            is SystemAction.Play -> target.play(action.queueRevision, from)
+            is SystemAction.Play -> if (mayPlay()) target.play(action.queueRevision, from)
             SystemAction.Pause -> target.pause(from)
             is SystemAction.Seek -> target.seek(action.queueRevision, action.positionMs, from)
             is SystemAction.Next -> target.next(action.queueRevision, from)

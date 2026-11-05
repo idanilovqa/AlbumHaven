@@ -1,6 +1,8 @@
 package org.albumhaven.shell.playback
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioFocusPolicyTest {
@@ -77,6 +79,49 @@ class AudioFocusPolicyTest {
     fun aMayDuckLossIsDuckedByThePlatform() {
         policy.onState(NativePlaybackState.PLAYING)
         assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.LOSS_TRANSIENT_CAN_DUCK))
+    }
+
+    @Test
+    fun aPlayDuringACallIsHeldBackUntilFocusReturns() {
+        assertTrue(policy.mayPlay())
+        policy.onState(NativePlaybackState.PLAYING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        policy.onState(NativePlaybackState.PAUSED)
+        policy.onFocusChange(FocusChange.GAIN)
+        policy.onState(NativePlaybackState.LOADING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        policy.onState(NativePlaybackState.PAUSED)
+
+        assertFalse(policy.mayPlay())
+        assertEquals(listOf(FocusEffect.Resume), policy.onFocusChange(FocusChange.GAIN))
+        assertTrue(policy.mayPlay())
+    }
+
+    @Test
+    fun aPlayDuringACallNeitherClaimsNorAnnouncesPlaybackUntilFocusReturns() {
+        val first = SyntheticTrack(tag = 1, frames = 3L * RATE)
+        val harness = ControllerHarness(first)
+        val port = ControllerPlaybackPort({ harness.controller }, policy::mayPlay)
+        harness.load(1, first, autoplay = false)
+        harness.step()
+        // A call takes focus from a player that held it, and the user (or the web) presses play.
+        policy.onState(NativePlaybackState.PLAYING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        policy.onState(NativePlaybackState.PAUSED)
+        assertEquals(CommandResult.ACCEPTED, port.play(1))
+        repeat(5) { harness.step() }
+
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(emptyList<String>(), harness.claims.calls)
+        assertTrue(harness.listen.posts.isEmpty())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
+
+        // The call ends: the remembered play starts now, as the service applies the policy's resume.
+        assertEquals(listOf(FocusEffect.Resume), policy.onFocusChange(FocusChange.GAIN))
+        harness.controller.play(harness.controller.snapshot.queueRevision, CommandSource.SYSTEM)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertEquals(ListenEffect.NOW_PLAYING, harness.listen.posts.first().first)
     }
 
     @Test

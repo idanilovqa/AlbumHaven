@@ -69,7 +69,7 @@ class BridgeControllerTest {
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
     private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachments::add), updates)
+        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachment = attachments::add), updates)
 
     private fun send(
         controller: BridgeController,

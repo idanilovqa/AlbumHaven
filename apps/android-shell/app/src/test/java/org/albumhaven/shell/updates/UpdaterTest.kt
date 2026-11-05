@@ -32,8 +32,10 @@ class UpdaterTest {
         var commitSucceeds = true
         var origin = ARTIFACT_ORIGIN
 
+        /** Sessions Android still holds: committed and neither installed, refused nor dropped. */
+        val liveSessions = mutableSetOf<Int>()
+
         override fun nowMs() = now
-        override fun artifactOrigin() = origin
         override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
             fetched += url
             fetch = done
@@ -62,18 +64,22 @@ class UpdaterTest {
         }
         override fun commit(sessionId: Int): Boolean {
             committed += sessionId
+            if (commitSucceeds) liveSessions += sessionId
             return commitSucceeds
         }
         override fun abandon(sessionId: Int) {
             abandoned += sessionId
+            liveSessions -= sessionId
         }
+        override fun sessionExists(sessionId: Int) = sessionId in liveSessions
     }
 
     private val ports = FakePorts()
     private val store = MemoryStore()
     private val states = mutableListOf<UpdateState>()
 
-    private fun updater(policy: UpdatePolicy = policy()) = Updater(policy, ports, store).also { it.addListener { state -> states += state } }
+    private fun updater(policy: UpdatePolicy = policy()) =
+        Updater({ policy.copy(artifactOrigin = ports.origin) }, ports, store).also { it.addListener { state -> states += state } }
 
     private fun available(): Updater = updater().also {
         assertTrue(it.check(1..1))
@@ -318,16 +324,16 @@ class UpdaterTest {
         updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
         var confirmed = 0
-        updater.onInstallStatus(InstallStatus.PendingUserAction { confirmed++ })
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction { confirmed++ })
         assertEquals(1, confirmed)
         assertEquals(UpdateState.Installing(manifest()), updater.state)
-        updater.onInstallStatus(InstallStatus.Cancelled)
+        updater.onInstallStatus(3, InstallStatus.Cancelled)
         assertEquals(UpdateState.Ready(manifest()), updater.state)
         assertEquals(manifestJson(), store.stagedManifest)
     }
 
     @Test
-    fun `leaving Android's confirmation unanswered makes the update ready again on return`() {
+    fun `an approved installation stays installing when the app comes back`() {
         val updater = ready()
         updater.install { it() }
         // Returning while staging, stopping playback or committing changes nothing.
@@ -336,12 +342,25 @@ class UpdaterTest {
         updater.onForeground()
         assertEquals(UpdateState.Installing(manifest()), updater.state)
 
-        // The user went Home from the confirmation; Android reports nothing for it.
-        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        // The user approved; Android is still installing when its confirmation closes.
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        updater.onForeground()
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        assertFalse(updater.install { error("not reached") })
+        assertTrue(ports.abandoned.isEmpty())
+    }
+
+    @Test
+    fun `a confirmation Android dropped makes the update ready again on return`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        ports.liveSessions -= 3
         updater.onForeground()
         assertEquals(UpdateState.Ready(manifest()), updater.state)
 
-        // Install update asks Android again with a fresh session in place of the unanswered one.
+        // Install update asks Android again with a fresh session in place of the dropped one.
         assertTrue(updater.install { it() })
         assertEquals(listOf(3), ports.abandoned)
         assertEquals(UpdateState.Installing(manifest()), updater.state)
@@ -350,22 +369,48 @@ class UpdaterTest {
     }
 
     @Test
-    fun `a late answer to an unanswered confirmation still applies`() {
+    fun `the abandoned session's abort never cancels the retry that replaced it`() {
         val updater = ready()
         updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
-        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        ports.liveSessions -= 3
         updater.onForeground()
-        updater.onInstallStatus(InstallStatus.Cancelled)
+        updater.install { it() }
+
+        // Android answers the abandoned session only now, while the retry is being staged.
+        updater.onInstallStatus(3, InstallStatus.Cancelled)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.stageDone!!(StageResult.Staged(4))
+        assertEquals(listOf(3), ports.abandoned)
+        assertEquals(listOf(3, 4), ports.committed)
+
+        // Once the retry runs, statuses of the old session still change nothing.
+        updater.onInstallStatus(3, InstallStatus.Failed)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        updater.onInstallStatus(4, InstallStatus.Cancelled)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+    }
+
+    @Test
+    fun `a late answer for a dropped confirmation still applies`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
+        ports.liveSessions -= 3
+        updater.onForeground()
+        updater.onInstallStatus(3, InstallStatus.Cancelled)
         assertEquals(UpdateState.Ready(manifest()), updater.state)
 
         // The cancelled session is gone, so the next install has nothing to abandon.
         updater.install { it() }
         assertTrue(ports.abandoned.isEmpty())
         ports.stageDone!!(StageResult.Staged(5))
-        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        updater.onInstallStatus(5, InstallStatus.PendingUserAction {})
+        ports.liveSessions -= 5
         updater.onForeground()
-        updater.onInstallStatus(InstallStatus.Failed)
+        updater.onInstallStatus(5, InstallStatus.Failed)
         assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, null, manifest(), 1_000_000L), updater.state)
     }
 
@@ -374,7 +419,7 @@ class UpdaterTest {
         val updater = ready()
         updater.install { it() }
         ports.stageDone!!(StageResult.Staged(3))
-        updater.onInstallStatus(InstallStatus.Failed)
+        updater.onInstallStatus(3, InstallStatus.Failed)
         assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, null, manifest(), 1_000_000L), updater.state)
         assertNull(store.stagedManifest)
         assertTrue(updater.download())
@@ -397,7 +442,7 @@ class UpdaterTest {
     @Test
     fun `status for no running install is ignored`() {
         val updater = ready()
-        updater.onInstallStatus(InstallStatus.Failed)
+        updater.onInstallStatus(3, InstallStatus.Failed)
         assertEquals(UpdateState.Ready(manifest()), updater.state)
         assertTrue(ports.committed.isEmpty())
     }
@@ -410,7 +455,7 @@ class UpdaterTest {
 
         // After the update installed, the staged manifest is no longer newer.
         val discardedBefore = ports.discarded
-        val updated = Updater(policy(installedVersionCode = 2), ports, store)
+        val updated = updater(policy(installedVersionCode = 2))
         assertEquals(UpdateState.Idle(null), updated.state)
         assertNull(store.stagedManifest)
         assertTrue(ports.discarded > discardedBefore)

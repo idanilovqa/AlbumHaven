@@ -3,6 +3,7 @@ package org.albumhaven.shell.playback
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -45,6 +46,20 @@ class PlaybackNetworkTest {
     fun csrfTokenIsReadFromTheSessionCookieLikeTheWebFetchWrapper() {
         assertEquals("csrf+value", ShellSession.csrfToken(cookieHeader))
         assertNull(ShellSession.csrfToken("__Host-album_haven_session=session-value"))
+    }
+
+    @Test
+    fun aSessionCookieHttpCannotCarryIsLeftOutSoTheServerAnswersAsSignedOut() {
+        val unsendable = ShellSession({ origin }) { "__Host-album_haven_session=café; __Host-album_haven_csrf=c" }
+        val request = unsendable.authorize(Request.Builder().url(origin), withCsrf = true).build()
+        assertNull(request.header("Cookie"))
+        assertNull(request.header(ShellSession.CSRF_HEADER))
+        assertEquals(origin, request.header("Origin"))
+
+        val decodedCsrf = ShellSession({ origin }) { "__Host-album_haven_session=s; __Host-album_haven_csrf=caf%C3%A9" }
+        val sent = decodedCsrf.authorize(Request.Builder().url(origin), withCsrf = true).build()
+        assertEquals("__Host-album_haven_session=s; __Host-album_haven_csrf=caf%C3%A9", sent.header("Cookie"))
+        assertNull(sent.header(ShellSession.CSRF_HEADER))
     }
 
     @Test

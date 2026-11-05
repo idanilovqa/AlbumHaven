@@ -1,6 +1,7 @@
 package org.albumhaven.shell.playback
 
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
 
 /** Path-free metadata `PUT /playback/state` mirrors to other clients. */
 data class ClaimTrack(
@@ -63,6 +64,12 @@ class PlaybackClaimOwner(
     private var leaseEndsMs = 0L
     private val waiters = mutableListOf<(ClaimOutcome) -> Unit>()
 
+    // Set by [close]; a grant answered after it is given back by its own request.
+    @Volatile private var closed = false
+
+    /** A granted token whose answer the playback thread has not read yet. */
+    private val unreadGrant = AtomicReference<String?>(null)
+
     val owned: Boolean get() = token != null
 
     /** Whether the held claim's latest answer says listens can reach Last.fm; null when unknown. */
@@ -97,7 +104,12 @@ class PlaybackClaimOwner(
         val requestEpoch = epoch
         val sentMs = clock()
         io.execute {
-            val response = api.acquire(clientId, null, claimTrack)
+            val response = call { api.acquire(clientId, null, claimTrack) }
+            if (response is ClaimResponse.Granted) {
+                unreadGrant.set(response.claimToken)
+                // A closed owner never reads the answer, so the grant goes back from here.
+                if (closed) unreadGrant.getAndSet(null)?.let(::giveBack)
+            }
             post(Runnable { acquired(requestEpoch, sentMs, response) })
         }
     }
@@ -122,7 +134,7 @@ class PlaybackClaimOwner(
         lastRenewSentMs = now
         val requestEpoch = epoch
         io.execute {
-            val response = api.acquire(clientId, held, claimTrack)
+            val response = call { api.acquire(clientId, held, claimTrack) }
             post(Runnable { renewed(requestEpoch, now, response) })
         }
     }
@@ -139,8 +151,33 @@ class PlaybackClaimOwner(
         val held = token
         val wasActive = held != null || acquiring
         drop()
-        if (held != null) io.execute { api.release(clientId, held) }
+        if (held != null) io.execute { giveBack(held) }
         if (wasActive) events(ClaimEvent.Released)
+    }
+
+    /**
+     * Releases the claim for good, as its retired owner stops: a grant still on its way back is
+     * given back by whichever of this and its own request sees the other last.
+     */
+    fun close() {
+        closed = true
+        release()
+        unreadGrant.getAndSet(null)?.let { token -> io.execute { giveBack(token) } }
+    }
+
+    /** A request that cannot even be built, such as one refused by OkHttp, is as unanswered as a lost one. */
+    private inline fun call(request: () -> ClaimResponse): ClaimResponse = try {
+        request()
+    } catch (_: RuntimeException) {
+        ClaimResponse.Unreachable
+    }
+
+    private fun giveBack(token: String) {
+        try {
+            api.release(clientId, token)
+        } catch (_: RuntimeException) {
+            // The server lease expires on its own.
+        }
     }
 
     private fun drop() {
@@ -153,9 +190,11 @@ class PlaybackClaimOwner(
     }
 
     private fun acquired(requestEpoch: Long, sentMs: Long, response: ClaimResponse) {
+        // A grant [close] already gave back is not this owner's any more.
+        if (response is ClaimResponse.Granted && !unreadGrant.compareAndSet(response.claimToken, null)) return
         if (requestEpoch != epoch) {
             // Released while the acquisition was in flight: give the orphan back at once.
-            if (response is ClaimResponse.Granted) io.execute { api.release(clientId, response.claimToken) }
+            if (response is ClaimResponse.Granted) io.execute { giveBack(response.claimToken) }
             return
         }
         acquiring = false

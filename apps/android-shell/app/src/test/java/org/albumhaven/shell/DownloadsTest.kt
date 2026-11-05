@@ -3,6 +3,7 @@ package org.albumhaven.shell
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.util.concurrent.Executor
 
 class DownloadsTest {
     @Test
@@ -11,5 +12,27 @@ class DownloadsTest {
         assertNull(downloadManagerOrNull<Long> { throw IllegalStateException("Failed to get external storage files directory") })
         assertNull(downloadManagerOrNull<Long> { throw SecurityException("Unsupported path") })
         assertEquals(42L, downloadManagerOrNull { 42L })
+    }
+
+    @Test
+    fun aDownloadIsBuiltAndEnqueuedOffTheMainThreadAndARefusalAnswersOnIt() {
+        var thread = "main"
+        val io = Executor { task ->
+            thread = "io"
+            task.run()
+            thread = "main"
+        }
+        val mainQueue = ArrayDeque<Runnable>()
+        val seen = mutableListOf<String>()
+
+        // Building the request asks for external storage, which throws while it is unavailable.
+        enqueueDownload(io, mainQueue::add, {
+            seen += "build on $thread"
+            throw IllegalStateException("Failed to get external storage files directory")
+        }) { seen += "answer $it on $thread" }
+        enqueueDownload(io, mainQueue::add, { 7L }) { seen += "answer $it on $thread" }
+        while (mainQueue.isNotEmpty()) mainQueue.removeFirst().run()
+
+        assertEquals(listOf("build on io", "answer null on main", "answer 7 on main"), seen)
     }
 }

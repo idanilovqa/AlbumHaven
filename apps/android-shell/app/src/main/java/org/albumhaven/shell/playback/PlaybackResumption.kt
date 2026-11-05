@@ -109,7 +109,12 @@ class ResumeRunner(private val io: Executor, private val main: Executor) {
     ): ListenableFuture<*> {
         showResuming()
         io.execute {
-            val answer = exchange()
+            // A request that cannot even be built, such as one OkHttp refuses, resumes nothing.
+            val answer = try {
+                exchange()
+            } catch (_: RuntimeException) {
+                ResumeAnswer.Unavailable
+            }
             main.execute { answered(answer) }
         }
         return Futures.immediateVoidFuture()

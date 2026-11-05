@@ -46,7 +46,8 @@ class AudioTrackPcmSink(override val sampleRate: Int) : PcmSink {
             frames * PcmRing.CHANNELS,
             AudioTrack.WRITE_NON_BLOCKING,
         )
-        check(written >= 0) { "AudioTrack write failed: $written" }
+        // The track's error, such as ERROR_DEAD_OBJECT once the audio server died, is the engine's to stop on.
+        if (written < 0) return written
         check(written % PcmRing.CHANNELS == 0) { "AudioTrack accepted a partial stereo frame" }
         writtenFrames += written / PcmRing.CHANNELS
         return written / PcmRing.CHANNELS

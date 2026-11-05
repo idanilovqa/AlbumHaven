@@ -63,6 +63,7 @@ class ControllerHarness(
     realTime: Boolean = false,
     claimIo: Executor = Executor { it.run() },
     listenIo: Executor = Executor { it.run() },
+    failures: (RuntimeException) -> Unit = {},
 ) {
     var now = 0L
     val server = FakeAhpcServer(tracks.toList())
@@ -104,6 +105,7 @@ class ControllerHarness(
         warmer = { socketConnection -> warms += socketConnection },
         deviceId = TEST_DEVICE_ID,
         wallClockMs = { 1_793_613_600_000L + now },
+        failures = failures,
     )
 
     fun item(track: SyntheticTrack) = QueueItem(
@@ -905,7 +907,7 @@ class NativePlaybackControllerTest {
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
         val written = harness.sinks.last().writtenFrames
 
-        harness.controller.documentStarted()
+        harness.controller.documentDetached()
         harness.runUntil { harness.sinks.last().writtenFrames > written + RATE }
         assertEquals(NativePlaybackState.PLAYING, harness.state())
         assertEquals(3, harness.controller.snapshot.queueRevision)
@@ -917,7 +919,7 @@ class NativePlaybackControllerTest {
         harness.step()
         assertEquals(NativePlaybackState.PAUSED, harness.state())
         assertEquals(CommandResult.ACCEPTED, harness.controller.play(3))
-        harness.controller.documentStarted()
+        harness.controller.documentDetached()
         assertEquals(CommandResult.ACCEPTED, harness.load(1, long))
         assertEquals(CommandResult.STALE_REVISION, harness.load(1, long))
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING && harness.controller.snapshot.queueRevision == 1L }
@@ -992,5 +994,26 @@ class NativePlaybackControllerTest {
         assertEquals(NativePlaybackState.IDLE, harness.state())
         assertEquals("release:token-1", harness.claims.calls.last())
         assertEquals(1, harness.closes)
+    }
+
+    /** The order the listen parity fixture's `refresh` step replays: a reloaded queue selects, then begins, the same listen. */
+    @Test
+    fun aRefreshedReferenceContinuesTheSameListen() {
+        val a = SyntheticTrack(tag = 1, frames = 12L * RATE)
+        val fresh = SyntheticTrack(tag = 6, frames = 12L * RATE)
+        val harness = ControllerHarness(a, fresh)
+        harness.load(1, a)
+        harness.runUntil { harness.controller.snapshot.positionMs >= 2_000 }
+        val refreshed = harness.item(fresh).copy(listenKey = harness.item(a).listenKey)
+        harness.controller.loadQueue(QueueLoad(2, listOf(refreshed), 0, harness.controller.snapshot.positionMs, null, autoplay = true))
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        harness.step()
+
+        val writes = harness.writes()
+        assertEquals(1, writes.map { it.second.getString("session_id") }.distinct().size)
+        assertEquals(1, writes.count { it.first == ListenEffect.NOW_PLAYING })
+        val complete = writes.single { it.first == ListenEffect.COMPLETE }.second
+        assertEquals(fresh.pcm.playbackRef, complete.getString("playbackRef"))
+        assertEquals("ended", complete.getString("completion_reason"))
     }
 }

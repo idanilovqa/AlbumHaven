@@ -191,11 +191,11 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
 
     override fun heardFrames() = (writtenFrames - pendingFrames()).toLong()
 
-    /** Fails like an [android.media.AudioTrack] whose audio server died: every write and play throws. */
+    /** Fails like an [android.media.AudioTrack] whose audio server died: every write answers `ERROR_DEAD_OBJECT`. */
     var dead = false
 
     override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
-        check(!dead) { "AudioTrack write failed: -32" }
+        if (dead) return ERROR_DEAD_OBJECT
         val accepted = minOf(frames, acceptFrames)
         while ((writtenFrames + accepted) * 2 > trace.size) trace = trace.copyOf(trace.size * 2)
         System.arraycopy(samples, offsetSamples, trace, writtenFrames * 2, accepted * 2)
@@ -204,13 +204,15 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
         return accepted
     }
 
-    override fun play() {
-        check(!dead) { "play() called on an uninitialized AudioTrack" }
-        operations += "play"
-    }
+    override fun play() { operations += "play" }
     override fun pause() { operations += "pause" }
     override fun flush() { operations += "flush" }
     override fun release() { operations += "release" }
+
+    private companion object {
+        /** `AudioTrack.ERROR_DEAD_OBJECT`. */
+        const val ERROR_DEAD_OBJECT = -6
+    }
 
     /** Contiguous runs of (tag, first source frame, length); any gap, repeat or insertion splits a run. */
     fun runs(): List<Run> {

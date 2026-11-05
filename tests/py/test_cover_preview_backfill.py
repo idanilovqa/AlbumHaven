@@ -230,3 +230,47 @@ def test_backfill_writes_to_requested_preview_storage_during_relocation(tmp_path
 
     assert worker.run_once() == 1
     assert generated == [(source, custom_root / "v1", recorder)]
+
+
+def test_backfill_reuses_active_root_preview_during_reverse_relocation(tmp_path):
+    """A preview still in the custom root must not be regenerated into album
+    folders mid-move: that repoints its inventory and strands the custom copy."""
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    revision = "a" * 64
+    custom_root = tmp_path / "Generated Previews"
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="custom",
+            active_root=custom_root,
+            requested_mode="album_folders",
+            operation_state="running",
+        )
+    )
+    existing = build_cover_variant_base_path(
+        source, cache_root=custom_root / "v1", max_size=480, revision=revision
+    ).with_suffix(".jpg")
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"custom-root preview")
+    connection = _Connection(
+        [{"cover_path": str(source), "cover_revision": revision}]
+    )
+    generated = []
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **kwargs: generated.append(source_path),
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 0
+    assert generated == []

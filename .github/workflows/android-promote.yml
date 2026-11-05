@@ -3,8 +3,9 @@ name: Android Promote
 # Promotes one exact, already-verified commit to an Android channel. It builds the release APK
 # once, signs it with the channel key held by the protected environment, and records the result
 # as a data-only workflow artifact: promotion.json (provenance and the Update Manifest v1) plus
-# the APK encrypted to the deployment synchronizer's key. Nothing here deploys or publishes; the
-# outbound-only synchronizer in album-haven-deployments verifies and publishes the artifact.
+# the APK encrypted to the deployment synchronizer's key. No APK, signed or unsigned, is ever
+# uploaded unencrypted. Nothing here deploys or publishes; the outbound-only synchronizer in
+# album-haven-deployments verifies and publishes the artifact. Every action is pinned to a commit.
 on:
   workflow_dispatch:
     inputs:
@@ -51,7 +52,7 @@ jobs:
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be 40 lowercase hexadecimal characters"; exit 1; }
 
       - name: Checkout promotion tooling
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: tooling
           persist-credentials: false
@@ -66,7 +67,7 @@ jobs:
 
       - name: Verify pipeline, release and allocate the version code
         id: plan
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           CHANNEL: ${{ inputs.channel }}
           COMMIT: ${{ inputs.commit }}
@@ -169,7 +170,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout the promoted commit
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.commit }}
           persist-credentials: false
@@ -180,13 +181,13 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$COMMIT"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         # The runner SDK no longer offers the legacy "tools" package the action installs by default.
         with:
           packages: platform-tools
@@ -196,7 +197,7 @@ jobs:
 
       # Release builds never read a cache another run could have written.
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
         with:
           cache-disabled: true
 
@@ -213,17 +214,41 @@ jobs:
           "-PalbumHavenVersionName=$VERSION_NAME"
           "-PalbumHaven${FLAVOR}CertificateSha256=$CERTIFICATE"
 
-      - name: Keep the unsigned APK for signing
-        uses: actions/upload-artifact@v4
+      # Tooling from main, as in every job: the promoted commit may predate the encrypt command.
+      - name: Checkout promotion tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: tooling
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      # Any signed-in GitHub user can download this public repository's workflow artifacts, so the
+      # unsigned APK leaves this job only encrypted to the signing environment's key.
+      - name: Encrypt the unsigned APK to the signing environment
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY: ${{ vars.ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          apk="apps/android-shell/app/build/outputs/apk/$CHANNEL/release/app-$CHANNEL-release-unsigned.apk"
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          node tooling/scripts/ci/android-promotion.cjs encrypt "--in=$apk" "--out=$RUNNER_TEMP/unsigned/unsigned.apk.enc"
+          rm -f "$apk"
+
+      - name: Keep the encrypted unsigned APK for signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
-          path: apps/android-shell/app/build/outputs/apk/${{ inputs.channel }}/release/app-${{ inputs.channel }}-release-unsigned.apk
+          path: ${{ runner.temp }}/unsigned/unsigned.apk.enc
           if-no-files-found: error
+          compression-level: 0
           retention-days: 1
 
-  # Signing runs in the channel's protected environment and never executes the promoted source.
+  # Signing runs in the channel's protected environment with read-only repository access. It never
+  # executes the promoted source and installs no SDK: zipalign, apksigner and aapt2 come from the
+  # runner image's preinstalled Android SDK.
   sign:
-    name: Sign And Record Promotion
+    name: Sign Release APK
     needs:
       - verify
       - build
@@ -231,34 +256,29 @@ jobs:
     timeout-minutes: 15
     environment: android-${{ inputs.channel }}
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout promotion tooling
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: tooling
           sparse-checkout: scripts/ci
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        # The runner SDK no longer offers the legacy "tools" package the action installs by default.
-        with:
-          packages: platform-tools
-
-      - name: Install build tools
-        run: sdkmanager "build-tools;36.0.0"
-
-      - name: Download the unsigned APK
-        uses: actions/download-artifact@v4
+      - name: Download the encrypted unsigned APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
           path: ${{ runner.temp }}/unsigned
+
+      - name: Decrypt the unsigned APK
+        env:
+          ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY: ${{ secrets.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node tooling/scripts/ci/android-promotion.cjs decrypt "--in=$RUNNER_TEMP/unsigned/unsigned.apk.enc" \
+            "--out=$RUNNER_TEMP/unsigned.apk"
 
       - name: Sign with the channel key
         env:
@@ -269,11 +289,15 @@ jobs:
           set -euo pipefail
           umask 077
           tools="$ANDROID_HOME/build-tools/36.0.0"
+          for tool in zipalign apksigner aapt2; do
+            test -x "$tools/$tool" || { echo "::error::The runner image has no preinstalled build-tools 36.0.0 $tool"; exit 1; }
+          done
           keystore="$RUNNER_TEMP/release.p12"
           trap 'rm -f "$keystore"' EXIT
           test -n "$KEYSTORE_BASE64" && test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::The channel signing secrets are not configured"; exit 1; }
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
-          "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/unsigned/app-$CHANNEL-release-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$RUNNER_TEMP/unsigned.apk"
           "$tools/apksigner" sign --ks "$keystore" --ks-type PKCS12 --ks-key-alias "album-haven-$CHANNEL" \
             --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
             --out "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
@@ -292,9 +316,38 @@ jobs:
             "--certs=$RUNNER_TEMP/certs.txt" "--out=$RUNNER_TEMP/promotion"
           rm -f "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
 
-      # The tag is the durable record of allocated version codes; creating an existing tag fails.
+      # Data only: promotion.json and the APK encrypted to the synchronizer. The record job publishes
+      # it under its final name once the version tag exists.
+      - name: Keep the signed promotion for recording
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  # The only job that writes to the repository. It holds no secret and runs no promoted code.
+  record:
+    name: Record Promotion
+    needs:
+      - verify
+      - sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the signed promotion
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion
+
+      # The tag is the durable record of allocated version codes; creating an existing tag fails,
+      # so no promotion artifact is published for a code that was already recorded.
       - name: Record the version tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           PLAN: ${{ needs.verify.outputs.plan }}
         with:
@@ -308,10 +361,41 @@ jobs:
             });
 
       - name: Upload the promotion artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-promotion-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
           path: ${{ runner.temp }}/promotion/
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
+
+  # Intermediate artifacts are encrypted, but none outlives the run that needed it.
+  cleanup:
+    name: Delete Intermediate Artifacts
+    needs:
+      - verify
+      - build
+      - sign
+      - record
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the intermediate artifacts
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          INTERMEDIATE: >-
+            ["android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}",
+            "android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}"]
+        with:
+          script: |
+            const names = new Set(JSON.parse(process.env.INTERMEDIATE));
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id: context.runId, per_page: 100,
+            });
+            for (const artifact of artifacts.filter((candidate) => names.has(candidate.name))) {
+              await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: artifact.id });
+            }

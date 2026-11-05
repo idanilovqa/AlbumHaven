@@ -188,6 +188,50 @@ test('finalize writes an Update Manifest v1 and an APK only the synchronizer can
   assert.throws(() => decrypt(blob, recipient().privateKey));
 });
 
+function rawPrivateKey(privateKey) {
+  return privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32).toString('base64');
+}
+
+test('the unsigned APK reaches the signing job readable only with the signing environment key', () => {
+  const keys = recipient();
+  const apkBytes = Buffer.from('unsigned apk bytes');
+  const blob = promotion.encryptForRecipient(apkBytes, keys.publicBase64);
+  assert.equal(blob.includes(apkBytes), false);
+  assert.deepEqual(decrypt(blob, keys.privateKey), apkBytes, 'the format the synchronizer also reads');
+  assert.deepEqual(promotion.decryptForRecipient(blob, rawPrivateKey(keys.privateKey)), apkBytes);
+
+  assert.throws(() => promotion.decryptForRecipient(blob, rawPrivateKey(recipient().privateKey)), /not for this key or was altered/);
+  const altered = Buffer.from(blob);
+  altered[altered.length - 20] ^= 1;
+  assert.throws(() => promotion.decryptForRecipient(altered, rawPrivateKey(keys.privateKey)), /not for this key or was altered/);
+  assert.throws(() => promotion.decryptForRecipient(Buffer.from('plain apk'), rawPrivateKey(keys.privateKey)), /Not an encrypted/);
+  assert.throws(() => promotion.decryptForRecipient(blob, ''), /Recipient private key must be 32 bytes of base64/);
+  assert.throws(() => promotion.encryptForRecipient(apkBytes, undefined), /Recipient public key must be 32 bytes of base64/);
+});
+
+test('the workflow CLI encrypts, decrypts and generates recipient keys without printing private keys', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'android-promotion-cli-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = (name) => path.join(dir, name);
+  const printed = [];
+  t.mock.method(process.stdout, 'write', (text) => { printed.push(String(text)); return true; });
+
+  promotion.cli(['keygen', `--private-key=${file('signer.key')}`], {});
+  t.mock.restoreAll();
+  const publicKey = printed.join('').trim();
+  const privateKey = fs.readFileSync(file('signer.key'), 'utf8').trim();
+  assert.match(publicKey, /^[A-Za-z0-9+/]{43}=$/);
+  assert.equal(printed.join('').includes(privateKey), false);
+  assert.throws(() => promotion.cli(['keygen', `--private-key=${file('signer.key')}`], {}), /EEXIST/, 'never overwrites a key');
+
+  fs.writeFileSync(file('app.apk'), 'unsigned apk bytes');
+  promotion.cli(['encrypt', `--in=${file('app.apk')}`, `--out=${file('app.apk.enc')}`], { ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY: publicKey });
+  promotion.cli(['decrypt', `--in=${file('app.apk.enc')}`, `--out=${file('out.apk')}`], { ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY: privateKey });
+  assert.equal(fs.readFileSync(file('out.apk'), 'utf8'), 'unsigned apk bytes');
+  assert.throws(() => promotion.cli(['encrypt', `--in=${file('app.apk')}`, `--out=${file('x')}`], {}), /Recipient public key/);
+  assert.throws(() => promotion.cli(['sign'], {}), /Usage/);
+});
+
 test('finalize refuses an APK that does not match the plan, channel or certificate', () => {
   for (const [overrides, message] of [
     [{ signerDigest: 'd'.repeat(64) }, /not signed by the channel certificate/],
@@ -246,17 +290,48 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   assert.match(build, /cache-disabled: true/);
   assert.doesNotMatch(build, /secrets\.|environment:|contents: write/);
   assert.match(build, /retention-days: 1\n/);
+  // The public repository's artifacts are downloadable by any signed-in user: the unsigned APK
+  // leaves the build only encrypted to the signing environment, and is deleted from disk first.
+  assert.match(build, /ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY: \$\{\{ vars\.ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY \}\}/);
+  assert.match(build, /android-promotion\.cjs encrypt "--in=\$apk" "--out=\$RUNNER_TEMP\/unsigned\/unsigned\.apk\.enc"\n {10}rm -f "\$apk"/);
+  assert.match(build, /path: \$\{\{ runner\.temp \}\}\/unsigned\/unsigned\.apk\.enc\n/);
+  for (const path of workflow.match(/^ {10}path: [^\n]+/gm)) assert.doesNotMatch(path, /\.apk$/, path);
 
   const sign = jobBlock(workflow, 'sign');
   assert.match(sign, /environment: android-\$\{\{ inputs\.channel \}\}/);
-  assert.match(sign, /contents: write/);
+  assert.match(sign, /permissions:\n {6}contents: read\n {4}steps:/);
   assert.doesNotMatch(sign, /ref: \$\{\{ inputs\.commit \}\}|gradlew/, 'signing never runs the promoted source');
+  assert.doesNotMatch(sign, /setup-android|sdkmanager|setup-node|github-script|createRef/,
+    'signing installs no SDK, runs no third-party action and writes nothing to the repository');
+  assert.match(sign, /ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY: \$\{\{ secrets\.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY \}\}/);
+  assert.match(sign, /android-promotion\.cjs decrypt/);
+  assert.match(sign, /tools="\$ANDROID_HOME\/build-tools\/36\.0\.0"/);
   assert.match(sign, /--ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD/);
   assert.match(sign, /trap 'rm -f "\$keystore"' EXIT/);
+  assert.match(sign, /rm -f "\$RUNNER_TEMP\/unsigned\.apk"/);
   assert.match(sign, /rm -f "\$RUNNER_TEMP\/signed\.apk"/);
-  assert.match(sign, /refs\/tags\/android\/\$\{plan\.channel\}\/\$\{plan\.versionCode\}/);
-  assert.match(sign, /name: android-promotion-\$\{\{ inputs\.channel \}\}-\$\{\{ needs\.verify\.outputs\.version_code \}\}/);
-  assert.equal((workflow.match(/secrets\./g) || []).length, 2, 'only the signing step reads secrets');
-  assert.doesNotMatch(workflow, /echo[^\n]*(?:KEYSTORE|PASSWORD)/);
-  for (const uses of workflow.match(/uses: [^\n]+/g)) assert.match(uses, /@v\d+$/, uses);
+  assert.match(sign, /name: android-signed-\$\{\{ inputs\.channel \}\}-\$\{\{ needs\.verify\.outputs\.version_code \}\}/);
+
+  const record = jobBlock(workflow, 'record');
+  assert.match(record, /permissions:\n {6}contents: write\n {4}steps:/);
+  assert.doesNotMatch(record, /secrets\.|environment:|checkout/);
+  assert.ok(record.indexOf('createRef') < record.indexOf('name: Upload the promotion artifact'), 'tag before the artifact');
+  assert.match(record, /refs\/tags\/android\/\$\{plan\.channel\}\/\$\{plan\.versionCode\}/);
+  assert.match(record, /name: android-promotion-\$\{\{ inputs\.channel \}\}-\$\{\{ needs\.verify\.outputs\.version_code \}\}/);
+  assert.match(record, /retention-days: 90/);
+
+  const cleanup = jobBlock(workflow, 'cleanup');
+  assert.match(cleanup, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(cleanup, /permissions:\n {6}actions: write\n {4}steps:/);
+  assert.match(cleanup, /"android-unsigned-\$\{\{ inputs\.channel \}\}-\$\{\{ needs\.verify\.outputs\.version_code \}\}"/);
+  assert.match(cleanup, /"android-signed-\$\{\{ inputs\.channel \}\}-\$\{\{ needs\.verify\.outputs\.version_code \}\}"/);
+  assert.match(cleanup, /deleteArtifact/);
+  assert.doesNotMatch(cleanup, /secrets\.|checkout/);
+
+  assert.equal((workflow.match(/contents: write/g) || []).length, 1, 'only the record job writes');
+  assert.deepEqual(workflow.match(/secrets\.[A-Z0-9_]+/g).sort(), ['secrets.ANDROID_KEYSTORE_BASE64',
+    'secrets.ANDROID_KEYSTORE_PASSWORD', 'secrets.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY'], 'only the signing job reads secrets');
+  assert.doesNotMatch(workflow, /echo[^\n]*(?:KEYSTORE|PASSWORD|PRIVATE_KEY)/);
+  // A moved tag cannot change what runs next to the signing key: every action is a full commit.
+  for (const uses of workflow.match(/uses: [^\n]+/g)) assert.match(uses, /^uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/, uses);
 });

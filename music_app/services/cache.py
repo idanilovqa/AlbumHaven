@@ -417,6 +417,9 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": relation_views,
             "relations_last_built": relations_last_built,
             "expected_cover_mutation_revision": expected_cover_mutation_revision,
+            # Only the changed files' albums: the rest of this snapshot is as
+            # old as its load and must never overwrite a newer publication.
+            "publish_paths": set(changed_entries),
         }
         if expected_inventory_mutation_revision is not None:
             snapshot_options["expected_inventory_mutation_revision"] = (
@@ -464,6 +467,7 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": latest_relation_views,
             "relations_last_built": latest_relations_last_built,
             "expected_cover_mutation_revision": retry_cover_mutation_revision,
+            "publish_paths": set(changed_entries),
         }
         if retry_inventory_mutation_revision is not None:
             retry_snapshot_options["expected_inventory_mutation_revision"] = (

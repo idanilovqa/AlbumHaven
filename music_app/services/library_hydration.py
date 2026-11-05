@@ -443,6 +443,10 @@ def hydrate_library_state_from_disk(
         snapshot_options = {}
         if ensure_relations and relations_changed:
             snapshot_options["rebuild_relation_projection"] = True
+        if len(sanitized_file_cache) == len(file_cache):
+            # Only repaired entries: the loaded snapshot may already be older
+            # than a scan's publication. Dropped entries still need the full save.
+            snapshot_options["publish_paths"] = set(changed_entries)
         committed_relations = scan_cache_adapter.save_snapshot(
             config["CACHE_PATH"],
             sanitized_file_cache,

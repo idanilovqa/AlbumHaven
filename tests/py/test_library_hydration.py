@@ -447,7 +447,11 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     assert saved_cache_path == tmp_path / "cache.json"
     assert saved_root_identity == "root-identity"
     assert saved_last_scan == 12.5
-    assert saved_kwargs == {"relation_views": {}, "relations_last_built": 0.0, "rebuild_relation_projection": True}
+    # Only the repaired entry publishes; the loaded snapshot may already be stale.
+    assert saved_kwargs == {
+        "relation_views": {}, "relations_last_built": 0.0, "rebuild_relation_projection": True,
+        "publish_paths": {str(track_path)},
+    }
     assert saved_file_cache[str(track_path)]["cover_path"] == str(cover_path)
     assert saved_file_cache[str(track_path)]["library_root_id"] == "main-library-root-1"
     assert saved_file_cache[str(track_path)]["library_root_category"] == "main_library"

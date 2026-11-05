@@ -37,5 +37,5 @@ A site the app cannot run (no shared bridge protocol, or a capability it names i
 the handshake's `requiredCapabilities` that this build lacks) is refused and
 covered by the Update required screen. Its Check for update checks for an APK
 whose bridge range includes the site's, downloads a newer one at once, and
-Install update hands it to Android as Settings does. Release ordering is in
+Update hands it to Android as Settings does. Release ordering is in
 `docs/android-release-signing.md`.

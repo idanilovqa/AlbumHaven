@@ -306,7 +306,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         if (!originPolicy.isSameOrigin(url, selectedOrigin)) return
         val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
         // Without a working Download Manager the page simply stays where it is.
-        enqueueDownload(ioExecutor, mainHandler::post, {
+        enqueueDownload(ioExecutor) {
             val request = DownloadManager.Request(url.toUri())
                 .addRequestHeader("Cookie", cookie)
                 .addRequestHeader("User-Agent", userAgent)
@@ -318,7 +318,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                     URLUtil.guessFileName(url, contentDisposition, mimeType),
                 )
             getSystemService(DownloadManager::class.java).enqueue(request)
-        }) {}
+        }
     }
 
     private fun openExternally(url: String) {

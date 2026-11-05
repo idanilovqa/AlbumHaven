@@ -99,7 +99,7 @@ class PlaybackService : MediaLibraryService() {
 
     /** Whether a document negotiated the bridge, so it refreshes the references it handed over. */
     private var documentAttached = false
-    private val focusPolicy = AudioFocusPolicy()
+    private val focusPolicy = AudioFocusPolicy(::requestFocus)
     private val port = ControllerPlaybackPort({ controller }) { attached -> documentAttached = attached }
 
     // One executor per controller lifetime, so a retired controller's release reaches its own origin.
@@ -476,11 +476,7 @@ class PlaybackService : MediaLibraryService() {
     private fun apply(effects: List<FocusEffect>) {
         effects.forEach { effect ->
             when (effect) {
-                FocusEffect.Request -> apply(
-                    focusPolicy.onRequestResult(
-                        audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED,
-                    ),
-                )
+                FocusEffect.Request -> apply(focusPolicy.onRequestResult(requestFocus()))
                 FocusEffect.Abandon -> audioManager.abandonAudioFocusRequest(focusRequest)
                 FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
@@ -488,6 +484,9 @@ class PlaybackService : MediaLibraryService() {
             }
         }
     }
+
+    /** Also asked from the playback thread before a start; the listener answers on the main thread. */
+    private fun requestFocus() = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
 
     private fun watchNoisy(enabled: Boolean) {
         if (enabled == noisyRegistered) return

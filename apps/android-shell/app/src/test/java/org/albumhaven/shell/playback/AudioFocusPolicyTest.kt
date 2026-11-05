@@ -6,7 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioFocusPolicyTest {
-    private val policy = AudioFocusPolicy()
+    /** What the platform answers a focus request; a call refuses it. */
+    private var granted = true
+    private val policy = AudioFocusPolicy { granted }
 
     @Test
     fun playbackRequestsFocusOnceAndWatchesForNoisyOutput() {
@@ -36,10 +38,20 @@ class AudioFocusPolicyTest {
     fun aTransientLossSuchAsACallPausesAndResumesOnlyWhenFocusReturns() {
         policy.onState(NativePlaybackState.PLAYING)
         assertEquals(listOf(FocusEffect.Pause), policy.onFocusChange(FocusChange.LOSS_TRANSIENT))
-        // The request is kept so the platform can give focus back.
-        assertEquals(listOf(FocusEffect.WatchNoisy(false)), policy.onState(NativePlaybackState.PAUSED))
+        // The request is kept so the platform can give focus back, and output stays watched meanwhile.
+        assertEquals(emptyList<FocusEffect>(), policy.onState(NativePlaybackState.PAUSED))
         assertEquals(listOf(FocusEffect.Resume), policy.onFocusChange(FocusChange.GAIN))
-        assertEquals(listOf(FocusEffect.WatchNoisy(true)), policy.onState(NativePlaybackState.LOADING))
+        assertEquals(emptyList<FocusEffect>(), policy.onState(NativePlaybackState.LOADING))
+        assertEquals(listOf(FocusEffect.WatchNoisy(false), FocusEffect.Abandon), policy.onState(NativePlaybackState.PAUSED))
+    }
+
+    @Test
+    fun headphonesRemovedDuringACallCancelTheResume() {
+        policy.onState(NativePlaybackState.PLAYING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        policy.onState(NativePlaybackState.PAUSED)
+        assertEquals(listOf(FocusEffect.WatchNoisy(false), FocusEffect.Abandon), policy.onBecomingNoisy())
+        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
     }
 
     @Test
@@ -51,7 +63,7 @@ class AudioFocusPolicyTest {
         assertEquals(listOf(FocusEffect.Pause), policy.onState(NativePlaybackState.LOADING))
         assertEquals(emptyList<FocusEffect>(), policy.onState(NativePlaybackState.PAUSED))
         assertEquals(listOf(FocusEffect.Resume), policy.onFocusChange(FocusChange.GAIN))
-        assertEquals(listOf(FocusEffect.WatchNoisy(true)), policy.onState(NativePlaybackState.LOADING))
+        assertEquals(emptyList<FocusEffect>(), policy.onState(NativePlaybackState.LOADING))
     }
 
     @Test
@@ -71,7 +83,7 @@ class AudioFocusPolicyTest {
         policy.onState(NativePlaybackState.PLAYING)
         policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
         policy.onState(NativePlaybackState.PAUSED)
-        assertEquals(listOf(FocusEffect.Abandon), policy.onState(NativePlaybackState.IDLE))
+        assertEquals(listOf(FocusEffect.WatchNoisy(false), FocusEffect.Abandon), policy.onState(NativePlaybackState.IDLE))
         assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
     }
 
@@ -98,13 +110,25 @@ class AudioFocusPolicyTest {
     }
 
     @Test
+    fun aStartTheCallRefusesFocusForIsNotHeld() {
+        granted = false
+        assertFalse(policy.mayStart())
+        // Nothing is held, so the call's end resumes nothing; a later start asks again.
+        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
+        granted = true
+        assertTrue(policy.mayStart())
+        assertEquals(listOf(FocusEffect.WatchNoisy(true)), policy.onState(NativePlaybackState.LOADING))
+    }
+
+    @Test
     fun aPauseOrStopDuringACallDropsTheHeldStart() {
         policy.onState(NativePlaybackState.PLAYING)
         policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
         policy.onState(NativePlaybackState.PAUSED)
         assertFalse(policy.mayStart())
         policy.dropHeldStart()
-        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
+        // Nothing resumes; output stops being watched.
+        assertEquals(listOf(FocusEffect.WatchNoisy(false)), policy.onFocusChange(FocusChange.GAIN))
     }
 
     private val first = SyntheticTrack(tag = 1, frames = 3L * RATE)
@@ -118,7 +142,7 @@ class AudioFocusPolicyTest {
 
         fun apply(effects: List<FocusEffect>): Unit = effects.forEach { effect ->
             when (effect) {
-                FocusEffect.Request -> apply(policy.onRequestResult(granted = true))
+                FocusEffect.Request -> apply(policy.onRequestResult(granted))
                 FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
                 else -> Unit
@@ -184,6 +208,47 @@ class AudioFocusPolicyTest {
         assertEquals(ListenEffect.NOW_PLAYING, harness.listen.posts.first().first)
     }
 
+    @Test
+    fun aPlayDuringACallFromAnAlreadyPausedPlayerNeitherClaimsNorAnnouncesPlayback() {
+        val focused = Focused(first)
+        val harness = focused.harness
+        harness.load(1, first, autoplay = false)
+        focused.step()
+        // The player was paused and holds no focus, so it never hears the call; the call refuses focus.
+        granted = false
+        assertEquals(CommandResult.ACCEPTED, ControllerPlaybackPort({ harness.controller }).play(1))
+        repeat(5) { focused.step() }
+
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertTrue(harness.events.none { it.snapshot.state == NativePlaybackState.LOADING })
+        assertEquals(emptyList<String>(), harness.claims.calls)
+        assertTrue(harness.listen.posts.isEmpty())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
+
+        // After the call a play starts normally.
+        granted = true
+        harness.controller.play(1)
+        focused.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertEquals(ListenEffect.NOW_PLAYING, harness.listen.posts.first().first)
+    }
+
+    @Test
+    fun headphonesRemovedDuringACallKeepPlaybackFromResumingOnTheSpeaker() {
+        val focused = Focused(first, second)
+        val harness = focused.harness
+        focused.interruptedByACall()
+        val acquires = focused.acquires()
+        val written = focused.written()
+
+        focused.apply(policy.onBecomingNoisy())
+        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
+        repeat(20) { focused.step() }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(acquires, focused.acquires())
+        assertEquals(written, focused.written())
+    }
+
     private fun assertHeldDuringTheCallThenStarted(start: (Focused) -> Unit) {
         val focused = Focused(first, second)
         val harness = focused.harness
@@ -232,7 +297,8 @@ class AudioFocusPolicyTest {
         repeat(5) { focused.step() }
         val acquires = focused.acquires()
 
-        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
+        // Nothing resumes; at most output stops being watched.
+        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN).filterNot { it == FocusEffect.WatchNoisy(false) })
         repeat(20) { focused.step() }
         assertTrue(harness.state() == NativePlaybackState.PAUSED || harness.state() == NativePlaybackState.IDLE)
         assertEquals(acquires, focused.acquires())

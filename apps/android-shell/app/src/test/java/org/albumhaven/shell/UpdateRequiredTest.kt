@@ -71,7 +71,7 @@ class UpdateRequiredTest {
     @Test
     fun onlyStepsWaitingForTheUserOfferAnAction() {
         val actionable = UpdateStep.entries.filter { it.actionable }
-        assertEquals(listOf(UpdateStep.REQUIRED, UpdateStep.READY, UpdateStep.AUTHORIZATION, UpdateStep.INVALID), actionable)
+        assertEquals(listOf(UpdateStep.REQUIRED, UpdateStep.READY, UpdateStep.INSTALLING, UpdateStep.AUTHORIZATION, UpdateStep.INVALID), actionable)
     }
 
     @Test
@@ -105,21 +105,25 @@ class UpdateRequiredTest {
     }
 
     @Test
-    fun readyAndAuthorizationInstallAndAnInvalidDownloadRetries() {
+    fun readyInstallingAndAuthorizationInstallAndAnInvalidDownloadRetries() {
         val (ready, readyUpdates) = flow(UpdateState.Ready(manifest))
         ready.act()
+        // Update while installing shows a confirmation left unanswered again.
+        val (installing, installingUpdates) = flow(UpdateState.Installing(manifest))
+        installing.act()
         val (authorization, authorizationUpdates) = flow(UpdateState.Authorization(manifest))
         authorization.act()
         val (invalid, invalidUpdates) = flow(UpdateState.Failed(UpdateError.VERIFICATION_FAILED, null, manifest, null))
         invalid.act()
         assertEquals(listOf("install"), readyUpdates.calls)
+        assertEquals(listOf("install"), installingUpdates.calls)
         assertEquals(listOf("install"), authorizationUpdates.calls)
         assertEquals(listOf("download"), invalidUpdates.calls)
     }
 
     @Test
     fun busyStepsIgnoreTheButton() {
-        for (state in listOf(UpdateState.Checking(null), UpdateState.Downloading(manifest, 1), UpdateState.Verifying(manifest), UpdateState.Installing(manifest))) {
+        for (state in listOf(UpdateState.Checking(null), UpdateState.Downloading(manifest, 1), UpdateState.Verifying(manifest))) {
             val (flow, updates) = flow(state)
             flow.act()
             assertEquals(state.toString(), emptyList<String>(), updates.calls)

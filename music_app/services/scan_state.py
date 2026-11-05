@@ -17,6 +17,7 @@ from music_app.services.library_indexing import (
 )
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import (
+    ScanCacheInventorySuperseded,
     ScanCachePublicationSuperseded,
     select_scan_cache_adapter,
 )
@@ -172,6 +173,44 @@ def finalize_post_scan_actions(
         reason="automatic_candidate_refresh",
     )
     start_background_cover_refresh()
+
+
+# A full scan of a slow library can take hours; any watcher or tag-edit
+# publication meanwhile used to discard the whole scan (sandbox2 2026-11-05).
+_SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS = 5
+_SUPERSEDED_SCAN_CLOCK_MARGIN_SECONDS = 60.0
+
+
+def _merge_newer_published_inventory(
+    adapter,
+    publication_state: dict[str, object],
+    *,
+    since: float,
+    separate_release_keys,
+) -> int | None:
+    """Adopt files other publications wrote after the scan started.
+
+    Those publications read the files after this scan did, so their entries
+    and removals win; every other file keeps the scan's fresh read.
+    """
+    load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
+    load_published = getattr(adapter, "load_inventory_published_since", None)
+    if not callable(load_revision) or not callable(load_published):
+        return None
+    # Read the revision first: a change after it supersedes the retry again.
+    revision = int(load_revision())
+    published, removed = load_published(since)
+    file_cache = {
+        path: entry
+        for path, entry in dict(publication_state.get("file_cache") or {}).items()
+        if path not in removed
+    }
+    file_cache.update(published)
+    publication_state["file_cache"] = file_cache
+    publication_state["albums"] = build_albums_from_file_cache(
+        file_cache, set(separate_release_keys or set()),
+    )
+    return revision
 
 
 def refresh_library_state(
@@ -452,7 +491,29 @@ def refresh_library_state(
             relation_refresh_options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
-        refresh_relation_views(**relation_refresh_options)
+        for republish_attempt in range(_SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS + 1):
+            try:
+                refresh_relation_views(**relation_refresh_options)
+                break
+            except ScanCacheInventorySuperseded:
+                if republish_attempt == _SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS:
+                    raise
+                revision = _merge_newer_published_inventory(
+                    scan_cache_adapter,
+                    publication_state,
+                    since=scan_started_at - _SUPERSEDED_SCAN_CLOCK_MARGIN_SECONDS,
+                    separate_release_keys=new_separate_release_keys,
+                )
+                if revision is None:
+                    raise
+                relation_refresh_options["expected_inventory_mutation_revision"] = revision
+                rebuilt_albums = publication_state["albums"]
+                new_file_cache = publication_state["file_cache"]
+                log_app_event(
+                    cfg, logger,
+                    "Library scan republishing over newer watcher or tag-edit changes",
+                    level="info", attempt=republish_attempt + 1,
+                )
         local_cover_inventory = cfg.get("_LOCAL_COVER_INVENTORY")
         if local_cover_inventory is not None:
             local_cover_inventory.rescan()

@@ -100,6 +100,10 @@ class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 
 
+class ScanCacheInventorySuperseded(ScanCachePublicationSuperseded):
+    """A watcher or tag edit published files while the full scan was prepared."""
+
+
 class StructuralTagEditDestinationConflict(RuntimeError):
     """Raised when a structural tag edit would collide with another album."""
 
@@ -325,6 +329,38 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def load_inventory_published_since(self, since_epoch: float) -> tuple[dict[str, dict[str, object]], set[str]]:
+        """Files another publication wrote or removed after a full scan started."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                """
+                select files.private_path, files.scan_cache_stale,
+                  files.metadata #> '{scan_cache,file_entry}' as file_entry
+                from library.local_track_files files
+                join library.library_roots roots on roots.id = files.library_root_id and roots.is_active
+                join library.libraries libraries on libraries.id = roots.library_id
+                join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+                where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Library'
+                  and libraries.library_kind = 'local'
+                  and files.last_seen_at >= to_timestamp(%(since)s)
+                """,
+                {"since": float(since_epoch)},
+            ).fetchall()
+        published: dict[str, dict[str, object]] = {}
+        removed: set[str] = set()
+        for row in rows:
+            payload = _row_mapping(row)
+            path = str(payload["private_path"])
+            entry = payload.get("file_entry")
+            if payload.get("scan_cache_stale") or not isinstance(entry, dict):
+                removed.add(path)
+                continue
+            try:
+                published[path] = {**deserialize_file_entry(entry), "path": path}
+            except Exception:
+                published[path] = {**entry, "path": path}
+        return published, removed
 
     def load_file_entries(self, paths, *, include_siblings=False):
         """Read only selected files, optionally including their album containers."""
@@ -2135,7 +2171,7 @@ class PostgresScanCacheAdapter:
                 _load_inventory_mutation_revision(connection)
                 != prepared_inventory_mutation_revision
             ):
-                raise ScanCachePublicationSuperseded(
+                raise ScanCacheInventorySuperseded(
                     "Inventory changed through a structural tag edit while the scan snapshot was being prepared."
                 )
             from music_app.services.scoped_relation_projection import pending_scan_baseline, record_pending_scan_receipt

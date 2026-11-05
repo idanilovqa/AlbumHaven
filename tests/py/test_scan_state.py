@@ -2213,6 +2213,70 @@ def test_full_scan_carries_inventory_revision_captured_before_filesystem_scan(
     assert observed["refresh_kwargs"]["expected_inventory_mutation_revision"] == 23
 
 
+def test_superseded_full_scan_republishes_with_newer_published_files(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    # sandbox2 2026-11-05: a 4 h repair scan was discarded because watcher
+    # publications bumped the inventory revision while it ran.
+    revisions = iter([23, 24])
+    attempts = []
+
+    class RevisionAdapter(FakeScanCacheAdapter):
+        def load_cover_mutation_revision(self):
+            return 11
+
+        def load_inventory_mutation_revision(self):
+            return next(revisions)
+
+        def load_inventory_published_since(self, since_epoch):
+            assert since_epoch > 0
+            return {"edited": {"path": "edited", "album": "Watcher Album"}}, {"deleted"}
+
+    _install_scan_cache_adapter(monkeypatch, RevisionAdapter())
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda file_cache, _keys: [SimpleNamespace(key=f"albums-of-{len(file_cache)}")],
+    )
+    library_state.update({"file_cache": {}, "albums": [], "last_scan": 0.0, "relation_views": {"artists": []}})
+
+    def scan(**_kwargs):
+        return {
+            "kept": {"path": "kept", "album": "Scan Album"},
+            "edited": {"path": "edited", "album": "Old Album"},
+            "deleted": {"path": "deleted", "album": "Scan Album"},
+        }, 55.0
+
+    def refresh(**kwargs):
+        attempts.append((kwargs["expected_inventory_mutation_revision"], dict(kwargs["publication_state"]["file_cache"])))
+        if len(attempts) == 1:
+            raise scan_state.ScanCacheInventorySuperseded("newer watcher publication")
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan,
+        refresh_relation_views=refresh,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert [revision for revision, _cache in attempts] == [23, 24]
+    assert attempts[1][1] == {
+        "kept": {"path": "kept", "album": "Scan Album"},
+        "edited": {"path": "edited", "album": "Watcher Album"},
+    }
+    assert library_state["scan_outcome"] == "completed"
+    assert library_state["albums"][0].key == "albums-of-2"
+
+
 def test_stale_scan_generation_does_not_publish_rating_seed_intent(
     runtime_config,
     runtime_logger,

@@ -881,6 +881,36 @@ def test_live_root_catch_up_rereads_only_changed_files(watcher_repair_inventory)
     assert titles == {unchanged["path"]: "01", edited["path"]: "Retagged"}
 
 
+def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_repair_inventory):
+    # A superseded full scan adopts exactly these files instead of discarding itself.
+    import time
+
+    fixture = watcher_repair_inventory
+    untouched = fixture.entry("Owner/Untouched/01.flac", album="Untouched")
+    edited = fixture.entry("Owner/Edited/01.flac", album="Edited")
+    deleted = fixture.entry("Owner/Deleted/01.flac", album="Deleted")
+    fixture.seed(untouched, edited, deleted)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        scan_started = connection.execute("select extract(epoch from clock_timestamp()) as now").fetchone()["now"]
+    time.sleep(0.05)
+    retagged = {**edited, "title": "Watcher Title"}
+    _live_reconcile(fixture, {edited["path"]: retagged}, Path(edited["path"]).parent)
+    Path(deleted["path"]).unlink()
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(deleted["path"]),), deleted_subtrees=(), moves=(),
+    ))
+
+    published, removed = fixture.adapter.load_inventory_published_since(float(scan_started))
+
+    assert set(published) == {edited["path"]}
+    assert published[edited["path"]]["title"] == "Watcher Title"
+    assert removed == {deleted["path"]}
+
+
 def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Demo Album"), "year": 2020}

@@ -327,6 +327,49 @@ class UpdaterTest {
     }
 
     @Test
+    fun `leaving Android's confirmation unanswered makes the update ready again on return`() {
+        val updater = ready()
+        updater.install { it() }
+        // Returning while staging, stopping playback or committing changes nothing.
+        updater.onForeground()
+        ports.stageDone!!(StageResult.Staged(3))
+        updater.onForeground()
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+
+        // The user went Home from the confirmation; Android reports nothing for it.
+        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        updater.onForeground()
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+
+        // Install update asks Android again with a fresh session in place of the unanswered one.
+        assertTrue(updater.install { it() })
+        assertEquals(listOf(3), ports.abandoned)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.stageDone!!(StageResult.Staged(4))
+        assertEquals(listOf(3, 4), ports.committed)
+    }
+
+    @Test
+    fun `a late answer to an unanswered confirmation still applies`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        updater.onForeground()
+        updater.onInstallStatus(InstallStatus.Cancelled)
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+
+        // The cancelled session is gone, so the next install has nothing to abandon.
+        updater.install { it() }
+        assertTrue(ports.abandoned.isEmpty())
+        ports.stageDone!!(StageResult.Staged(5))
+        updater.onInstallStatus(InstallStatus.PendingUserAction {})
+        updater.onForeground()
+        updater.onInstallStatus(InstallStatus.Failed)
+        assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, null, manifest(), 1_000_000L), updater.state)
+    }
+
+    @Test
     fun `an install failure is readable and offers the download again`() {
         val updater = ready()
         updater.install { it() }

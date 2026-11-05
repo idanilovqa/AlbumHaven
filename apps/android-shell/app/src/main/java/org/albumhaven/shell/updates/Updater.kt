@@ -167,6 +167,9 @@ class Updater(
     private var passiveChecked = false
     private var sessionId: Int? = null
 
+    /** Android showed its confirmation for [sessionId]; leaving it unanswered reports nothing. */
+    private var confirming = false
+
     var state: UpdateState = restore()
         private set(value) {
             field = value
@@ -308,6 +311,9 @@ class Updater(
             state = UpdateState.Authorization(manifest)
             return true
         }
+        // A confirmation left unanswered is asked again with a fresh session.
+        sessionId?.let(ports::abandon)
+        endSession()
         state = UpdateState.Installing(manifest)
         ports.stage(manifest) { result -> staged(manifest, result, prepare) }
         return true
@@ -323,7 +329,7 @@ class Updater(
                 sessionId = result.sessionId
                 prepare {
                     if (sessionId == result.sessionId && !ports.commit(result.sessionId)) {
-                        sessionId = null
+                        endSession()
                         fail(UpdateError.INSTALL_FAILED, null, manifest)
                     }
                 }
@@ -333,32 +339,50 @@ class Updater(
         }
     }
 
-    /** Reported by `PackageInstaller` for the committed session. */
+    /** Reported by `PackageInstaller` for the committed session, also after its confirmation was left unanswered. */
     fun onInstallStatus(status: InstallStatus) {
-        val installing = state as? UpdateState.Installing ?: return
+        val manifest = when (val current = state) {
+            is UpdateState.Installing -> current.manifest
+            is UpdateState.Ready -> current.manifest.takeIf { sessionId != null } ?: return
+            else -> return
+        }
         when (status) {
-            is InstallStatus.PendingUserAction -> status.confirm()
+            is InstallStatus.PendingUserAction -> if (state is UpdateState.Installing) {
+                confirming = true
+                status.confirm()
+            }
             // Android replaces the package and ends this process; nothing is left to show.
             InstallStatus.Succeeded -> {
-                sessionId = null
+                endSession()
                 store.stagedManifest = null
             }
             // The verified file stays, so Install update can ask Android again.
             InstallStatus.Cancelled -> {
-                sessionId = null
-                state = UpdateState.Ready(installing.manifest)
+                endSession()
+                state = UpdateState.Ready(manifest)
             }
             InstallStatus.Failed -> {
-                sessionId = null
-                fail(UpdateError.INSTALL_FAILED, null, installing.manifest)
+                endSession()
+                fail(UpdateError.INSTALL_FAILED, null, manifest)
             }
         }
     }
 
-    /** The user came back from system Settings: a granted install source makes the update ready again. */
+    /**
+     * The user came back to the app: from system Settings, a granted install source makes the
+     * update ready again; from Android's confirmation without answering it, so does Install update.
+     */
     fun onForeground() {
-        val current = state as? UpdateState.Authorization ?: return
-        if (ports.canRequestInstalls()) state = UpdateState.Ready(current.manifest)
+        when (val current = state) {
+            is UpdateState.Authorization -> if (ports.canRequestInstalls()) state = UpdateState.Ready(current.manifest)
+            is UpdateState.Installing -> if (confirming) state = UpdateState.Ready(current.manifest)
+            else -> Unit
+        }
+    }
+
+    private fun endSession() {
+        sessionId = null
+        confirming = false
     }
 
     /** [reason] is a [Rejection] or [AccessFailure] wire name. */

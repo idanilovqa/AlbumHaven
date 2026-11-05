@@ -141,10 +141,11 @@ def _integer(item: _Tlv, tag: int = 2) -> int:
 
 
 def _boolean(item: _Tlv) -> bool:
+    """Any nonzero content byte is TRUE: some secure hardware encodes it as 0x01, not DER's 0xff."""
     value = _universal(item, 1)
-    if value not in (b"\x00", b"\xff"):
+    if len(value) != 1:
         raise AttestationRefused()
-    return value == b"\xff"
+    return value != b"\x00"
 
 
 def _tagged(authorizations: _Tlv, tag: int) -> list[_Tlv]:
@@ -182,8 +183,10 @@ def parse_key_description(der: bytes) -> KeyDescription:
     fields = _children(_universal(_single(der), 16, constructed=True))
     if len(fields) < 8:
         raise AttestationRefused()
-    level = _SECURITY_LEVELS.get(_integer(fields[1], tag=10))
-    if level is None:
+    level_code = _integer(fields[1], tag=10)
+    level = _SECURITY_LEVELS.get(level_code)
+    # The attested level is believed only when the KeyMint holding the key reports the same one.
+    if level is None or _integer(fields[3], tag=10) != level_code:
         raise AttestationRefused()
     challenge = _universal(fields[4], 4)
     software_enforced, hardware_enforced = fields[6:8]

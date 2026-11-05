@@ -594,7 +594,7 @@ def test_manual_measured_retry_uses_shared_guards_and_retry_bookkeeping(monkeypa
 def test_manual_measured_retry_counts_retryable_provider_failure_as_attempted(monkeypatch):
     from contextlib import nullcontext
 
-    from music_app.services import lastfm_retry, lastfm_sync_bridge, measured_listen_history
+    from music_app.services import lastfm_retry, lastfm_sync_bridge
     from music_app.services.lastfm import LastfmError
 
     entry = {
@@ -636,7 +636,7 @@ def test_manual_measured_retry_counts_retryable_provider_failure_as_attempted(mo
     monkeypatch.setattr(lastfm_retry, "is_meaningful_listen_session", lambda _entry: True)
     monkeypatch.setattr(lastfm_retry, "normalize_playback_track_payload", lambda payload: dict(payload))
     monkeypatch.setattr(lastfm_retry, "scrobble_track", fail_scrobble)
-    monkeypatch.setattr(measured_listen_history, "normalize_measurement", lambda item, **_scope: item)
+    monkeypatch.setattr(lastfm_sync_bridge, "normalize_measurement", lambda item, **_scope: item)
     monkeypatch.setattr(lastfm_sync_bridge, "measured_provider_guard", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         lastfm_sync_bridge,
@@ -675,7 +675,7 @@ def test_manual_measured_retry_counts_retryable_provider_failure_as_attempted(mo
 def test_manual_measured_retry_persists_code_9_guard_and_does_not_resubmit(monkeypatch):
     from contextlib import nullcontext
 
-    from music_app.services import lastfm_retry, lastfm_sync_bridge, measured_listen_history
+    from music_app.services import lastfm_retry, lastfm_sync_bridge
     from music_app.services.lastfm import LastfmError
 
     stored = {
@@ -726,7 +726,7 @@ def test_manual_measured_retry_persists_code_9_guard_and_does_not_resubmit(monke
     monkeypatch.setattr(lastfm_retry, "is_meaningful_listen_session", lambda _entry: True)
     monkeypatch.setattr(lastfm_retry, "normalize_playback_track_payload", lambda payload: dict(payload))
     monkeypatch.setattr(lastfm_retry, "scrobble_track", code_9_scrobble)
-    monkeypatch.setattr(measured_listen_history, "normalize_measurement", lambda item, **_scope: item)
+    monkeypatch.setattr(lastfm_sync_bridge, "normalize_measurement", lambda item, **_scope: item)
     monkeypatch.setattr(lastfm_sync_bridge, "measured_provider_guard", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         lastfm_sync_bridge,

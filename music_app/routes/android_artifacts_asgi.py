@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.access_log_redaction import redact_access_log_paths
+from music_app.routes.auth_asgi import _policy_config
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_body, read_bounded_json_object
 from music_app.services.android_artifact_access import (
     APK_NAME,
@@ -32,7 +33,6 @@ ARTIFACTS_DIR_ENV = "ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR"
 DOWNLOAD_PREFIX = "/artifacts/android/download/"
 _NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 _MAX_ATTEST_BYTES = 64 * 1024
-_MAX_EXCHANGE_BYTES = 1024
 _DETAILS = {
     "invalid_request": "Invalid artifact request.",
     "signed_out": "Authentication required.",
@@ -58,10 +58,12 @@ def _refused(error: ArtifactAccessError) -> Response:
 
 
 def _access(request: Request) -> AndroidArtifactAccess:
-    configured = getattr(request.app.state, "android_artifact_access", None)
-    if configured is not None:
-        return configured
-    return AndroidArtifactAccess(request.app.state.config, getattr(request.app.state, "auth_policy_config", {}))
+    """The app's one access service, built on first use because the auth policy loads lazily."""
+    state = request.app.state
+    access = getattr(state, "android_artifact_access", None)
+    if access is None:
+        access = state.android_artifact_access = AndroidArtifactAccess(state.config, _policy_config(request))
+    return access
 
 
 def _artifact_file(channel: str, name: str) -> Path | None:
@@ -89,20 +91,20 @@ async def _json(request: Request, max_bytes: int = 16_384) -> dict:
     return payload
 
 
-async def _body(request: Request, max_bytes: int) -> bytes:
+async def _require_empty_body(request: Request) -> None:
     try:
-        body = await read_bounded_body(request, max_bytes=max_bytes)
+        body = await read_bounded_body(request, max_bytes=0)
     except JSONBodyTooLarge:
         body = None
     if body is None:
         raise ArtifactAccessError(400, "invalid_request")
-    return body
 
 
-async def _signed(request: Request, channel: str, body: bytes = b""):
+async def _signed(request: Request, channel: str):
+    """Verifies the device signature over this bodiless request."""
     return await run_in_threadpool(
         _access(request).verify_signed_request, request.state.current_actor, channel,
-        request.method, request.url.path, request.headers, body,
+        request.method, request.url.path, request.headers, b"",
     )
 
 
@@ -162,7 +164,8 @@ async def android_apk_exchange(request: Request, channel: str, name: str) -> Res
     if channel not in CHANNELS or not APK_NAME.fullmatch(name):
         return _not_found()
     try:
-        device_key = await _signed(request, channel, await _body(request, _MAX_EXCHANGE_BYTES))
+        await _require_empty_body(request)
+        device_key = await _signed(request, channel)
         if _artifact_file(channel, name) is None:
             return _not_found()
         result = await run_in_threadpool(

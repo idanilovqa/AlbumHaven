@@ -14,7 +14,7 @@ directory by the deployment synchronizer; see `docs/android-release-signing.md`.
 | Variable | Purpose |
 | --- | --- |
 | `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` | Directory with `stable/` and `sandbox/`, each holding `manifest.json` and flat `*.apk` files. Unset serves nothing. |
-| `ALBUM_HAVEN_ANDROID_STABLE_SIGNING_CERT_SHA256` | Comma-separated lowercase SHA-256 of the DER signing certificates whose Stable app (`org.albumhaven.app`) may attest. Empty refuses Stable. |
+| `ALBUM_HAVEN_ANDROID_STABLE_SIGNING_CERT_SHA256` | Comma-separated hex SHA-256 (either case, keytool's `AB:CD:...` colons allowed) of the DER signing certificates whose Stable app (`org.albumhaven.app`) may attest. Empty refuses Stable. |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_SIGNING_CERT_SHA256` | The same for the Sandbox app (`org.albumhaven.app.sandbox`). |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_ALLOW_SOFTWARE_ATTESTATION` | `1` lets a sandbox server accept software-backed Sandbox keys, for emulators and debug testing only. Off by default; never applies to Stable. |
 | `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE` | Optional local copy of Google's attestation status list. When set but unreadable, attestation fails closed. |
@@ -47,7 +47,8 @@ cookie; POSTs also carry the session CSRF header. The route action is
    status list; the chain ends at a pinned Google hardware attestation root; only
    the leaf carries the attestation extension; its challenge matches; its
    `attestationApplicationId` names exactly the channel's package with an allowed
-   signing-certificate digest; its attestation security level is TEE or StrongBox;
+   signing-certificate digest; its attestation security level is TEE or StrongBox
+   and equals its KeyMint security level;
    its hardware-enforced `rootOfTrust` reports `deviceLocked` true and
    `verifiedBootState` Verified; and the key is P-256. The package and signer come
    from the Android framework, so they are believed only on a locked, verified
@@ -60,8 +61,8 @@ cookie; POSTs also carry the session CSRF header. The route action is
    over `album-haven-android-artifact-request-v1`, the method, the path, the
    challenge and the hex SHA-256 of the (empty) body, joined by newlines. Each
    request also rechecks that the key's signing certificate is still allowed and,
-   for a software key, that the sandbox flag is still on. The `POST` body is
-   limited to 1 KiB.
+   for a software key, that the sandbox flag is still on. The `POST` must have
+   an empty body.
 4. The `POST` returns `{"path":"/artifacts/android/download/<token>"}`: a
    five-minute HMAC link naming one account, device key, channel and file. The app
    checks it with `HEAD` and hands it to `DownloadManager`, which needs no cookies.

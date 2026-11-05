@@ -87,7 +87,7 @@ from music_app.services.loops import (
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.track_preferences import save_track_preference
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
 
 router = APIRouter()
@@ -754,6 +754,9 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    if payload.get("measurement_version") is not None and payload.get("finalized") is True:
+        # Finalizing a measured listen is the /playback/session/complete write.
+        await require_action("integration.lastfm.complete")(request)
     await require_playback_claim(request, payload)
     payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)

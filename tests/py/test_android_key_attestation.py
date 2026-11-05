@@ -71,13 +71,29 @@ def test_a_hardware_key_on_an_unlocked_or_unverified_device_is_refused(pki, leve
         verify(pki, chain)
 
 
-def test_a_malformed_root_of_trust_is_refused(pki):
-    description = bytearray(key_description(CHALLENGE))
-    # deviceLocked must be DER TRUE (0xff) or FALSE (0x00).
-    locked = description.index(b"\x01\x01\xff")
-    description[locked + 2] = 0x01
+@pytest.mark.parametrize(("content", "locked"), [(b"\x01", True), (b"\x7f", True), (b"\xff", True), (b"\x00", False)])
+def test_device_locked_reads_any_nonzero_byte_as_true(content, locked):
+    # Some secure hardware encodes TRUE as 0x01 rather than DER's 0xff.
+    description = parse_key_description(key_description(CHALLENGE, boot=(content, 0)))
+    assert description.root_of_trust.device_locked is locked
+
+
+def test_a_locked_device_reporting_true_as_one_is_accepted(pki):
+    chain, _ = pki.chain(CHALLENGE, boot=(b"\x01", 0))
+    assert verify(pki, chain).security_level is SecurityLevel.TEE
+
+
+@pytest.mark.parametrize("content", [b"", b"\xff\xff"], ids=["empty", "two-bytes"])
+def test_a_malformed_root_of_trust_is_refused(content):
     with pytest.raises(AttestationRefused):
-        parse_key_description(bytes(description))
+        parse_key_description(key_description(CHALLENGE, boot=(content, 0)))
+
+
+@pytest.mark.parametrize(("level", "keymint_level"), [(1, 2), (2, 1), (1, 0), (2, 0)])
+def test_a_keymint_level_other_than_the_attestation_level_is_refused(pki, level, keymint_level):
+    chain, _ = pki.chain(CHALLENGE, level=level, keymint_level=keymint_level)
+    with pytest.raises(AttestationRefused):
+        verify(pki, chain)
 
 
 @pytest.mark.parametrize(

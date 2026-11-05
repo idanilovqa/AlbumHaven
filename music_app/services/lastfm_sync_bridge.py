@@ -5,7 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 from music_app.services.lastfm import LastfmError
 from music_app.services.measured_listen_history import (
+    MeasuredListenError,
+    load_measured,
     measured_provider_guard,
+    normalize_measurement,
+    playback_handoff_completion_digest,
     validate_playback_completion,
 )
 from music_app.services.lastfm_listen_sync import (
@@ -59,8 +63,6 @@ def prepare_measured_playback_completion(
     library_id: int,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
 ) -> JsonDict | None:
-    from music_app.services.measured_listen_history import normalize_measurement
-
     validate_playback_completion(payload)
     entry = build_playback_complete_entry({**payload, "user_timezone": user_timezone})
     for key in ("measurement_version", "device_id", "session_id", "sequence",
@@ -83,16 +85,11 @@ def prepare_handoff_completion(
     library_id: int,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
 ) -> tuple[JsonDict | None, bytes]:
-    """The measured entry a reload handoff persists (None without a completion) and its fingerprint."""
-    from music_app.services.measured_listen_history import (
-        MeasuredListenError,
-        playback_handoff_completion_digest,
-    )
+    """The measured entry a reload handoff persists (None without a completion) and its fingerprint.
 
+    A handoff ends its listen, so a completion must be finalized."""
     if payload is None:
-        return None, playback_handoff_completion_digest(
-            None, account_id=account_id, library_id=library_id,
-        )
+        return None, playback_handoff_completion_digest(None)
     entry = prepare_measured_playback_completion(
         payload,
         user_timezone=user_timezone,
@@ -100,11 +97,11 @@ def prepare_handoff_completion(
         library_id=library_id,
         is_meaningful_listen_session=is_meaningful_listen_session,
     )
+    if payload.get("finalized") is not True:
+        raise MeasuredListenError("Listen handoff completion must be finalized")
     if entry is None:
         raise MeasuredListenError("Listen completion is below the persistence threshold")
-    return entry, playback_handoff_completion_digest(
-        entry, account_id=account_id, library_id=library_id,
-    )
+    return entry, playback_handoff_completion_digest(entry)
 
 
 _CREDENTIAL_UNAVAILABLE = "Account-scoped Last.fm credential is unavailable"
@@ -178,7 +175,6 @@ def record_playback_session_complete(
             provider_attempted = False
             error = _CREDENTIAL_UNAVAILABLE
             if persisted_entry is not None:
-                from music_app.services.measured_listen_history import load_measured
                 stored = load_measured(
                     provider_connection,
                     account_id=account_id,

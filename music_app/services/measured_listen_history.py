@@ -126,14 +126,12 @@ def normalize_measurement(entry, *, account_id, library_id):
     return item
 
 
-def playback_handoff_completion_digest(entry, *, account_id, library_id):
+def playback_handoff_completion_digest(entry):
+    """The fingerprint of a [normalize_measurement]-normalized handoff entry, or of none."""
     if entry is None:
         return NO_HANDOFF_COMPLETION_DIGEST
-    item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
-    if item["finalized"] is not True:
-        raise MeasuredListenError("Listen handoff completion must be finalized")
     submitted = {
-        key: value for key, value in item.items()
+        key: value for key, value in entry.items()
         if key not in _SERVER_FIELDS and not key.startswith("scrobble_")
     }
     canonical = json.dumps(

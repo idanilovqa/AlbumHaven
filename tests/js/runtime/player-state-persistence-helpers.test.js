@@ -363,6 +363,7 @@ test('delayed pageshow cannot autoplay with an expired restore claim', async () 
   const context = loadHelper({
     AbortController,
     Date: class extends Date { static now() { return now; } },
+    performance: { now: () => now },
     setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id),
     setInterval: () => 0,

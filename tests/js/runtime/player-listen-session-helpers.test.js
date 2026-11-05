@@ -51,6 +51,7 @@ function loadHelper(overrides = {}, prependSource = '') {
     }),
     isoNow: () => '2026-05-14T00:00:00Z',
     unixNowSeconds: () => 1778716800,
+    performance,
     console,
   };
   Object.assign(context, overrides);
@@ -176,7 +177,7 @@ test('active short listen unload stages one reload handoff without separate comp
         tabId: 'departing-client',
         activeClaim: {
           claimToken: 'departing-claim',
-          expiresAt: '2099-10-23T23:00:30Z',
+          leaseDeadline: Infinity,
           track: { playbackRef: 'short-ref' },
         },
         initialized: true,
@@ -722,7 +723,7 @@ async function run() {
             tabId: 'unload-client',
             activeClaim: {
               claimToken: 'unload-claim',
-              expiresAt: '2099-10-23T23:00:30Z',
+              leaseDeadline: Infinity,
               track: { playbackRef: 'unload-ref' },
             },
             initialized: true,

@@ -12577,6 +12577,9 @@ function registerAndroidNativePlaybackEvents() {
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+// The server's claim lease (_CLAIM_LEASE_SECONDS). Its answer's expiresAt is on the server's clock,
+// so this document times the lease on its own monotonic clock from each answer's arrival instead.
+const PLAYBACK_CLAIM_LEASE_MS = 30000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -12813,19 +12816,22 @@ async function deletePlaybackClaim(claim) {
 }
 
 function acceptPlaybackClaim(result, prepared) {
-  if (result.protocol !== 1 || !result.claimToken || !(Date.parse(result.expiresAt) > Date.now())) {
+  if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))) {
     throw new Error('Playback claim is unavailable.');
   }
   const ownership = getPlaybackOwnershipState();
   // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
   const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
-  const claim = { ...prepared, claimToken: result.claimToken, expiresAt: result.expiresAt, scrobblingAvailable };
+  const claim = { ...prepared, claimToken: result.claimToken,
+    leaseDeadline: performance.now() + PLAYBACK_CLAIM_LEASE_MS, scrobblingAvailable };
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
-  ownership.expiryTimer = setTimeout(() => {
+  ownership.expiryTimer = setTimeout(async () => {
+    // A claim request in flight confirms or drops this claim itself within its request deadline.
+    await ownership.pendingOperation;
     if (ownership.activeClaim === claim) losePlaybackOwnership();
-  }, Math.max(0, Date.parse(claim.expiresAt) - Date.now()));
+  }, PLAYBACK_CLAIM_LEASE_MS);
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
@@ -12993,7 +12999,7 @@ function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track)
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
-  return Boolean(claim?.claimToken && Date.parse(claim.expiresAt) > Date.now());
+  return Boolean(claim?.claimToken && claim.leaseDeadline > performance.now());
 }
 
 function canEmitPlaybackSessionSideEffects() {

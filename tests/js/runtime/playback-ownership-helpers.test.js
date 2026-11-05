@@ -52,6 +52,7 @@ function loadHelper(overrides = {}) {
     setInterval: () => 0,
     setTimeout: () => 0,
     showToast: () => {},
+    performance,
     console,
   };
   Object.assign(context, overrides);
@@ -94,7 +95,7 @@ function activeOwnershipState() {
         mirroredTrack: null,
         activeClaim: {
           claimToken: 'departing-claim',
-          expiresAt: '2099-10-23T23:00:30Z',
+          leaseDeadline: Infinity,
           track: { playbackRef: 'departing-ref' },
         },
         channel: null,
@@ -181,9 +182,10 @@ test('expired handoff renews the still-live retained claim without a null acquir
   const storage = new Map();
   const requests = [];
   const state = activeOwnershipState();
-  state.player.ownership.activeClaim.expiresAt = new Date(startedAt + 30_000).toISOString();
+  state.player.ownership.activeClaim.leaseDeadline = 30_000;
   const { context } = loadHelper({
     Date: class extends Date { static now() { return now; } },
+    performance: { now: () => now - startedAt },
     state,
     crypto: require('node:crypto').webcrypto,
     window: { crypto: require('node:crypto').webcrypto },
@@ -234,12 +236,11 @@ for (const snapshot of [
 }
 
 test('BFCache fallback rejects an expired retained claim without acquiring anonymously', async () => {
-  const now = Date.parse('2026-10-25T12:00:00Z');
   const state = activeOwnershipState();
-  state.player.ownership.activeClaim.expiresAt = new Date(now - 1).toISOString();
+  state.player.ownership.activeClaim.leaseDeadline = 30_000;
   let requests = 0;
   const { context } = loadHelper({
-    Date: class extends Date { static now() { return now; } },
+    performance: { now: () => 30_001 },
     state,
     getSessionStorageItem: () => '',
     removeSessionStorageItem: () => {},
@@ -992,38 +993,106 @@ for (const replacement of [false, true]) {
   });
 }
 
-test('lease expiry silences output while a renewal request remains pending', async () => {
-  const pendingRenewal = deferred();
-  let expire;
+function leaseHarness({ clientOffsetMs = 0, renew }) {
+  const serverNow = Date.parse('2026-10-25T12:00:00Z');
+  const clock = { monotonic: 0 };
+  const timers = [];
+  let heartbeat = null;
   let renewals = 0;
-  const { context, stopStreamingPlaybackCalls } = loadHelper({
-    setTimeout: (callback, delay) => { if (delay > 10000) expire = callback; return 18; },
+  const loaded = loadHelper({
+    Date: class extends Date { static now() { return serverNow + clientOffsetMs + clock.monotonic; } },
+    performance: { now: () => clock.monotonic },
+    setInterval: (callback) => { heartbeat = callback; return 17; },
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 0 }),
     fetch: async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null;
       if (url === '/playback/refs') return jsonResponse({ protocol: 1, tracks: [{
         clientKey: body.tracks[0].clientKey, playbackRef: 'playback-ref-1',
-      }] });
-      if (body.claimToken) {
-        renewals += 1;
-        return pendingRenewal.promise;
-      }
-      return jsonResponse({ protocol: 1, claimToken: 'claim-1',
-        expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+      }], expiresAt: new Date(serverNow + clock.monotonic + 86_400_000).toISOString() });
+      const answer = () => jsonResponse({ protocol: 1, claimToken: 'claim-1',
+        expiresAt: new Date(serverNow + clock.monotonic + 30_000).toISOString(),
+        playbackState: { is_playing_here: true } });
+      if (!body.claimToken) return answer();
+      renewals += 1;
+      return renew ? renew(answer, options.signal) : answer();
     },
   });
+  loaded.context.state.player.current = localTrack;
+  const leaseTimers = () => timers.filter(({ delay }) => delay === 30_000);
+  return { ...loaded, clock, timers, leaseTimers, heartbeat: () => heartbeat(), renewals: () => renewals };
+}
+
+for (const clientOffsetMs of [300_000, -300_000]) {
+  test(`a client clock ${clientOffsetMs > 0 ? 'ahead of' : 'behind'} the server by 5 minutes acquires and renews`, async () => {
+    const harness = leaseHarness({ clientOffsetMs });
+    const { context, clock, stopStreamingPlaybackCalls } = harness;
+
+    assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.equal(harness.leaseTimers().length, 1, 'the lease is timed from the answer, not the server clock');
+    for (const at of [10_000, 20_000, 30_000, 40_000]) {
+      clock.monotonic = at;
+      harness.heartbeat();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(harness.renewals(), 4);
+    clock.monotonic = 65_000;
+    for (const { callback } of harness.leaseTimers().slice(0, -1)) await callback();
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
+    assert.equal(context.state.player.ownership.blockedReason, '');
+    assert.deepEqual(stopStreamingPlaybackCalls, []);
+  });
+}
+
+test('lease expiry defers to an in-flight renewal that the server confirms', async () => {
+  const pendingRenewal = deferred();
+  const harness = leaseHarness({ renew: (answer) => pendingRenewal.promise.then(answer) });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-  context.state.player.current = localTrack;
-  const renewal = context.refreshPlaybackOwnershipClaim();
+  clock.monotonic = 10_000;
+  harness.heartbeat();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(renewals, 1);
-  expire();
-  assert.equal(context.state.player.ownership.activeClaim, null);
+  assert.equal(harness.renewals(), 1);
+
+  clock.monotonic = 30_000;
+  const expiry = harness.leaseTimers()[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.isActivePlaybackOwner(), false, 'listen writes stop at the local lease deadline');
+  assert.deepEqual(stopStreamingPlaybackCalls, [], 'the pending renewal still decides ownership');
+  pendingRenewal.resolve();
+  await expiry;
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('lease expiry still drops ownership when renewals stop answering', async () => {
+  const harness = leaseHarness({ renew: (_answer, signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')));
+  }) });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  clock.monotonic = 30_000;
+  await harness.leaseTimers()[0].callback();
+  assert.equal(context.state.player.ownership.activeClaim, null, 'no renewal in flight: the lease ends');
   assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
-  pendingRenewal.resolve(jsonResponse({ protocol: 1, claimToken: 'claim-1',
-    expiresAt: '2099-10-24T00:00:30Z', playbackState: { is_playing_here: true } }));
-  assert.equal(await renewal, false);
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  harness.heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.renewals(), 1);
+  clock.monotonic = 60_000;
+  const expiry = harness.leaseTimers()[1].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(context.state.player.ownership.activeClaim, null);
+  const renewalDeadline = harness.timers.filter(({ delay }) => delay === 10_000).at(-1);
+  renewalDeadline.callback();
+  await expiry;
   assert.equal(context.state.player.ownership.activeClaim, null);
-  assert.equal(stopStreamingPlaybackCalls.length, 1);
+  assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
+  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost', 'ownership-lost']);
 });
 
 {

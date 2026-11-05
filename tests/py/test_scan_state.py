@@ -2233,7 +2233,17 @@ def test_superseded_full_scan_republishes_with_newer_published_files(
 
         def load_inventory_published_since(self, since_epoch):
             assert since_epoch > 0
-            return {"edited": {"path": "edited", "album": "Watcher Album"}}, {"deleted"}
+            return {
+                # A watcher re-read the file after a later edit: adopted.
+                "edited": {"path": "edited", "album": "Watcher Album", "mtime": 20.0, "metadata_schema_version": 6},
+                # A whole-library save rewrote the stored v2 row (sandbox2
+                # 2026-11-05): older than the scan's fresh read, never adopted.
+                "kept": {"path": "kept", "album": "Stale Album", "mtime": 10.0, "metadata_schema_version": 2},
+                # Same file, newer mtime but an older reader: never adopted.
+                "reread": {"path": "reread", "album": "Old Reader", "mtime": 30.0, "metadata_schema_version": 5},
+                # A file this scan never saw: adopted.
+                "added": {"path": "added", "album": "Watcher Added", "mtime": 1.0, "metadata_schema_version": 6},
+            }, {"deleted"}
 
     _install_scan_cache_adapter(monkeypatch, RevisionAdapter())
     monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
@@ -2244,11 +2254,14 @@ def test_superseded_full_scan_republishes_with_newer_published_files(
     )
     library_state.update({"file_cache": {}, "albums": [], "last_scan": 0.0, "relation_views": {"artists": []}})
 
+    fresh = {"metadata_schema_version": 6, "mtime": 10.0}
+
     def scan(**_kwargs):
         return {
-            "kept": {"path": "kept", "album": "Scan Album"},
-            "edited": {"path": "edited", "album": "Old Album"},
-            "deleted": {"path": "deleted", "album": "Scan Album"},
+            "kept": {"path": "kept", "album": "Scan Album", **fresh},
+            "edited": {"path": "edited", "album": "Old Album", **fresh},
+            "reread": {"path": "reread", "album": "Scan Album", **fresh},
+            "deleted": {"path": "deleted", "album": "Scan Album", **fresh},
         }, 55.0
 
     def refresh(**kwargs):
@@ -2270,11 +2283,13 @@ def test_superseded_full_scan_republishes_with_newer_published_files(
 
     assert [revision for revision, _cache in attempts] == [23, 24]
     assert attempts[1][1] == {
-        "kept": {"path": "kept", "album": "Scan Album"},
-        "edited": {"path": "edited", "album": "Watcher Album"},
+        "kept": {"path": "kept", "album": "Scan Album", **fresh},
+        "edited": {"path": "edited", "album": "Watcher Album", "mtime": 20.0, "metadata_schema_version": 6},
+        "reread": {"path": "reread", "album": "Scan Album", **fresh},
+        "added": {"path": "added", "album": "Watcher Added", "mtime": 1.0, "metadata_schema_version": 6},
     }
     assert library_state["scan_outcome"] == "completed"
-    assert library_state["albums"][0].key == "albums-of-2"
+    assert library_state["albums"][0].key == "albums-of-4"
 
 
 def test_stale_scan_generation_does_not_publish_rating_seed_intent(

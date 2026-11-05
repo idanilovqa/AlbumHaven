@@ -1112,7 +1112,9 @@ def test_postgres_hydration_marks_incomplete_file_metadata_for_automatic_repair_
     if metadata_schema_version is not None:
         file_entry["metadata_schema_version"] = metadata_schema_version
     if metadata_schema_version == FILE_METADATA_SCHEMA_VERSION:
+        # A current reader writes both keys (compilation_tag since 7a7dd593).
         file_entry["release_date"] = None
+        file_entry["compilation_tag"] = None
 
     adapter = FakeSelectedScanCacheAdapter({str(track_path): file_entry}, 123.0)
     adapter.backend = PERSISTENCE_BACKEND_POSTGRES

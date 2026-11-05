@@ -304,7 +304,8 @@ class ListenSessions(
     private fun scrobble(session: Session?): Pending {
         if (session == null) return Pending.settled(false)
         session.scrobbleRequest?.let { return it }
-        if (session.scrobbled || !canScrobble(session) || session.scrobblePending ||
+        // The server records no listen of 10 s or less, so a scrobble before then would be ignored.
+        if (session.scrobbled || !canScrobble(session) || !shouldPersist(session) || session.scrobblePending ||
             !isDue(session, ListenEffect.SCROBBLE) || !canEmit()
         ) {
             return Pending.settled(false)

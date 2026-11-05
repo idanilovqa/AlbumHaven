@@ -49,6 +49,17 @@
       "album": "Playback Ownership",
       "trackNumber": "",
       "durationSeconds": 40
+    },
+    "short": {
+      "playbackRef": "ref-short.sig",
+      "listenKey": "lk1-5a8c2e71f09b4d36",
+      "path": "C:/Music/Android Acceptance/04 Short Signal.flac",
+      "coverPath": "C:/Music/Android Acceptance/cover.jpg",
+      "title": "Short Signal",
+      "artist": "Android Acceptance",
+      "album": "Playback Ownership",
+      "trackNumber": "4",
+      "durationSeconds": 14
     }
   },
   "scenarios": [
@@ -3333,6 +3344,146 @@
               }
             ],
             "playbackRef": "ref-long.sig"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a short track scrobbles only once its listen is longer than ten seconds, even past half its length",
+      "steps": [
+        {
+          "at": 0,
+          "do": "select",
+          "track": "short"
+        },
+        {
+          "at": 0,
+          "do": "begin",
+          "position": 0
+        },
+        {
+          "at": 7500,
+          "do": "heard",
+          "seconds": 7.5
+        },
+        {
+          "at": 7500,
+          "do": "position",
+          "position": 7.5
+        },
+        {
+          "at": 10500,
+          "do": "heard",
+          "seconds": 3
+        },
+        {
+          "at": 10500,
+          "do": "position",
+          "position": 10.5
+        },
+        {
+          "at": 14000,
+          "do": "heard",
+          "seconds": 3.5
+        },
+        {
+          "at": 14000,
+          "do": "ended"
+        }
+      ],
+      "writes": [
+        {
+          "effect": "now-playing",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 0,
+            "finalized": false,
+            "measured_listened_seconds": 0,
+            "max_measured_contiguous_seconds": 0,
+            "title": "Short Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 14,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "4",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "playbackRef": "ref-short.sig"
+          }
+        },
+        {
+          "effect": "scrobble",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 1,
+            "finalized": false,
+            "measured_listened_seconds": 10.5,
+            "max_measured_contiguous_seconds": 10.5,
+            "title": "Short Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 14,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "4",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "total_listened_seconds": 0,
+            "max_contiguous_seconds": 0,
+            "playbackRef": "ref-short.sig"
+          }
+        },
+        {
+          "effect": "complete",
+          "body": {
+            "measurement_version": "rendered-pcm-v1",
+            "device_id": "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "sequence": 2,
+            "finalized": true,
+            "measured_listened_seconds": 14,
+            "max_measured_contiguous_seconds": 14,
+            "title": "Short Signal",
+            "artist": "Android Acceptance",
+            "album": "Playback Ownership",
+            "album_artist": "Android Acceptance",
+            "duration_seconds": 14,
+            "started_at": "2026-11-02T10:00:00.000Z",
+            "started_at_unix": 1793613600,
+            "track_number": "4",
+            "request_origin": {
+              "client_kind": "private_web",
+              "origin_type": "browser_tab",
+              "origin_id": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70"
+            },
+            "ended_at": "2026-11-02T10:00:14.000Z",
+            "total_listened_seconds": 14,
+            "max_contiguous_seconds": 14,
+            "finished_fully": true,
+            "skipped": false,
+            "completion_reason": "ended",
+            "scrobble_eligible": true,
+            "scrobbled": true,
+            "segments": [
+              {
+                "start_seconds": 0,
+                "end_seconds": 14
+              }
+            ],
+            "playbackRef": "ref-short.sig"
           }
         }
       ]

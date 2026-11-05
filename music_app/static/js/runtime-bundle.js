@@ -38580,7 +38580,8 @@ function maybeRetryNowPlaying(session) {
 async function maybeScrobbleListenSession(session) {
   if (!session) return false;
   if (session.scrobblePromise) return session.scrobblePromise;
-  if (session.scrobbled || !canScrobbleListenSession(session)) return false;
+  // The server records no listen of 10 s or less, so a scrobble before then would be ignored.
+  if (session.scrobbled || !canScrobbleListenSession(session) || !shouldPersistListenSession(session)) return false;
   if (session.scrobblePending || !isListenWriteDue(session, 'scrobble')) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;

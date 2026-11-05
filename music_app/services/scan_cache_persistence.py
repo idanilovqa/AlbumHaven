@@ -7511,6 +7511,11 @@ def _upsert_local_album_sql(
         if preserve_existing_cover_authority
         else "library.local_albums.metadata || excluded.metadata"
     )
+    release_year_update = """case
+                when nullif(library.local_albums.metadata ->> 'release_date', '') is not null
+                then library.local_albums.release_year
+                else excluded.release_year
+              end"""
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7544,14 +7549,19 @@ def _upsert_local_album_sql(
         on conflict (library_id, album_key) do update
           set artist_id = excluded.artist_id,
               title = excluded.title,
-              release_year = case
-                when nullif(library.local_albums.metadata ->> 'release_date', '') is not null
-                then library.local_albums.release_year
-                else excluded.release_year
-              end,
+              release_year = {release_year_update},
               cover_path = {cover_path_update},
               last_seen_at = now(),
-              metadata = {metadata_update};
+              metadata = {metadata_update}
+          -- An unchanged album is not rewritten, so it fires no row triggers.
+          where (
+            library.local_albums.artist_id, library.local_albums.title,
+            library.local_albums.release_year, library.local_albums.cover_path,
+            library.local_albums.metadata
+          ) is distinct from (
+            excluded.artist_id, excluded.title, {release_year_update},
+            {cover_path_update}, {metadata_update}
+          );
     """
 
 
@@ -7645,7 +7655,10 @@ def _upsert_local_album_featured_artist_sql() -> str:
         on conflict (library_id, album_id, artist_id, featured_kind) do update
           set last_seen_at = now(),
               metadata = library.local_album_featured_artists.metadata
-                         || (excluded.metadata - 'source');
+                         || (excluded.metadata - 'source')
+          where library.local_album_featured_artists.metadata is distinct from (
+            library.local_album_featured_artists.metadata || (excluded.metadata - 'source')
+          );
     """
 
 

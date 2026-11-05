@@ -357,6 +357,42 @@ def test_featured_artist_upsert_skips_unchanged_credits():
     ) in normalized_sql
 
 
+@pytest.mark.parametrize("reported", [[0, 2], []])
+def test_unchanged_row_prefilter_sends_every_row_it_cannot_prove_unchanged(reported):
+    from music_app.services import scan_cache_persistence
+
+    rows = [{"track_key": f"t{index}", "title": f"Track {index}"} for index in range(3)]
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append([row["row_index"] for row in params["rows"].obj])
+            return SimpleNamespace(fetchall=lambda: [{"row_index": index} for index in reported])
+
+    unchanged = scan_cache_persistence._unchanged_row_fingerprints(
+        Connection(), scan_cache_persistence._unchanged_local_track_rows_sql(), rows,
+    )
+
+    assert executed == [[0, 1, 2]]
+    assert [row["track_key"] for row in rows if scan_cache_persistence._row_fingerprint(row) not in unchanged] == (
+        ["t1"] if reported else ["t0", "t1", "t2"]
+    )
+
+
+@pytest.mark.parametrize("builder", ["_unchanged_local_track_rows_sql", "_unchanged_local_track_file_rows_sql"])
+def test_unchanged_row_prefilters_mirror_their_upsert_guards(builder):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(getattr(scan_cache_persistence, builder)())
+
+    assert normalized_sql.startswith("with bootstrap_context as (")
+    assert "is not distinct from" in normalized_sql
+    assert "insert into" not in normalized_sql and "update " not in normalized_sql
+    if builder == "_unchanged_local_track_file_rows_sql":
+        assert "root_resolution.resolution_status = 'resolved'" in normalized_sql
+        assert "#- '{scan_cache,stale_marked_at}'" in normalized_sql
+
+
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 from time import perf_counter
@@ -2180,6 +2181,13 @@ class PostgresScanCacheAdapter:
                 for row in track_file_rows
                 if str(row.get("private_path") or "")
             ]
+            # Compare before the lock; under it, write only what changed.
+            unchanged_track_rows = _unchanged_row_fingerprints(
+                connection, _unchanged_local_track_rows_sql(), track_rows,
+            )
+            unchanged_track_file_rows = _unchanged_row_fingerprints(
+                connection, _unchanged_local_track_file_rows_sql(), track_file_rows,
+            )
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
@@ -2258,12 +2266,12 @@ class PostgresScanCacheAdapter:
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_sql(),
-                track_rows,
+                [row for row in track_rows if _row_fingerprint(row) not in unchanged_track_rows],
             )
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_file_sql(),
-                track_file_rows,
+                [row for row in track_file_rows if _row_fingerprint(row) not in unchanged_track_file_rows],
             )
             repaired_album_keys = sorted({
                 str(getattr(album, "key", "")) for album in albums
@@ -7777,6 +7785,112 @@ def _upsert_local_track_sql() -> str:
             library.local_tracks.metadata || excluded.metadata
           );
     """
+
+
+_BOOTSTRAP_CONTEXT_SQL = """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )"""
+
+
+def _unchanged_local_track_rows_sql() -> str:
+    """Read-only twin of _upsert_local_track_sql's change guard: rows it would skip."""
+    return _BOOTSTRAP_CONTEXT_SQL + """
+        select input_row.row_index
+        from bootstrap_context
+        cross join jsonb_to_recordset(%(rows)s::jsonb) as input_row (
+          row_index integer, album_key text, artist_key text, track_key text, title text,
+          disc_number integer, track_number integer, duration_seconds integer, metadata jsonb
+        )
+        left join library.local_albums
+          on library.local_albums.library_id = bootstrap_context.library_id
+         and library.local_albums.album_key = input_row.album_key
+        left join library.local_artists
+          on library.local_artists.library_id = bootstrap_context.library_id
+         and library.local_artists.artist_key = input_row.artist_key
+        join library.local_tracks
+          on library.local_tracks.library_id = bootstrap_context.library_id
+         and library.local_tracks.track_key = input_row.track_key
+        where (
+             library.local_tracks.album_id, library.local_tracks.artist_id, library.local_tracks.title,
+             library.local_tracks.disc_number, library.local_tracks.track_number,
+             library.local_tracks.duration_seconds, library.local_tracks.metadata
+           ) is not distinct from (
+             library.local_albums.id, library.local_artists.id, input_row.title,
+             input_row.disc_number, input_row.track_number,
+             input_row.duration_seconds, library.local_tracks.metadata || input_row.metadata
+           );
+    """
+
+
+def _unchanged_local_track_file_rows_sql() -> str:
+    """Read-only twin of _upsert_local_track_file_sql's change guard: rows it would skip.
+
+    An unresolved root never counts as unchanged, so the upsert still reports it.
+    """
+    return _BOOTSTRAP_CONTEXT_SQL + """
+        select input_row.row_index
+        from bootstrap_context
+        cross join jsonb_to_recordset(%(rows)s::jsonb) as input_row (
+          row_index integer, track_key text, private_path text, relative_path text,
+          file_size_bytes bigint, modified_at_epoch double precision, metadata jsonb
+        )
+        cross join lateral library.local_track_file_root_resolution(
+          bootstrap_context.library_id, input_row.private_path, input_row.metadata
+        ) as root_resolution
+        join library.local_tracks
+          on library.local_tracks.library_id = bootstrap_context.library_id
+         and library.local_tracks.track_key = input_row.track_key
+        join library.local_track_files
+          on library.local_track_files.private_path = input_row.private_path
+        where root_resolution.resolution_status = 'resolved'
+          and (
+             library.local_track_files.track_id, library.local_track_files.library_root_id,
+             library.local_track_files.relative_path, library.local_track_files.file_size_bytes,
+             library.local_track_files.modified_at, library.local_track_files.metadata
+           ) is not distinct from (
+             library.local_tracks.id, root_resolution.library_root_id,
+             input_row.relative_path, input_row.file_size_bytes,
+             to_timestamp(input_row.modified_at_epoch),
+             (library.local_track_files.metadata || input_row.metadata) #- '{scan_cache,stale_marked_at}'
+           );
+    """
+
+
+def _row_fingerprint(row: dict[str, object]) -> str:
+    return json.dumps(_jsonb_compatible(row), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _unchanged_row_fingerprints(connection: Any, sql: str, rows: list[dict[str, object]]) -> set[str]:
+    """Fingerprints of rows whose upsert would write nothing, read before the lock.
+
+    The publication lock is then held only for rows that change. A row edited
+    between this read and the lock is caught by the revision check under it.
+    A row the query does not report is sent, so the guard stays the authority.
+    """
+    unchanged: set[str] = set()
+    for batch_start in range(0, len(rows), _PIPELINE_BATCH_SIZE):
+        batch = [
+            {**_jsonb_compatible(row), "row_index": index}
+            for index, row in enumerate(rows[batch_start:batch_start + _PIPELINE_BATCH_SIZE])
+        ]
+        unchanged_indexes = {
+            int(_row_mapping(result).get("row_index", -1))
+            for result in connection.execute(sql, {"rows": _jsonb(batch)}).fetchall() or ()
+        }
+        unchanged.update(
+            _row_fingerprint(row)
+            for index, row in enumerate(rows[batch_start:batch_start + _PIPELINE_BATCH_SIZE])
+            if index in unchanged_indexes
+        )
+    return unchanged
 
 
 def _upsert_local_track_file_sql() -> str:

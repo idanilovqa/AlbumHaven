@@ -100,7 +100,7 @@ class PlaybackService : MediaLibraryService() {
     /** Whether a document negotiated the bridge, so it refreshes the references it handed over. */
     private var documentAttached = false
     private val focusPolicy = AudioFocusPolicy()
-    private val port = ControllerPlaybackPort({ controller }, focusPolicy::mayPlay) { attached -> documentAttached = attached }
+    private val port = ControllerPlaybackPort({ controller }) { attached -> documentAttached = attached }
 
     // One executor per controller lifetime, so a retired controller's release reaches its own origin.
     private var playbackIo: ExecutorService = Executors.newSingleThreadExecutor()
@@ -160,7 +160,7 @@ class PlaybackService : MediaLibraryService() {
         val restored = restoreStore.load(origin)
         // The restored queue's controller ID lets the document that handed Android that queue adopt it again.
         controller = createController(origin, restored?.clientId)
-        player = NativeMediaPlayer(Looper.getMainLooper(), { controller }, { origin }, ::resumeFor, focusPolicy::mayPlay)
+        player = NativeMediaPlayer(Looper.getMainLooper(), { controller }, { origin }, ::resumeFor)
         player.showRestored(restored)
         artwork = SessionArtworkLoader(client) { session(origin) }
         session = MediaLibrarySession.Builder(this, player, SessionCallback())
@@ -320,6 +320,7 @@ class PlaybackService : MediaLibraryService() {
                 }, "AlbumHavenPlayback").start()
             },
             failures = { failure -> if (BuildConfig.DEBUG) Log.w(TAG, "Playback stopped", failure) },
+            startGate = focusPolicy,
         )
         return created.also { it.start() }
     }
@@ -481,7 +482,7 @@ class PlaybackService : MediaLibraryService() {
                     ),
                 )
                 FocusEffect.Abandon -> audioManager.abandonAudioFocusRequest(focusRequest)
-                FocusEffect.Pause -> controller.pause(CommandSource.SYSTEM)
+                FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
                 is FocusEffect.WatchNoisy -> watchNoisy(effect.enabled)
             }

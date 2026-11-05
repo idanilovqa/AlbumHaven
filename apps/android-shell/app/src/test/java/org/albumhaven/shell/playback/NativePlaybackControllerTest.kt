@@ -64,6 +64,7 @@ class ControllerHarness(
     claimIo: Executor = Executor { it.run() },
     listenIo: Executor = Executor { it.run() },
     failures: (RuntimeException) -> Unit = {},
+    startGate: StartGate = StartGate.OPEN,
 ) {
     var now = 0L
     val server = FakeAhpcServer(tracks.toList())
@@ -106,6 +107,7 @@ class ControllerHarness(
         deviceId = TEST_DEVICE_ID,
         wallClockMs = { 1_793_613_600_000L + now },
         failures = failures,
+        startGate = startGate,
     )
 
     fun item(track: SyntheticTrack) = QueueItem(

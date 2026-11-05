@@ -18457,3 +18457,27 @@ def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migratio
     active_rows = _cte_body(sql, "active_problem_rows")
     assert "scan_physical_parent" not in active_rows
     assert "library.local_path_key(library.local_track_files.private_path) <> ''" in active_rows
+
+
+def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
+    """The first Problematic Files page loads rows for about 50 albums, yet on the
+    real 160k-file library it took 3.1 s: the planner sorted every track to join
+    the mis-estimated album CTE, hashed every track to scope folder files, and
+    rebuilt the folder-context hash once per selected file."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, selected_album_ids=True, path_columns=True,
+    )
+
+    assert "where library.local_tracks.album_id = any(array(select id from selected_albums))" in _cte_body(
+        sql, "selected_tracks"
+    )
+    scope = _cte_body(sql, "physical_scope_file_ids")
+    lateral = scope[scope.index("join lateral"):]
+    assert "join library.local_tracks scoped_tracks" in lateral
+    assert lateral.index("join library.local_tracks scoped_tracks") < lateral.index(") scoped_files on true")
+    assert "physical_file_context" not in _cte_body(sql, "selected_track_file_rows")
+    assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
+        sql, "selected_active_track_file_rows"
+    )

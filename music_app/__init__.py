@@ -440,6 +440,7 @@ def create_asgi_app():
         MusicBrainzEnrichmentPostgresRepository,
     )
     from music_app.services.musicbrainz_enrichment_triggers import (
+        schedule_after_targeted_commit,
         schedule_startup_backfill,
     )
     from music_app.services.musicbrainz_enrichment_worker import (
@@ -651,11 +652,18 @@ def create_asgi_app():
                 exception_overrides_provider=lambda: load_exception_overrides(
                     runtime.config
                 ),
-                after_commit=lambda result: invalidate_targeted_library_projections(
-                    runtime.library_state,
-                    runtime.config,
-                    revision=result.revision,
-                    affected_album_keys=result.affected_album_keys,
+                after_commit=lambda result: (
+                    invalidate_targeted_library_projections(
+                        runtime.library_state,
+                        runtime.config,
+                        revision=result.revision,
+                        affected_album_keys=result.affected_album_keys,
+                    ),
+                    schedule_after_targeted_commit(
+                        runtime.config.get("_MUSICBRAINZ_ENRICHMENT_SCHEDULER"),
+                        result,
+                        logger=runtime.logger,
+                    ),
                 ),
                 reservation_acquirer=acquire_structural_tag_edit_reservation,
                 publication_guard=runtime.library_watch_health_service.publication_guard,

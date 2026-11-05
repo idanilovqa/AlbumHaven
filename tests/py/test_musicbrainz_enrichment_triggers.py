@@ -136,3 +136,37 @@ def test_startup_backfill_is_wired_before_the_worker_begins_polling():
     assert source.index("schedule_startup_backfill(") < source.index(
         "start_musicbrainz_enrichment_worker("
     )
+
+
+def test_watcher_publication_with_changed_albums_queues_new_album_enrichment():
+    from types import SimpleNamespace
+
+    from music_app.services.musicbrainz_enrichment_triggers import schedule_after_targeted_commit
+
+    calls = []
+    scheduler = SimpleNamespace(schedule=lambda trigger, **_kwargs: calls.append(trigger))
+
+    schedule_after_targeted_commit(scheduler, SimpleNamespace(revision=7, affected_album_keys=("new-album",)))
+    schedule_after_targeted_commit(scheduler, SimpleNamespace(revision=8, affected_album_keys=()))
+    schedule_after_targeted_commit(None, SimpleNamespace(revision=9, affected_album_keys=("other",)))
+
+    assert calls == ["new_album"]
+
+
+def test_watcher_scheduling_failure_never_fails_the_publication():
+    from types import SimpleNamespace
+
+    from music_app.services.musicbrainz_enrichment_triggers import schedule_after_targeted_commit
+
+    warnings = []
+
+    def fail(_trigger, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    schedule_after_targeted_commit(
+        SimpleNamespace(schedule=fail),
+        SimpleNamespace(revision=7, affected_album_keys=("new-album",)),
+        logger=SimpleNamespace(warning=warnings.append),
+    )
+
+    assert len(warnings) == 1

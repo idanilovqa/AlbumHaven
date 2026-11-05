@@ -12,7 +12,6 @@ five-minute HMAC link for one file, which ``DownloadManager`` fetches without co
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
@@ -20,7 +19,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
+from music_app.routes.access_log_redaction import redact_access_log_paths
+from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_body, read_bounded_json_object
 from music_app.services.android_artifact_access import (
     APK_NAME,
     CHANNELS,
@@ -45,25 +45,7 @@ _DETAILS = {
 }
 
 router = APIRouter()
-
-
-class _RedactDownloadTokens(logging.Filter):
-    """Access logs record download links as their prefix only; the token is a credential."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and any(isinstance(arg, str) and DOWNLOAD_PREFIX in arg for arg in args):
-            record.args = tuple(
-                f"{arg.split(DOWNLOAD_PREFIX, 1)[0]}{DOWNLOAD_PREFIX}[redacted]"
-                if isinstance(arg, str) and DOWNLOAD_PREFIX in arg else arg
-                for arg in args
-            )
-        return True
-
-
-_access_logger = logging.getLogger("uvicorn.access")
-if not any(isinstance(item, _RedactDownloadTokens) for item in _access_logger.filters):
-    _access_logger.addFilter(_RedactDownloadTokens())
+redact_access_log_paths(DOWNLOAD_PREFIX)
 
 
 def _not_found() -> Response:
@@ -105,6 +87,16 @@ async def _json(request: Request, max_bytes: int = 16_384) -> dict:
     if not payload or type(payload.get("protocol")) is not int or payload["protocol"] != 1:
         raise ArtifactAccessError(400, "invalid_request")
     return payload
+
+
+async def _body(request: Request, max_bytes: int) -> bytes:
+    try:
+        body = await read_bounded_body(request, max_bytes=max_bytes)
+    except JSONBodyTooLarge:
+        body = None
+    if body is None:
+        raise ArtifactAccessError(400, "invalid_request")
+    return body
 
 
 async def _signed(request: Request, channel: str, body: bytes = b""):
@@ -169,11 +161,8 @@ async def android_apk_exchange(request: Request, channel: str, name: str) -> Res
     """Exchanges the manifest's immutable APK URL for a short-lived download link."""
     if channel not in CHANNELS or not APK_NAME.fullmatch(name):
         return _not_found()
-    body = await request.body()
     try:
-        if len(body) > _MAX_EXCHANGE_BYTES:
-            raise ArtifactAccessError(400, "invalid_request")
-        device_key = await _signed(request, channel, body)
+        device_key = await _signed(request, channel, await _body(request, _MAX_EXCHANGE_BYTES))
         if _artifact_file(channel, name) is None:
             return _not_found()
         result = await run_in_threadpool(

@@ -24,7 +24,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 KEY_DESCRIPTION_OID = x509.ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17")
 ROOTS_PATH = Path(__file__).with_name("android_attestation_roots.pem")
 MAX_CHAIN_LENGTH = 10
+_ROOT_OF_TRUST_TAG = 704
 _ATTESTATION_APPLICATION_ID_TAG = 709
+_VERIFIED_BOOT_STATE_VERIFIED = 0
 
 
 class SecurityLevel(str, Enum):
@@ -51,6 +53,7 @@ class AttestationPolicy:
 class AttestedKey:
     public_key_der: bytes
     security_level: SecurityLevel
+    signing_certificate_sha256: str
 
 
 def _spki(certificate: x509.Certificate) -> bytes:
@@ -137,12 +140,42 @@ def _integer(item: _Tlv, tag: int = 2) -> int:
     return int.from_bytes(value, "big", signed=True)
 
 
+def _boolean(item: _Tlv) -> bool:
+    value = _universal(item, 1)
+    if value not in (b"\x00", b"\xff"):
+        raise AttestationRefused()
+    return value == b"\xff"
+
+
+def _tagged(authorizations: _Tlv, tag: int) -> list[_Tlv]:
+    """The explicitly tagged entries ``[tag]`` of one AuthorizationList."""
+    entries = [
+        entry for entry in _children(_universal(authorizations, 16, constructed=True))
+        if entry.tag_class == 2 and entry.tag == tag
+    ]
+    if any(not entry.constructed for entry in entries):
+        raise AttestationRefused()
+    return entries
+
+
+@dataclass(frozen=True)
+class RootOfTrust:
+    device_locked: bool
+    verified_boot_state: int
+
+    @property
+    def verified(self) -> bool:
+        """A locked bootloader that booted a verified, manufacturer-signed system."""
+        return self.device_locked and self.verified_boot_state == _VERIFIED_BOOT_STATE_VERIFIED
+
+
 @dataclass(frozen=True)
 class KeyDescription:
     attestation_security_level: SecurityLevel
     challenge: bytes
     packages: tuple[str, ...]
     signature_digests: frozenset[str]
+    root_of_trust: RootOfTrust | None
 
 
 def parse_key_description(der: bytes) -> KeyDescription:
@@ -153,13 +186,12 @@ def parse_key_description(der: bytes) -> KeyDescription:
     if level is None:
         raise AttestationRefused()
     challenge = _universal(fields[4], 4)
+    software_enforced, hardware_enforced = fields[6:8]
     application_ids = [
-        entry
-        for authorizations in fields[6:8]
-        for entry in _children(_universal(authorizations, 16, constructed=True))
-        if entry.tag_class == 2 and entry.tag == _ATTESTATION_APPLICATION_ID_TAG
+        entry for authorizations in (software_enforced, hardware_enforced)
+        for entry in _tagged(authorizations, _ATTESTATION_APPLICATION_ID_TAG)
     ]
-    if len(application_ids) != 1 or not application_ids[0].constructed:
+    if len(application_ids) != 1:
         raise AttestationRefused()
     inner = _universal(_single(application_ids[0].value), 4)
     package_set, digest_set = _children(_universal(_single(inner), 16, constructed=True))[:2]
@@ -168,7 +200,21 @@ def parse_key_description(der: bytes) -> KeyDescription:
         name, _version = _children(_universal(info, 16, constructed=True))[:2]
         packages.append(_universal(name, 4).decode("utf-8", "strict"))
     digests = frozenset(_universal(item, 4).hex() for item in _children(_universal(digest_set, 17, constructed=True)))
-    return KeyDescription(level, challenge, tuple(packages), digests)
+    return KeyDescription(level, challenge, tuple(packages), digests, _root_of_trust(hardware_enforced))
+
+
+def _root_of_trust(hardware_enforced: _Tlv) -> RootOfTrust | None:
+    """The secure hardware's own boot report; absent from software-backed descriptions."""
+    entries = _tagged(hardware_enforced, _ROOT_OF_TRUST_TAG)
+    if not entries:
+        return None
+    if len(entries) != 1:
+        raise AttestationRefused()
+    fields = _children(_universal(_single(entries[0].value), 16, constructed=True))
+    if len(fields) < 3:
+        raise AttestationRefused()
+    _universal(fields[0], 4)  # verifiedBootKey
+    return RootOfTrust(_boolean(fields[1]), _integer(fields[2], tag=10))
 
 
 # --- Chain verification ------------------------------------------------------------------------
@@ -202,9 +248,11 @@ def verify_attestation_chain(
 
     Every certificate signs the one below it; only certificate authorities may issue, and
     only the leaf may carry a KeyDescription, so an attested key cannot sign a forged child.
-    Issuers must be within their validity period (the Keystore leaf's is meaningless). A chain
+    Issuers must be within their validity period (the Keystore leaf's is meaningless). A
+    hardware-backed key must also report a locked bootloader and a verified boot. A chain
     that does not end at a pinned root is accepted only when [policy] allows software
-    attestation and the leaf itself says it is software-backed.
+    attestation and the leaf itself says it is software-backed. The returned key names the
+    allowed signing certificate it matched, so a later configuration change can revoke it.
     """
     if not 2 <= len(chain_der) <= MAX_CHAIN_LENGTH:
         raise AttestationRefused()
@@ -240,23 +288,27 @@ def verify_attestation_chain(
     except (UnicodeDecodeError, ValueError):
         raise AttestationRefused() from None
 
-    pinned = _spki(root) in roots
     if description.attestation_security_level is SecurityLevel.SOFTWARE:
         # The AOSP software attestation key is public, so these chains prove nothing.
         if not policy.allow_software:
             raise AttestationRefused()
-    elif not pinned:
+    elif _spki(root) not in roots:
+        raise AttestationRefused()
+    elif description.root_of_trust is None or not description.root_of_trust.verified:
+        # The package and signer are reported by the Android framework, so they are believed
+        # only when the secure hardware saw a locked bootloader start a verified system.
         raise AttestationRefused()
     if not hmac.compare_digest(description.challenge, challenge):
         raise AttestationRefused()
     if description.packages != (policy.package_name,):
         raise AttestationRefused()
-    if not description.signature_digests & policy.signing_certificate_sha256:
+    signers = description.signature_digests & policy.signing_certificate_sha256
+    if not signers:
         raise AttestationRefused()
     leaf_key = chain[0].public_key()
     if not isinstance(leaf_key, ec.EllipticCurvePublicKey) or not isinstance(leaf_key.curve, ec.SECP256R1):
         raise AttestationRefused()
-    return AttestedKey(_spki(chain[0]), description.attestation_security_level)
+    return AttestedKey(_spki(chain[0]), description.attestation_security_level, min(signers))
 
 
 def public_key_digest(public_key_der: bytes) -> bytes:

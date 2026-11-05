@@ -75,21 +75,22 @@ def prepare_measured_playback_completion(
     return entry if is_meaningful_listen_session(entry) else None
 
 
-def playback_handoff_completion_fingerprint(
+def prepare_handoff_completion(
     payload: JsonDict | None,
     *,
     user_timezone: str,
     account_id: int,
     library_id: int,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
-) -> bytes:
+) -> tuple[JsonDict | None, bytes]:
+    """The measured entry a reload handoff persists (None without a completion) and its fingerprint."""
     from music_app.services.measured_listen_history import (
         MeasuredListenError,
         playback_handoff_completion_digest,
     )
 
     if payload is None:
-        return playback_handoff_completion_digest(
+        return None, playback_handoff_completion_digest(
             None, account_id=account_id, library_id=library_id,
         )
     entry = prepare_measured_playback_completion(
@@ -100,24 +101,26 @@ def playback_handoff_completion_fingerprint(
         is_meaningful_listen_session=is_meaningful_listen_session,
     )
     if entry is None:
-        raise MeasuredListenError("Listen completion below persistence threshold")
-    return playback_handoff_completion_digest(
+        raise MeasuredListenError("Listen completion is below the persistence threshold")
+    return entry, playback_handoff_completion_digest(
         entry, account_id=account_id, library_id=library_id,
     )
 
 
+_CREDENTIAL_UNAVAILABLE = "Account-scoped Last.fm credential is unavailable"
+
+
 def _seed_measured_playback_completion(entry: JsonDict) -> JsonDict:
     seeded = dict(entry)
-    error = "Account-scoped Last.fm credential is unavailable"
     seeded.update({
         "scrobbled": False,
-        "scrobble_error": error,
+        "scrobble_error": _CREDENTIAL_UNAVAILABLE,
         "scrobble_retryable": True,
         "sync_problem": {
             "provider": "lastfm",
             "kind": "scrobble",
             "status": "account_credential_unavailable",
-            "message": error,
+            "message": _CREDENTIAL_UNAVAILABLE,
         },
     })
     return seeded
@@ -125,26 +128,14 @@ def _seed_measured_playback_completion(entry: JsonDict) -> JsonDict:
 
 def persist_measured_playback_completion(
     config: ConfigDict,
-    payload: JsonDict,
+    entry: JsonDict,
     *,
     account_id: int,
     library_id: int,
     connection,
-    user_timezone: str,
-    is_meaningful_listen_session: ListenHistoryMeaningChecker,
     append_listen_history_entry: ListenHistoryAppender,
 ) -> JsonDict:
-    from music_app.services.measured_listen_history import MeasuredListenError
-
-    entry = prepare_measured_playback_completion(
-        payload,
-        user_timezone=user_timezone,
-        account_id=account_id,
-        library_id=library_id,
-        is_meaningful_listen_session=is_meaningful_listen_session,
-    )
-    if entry is None:
-        raise MeasuredListenError("Listen completion is below the persistence threshold")
+    """Appends a prepared handoff entry, not yet scrobbled, inside the caller's transaction."""
     return append_listen_history_entry(
         config,
         _seed_measured_playback_completion(entry),
@@ -168,10 +159,12 @@ def record_playback_session_complete(
     update_listen_history_entry: ListenHistoryUpdater,
     scrobble_track: LastfmScrobbler,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
-    persisted_measured_entry: JsonDict | None = None,
+    persisted_entry: JsonDict | None = None,
 ) -> tuple[JsonDict, int]:
+    """``persisted_entry`` is the prepared measured entry a caller already committed; its stored
+    row is reloaded under the provider guard instead of being appended again."""
     if payload.get("measurement_version") is not None:
-        entry = prepare_measured_playback_completion(
+        entry = persisted_entry if persisted_entry is not None else prepare_measured_playback_completion(
             payload,
             user_timezone=user_timezone,
             account_id=account_id,
@@ -183,9 +176,8 @@ def record_playback_session_complete(
         with measured_provider_guard(config, account_id=account_id, library_id=library_id,
                                      device_id=entry["device_id"], session_id=entry["session_id"]) as provider_connection:
             provider_attempted = False
-            error = "Account-scoped Last.fm credential is unavailable"
-            stored = persisted_measured_entry
-            if stored is not None:
+            error = _CREDENTIAL_UNAVAILABLE
+            if persisted_entry is not None:
                 from music_app.services.measured_listen_history import load_measured
                 stored = load_measured(
                     provider_connection,

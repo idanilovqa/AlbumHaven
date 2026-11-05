@@ -1274,7 +1274,7 @@ def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_rece
         update_listen_history_entry=lambda *args, **kwargs: pytest.fail("accepted receipt must not be updated"),
         scrobble_track=lambda *args, **kwargs: provider_calls.append((args, kwargs)),
         log_lastfm_scrobble_event=lambda *args, **kwargs: None,
-        persisted_measured_entry=stale_receipt,
+        persisted_entry=stale_receipt,
     )
 
     assert status == 200
@@ -1289,7 +1289,7 @@ def test_delayed_provider_reloads_durable_completion_instead_of_using_stale_rece
 
 
 def test_handoff_completion_fingerprint_is_canonical_and_distinguishes_null():
-    from music_app.services.lastfm_sync_bridge import playback_handoff_completion_fingerprint
+    from music_app.services.lastfm_sync_bridge import prepare_handoff_completion
 
     completion = {
         "title": "Track",
@@ -1308,13 +1308,13 @@ def test_handoff_completion_fingerprint_is_canonical_and_distinguishes_null():
         "max_measured_contiguous_seconds": 70,
     }
     def fingerprint(payload):
-        return playback_handoff_completion_fingerprint(
+        return prepare_handoff_completion(
             payload,
             user_timezone="UTC",
             account_id=11,
             library_id=43,
             is_meaningful_listen_session=lambda _entry: True,
-        )
+        )[1]
 
     null_digest = fingerprint(None)
     completion_digest = fingerprint(completion)
@@ -1953,3 +1953,124 @@ def test_http_resume_exchange_mints_fresh_references_only_for_the_tokens_account
     configure_native_app(playback_app, fixture, create_member(fixture))
     status, _, body = run_asgi_request(playback_app, "POST", "/playback/refs/resume", json_body=request)
     assert status == 403 and fixture.paths[1] not in body.decode()
+
+
+def _completion_handoff(fixture, playback_app, actor):
+    """A web claim held by ``actor`` and a handoff request carrying its finalized 70-second listen."""
+    now = datetime.now(timezone.utc)
+    service = claims_service(fixture, lambda: now)
+    reference = issue(reference_service(fixture, lambda: now), fixture)["tracks"][0]["playbackRef"]
+    client_id = str(uuid4())
+    claim = service.acquire(actor, client_id=client_id, client_surface="private_web", track={
+        "playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None,
+    })
+    started = now - timedelta(seconds=70)
+    completion = {
+        "path": fixture.paths[1], "title": "Track", "artist": "Owner", "album": "Album", "duration_seconds": 120,
+        "started_at": started.isoformat(), "started_at_unix": int(started.timestamp()), "ended_at": now.isoformat(),
+        "measurement_version": "rendered-pcm-v1", "device_id": str(uuid4()), "session_id": str(uuid4()),
+        "sequence": 1, "finalized": True, "measured_listened_seconds": 70, "max_measured_contiguous_seconds": 70,
+        "total_listened_seconds": 70, "max_contiguous_seconds": 70, "completion_reason": "pagehide",
+        "finished_fully": False, "skipped": True, "segments": [{"start_seconds": 0, "end_seconds": 70}],
+    }
+    return {
+        "protocol": 1, "clientId": client_id, "claimToken": claim["claimToken"],
+        "handoff": {"id": str(uuid4()), "token": opaque_test_token("completion-" + uuid4().hex[:8])},
+        "completion": completion,
+        "csrf_token": issue_session_csrf("s" * 43, playback_app.state.auth_policy_config),
+    }
+
+
+def _handoff_state(fixture, actor, session_id):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        pending = connection.execute(
+            "select pending_handoff_id from app.playback_claims where account_id = %s and library_id = %s",
+            (actor.account_id, actor.current_library_id),
+        ).fetchone()["pending_handoff_id"]
+        listens = connection.execute(
+            "select count(*) as count from integration.listen_history where account_id = %s and session_id = %s",
+            (actor.account_id, session_id),
+        ).fetchone()["count"]
+    return (str(pending) if pending is not None else None), listens
+
+
+def _provider_calls(monkeypatch):
+    from music_app.routes import playback_control_asgi as routes
+
+    calls = []
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: calls.append("session"))
+    monkeypatch.setattr(routes, "record_playback_session_complete",
+                        lambda *args, **kwargs: (calls.append("provider") or {"ok": True}, 200))
+    return calls
+
+
+def _member_allowed(fixture, *library_actions):
+    """A library member with app access and only the named library-scoped actions."""
+    return replace(create_member(fixture), capability_grants=(
+        CapabilityGrant("app.access", "global", None),
+        *(CapabilityGrant(action, "library", fixture.actor.current_library_id) for action in library_actions),
+    ))
+
+
+def test_a_handoff_completion_requires_the_listen_completion_action(playback_inventory, playback_app, monkeypatch):
+    fixture = playback_inventory
+    member = _member_allowed(fixture, "library.media.read")
+    configure_native_app(playback_app, fixture, member)
+    request = _completion_handoff(fixture, playback_app, member)
+    calls = _provider_calls(monkeypatch)
+
+    status, _, _ = run_asgi_request(playback_app, "POST", "/playback/state/handoff", json_body=request)
+
+    assert status == 403
+    assert calls == []
+    assert _handoff_state(fixture, member, request["completion"]["session_id"]) == (None, 0)
+    # A handoff without a listen to record needs nothing beyond app access.
+    status, _, _ = run_asgi_request(playback_app, "POST", "/playback/state/handoff",
+                                    json_body={**request, "completion": None})
+    assert status == 200
+    assert _handoff_state(fixture, member, request["completion"]["session_id"]) == (request["handoff"]["id"], 0)
+
+
+def test_a_handoff_completion_without_the_scrobble_action_records_the_listen_but_skips_last_fm(
+    playback_inventory, playback_app, monkeypatch,
+):
+    fixture = playback_inventory
+    member = _member_allowed(fixture, "library.media.read", "integration.lastfm.complete")
+    configure_native_app(playback_app, fixture, member)
+    request = _completion_handoff(fixture, playback_app, member)
+    calls = _provider_calls(monkeypatch)
+
+    status, _, body = run_asgi_request(playback_app, "POST", "/playback/state/handoff", json_body=request)
+
+    assert status == 200, decode_json(body)
+    assert decode_json(body)["staged"] is True
+    assert calls == []
+    assert _handoff_state(fixture, member, request["completion"]["session_id"]) == (request["handoff"]["id"], 1)
+
+
+@pytest.mark.parametrize("failure", ["conflict", "database"])
+def test_a_provider_failure_after_the_handoff_commits_still_returns_the_staged_handoff(
+    playback_inventory, playback_app, monkeypatch, failure,
+):
+    from music_app.routes import playback_control_asgi as routes
+    from music_app.services.measured_listen_history import MeasuredListenError
+
+    fixture = playback_inventory
+    configure_native_app(playback_app, fixture)
+    request = _completion_handoff(fixture, playback_app, fixture.actor)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *args, **kwargs: {"key": "test-session"})
+
+    def failing_provider(*args, **kwargs):
+        if failure == "conflict":
+            raise MeasuredListenError("Listen snapshot conflicts", status_code=409)
+        raise psycopg.OperationalError("provider database unavailable")
+
+    monkeypatch.setattr(routes, "record_playback_session_complete", failing_provider)
+
+    status, _, body = run_asgi_request(playback_app, "POST", "/playback/state/handoff", json_body=request)
+
+    assert status == 200, body
+    result = decode_json(body)
+    assert result["staged"] is True
+    assert "provider database" not in body.decode()
+    assert _handoff_state(fixture, fixture.actor, request["completion"]["session_id"]) == (request["handoff"]["id"], 1)

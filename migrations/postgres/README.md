@@ -164,9 +164,15 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0096_create_generated_preview_storage.sql
 0097_repair_generated_preview_inventory_path_constraint.sql
 0098_track_generated_preview_current_path.sql
+0099_reconcile_cover_lookup_notification_album_identities.sql
+0100_archive_invalid_featured_track_cover_notifications.sql
+0101_create_local_album_identity_transitions.sql
+0102_narrow_synthetic_unknown_album_identity_guard.sql
+0103_repair_synthetic_unknown_cover_task_identities.sql
 0104_create_playback_claims.sql
 0105_add_playback_claim_handoffs.sql
 0106_create_android_artifact_access.sql
+0107_add_android_device_key_signer.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -243,7 +249,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091`, plus `0104` through `0106`, are unreleased branch migrations.
+`0081` through `0091`, plus `0104` through `0107`, are unreleased branch migrations.
 Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
@@ -317,6 +323,16 @@ channel; no private key, token or certificate chain is stored. Older application
 versions leave both tables unused. For rollback, roll back the application first;
 retaining the tables is harmless, and dropping them only forces every device to
 attest again.
+
+Migration `0107_add_android_device_key_signer.sql` adds the nullable
+`signing_certificate_sha256` (32 bytes) to `app.android_device_keys`: the allowed
+signing certificate a key's attestation matched. The server rechecks it, and the
+key's security level, against the current configuration on every signed request
+and download. It is a separate migration rather than an edit of `0106`, whose
+checksum sandboxes may already have recorded. Existing rows keep null; nothing is
+inferred for them, so those devices are refused until the app attests again. The
+table's existing grants cover the column. For rollback, roll back the application
+first; the column can stay.
 
 Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
 

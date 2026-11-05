@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import FastAPI
 
-from music_app.routes.android_artifacts_asgi import ARTIFACTS_DIR_ENV, _RedactDownloadTokens, router
+from music_app.routes.android_artifacts_asgi import ARTIFACTS_DIR_ENV, router
 from music_app.services.android_artifact_access import (
     ALLOW_SOFTWARE_ENV,
     SIGNING_CERTIFICATES_ENV,
@@ -73,7 +73,7 @@ def _app(actors=None, access=None):
     return app
 
 
-def _request(app, method, path, *, session=None, headers=None, body=b""):
+def _request(app, method, path, *, session=None, headers=None, body=b"", receive=None):
     request_headers = [(b"host", b"albumhaven.test")]
     if session:
         csrf = issue_session_csrf(session, AUTH)
@@ -88,7 +88,7 @@ def _request(app, method, path, *, session=None, headers=None, body=b""):
         request_headers += [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
     messages, sent = [], False
 
-    async def receive():
+    async def receive_body():
         nonlocal sent
         if sent:
             return {"type": "http.disconnect"}
@@ -104,7 +104,7 @@ def _request(app, method, path, *, session=None, headers=None, body=b""):
             "scheme": "https", "path": path, "raw_path": quote(path).encode("ascii"), "query_string": b"",
             "headers": request_headers, "client": ("127.0.0.1", 50000), "server": ("albumhaven.test", 443),
         },
-        receive,
+        receive or receive_body,
         send,
     ))
     start = next(item for item in messages if item["type"] == "http.response.start")
@@ -186,10 +186,29 @@ def test_only_the_download_link_prefix_is_public(method, path, public):
 def test_access_logs_never_record_a_download_token():
     record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
                                ("127.0.0.1:5", "GET", "/artifacts/android/download/secret.token", "1.1", 200), None)
-    assert _RedactDownloadTokens().filter(record)
+    for item in logging.getLogger("uvicorn.access").filters:
+        assert item.filter(record)
     assert "secret" not in record.getMessage()
     assert "/artifacts/android/download/[redacted]" in record.getMessage()
-    assert any(isinstance(item, _RedactDownloadTokens) for item in logging.getLogger("uvicorn.access").filters)
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["content-length", "chunked"])
+def test_an_oversized_apk_exchange_body_is_refused_without_buffering_it(artifacts, declared):
+    def no_database(_url):
+        raise AssertionError("an oversized exchange is refused before any database work")
+
+    app = _app({SESSION_A: _actor(1, 1)}, access=AndroidArtifactAccess({}, AUTH, connect=no_database))
+    chunks = []
+
+    async def endless_body():
+        chunks.append(1)
+        return {"type": "http.request", "body": b"x" * 600, "more_body": True}
+
+    headers = {"content-length": str(10 ** 12)} if declared else None
+    status, _, body = _request(app, "POST", "/artifacts/android/sandbox/album-haven-2.apk", session=SESSION_A,
+                               headers=headers, receive=endless_body)
+    assert (status, json.loads(body)["code"]) == (400, "invalid_request")
+    assert len(chunks) == (0 if declared else 2)
 
 
 # --- Against an isolated Postgres --------------------------------------------------------------
@@ -482,3 +501,79 @@ def test_refusals_never_echo_tokens_challenges_or_paths(world, caplog):
                          {"protocol": 1, "channel": "sandbox", "challenge": challenge, "chain": ["AAAA", "AAAA"]})
     assert status == 403 and challenge not in json.dumps(body)
     assert challenge not in caplog.text and str(world.artifacts) not in caplog.text
+
+
+def _manifest_status(world, device_key, key):
+    path = "/artifacts/android/sandbox/manifest.json"
+    status, _, body = _request(world.app, "GET", path, session=SESSION_A,
+                               headers=_signed_headers(world, device_key, key, "GET", path))
+    return status, json.loads(body)["code"] if status != 200 else None
+
+
+@pytest.mark.parametrize("level", [1, 2], ids=["tee", "strongbox"])
+@pytest.mark.parametrize("boot", [(False, 0), (True, 2), None], ids=["unlocked", "unverified", "no-root-of-trust"])
+def test_an_unlocked_or_unverified_device_cannot_attest(world, level, boot):
+    status, body, _ = _attest(world, level=level, boot=boot)
+    assert (status, body["code"]) == (403, "attestation_refused")
+    with isolatedPostgres._connect(world.db.setup_url) as connection:
+        assert connection.execute("select count(*) as keys from app.android_device_keys").fetchone()["keys"] == 0
+
+
+def test_software_keys_stop_working_once_the_test_flag_is_off(world):
+    world.environ[ALLOW_SOFTWARE_ENV] = "1"
+    status, body, key = _attest(world, level=0, boot=None)
+    assert (status, body["securityLevel"]) == (200, "software")
+    device_key = body["deviceKey"]
+    grant = _exchange(world, device_key, key)[1]
+
+    del world.environ[ALLOW_SOFTWARE_ENV]
+    assert _manifest_status(world, device_key, key) == (403, "attestation_required")
+    assert _exchange(world, device_key, key)[0] == 403
+    assert _request(world.app, "GET", grant["path"])[0] == 403
+
+
+def test_removing_a_signing_certificate_revokes_the_keys_it_admitted(world):
+    device_key, key = _device(world)
+    grant = _exchange(world, device_key, key)[1]
+
+    world.environ[SIGNING_CERTIFICATES_ENV["sandbox"]] = "cd" * 32
+    assert _manifest_status(world, device_key, key) == (403, "attestation_required")
+    assert _request(world.app, "GET", grant["path"])[0] == 403
+
+    # A rotation that keeps the old certificate allowed keeps its keys.
+    world.environ[SIGNING_CERTIFICATES_ENV["sandbox"]] = f"{'cd' * 32},{SIGNER}"
+    assert _manifest_status(world, device_key, key) == (200, None)
+    assert _request(world.app, "GET", grant["path"])[0] == 200
+
+
+def test_the_stored_key_records_the_signer_its_attestation_matched(world):
+    device_key, _ = _device(world)
+    with isolatedPostgres._connect(world.db.setup_url) as connection:
+        row = connection.execute("select signing_certificate_sha256 from app.android_device_keys where id = %s",
+                                 (device_key,)).fetchone()
+    assert bytes(row["signing_certificate_sha256"]).hex() == SIGNER
+
+
+def test_a_key_stored_without_its_signer_must_attest_again(world):
+    device_key, key = _device(world)
+    grant = _exchange(world, device_key, key)[1]
+    with isolatedPostgres._connect(world.db.setup_url) as connection:
+        connection.execute("update app.android_device_keys set signing_certificate_sha256 = null")
+    assert _manifest_status(world, device_key, key) == (403, "attestation_required")
+    assert _request(world.app, "GET", grant["path"])[0] == 403
+
+
+def test_a_failed_signature_does_not_refresh_the_device_key(world):
+    device_key, key = _device(world)
+
+    def last_used():
+        with isolatedPostgres._connect(world.db.setup_url) as connection:
+            return connection.execute("select last_used_at from app.android_device_keys where id = %s",
+                                      (device_key,)).fetchone()["last_used_at"]
+
+    attested = last_used()
+    world.clock.now += timedelta(minutes=1)
+    assert _manifest_status(world, device_key, ec.generate_private_key(ec.SECP256R1())) == (403, "signature_invalid")
+    assert last_used() == attested
+    assert _manifest_status(world, device_key, key) == (200, None)
+    assert last_used() == world.clock.now

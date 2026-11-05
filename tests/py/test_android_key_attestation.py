@@ -6,9 +6,11 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from music_app.services import android_key_attestation
 from music_app.services.android_key_attestation import (
     AttestationPolicy,
     AttestationRefused,
+    RootOfTrust,
     SecurityLevel,
     load_root_public_keys,
     parse_key_description,
@@ -41,12 +43,41 @@ def test_a_hardware_chain_to_the_pinned_root_is_accepted(pki, level, expected):
     assert key.public_key_der == spki(leaf_key)
 
 
+def test_the_attested_key_names_the_allowed_signer_it_matched(pki):
+    chain, _ = pki.chain(CHALLENGE, digests=("cd" * 32, SIGNER))
+    assert verify(pki, chain).signing_certificate_sha256 == SIGNER
+
+
 def test_the_key_description_round_trips_through_the_parser():
-    description = parse_key_description(key_description(CHALLENGE, packages=("a.b",), digests=(SIGNER, "cd" * 32)))
+    description = parse_key_description(key_description(CHALLENGE, packages=("a.b",), digests=(SIGNER, "cd" * 32),
+                                                         boot=(False, 2)))
     assert description.challenge == CHALLENGE
     assert description.packages == ("a.b",)
     assert description.signature_digests == {SIGNER, "cd" * 32}
     assert description.attestation_security_level is SecurityLevel.TEE
+    assert description.root_of_trust == RootOfTrust(device_locked=False, verified_boot_state=2)
+    assert parse_key_description(key_description(CHALLENGE, boot=None)).root_of_trust is None
+
+
+@pytest.mark.parametrize("level", [1, 2], ids=["tee", "strongbox"])
+@pytest.mark.parametrize(
+    "boot",
+    [(False, 0), (True, 1), (True, 2), (True, 3), (False, 2), None],
+    ids=["unlocked", "self-signed", "unverified", "failed", "unlocked-unverified", "no-root-of-trust"],
+)
+def test_a_hardware_key_on_an_unlocked_or_unverified_device_is_refused(pki, level, boot):
+    chain, _ = pki.chain(CHALLENGE, level=level, boot=boot)
+    with pytest.raises(AttestationRefused):
+        verify(pki, chain)
+
+
+def test_a_malformed_root_of_trust_is_refused(pki):
+    description = bytearray(key_description(CHALLENGE))
+    # deviceLocked must be DER TRUE (0xff) or FALSE (0x00).
+    locked = description.index(b"\x01\x01\xff")
+    description[locked + 2] = 0x01
+    with pytest.raises(AttestationRefused):
+        parse_key_description(bytes(description))
 
 
 @pytest.mark.parametrize(
@@ -73,7 +104,8 @@ def test_a_wrong_or_replayed_challenge_is_refused(pki):
 
 
 def test_software_attestation_is_refused_unless_explicitly_allowed(pki):
-    chain, _ = pki.chain(CHALLENGE, level=0)
+    # Software Keystore has no secure hardware to report a root of trust.
+    chain, _ = pki.chain(CHALLENGE, level=0, boot=None)
     with pytest.raises(AttestationRefused):
         verify(pki, chain)
     allowed = AttestationPolicy(SANDBOX_PACKAGE, frozenset({SIGNER}), allow_software=True)
@@ -162,7 +194,23 @@ GOOGLE_SAMPLE_POLICY = AttestationPolicy(
 GOOGLE_SAMPLE_TIME = datetime(2024, 9, 20, tzinfo=timezone.utc)
 
 
-def test_a_real_google_tee_chain_verifies_against_the_bundled_roots():
+@pytest.fixture
+def sample_boot_verified(monkeypatch):
+    """Google's sample comes from an unlocked development device; pretend it booted verified."""
+    monkeypatch.setattr(android_key_attestation, "_root_of_trust",
+                        lambda _hardware: RootOfTrust(device_locked=True, verified_boot_state=0))
+
+
+def test_the_real_google_tee_chain_reports_its_unlocked_device_and_is_refused():
+    leaf = x509.load_der_x509_certificate(_google_sample()[0])
+    extension = leaf.extensions.get_extension_for_oid(android_key_attestation.KEY_DESCRIPTION_OID).value
+    assert parse_key_description(extension.value).root_of_trust == RootOfTrust(False, 2)
+    with pytest.raises(AttestationRefused):
+        verify_attestation_chain(_google_sample(), challenge=b"challenge", policy=GOOGLE_SAMPLE_POLICY,
+                                 roots=load_root_public_keys(), now=GOOGLE_SAMPLE_TIME)
+
+
+def test_a_real_google_tee_chain_verifies_against_the_bundled_roots(sample_boot_verified):
     key = verify_attestation_chain(_google_sample(), challenge=b"challenge", policy=GOOGLE_SAMPLE_POLICY,
                                    roots=load_root_public_keys(), now=GOOGLE_SAMPLE_TIME)
     assert key.security_level is SecurityLevel.TEE
@@ -178,7 +226,7 @@ def test_a_real_google_tee_chain_verifies_against_the_bundled_roots():
     ],
     ids=["challenge", "package", "expired-intermediate"],
 )
-def test_the_real_google_chain_is_still_held_to_policy(challenge, policy, now):
+def test_the_real_google_chain_is_still_held_to_policy(sample_boot_verified, challenge, policy, now):
     with pytest.raises(AttestationRefused):
         verify_attestation_chain(_google_sample(), challenge=challenge, policy=policy,
                                  roots=load_root_public_keys(), now=now)

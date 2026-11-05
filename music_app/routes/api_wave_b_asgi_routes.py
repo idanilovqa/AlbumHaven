@@ -49,6 +49,7 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
+from music_app.services.lastfm_listen_sync import has_heard_scrobble_threshold
 from music_app.services.lastfm_retry import (
     LastfmRetryBatchError,
     pending_scrobble_count,
@@ -777,6 +778,9 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
             return JSONResponse(result, status_code=status)
         except ValueError as error:
             return JSONResponse({"ok": False, "error": "Invalid or conflicting listen snapshot"}, status_code=getattr(error, "status_code", 400))
+    # An older tab's unmeasured scrobble is held to the same Last.fm threshold as a measured listen.
+    if not has_heard_scrobble_threshold(payload):
+        return JSONResponse({"ok": True, "scrobbled": False, "ignored": True})
     try:
         result = await run_in_threadpool(scrobble_track, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:

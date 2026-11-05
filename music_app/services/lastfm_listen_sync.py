@@ -34,6 +34,17 @@ def playback_scrobble_threshold_seconds(duration_seconds: object) -> float:
     return min(duration * 0.5, _MAX_SCROBBLE_THRESHOLD_SECONDS)
 
 
+def has_heard_scrobble_threshold(payload: dict[str, object]) -> bool:
+    """Whether an unmeasured listen was heard long enough to scrobble; a listen of unknown duration
+    or of a track of 30 s or less never was."""
+    threshold = playback_scrobble_threshold_seconds(payload.get("duration_seconds"))
+    listened = max(
+        _float_payload_value(payload, "total_listened_seconds"),
+        _float_payload_value(payload, "max_contiguous_seconds"),
+    )
+    return 0 < threshold <= listened
+
+
 def is_playback_complete_scrobble_eligible(payload: dict[str, object]) -> bool:
     threshold = playback_scrobble_threshold_seconds(payload.get("duration_seconds"))
     if threshold <= 0:

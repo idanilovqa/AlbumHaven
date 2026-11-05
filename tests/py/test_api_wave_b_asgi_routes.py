@@ -71,6 +71,10 @@ def _track_ref(app, filename: str = "01 Track.flac") -> str:
     return str((Path(app.config["MUSIC_DIR"]) / "Artist One" / "Album One" / filename).resolve())
 
 
+# An older tab's unmeasured listen heard past Last.fm's threshold: half of a 200 s track.
+HEARD_UNMEASURED_LISTEN = {"duration_seconds": 200, "total_listened_seconds": 100, "max_contiguous_seconds": 100}
+
+
 def _make_asgi_app():
     from music_app import create_asgi_app
 
@@ -1113,7 +1117,7 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
         asgi_app,
         "POST",
         "/playback/session/scrobble",
-        json_body={**playback_claim, "artist": "Artist", "title": "Song", "album": "Album"},
+        json_body={**playback_claim, **HEARD_UNMEASURED_LISTEN, "artist": "Artist", "title": "Song", "album": "Album"},
     )
 
     assert credentials_status == 503
@@ -1557,6 +1561,7 @@ def test_asgi_playback_session_scrobble_logs_success_history_entry(
         "/playback/session/scrobble",
         json_body={
             **playback_claim,
+            **HEARD_UNMEASURED_LISTEN,
             "artist": "Artist",
             "title": "Song",
             "album": "Album",
@@ -1574,6 +1579,38 @@ def test_asgi_playback_session_scrobble_logs_success_history_entry(
     assert history_entry["album"] == "Album"
     assert history_entry["title"] == "Song"
     assert history_entry["track_number"] == "4"
+
+
+@pytest.mark.parametrize("listen", [
+    {"duration_seconds": 30, "total_listened_seconds": 30, "max_contiguous_seconds": 30},
+    {"duration_seconds": 8, "total_listened_seconds": 8, "max_contiguous_seconds": 8},
+    {"duration_seconds": 60, "total_listened_seconds": 1, "max_contiguous_seconds": 1},
+    {"duration_seconds": 600, "total_listened_seconds": 239.9, "max_contiguous_seconds": 200},
+    {"duration_seconds": 0, "total_listened_seconds": 100, "max_contiguous_seconds": 100},
+    {},
+], ids=["thirty-seconds-in-full", "eight-seconds-in-full", "below-half", "below-four-minutes",
+        "unknown-duration", "no-listened-seconds"])
+def test_asgi_unmeasured_scrobble_below_the_lastfm_threshold_is_ignored_unsent(
+    app, monkeypatch, local_log_history_items, connected_lastfm_session, playback_claim, listen,
+):
+    from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+
+    calls = []
+    monkeypatch.setattr(asgi_routes, "scrobble_track", lambda *args, **kwargs: calls.append(args))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/playback/session/scrobble",
+        json_body={**playback_claim, **listen, "artist": "Artist", "title": "Song", "timestamp": 12345},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"ok": True, "scrobbled": False, "ignored": True}
+    assert calls == []
+    assert local_log_history_items() == []
 
 
 def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
@@ -1602,7 +1639,7 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
         asgi_app,
         "POST",
         "/playback/session/scrobble",
-        json_body={**playback_claim, "artist": "Artist", "title": "Song", "timestamp": 12345},
+        json_body={**playback_claim, **HEARD_UNMEASURED_LISTEN, "artist": "Artist", "title": "Song", "timestamp": 12345},
     )
 
     assert status == 200

@@ -185,3 +185,67 @@ def test_old_writer_detached_edit_replays_without_rebuilding_album_membership(mo
         assert membership() == committed_membership
         assert connection.execute('select album_id,first_gallery_generation from library.local_relation_dirty_albums where library_id=%s order by album_id', (library_id,)).fetchall() == pending_journal
         assert connection.execute('select last_publication_xid::text from library.local_relation_projection_state where library_id=%s', (library_id,)).fetchone()[0] == publication_xid
+
+
+def test_tag_edit_publishes_with_another_albums_pending_change_and_refuses_its_own():
+    # INT-018: a pending change to another album must not block a tag edit.
+    import psycopg
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import scoped_relation_projection as scoped
+
+    database_url = _isolated_runtime_database_url_or_skip()
+    setup_url = os.environ.get('ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL', '')
+    if not setup_url:
+        pytest.skip('An isolated migrator URL is required.')
+    isolatedPostgres.prepare_isolated_database(setup_url, database_url)
+    config = {'ALBUM_HAVEN_APP_DATABASE_URL': database_url, 'SHARED_LIBRARY_BROWSE_ONLY': True}
+    token = uuid4().hex
+    with psycopg.connect(database_url) as connection:
+        library_id = connection.execute("""select libraries.id from app.bootstrap_owners owners
+            join library.libraries on libraries.owner_account_id=owners.account_id
+            where owners.owner_key='local-bootstrap-owner' and libraries.name='Local Library'
+              and libraries.library_kind='local'""").fetchone()[0]
+        root_id = connection.execute("""insert into library.library_roots(library_id,root_path,root_kind)
+            values(%s,%s,'main_library') returning id""", (library_id, f'C:/pending-edit/{token}')).fetchone()[0]
+        albums, paths = {}, {}
+        for name in ('edited', 'pending'):
+            artist_id = connection.execute("""insert into library.local_artists(library_id,artist_key,name)
+                values(%s,%s,%s) returning id""", (library_id, f'{token}-{name}', f'{name} artist {token}')).fetchone()[0]
+            albums[name] = connection.execute("""insert into library.local_albums(library_id,artist_id,album_key,title)
+                values(%s,%s,%s,%s) returning id""", (library_id, artist_id, f'{token}-{name}', f'{name} album')).fetchone()[0]
+            connection.execute("""insert into library.local_album_featured_artists(library_id,album_id,artist_id,featured_kind)
+                values(%s,%s,%s,'owner')""", (library_id, albums[name], artist_id))
+            track_id = connection.execute("""insert into library.local_tracks(library_id,album_id,artist_id,track_key,title)
+                values(%s,%s,%s,%s,'Track') returning id""", (library_id, albums[name], artist_id, f'{token}-{name}')).fetchone()[0]
+            paths[name] = f'C:/pending-edit/{token}/{name}.flac'
+            connection.execute("""insert into library.local_track_files(track_id,library_root_id,private_path,relative_path)
+                values(%s,%s,%s,%s)""", (track_id, root_id, paths[name], f'{name}.flac'))
+        persistence._commit_structural_relation_projection(
+            _CommitSuppressingConnection(connection), config, reason='test_fixture')
+        connection.commit()
+        gallery.initialize_gallery_membership(config)
+        assert scoped.tag_edit_baseline_ready(config, track_paths=[paths['edited']])
+
+        connection.execute('update library.local_albums set title=%s where id=%s', ('Pending retitle', albums['pending']))
+        connection.commit()
+        assert connection.execute('select album_id from library.local_relation_dirty_albums where library_id=%s',
+                                  (library_id,)).fetchall() == [(albums['pending'],)]
+        assert scoped.tag_edit_baseline_ready(config, track_paths=[paths['edited']])
+        assert not scoped.tag_edit_baseline_ready(config, track_paths=[paths['pending']])
+
+        connection.execute('update library.local_albums set title=%s where id=%s', ('Edited retitle', albums['edited']))
+        scoped.publish_affected_relation_projection(
+            _CommitSuppressingConnection(connection), album_ids=[albums['edited']], config=config)
+        connection.commit()
+
+        generation = connection.execute('select generation from library.gallery_projection_state where library_id=%s',
+                                        (library_id,)).fetchone()[0]
+        headers = connection.execute('select source_generation from library.gallery_membership_headers where library_id=%s',
+                                     (library_id,)).fetchall()
+        assert headers and all(header[0] == generation for header in headers)
+        assert not connection.execute('select 1 from library.local_relation_dirty_albums where library_id=%s', (library_id,)).fetchone()
+        titles = {row[0]['album_title'] for row in connection.execute(
+            'select payload from library.gallery_membership_entries where library_id=%s', (library_id,)).fetchall()}
+        assert {'Edited retitle', 'Pending retitle'} <= titles
+        assert scoped.tag_edit_baseline_ready(config, track_paths=[paths['pending']])

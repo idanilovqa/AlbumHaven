@@ -1841,7 +1841,8 @@ class PostgresScanCacheAdapter:
                                 if isinstance(updated_file_entries.get(path), dict)}
         from music_app.services.scoped_relation_projection import tag_edit_baseline_ready
         with self._connect_to_database() as connection:
-            if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection)):
+            if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection),
+                                           track_paths=changed_paths):
                 from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
                 schedule_gallery_projection_refresh(self._config, incremental_membership=True)
                 raise RuntimeError("Library changes are still being reconciled. Retry this edit when library preparation finishes.")

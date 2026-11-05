@@ -143,7 +143,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'mark-version') {
-      openVersionPickerModal(album);
+      void openVersionPickerModal(album);
       return;
     }
 
@@ -152,40 +152,6 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
-    return;
-  }
-
-  const versionPickerOption = event.target.closest('[data-version-picker-target]');
-  if (versionPickerOption) {
-    event.preventDefault();
-    state.versionPicker.selectedTargetKey = versionPickerOption.getAttribute('data-version-picker-target') || '';
-    renderVersionPickerModal();
-    return;
-  }
-
-  const closeVersionPickerButton = event.target.closest('[data-close-version-picker="1"]');
-  if (closeVersionPickerButton || overlayClickStartedOnOverlay(document.getElementById('version-picker-modal'), event)) {
-    event.preventDefault();
-    closeVersionPickerModal();
-    return;
-  }
-
-  const saveVersionPickerButton = event.target.closest('[data-save-version-picker="1"]');
-  if (saveVersionPickerButton) {
-    event.preventDefault();
-    const sourceAlbum = state.versionPicker.album;
-    const targetKey = String(state.versionPicker.selectedTargetKey || '');
-    if (!sourceAlbum || !targetKey || state.versionPicker.saving) return;
-    state.versionPicker.saving = true;
-    renderVersionPickerModal();
-    markAlbumVersion(sourceAlbum.key || '', targetKey)
-      .then(() => {
-        closeVersionPickerModal();
-      })
-      .catch(() => {
-        state.versionPicker.saving = false;
-        renderVersionPickerModal();
-      });
     return;
   }
 

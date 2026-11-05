@@ -112,6 +112,27 @@ width: 18px;
 height: 18px;
 }
 .action-button__content { display: grid; place-items: center; }
+/* ActionButton badge: a solid, high-contrast number on the icon's lower-right corner. */
+.action-button--badged .action-button__content { position: relative; }
+.action-button__badge {
+position: absolute;
+right: -8px;
+bottom: -7px;
+box-sizing: border-box;
+min-width: 15px;
+height: 15px;
+padding: 0 3px;
+border-radius: 999px;
+background: var(--appearance-ink, var(--text, #f3f6fa));
+box-shadow: 0 0 0 2px var(--appearance-neutral-button-background, var(--appearance-control, var(--panel, #1e2c3e)));
+color: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel, #1e2c3e)));
+font-size: 10px;
+font-weight: 800;
+line-height: 15px;
+text-align: center;
+font-variant-numeric: tabular-nums;
+pointer-events: none;
+}
 .action-button__icon { display: block; }
 .action-button__icon.ui-icon {
 display: block;

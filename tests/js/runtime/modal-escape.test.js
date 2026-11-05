@@ -62,7 +62,6 @@ function harness() {
     closeImageLightbox: close('image-lightbox'),
     closeRepairConfirmModal: close('repair-confirm-modal'),
     closeNonAlbumModal: close('non-album-modal'),
-    closeVersionPickerModal: close('version-picker-modal'),
     renderTagEditor() {},
   });
   context.attachModalEvents();
@@ -160,7 +159,7 @@ test('deselecting files stays empty instead of silently selecting the first file
 
 for (const id of [
   'image-lightbox', 'repair-confirm-modal', 'cover-lookup-modal',
-  'non-album-modal', 'version-picker-modal', 'app-confirm-modal',
+  'non-album-modal', 'app-confirm-modal',
   'app-form-modal', 'loop-name-modal', 'loop-delete-confirm-modal',
 ]) {
   test(`Escape cancels only the foreground ${id}`, () => {

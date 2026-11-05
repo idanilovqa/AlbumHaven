@@ -175,6 +175,11 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   white-space: nowrap;
 }
 .on-page-alert__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+/* actionsPlacement: 'inline' puts the actions to the right of the message, wrapping below only when they do not fit. */
+.on-page-alert--inline-actions .on-page-alert__content { display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; }
+.on-page-alert--inline-actions .on-page-alert__title { flex: 1 0 100%; }
+.on-page-alert--inline-actions .on-page-alert__message { flex: 0 1 auto; }
+.on-page-alert--inline-actions .on-page-alert__actions { margin-top: 5px; }
 .on-page-alert__actions .ui-button:not(.ui-button--small) {
   min-height: 44px;
   padding: 0 16px;

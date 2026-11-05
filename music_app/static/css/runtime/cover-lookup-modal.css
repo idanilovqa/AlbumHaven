@@ -774,61 +774,6 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
-.version-picker-card {
-  width: min(720px, calc(100vw - 32px));
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  gap: 12px;
-}
-
-.version-picker-header,
-.version-picker-actions {
-  flex: 0 0 auto;
-}
-
-.version-picker-actions .button {
-  min-width: 96px;
-  font-weight: 700;
-}
-
-.version-picker-cancel {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.version-picker-save {
-  border-color: rgba(96, 165, 250, 0.42);
-  background: rgba(96, 165, 250, 0.18);
-  color: #eff6ff;
-}
-
-.version-picker-save:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: rgba(96, 165, 250, 0.28);
-}
-
-.version-picker-save:disabled {
-  opacity: 0.45;
-  cursor: default;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(245, 247, 250, 0.56);
-}
-
-.version-picker-body {
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.version-picker-description {
-  margin: 0;
-  color: rgba(245, 247, 250, 0.82);
-}
-
 .version-picker-list {
   display: flex;
   flex-direction: column;

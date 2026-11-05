@@ -146,11 +146,7 @@
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
 .album-track-table__secondary { container-type: inline-size; overflow: hidden; }
 .album-track-table__secondary > span { display: block; width: max-content; }
-.album-track-table__secondary.is-credit-overflowing > span { animation: album-track-credit-pan 12s linear infinite alternate; }
-@keyframes album-track-credit-pan {
-  0%, 15% { transform: translateX(0); }
-  85%, 100% { transform: translateX(min(0px, calc(100cqw - 100%))); }
-}
+.album-track-table__secondary.is-credit-overflowing > span { animation: running-line-pan var(--running-line-duration) linear infinite alternate; }
 /* Turning off album table motion also stops credit panning. */
 .album-track-table[data-playing-animation='disabled'] .album-track-table__secondary > span { animation: none; }
 @media (prefers-reduced-motion: reduce) {

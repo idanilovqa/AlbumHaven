@@ -1172,7 +1172,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {

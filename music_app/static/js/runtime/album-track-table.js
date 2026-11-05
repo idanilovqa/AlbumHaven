@@ -17,10 +17,9 @@ function syncAlbumTrackCreditMotion(root) {
     frame = 0;
     for (const row of rows) {
       const text = row.firstElementChild;
-      const motion = resolveCompactPlayerMetadataRowMotion({
-        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
-      });
+      const motion = resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth });
       row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+      applyRunningLineMotion(row, motion);
     }
   };
   const schedule = () => {
@@ -38,7 +37,7 @@ function syncAlbumTrackCreditMotion(root) {
     cancelAnimationFrame(frame);
     observer.disconnect();
     reduced.removeEventListener('change', schedule);
-    for (const row of rows) row.classList.remove('is-credit-overflowing');
+    for (const row of rows) { row.classList.remove('is-credit-overflowing'); clearRunningLineMotion(row); }
   });
   schedule();
 }
@@ -126,10 +125,20 @@ function buildAlbumTrackTableHtml(config = {}) {
   const lastMainIndex = groups.reduce((last, group, index) => (group?.isBonus ? last : index), -1);
   const splitTotals = Boolean(mainLength) && lastMainIndex >= 0 && lastMainIndex < groups.length - 1;
   const bonusLabel = bonusGroups.length === 1 ? (groupLabel(bonusGroups[0]) || 'Bonus Disc') : 'Bonus Discs';
-  const mainSummaryHtml = splitTotals
+  // perDiscLengths: every disc closes with its own length and the album ends with one Total Length
+  // (used when a later disc has its own name). Otherwise main/bonus totals apply.
+  const perDiscLengths = Boolean(config.perDiscLengths) && groups.length > 1;
+  const mainSummaryHtml = splitTotals && !perDiscLengths
     ? summaryBox([summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength)])
     : '';
-  const finalSummaryHtml = summaryBox([
+  const discSummaryHtml = (group, groupIndex) => {
+    const length = String(group?.lengthDisplay || '').trim();
+    const label = groupLabel(group) || `CD ${groupIndex + 1}`;
+    return length ? summaryBox([summaryLine('album-track-table__disc-total', `${label} Length`, length)]) : '';
+  };
+  const finalSummaryHtml = summaryBox(perDiscLengths ? [
+    totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
+  ] : [
     !splitTotals && mainLength ? summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength) : '',
     bonusLength ? summaryLine('album-track-table__bonus-total', `${bonusLabel} Length`, bonusLength) : '',
     totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
@@ -170,7 +179,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
-    const summaryHtml = groupIndex === lastMainIndex ? mainSummaryHtml : '';
+    const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : (groupIndex === lastMainIndex ? mainSummaryHtml : '');
     if (collapsibleGroups && showLabel) {
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}${summaryHtml}</details>`;
     }

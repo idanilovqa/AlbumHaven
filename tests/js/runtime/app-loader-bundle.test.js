@@ -65,6 +65,7 @@ const expectedRuntimeOrder = [
   'trigger-anchor.js',
   'search-input.js',
   'gallery-main-interactions.js',
+  'running-line.js',
   'compact-player-helpers.js',
   'player-streaming-decoders.js',
   'player-streaming-engine.js',

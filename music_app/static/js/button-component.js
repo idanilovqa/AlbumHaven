@@ -97,9 +97,13 @@
     const iconMarkup = options.icon
       ? renderIconSvg(options.icon, { className: `${iconClasses} ui-icon--${options.icon}` })
       : `<span class="${escape(iconClasses)}" aria-hidden="true"></span>`;
+    const badge = String(options.badge ?? '').trim();
+    if (badge.length > 3) throw new TypeError('ActionButton badge must be at most three characters.');
+    if (badge) actionOptions.className += ' action-button--badged';
+    const badgeMarkup = badge ? `<span class="action-button__badge" aria-hidden="true">${escape(badge)}</span>` : '';
     return renderButtonMarkup(
       actionOptions,
-      `<span class="ui-button__content action-button__content">${iconMarkup}</span>`,
+      `<span class="ui-button__content action-button__content">${iconMarkup}${badgeMarkup}</span>`,
     );
   }
 

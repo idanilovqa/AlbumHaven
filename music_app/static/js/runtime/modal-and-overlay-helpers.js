@@ -92,42 +92,7 @@ function showArtistTreeContextMenu(x, y, artist) {
   }
 }
 
-function ensureVersionPickerModal() {
-  let modal = document.getElementById('version-picker-modal');
-  if (modal) return modal;
-  modal = document.createElement('div');
-  modal.id = 'version-picker-modal';
-  modal.className = 'confirm-modal';
-  modal.hidden = true;
-  modal.innerHTML = `
-    <div class="confirm-modal-dialog version-picker-card" role="dialog" aria-modal="true" aria-labelledby="version-picker-title">
-      <div class="version-picker-header">
-        ${buildAlbumDetailsHeaderHtml({
-          variant: 'copy', title: 'Mark As A Version', titleId: 'version-picker-title',
-          subtitleId: 'version-picker-subtitle',
-          actionsHtml: ButtonComponent.renderActionButton({
-            icon: 'close', ariaLabel: 'Close version picker', presentation: 'bare',
-            attributes: { 'data-close-version-picker': '1' },
-          }),
-        })}
-      </div>
-      <div class="version-picker-body">
-        <p class="version-picker-description" data-version-picker-description></p>
-        <div class="version-picker-list" data-version-picker-list></div>
-      </div>
-      <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
-        <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-  bindOverlayPointerOrigin(modal);
-  return modal;
-}
-
-function getVersionPickerCandidates(album) {
-  const sourceAlbum = album || state.versionPicker.album;
+function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
   const sourceArtists = new Set(
     (Array.isArray(sourceAlbum?.artists) ? sourceAlbum.artists : [sourceAlbum?.album_artist])
@@ -152,65 +117,49 @@ function getVersionPickerCandidates(album) {
     .sort(compareAlbumVariants);
 }
 
-function renderVersionPickerModal() {
-  const modal = ensureVersionPickerModal();
-  const album = state.versionPicker.album;
-  const description = modal.querySelector('[data-version-picker-description]');
-  const list = modal.querySelector('[data-version-picker-list]');
-  const saveButton = modal.querySelector('[data-save-version-picker="1"]');
-  if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
-  const candidates = getVersionPickerCandidates(album);
-  description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
-    : '';
-  list.innerHTML = candidates.length
-    ? candidates.map((item) => {
-      const key = String(item.key || '');
-      const selected = key === String(state.versionPicker.selectedTargetKey || '');
-      return `
-        <button class="version-picker-option ${selected ? 'is-active' : ''}" type="button" data-version-picker-target="${escapeHtml(key)}" aria-pressed="${selected ? 'true' : 'false'}">
-          <span class="version-picker-option-cover">
-            ${item.cover_path
-              ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
-              : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
-          </span>
-          <span class="version-picker-option-meta">
-            <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
-            <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
-          </span>
-        </button>
-      `;
-    }).join('')
-    : '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
-  saveButton.disabled = state.versionPicker.saving || !state.versionPicker.selectedTargetKey;
-  saveButton.textContent = state.versionPicker.saving ? 'Saving...' : 'Save';
+function buildVersionPickerListHtml(candidates) {
+  if (!candidates.length) return '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
+  return candidates.map((item) => `
+    <button class="version-picker-option" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="false">
+      <span class="version-picker-option-cover">
+        ${item.cover_path
+          ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
+          : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
+      </span>
+      <span class="version-picker-option-meta">
+        <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
+        <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
+      </span>
+    </button>
+  `).join('');
 }
 
+// Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
 function openVersionPickerModal(album) {
-  const sourceAlbum = album || null;
-  if (!sourceAlbum) return;
-  state.versionPicker.album = sourceAlbum;
-  state.versionPicker.saving = false;
-  state.versionPicker.selectedTargetKey = '';
-  const modal = ensureVersionPickerModal();
-  renderVersionPickerModal();
-  modal.hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closeVersionPickerModal() {
-  const modal = document.getElementById('version-picker-modal');
-  if (!modal) return;
-  modal.hidden = true;
-  state.versionPicker.album = null;
-  state.versionPicker.selectedTargetKey = '';
-  state.versionPicker.saving = false;
-  const trackModalOpen = !document.getElementById('track-modal')?.hidden;
-  const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
-  const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
-  if (!trackModalOpen && !utilityModalOpen && !lightboxOpen) {
-    document.body.classList.remove('modal-open');
-  }
+  if (!album) return Promise.resolve(null);
+  let selectedKey = '';
+  let onPick = null;
+  return showAppFormDialog({
+    title: 'Mark As A Version',
+    submitLabel: 'Save',
+    submitEnabled: false,
+    contentHtml: `<div class="version-picker-list" data-version-picker-list>${buildVersionPickerListHtml(getVersionPickerCandidates(album))}</div>`,
+    onMount(content, controls) {
+      onPick = (event) => {
+        const option = event.target.closest?.('[data-version-picker-target]');
+        if (!option) return;
+        selectedKey = option.getAttribute('data-version-picker-target') || '';
+        content.querySelectorAll('[data-version-picker-target]').forEach((node) => {
+          node.classList.toggle('is-active', node === option);
+          node.setAttribute('aria-pressed', node === option ? 'true' : 'false');
+        });
+        controls.setSubmitEnabled(Boolean(selectedKey));
+      };
+      content.addEventListener('click', onPick);
+    },
+    onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
+    onSubmit: () => markAlbumVersion(album.key || '', selectedKey),
+  });
 }
 
 function getVisibleNonAlbumTracks(options = {}) {

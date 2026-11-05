@@ -2076,10 +2076,11 @@ function renderTrackModalRelease(album) {
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
-        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
-          label: String(index + 1),
+        actionsPlacement: 'inline',
+        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderActionButton({
+          icon: 'folder',
+          badge: String(index + 1),
           ariaLabel: `Open folder ${index + 1}`,
-          variant: 'secondary', size: 'small', quiet: true,
           className: 'track-modal-duplicate-folder',
           title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
           attributes: {
@@ -2301,10 +2302,15 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
+    const discSeconds = componentTracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0);
     return {
       discNumber: group.discNumber,
       discLabel,
+      discSubtitle: group.discSubtitle,
       isBonus: Boolean(group.isBonus),
+      lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       tracks: componentTracks,
     };
   });
@@ -2315,6 +2321,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   }
   const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
     && componentGroups.some((group) => !group.isBonus);
+  // A later disc with its own name (e.g. Kultivator CD 2 "Waiting Paths") gets its own length.
+  const hasNamedLaterDisc = componentGroups.some((group, index) => index > 0 && Boolean(group.discSubtitle));
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2324,6 +2332,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     groups: componentGroups,
 
     multiDisc: grouped.multiDisc,
+    perDiscLengths: hasNamedLaterDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
     bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',

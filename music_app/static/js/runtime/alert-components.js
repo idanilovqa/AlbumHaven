@@ -62,7 +62,8 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = String(config.className || '').trim();
+  const className = [config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '', String(config.className || '').trim()]
+    .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';

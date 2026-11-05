@@ -400,11 +400,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  versionPicker: {
-    album: null,
-    selectedTargetKey: '',
-    saving: false,
-  },
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';

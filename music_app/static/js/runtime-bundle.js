@@ -4397,7 +4397,8 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = String(config.className || '').trim();
+  const className = [config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '', String(config.className || '').trim()]
+    .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
@@ -5154,10 +5155,9 @@ function syncGalleryCardMetadataMotion(root) {
       frame = 0;
       for (const [row, text] of rows) {
         if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
-        const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
+        const motion = !reduced.matches ? resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
-        row.style.setProperty('--card-text-distance', `${motion.distance}px`);
-        row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
     };
     const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(refresh); };
@@ -5841,11 +5841,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  versionPicker: {
-    album: null,
-    selectedTargetKey: '',
-    saving: false,
-  },
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
@@ -7586,6 +7581,40 @@ function createGalleryFamilyPaintController(toggle) {
 
 // END js/runtime/gallery-main-interactions.js
 
+// BEGIN js/runtime/running-line.js
+
+/* RunningLine: the one timing contract for text that pans when it overflows its row.
+   Every surface (player, compact player, gallery cards, track credits) measures with
+   resolveRunningLineMotion, sets --running-line-distance / --running-line-duration on the row
+   (applyRunningLineMotion), and animates its text with the shared `running-line-pan` keyframes
+   in base-layout.css. Speed is slow enough to read: 12 px/s while moving, holding at each end. */
+const RUNNING_LINE_SPEED_PX_PER_SECOND = 12;
+const RUNNING_LINE_MOVING_SHARE = 0.7; // running-line-pan holds 15% at each end.
+const RUNNING_LINE_MIN_DURATION_MS = 4000;
+
+function resolveRunningLineMotion({ scrollWidth, clientWidth } = {}) {
+  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
+  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
+  const movingMs = (distance / RUNNING_LINE_SPEED_PX_PER_SECOND) * 1000;
+  return {
+    overflowing: true,
+    distance,
+    durationMs: Math.max(RUNNING_LINE_MIN_DURATION_MS, Math.round(movingMs / RUNNING_LINE_MOVING_SHARE)),
+  };
+}
+
+function applyRunningLineMotion(row, motion) {
+  row.style.setProperty('--running-line-distance', `${motion.distance}px`);
+  row.style.setProperty('--running-line-duration', `${motion.durationMs}ms`);
+}
+
+function clearRunningLineMotion(row) {
+  row.style.removeProperty('--running-line-distance');
+  row.style.removeProperty('--running-line-duration');
+}
+
+// END js/runtime/running-line.js
+
 // BEGIN js/runtime/compact-player-helpers.js
 
 const COMPACT_PLAYER_MODE_STORAGE_KEY = 'albumhaven.compactPlayer.mode.v1';
@@ -7641,16 +7670,6 @@ function buildCompactPlayerMetadataSummary(track) {
   const album = String(track?.album || '').trim();
   const song = artist && title ? `${artist} - ${title}` : artist || title;
   return song && album ? `${song} / ${album}` : song || album;
-}
-
-function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
-  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
-  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
-  return {
-    overflowing: true,
-    distance,
-    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
-  };
 }
 
 function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
@@ -7724,7 +7743,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMotion,
   resolveCompactPlayerMetadataRevealDelay,
   buildCompactPlayerMetadataSummary,
-  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
@@ -10939,7 +10957,7 @@ function attachAccountMenu(component, options = {}) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -12135,42 +12153,7 @@ function showArtistTreeContextMenu(x, y, artist) {
   }
 }
 
-function ensureVersionPickerModal() {
-  let modal = document.getElementById('version-picker-modal');
-  if (modal) return modal;
-  modal = document.createElement('div');
-  modal.id = 'version-picker-modal';
-  modal.className = 'confirm-modal';
-  modal.hidden = true;
-  modal.innerHTML = `
-    <div class="confirm-modal-dialog version-picker-card" role="dialog" aria-modal="true" aria-labelledby="version-picker-title">
-      <div class="version-picker-header">
-        ${buildAlbumDetailsHeaderHtml({
-          variant: 'copy', title: 'Mark As A Version', titleId: 'version-picker-title',
-          subtitleId: 'version-picker-subtitle',
-          actionsHtml: ButtonComponent.renderActionButton({
-            icon: 'close', ariaLabel: 'Close version picker', presentation: 'bare',
-            attributes: { 'data-close-version-picker': '1' },
-          }),
-        })}
-      </div>
-      <div class="version-picker-body">
-        <p class="version-picker-description" data-version-picker-description></p>
-        <div class="version-picker-list" data-version-picker-list></div>
-      </div>
-      <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
-        <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-  bindOverlayPointerOrigin(modal);
-  return modal;
-}
-
-function getVersionPickerCandidates(album) {
-  const sourceAlbum = album || state.versionPicker.album;
+function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
   const sourceArtists = new Set(
     (Array.isArray(sourceAlbum?.artists) ? sourceAlbum.artists : [sourceAlbum?.album_artist])
@@ -12195,65 +12178,49 @@ function getVersionPickerCandidates(album) {
     .sort(compareAlbumVariants);
 }
 
-function renderVersionPickerModal() {
-  const modal = ensureVersionPickerModal();
-  const album = state.versionPicker.album;
-  const description = modal.querySelector('[data-version-picker-description]');
-  const list = modal.querySelector('[data-version-picker-list]');
-  const saveButton = modal.querySelector('[data-save-version-picker="1"]');
-  if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
-  const candidates = getVersionPickerCandidates(album);
-  description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
-    : '';
-  list.innerHTML = candidates.length
-    ? candidates.map((item) => {
-      const key = String(item.key || '');
-      const selected = key === String(state.versionPicker.selectedTargetKey || '');
-      return `
-        <button class="version-picker-option ${selected ? 'is-active' : ''}" type="button" data-version-picker-target="${escapeHtml(key)}" aria-pressed="${selected ? 'true' : 'false'}">
-          <span class="version-picker-option-cover">
-            ${item.cover_path
-              ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
-              : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
-          </span>
-          <span class="version-picker-option-meta">
-            <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
-            <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
-          </span>
-        </button>
-      `;
-    }).join('')
-    : '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
-  saveButton.disabled = state.versionPicker.saving || !state.versionPicker.selectedTargetKey;
-  saveButton.textContent = state.versionPicker.saving ? 'Saving...' : 'Save';
+function buildVersionPickerListHtml(candidates) {
+  if (!candidates.length) return '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
+  return candidates.map((item) => `
+    <button class="version-picker-option" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="false">
+      <span class="version-picker-option-cover">
+        ${item.cover_path
+          ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
+          : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
+      </span>
+      <span class="version-picker-option-meta">
+        <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
+        <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
+      </span>
+    </button>
+  `).join('');
 }
 
+// Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
 function openVersionPickerModal(album) {
-  const sourceAlbum = album || null;
-  if (!sourceAlbum) return;
-  state.versionPicker.album = sourceAlbum;
-  state.versionPicker.saving = false;
-  state.versionPicker.selectedTargetKey = '';
-  const modal = ensureVersionPickerModal();
-  renderVersionPickerModal();
-  modal.hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closeVersionPickerModal() {
-  const modal = document.getElementById('version-picker-modal');
-  if (!modal) return;
-  modal.hidden = true;
-  state.versionPicker.album = null;
-  state.versionPicker.selectedTargetKey = '';
-  state.versionPicker.saving = false;
-  const trackModalOpen = !document.getElementById('track-modal')?.hidden;
-  const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
-  const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
-  if (!trackModalOpen && !utilityModalOpen && !lightboxOpen) {
-    document.body.classList.remove('modal-open');
-  }
+  if (!album) return Promise.resolve(null);
+  let selectedKey = '';
+  let onPick = null;
+  return showAppFormDialog({
+    title: 'Mark As A Version',
+    submitLabel: 'Save',
+    submitEnabled: false,
+    contentHtml: `<div class="version-picker-list" data-version-picker-list>${buildVersionPickerListHtml(getVersionPickerCandidates(album))}</div>`,
+    onMount(content, controls) {
+      onPick = (event) => {
+        const option = event.target.closest?.('[data-version-picker-target]');
+        if (!option) return;
+        selectedKey = option.getAttribute('data-version-picker-target') || '';
+        content.querySelectorAll('[data-version-picker-target]').forEach((node) => {
+          node.classList.toggle('is-active', node === option);
+          node.setAttribute('aria-pressed', node === option ? 'true' : 'false');
+        });
+        controls.setSubmitEnabled(Boolean(selectedKey));
+      };
+      content.addEventListener('click', onPick);
+    },
+    onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
+    onSubmit: () => markAlbumVersion(album.key || '', selectedKey),
+  });
 }
 
 function getVisibleNonAlbumTracks(options = {}) {
@@ -14812,7 +14779,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {
@@ -19838,10 +19804,9 @@ function syncAlbumTrackCreditMotion(root) {
     frame = 0;
     for (const row of rows) {
       const text = row.firstElementChild;
-      const motion = resolveCompactPlayerMetadataRowMotion({
-        clientWidth: row.clientWidth, scrollWidth: text.scrollWidth,
-      });
+      const motion = resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth });
       row.classList.toggle('is-credit-overflowing', !reduced.matches && motion.overflowing);
+      applyRunningLineMotion(row, motion);
     }
   };
   const schedule = () => {
@@ -19859,7 +19824,7 @@ function syncAlbumTrackCreditMotion(root) {
     cancelAnimationFrame(frame);
     observer.disconnect();
     reduced.removeEventListener('change', schedule);
-    for (const row of rows) row.classList.remove('is-credit-overflowing');
+    for (const row of rows) { row.classList.remove('is-credit-overflowing'); clearRunningLineMotion(row); }
   });
   schedule();
 }
@@ -19947,10 +19912,20 @@ function buildAlbumTrackTableHtml(config = {}) {
   const lastMainIndex = groups.reduce((last, group, index) => (group?.isBonus ? last : index), -1);
   const splitTotals = Boolean(mainLength) && lastMainIndex >= 0 && lastMainIndex < groups.length - 1;
   const bonusLabel = bonusGroups.length === 1 ? (groupLabel(bonusGroups[0]) || 'Bonus Disc') : 'Bonus Discs';
-  const mainSummaryHtml = splitTotals
+  // perDiscLengths: every disc closes with its own length and the album ends with one Total Length
+  // (used when a later disc has its own name). Otherwise main/bonus totals apply.
+  const perDiscLengths = Boolean(config.perDiscLengths) && groups.length > 1;
+  const mainSummaryHtml = splitTotals && !perDiscLengths
     ? summaryBox([summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength)])
     : '';
-  const finalSummaryHtml = summaryBox([
+  const discSummaryHtml = (group, groupIndex) => {
+    const length = String(group?.lengthDisplay || '').trim();
+    const label = groupLabel(group) || `CD ${groupIndex + 1}`;
+    return length ? summaryBox([summaryLine('album-track-table__disc-total', `${label} Length`, length)]) : '';
+  };
+  const finalSummaryHtml = summaryBox(perDiscLengths ? [
+    totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
+  ] : [
     !splitTotals && mainLength ? summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength) : '',
     bonusLength ? summaryLine('album-track-table__bonus-total', `${bonusLabel} Length`, bonusLength) : '',
     totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
@@ -19991,7 +19966,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
-    const summaryHtml = groupIndex === lastMainIndex ? mainSummaryHtml : '';
+    const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : (groupIndex === lastMainIndex ? mainSummaryHtml : '');
     if (collapsibleGroups && showLabel) {
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}${summaryHtml}</details>`;
     }
@@ -36262,10 +36237,11 @@ function renderTrackModalRelease(album) {
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
-        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
-          label: String(index + 1),
+        actionsPlacement: 'inline',
+        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderActionButton({
+          icon: 'folder',
+          badge: String(index + 1),
           ariaLabel: `Open folder ${index + 1}`,
-          variant: 'secondary', size: 'small', quiet: true,
           className: 'track-modal-duplicate-folder',
           title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
           attributes: {
@@ -36487,10 +36463,15 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
+    const discSeconds = componentTracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0);
     return {
       discNumber: group.discNumber,
       discLabel,
+      discSubtitle: group.discSubtitle,
       isBonus: Boolean(group.isBonus),
+      lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       tracks: componentTracks,
     };
   });
@@ -36501,6 +36482,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   }
   const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
     && componentGroups.some((group) => !group.isBonus);
+  // A later disc with its own name (e.g. Kultivator CD 2 "Waiting Paths") gets its own length.
+  const hasNamedLaterDisc = componentGroups.some((group, index) => index > 0 && Boolean(group.discSubtitle));
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -36510,6 +36493,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     groups: componentGroups,
 
     multiDisc: grouped.multiDisc,
+    perDiscLengths: hasNamedLaterDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
     bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
@@ -41808,11 +41792,10 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
       frame = 0;
       for (const [row, text] of entries) {
         const motion = !media?.matches && !row.hidden
-          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
           : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-metadata-overflowing', motion.overflowing);
-        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
-        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
     };
     const schedule = () => {
@@ -41847,8 +41830,7 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
         window.removeEventListener('resize', schedule);
         for (const row of entries.keys()) {
           row.classList.remove('is-metadata-overflowing');
-          row.style.removeProperty('--player-metadata-distance');
-          row.style.removeProperty('--player-metadata-duration');
+          clearRunningLineMotion(row);
         }
         entries.clear();
       },
@@ -43136,11 +43118,10 @@ function refreshCompactPlayerMetadataRows(els = compactPlayerElements()) {
   for (const [row, text] of [[els.titleRow, els.titleText], [els.artistRow, els.artistText]]) {
     if (!row || !text) continue;
     const motion = compactPlayerPresentation === 'docked' && !reducedMotion
-      ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+      ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
       : { overflowing: false, distance: 0, durationMs: 0 };
     row.classList.toggle('is-overflowing', motion.overflowing);
-    row.style.setProperty('--compact-player-row-pan-distance', `${motion.distance}px`);
-    row.style.setProperty('--compact-player-row-pan-duration', `${motion.durationMs}ms`);
+    applyRunningLineMotion(row, motion);
   }
 }
 
@@ -45482,7 +45463,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'mark-version') {
-      openVersionPickerModal(album);
+      void openVersionPickerModal(album);
       return;
     }
 
@@ -45491,40 +45472,6 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
-    return;
-  }
-
-  const versionPickerOption = event.target.closest('[data-version-picker-target]');
-  if (versionPickerOption) {
-    event.preventDefault();
-    state.versionPicker.selectedTargetKey = versionPickerOption.getAttribute('data-version-picker-target') || '';
-    renderVersionPickerModal();
-    return;
-  }
-
-  const closeVersionPickerButton = event.target.closest('[data-close-version-picker="1"]');
-  if (closeVersionPickerButton || overlayClickStartedOnOverlay(document.getElementById('version-picker-modal'), event)) {
-    event.preventDefault();
-    closeVersionPickerModal();
-    return;
-  }
-
-  const saveVersionPickerButton = event.target.closest('[data-save-version-picker="1"]');
-  if (saveVersionPickerButton) {
-    event.preventDefault();
-    const sourceAlbum = state.versionPicker.album;
-    const targetKey = String(state.versionPicker.selectedTargetKey || '');
-    if (!sourceAlbum || !targetKey || state.versionPicker.saving) return;
-    state.versionPicker.saving = true;
-    renderVersionPickerModal();
-    markAlbumVersion(sourceAlbum.key || '', targetKey)
-      .then(() => {
-        closeVersionPickerModal();
-      })
-      .catch(() => {
-        state.versionPicker.saving = false;
-        renderVersionPickerModal();
-      });
     return;
   }
 

@@ -319,3 +319,21 @@ test('AlbumTrackTable column priority keeps #, Track and Length on narrow tables
   assert.match(narrow, /--album-track-table-columns:\s*36px minmax\(0, 1fr\) minmax\(54px, auto\)/);
   assert.match(narrow, /\[data-track-problem-column\][^{]*\{\s*--album-track-table-columns:\s*36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
 });
+
+test('AlbumTrackTable gives each disc its own length and one Total Length when a later disc is named (Kultivator)', () => {
+  const html = loadTrackTable().buildAlbumTrackTableHtml({
+    groups: [
+      { discNumber: 1, discLabel: 'CD 1', isBonus: false, lengthDisplay: '48:10', tracks: [{ path: 'd1', title: 'Höga Hästar' }] },
+      { discNumber: 2, discLabel: 'CD 2 • Waiting Paths', discSubtitle: 'Waiting Paths', isBonus: false, lengthDisplay: '17:05', tracks: [{ path: 'd2', title: 'Waiting Paths' }] },
+    ],
+    perDiscLengths: true, totalLength: '1h 5m', mainLength: '1:05:15',
+  });
+  const first = html.indexOf('CD 1 Length: 48:10');
+  const secondHeading = html.indexOf('>CD 2 • Waiting Paths</h4>');
+  const second = html.indexOf('CD 2 • Waiting Paths Length: 17:05');
+  const total = html.indexOf('>Total Length: 1h 5m');
+  assert.ok(html.indexOf('Höga Hästar') < first && first < secondHeading, 'disc 1 closes with its own length');
+  assert.ok(secondHeading < second && second < total, 'disc 2 closes with its own length before the album total');
+  assert.doesNotMatch(html, /Total Main Album Length/);
+  assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 3);
+});

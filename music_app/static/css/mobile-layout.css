@@ -373,14 +373,10 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 /* Independent, measured metadata lines; only overflowing text moves. */
-@keyframes player-metadata-pan {
-  0%, 15% { transform: translateX(0); }
-  85%, 100% { transform: translateX(calc(-1 * var(--player-metadata-distance, 0px))); }
-}
 @media (max-width: 900px) {
   .global-player[data-player-seekbar-presentation] :is(#player-artist, #player-title, #player-album-link) { display: block; width: 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
   [data-player-metadata-text] { display: inline-block; min-width: 0; max-width: none; white-space: nowrap; vertical-align: top; }
-  .is-metadata-overflowing > [data-player-metadata-text] { animation: player-metadata-pan var(--player-metadata-duration) linear infinite alternate; }
+  .is-metadata-overflowing > [data-player-metadata-text] { animation: running-line-pan var(--running-line-duration) linear infinite alternate; }
   .is-metadata-overflowing:focus-visible > [data-player-metadata-text] { animation-play-state: paused; }
   .global-player .player-empty-message:not([hidden]) { display: block; grid-column: 1 / 3; grid-row: 1; align-self: center; justify-self: stretch; text-align: center; font-size: 13px; font-weight: 500; line-height: 18px; white-space: nowrap; color: var(--appearance-player-ink, var(--text)); }
   .global-player.is-empty :is(.player-meta, .player-timeline-wrap) { visibility: hidden; pointer-events: none; }
@@ -416,10 +412,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */
 .mobile-artists-mode, .mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
-@keyframes gallery-card-text-pan {
-  0%, 15% { transform: translateX(0); }
-  85%, 100% { transform: translateX(calc(-1 * var(--card-text-distance, 0px))); }
-}
 @media (max-width: 900px) {
   :is(button, a, [role="button"], .album-track-table__row) { -webkit-tap-highlight-color: transparent; }
   .gallery-bar :is(.action-button, .gallery-action-button, .gallery-info-button) { display: inline-grid; place-items: center; box-sizing: border-box; margin-block: 0; padding: 0; line-height: 0; flex-shrink: 0; }
@@ -505,7 +497,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card [data-gallery-metadata-text] { display: inline-block; white-space: nowrap; vertical-align: top; }
   .album-card[data-gallery-display="cards"] .album-title-button { white-space: normal; }
   .album-card[data-gallery-display="cards"] .album-title-button [data-gallery-metadata-text] { display: inline; white-space: normal; animation: none; }
-  .album-card .is-card-text-overflowing > [data-gallery-metadata-text] { animation: gallery-card-text-pan var(--card-text-duration) linear infinite alternate; }
+  .album-card .is-card-text-overflowing > [data-gallery-metadata-text] { animation: running-line-pan var(--running-line-duration) linear infinite alternate; }
   .album-card :focus-visible > [data-gallery-metadata-text] { animation-play-state: paused; }
   .album-card .rating-row[data-rating-value="0"] { display: none; }
   .album-card .rating-row:not([data-rating-value="0"]) { display: block; min-width: 0; }

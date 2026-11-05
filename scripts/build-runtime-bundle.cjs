@@ -34,6 +34,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/trigger-anchor.js',
   'js/runtime/search-input.js',
   'js/runtime/gallery-main-interactions.js',
+  'js/runtime/running-line.js',
   'js/runtime/compact-player-helpers.js',
   'js/runtime/player-streaming-decoders.js',
   'js/runtime/player-streaming-engine.js',

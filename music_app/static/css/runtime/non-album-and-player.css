@@ -493,12 +493,8 @@ transition: opacity var(--compact-motion-duration) var(--compact-motion-easing);
 .compact-player-metadata-row { display: block; min-width: 0; overflow: hidden; white-space: nowrap; }
 .compact-player-metadata-row > span { display: block; width: max-content; white-space: nowrap; }
 .compact-player-metadata-row.is-overflowing > span {
-animation: compact-player-metadata-pan var(--compact-player-row-pan-duration) ease-in-out infinite alternate;
+animation: running-line-pan var(--running-line-duration) linear infinite alternate;
 will-change: transform;
-}
-@keyframes compact-player-metadata-pan {
-0%, 16% { transform: translateX(0); }
-84%, 100% { transform: translateX(calc(-1 * var(--compact-player-row-pan-distance))); }
 }
 [data-compact-player-artist] { opacity: .65; font-size: 11px; }
 .compact-player-hover-bubble {

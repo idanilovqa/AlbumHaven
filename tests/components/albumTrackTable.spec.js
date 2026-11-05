@@ -58,11 +58,12 @@ for (const width of [390, 960]) {
     await page.setContent('<div id="table"></div>');
     await page.addStyleTag({ path: compactDataTableCssPath });
     await page.addStyleTag({ path: albumTrackTableCssPath });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/running-line.css') });
     await page.evaluate(() => {
       window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
       window.ButtonComponent = { renderIconSvg: () => '' };
     });
-    for (const file of ['compact-player-helpers.js', 'compact-data-table.js', 'album-track-table.js']) {
+    for (const file of ['running-line.js', 'compact-data-table.js', 'album-track-table.js']) {
       await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
     }
     await page.evaluate(() => {
@@ -75,7 +76,7 @@ for (const width of [390, 960]) {
     const rows = page.locator('.album-track-table__row');
     const before = await rows.first().boundingBox();
     const credit = page.locator('.album-track-table__secondary').first();
-    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
     await credit.locator('span').evaluate(node => {
       const animation = node.getAnimations()[0];
       animation.pause();
@@ -89,14 +90,14 @@ for (const width of [390, 960]) {
     await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
     expect(await short.locator('span').evaluate(node => node.getAnimations().length)).toBe(0);
     await short.evaluate(node => { node.style.width = '10px'; });
-    await expect(short.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
     await short.evaluate(node => { node.style.width = ''; });
     await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
     await expect(credit).toHaveAttribute('title', /Featured guest artist/);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
     await page.evaluate(() => disposeAlbumTrackCreditMotion(document.getElementById('table')));
     await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
     await page.setViewportSize({ width: width + 20, height: 720 });

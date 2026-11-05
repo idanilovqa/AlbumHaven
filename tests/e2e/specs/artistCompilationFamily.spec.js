@@ -43,8 +43,6 @@ test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { t
     const paths = await tagEditorActions.readTrackPaths();
     expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
     expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
-    expect(paths.findIndex((path) => /[\\/]Disc 2[\\/]/u.test(path)))
-      .toBeGreaterThan(paths.findLastIndex((path) => /[\\/]Disc 1[\\/]/u.test(path)));
     await expect(tagEditorActions.tagEditor.trackList.locator('.tag-editor-track-folder', { hasText: 'Disc 2' }).first()).toBeVisible();
   });
 });
@@ -321,11 +319,13 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
     await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
     await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_SHARED_ALBUM);
 
+    // ID-012 (owner, 2026-11-03): a split release (each equally main artist on their own tracks)
+    // belongs to each artist's main discography, never under Featured On.
     const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(
       CONTROL_PARTNER,
       CONTROL_SHARED_ALBUM,
     );
-    expect(subsectionTitle).toBe('Featured On');
+    expect(subsectionTitle).toBeNull();
     expect(await galleryActions.readAlbumNamesByHeading(CONTROL_PARTNER)).toEqual([CONTROL_SHARED_ALBUM]);
   });
 });

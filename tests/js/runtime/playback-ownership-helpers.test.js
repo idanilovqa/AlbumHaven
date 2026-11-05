@@ -1124,14 +1124,19 @@ test('lease expiry still drops ownership when renewals stop answering', async ()
   const { context, clock, stopStreamingPlaybackCalls } = harness;
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
   clock.monotonic = 30_000;
-  await harness.leaseTimers()[0].callback();
-  assert.equal(context.state.player.ownership.activeClaim, null, 'no renewal in flight: the lease ends');
+  const unanswered = harness.leaseTimers()[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.renewals(), 1, 'no renewal in flight: the lapsed lease asks the server once');
+  assert.notEqual(context.state.player.ownership.activeClaim, null);
+  harness.timers.filter(({ delay }) => delay === 10_000).at(-1).callback();
+  await unanswered;
+  assert.equal(context.state.player.ownership.activeClaim, null, 'an unanswered renewal ends the lease');
   assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
 
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
   harness.heartbeat();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(harness.renewals(), 1);
+  assert.equal(harness.renewals(), 2);
   clock.monotonic = 60_000;
   const expiry = harness.leaseTimers()[1].callback();
   await new Promise((resolve) => setImmediate(resolve));
@@ -1142,6 +1147,48 @@ test('lease expiry still drops ownership when renewals stop answering', async ()
   assert.equal(context.state.player.ownership.activeClaim, null);
   assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
   assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost', 'ownership-lost']);
+});
+
+test('a client clock jump past the lease keeps a playing claim the server still honours', async () => {
+  // Playwright's clock.install fakes performance.now and setTimeout but not the heartbeat interval
+  // started before it, so fastForward fires the lease timer with no renewal in between.
+  const harness = leaseHarness({});
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  for (const jump of [1, 2]) {
+    clock.monotonic += 299_000;
+    assert.equal(context.isActivePlaybackOwner(), false);
+    await harness.leaseTimers().at(-1).callback();
+    assert.equal(harness.renewals(), jump, 'each lapsed lease asks the server once');
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
+    assert.equal(context.state.player.ownership.blockedReason, '');
+  }
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('a client clock jump past the lease drops the claim when the server refuses its renewal', async () => {
+  const harness = leaseHarness({ renew: () => jsonResponse({ error: 'claim expired' }, { ok: false, status: 409 }) });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  clock.monotonic += 299_000;
+  await harness.leaseTimers()[0].callback();
+  assert.equal(harness.renewals(), 1);
+  assert.equal(context.state.player.ownership.activeClaim, null);
+  assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
+  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
+});
+
+test('a paused claim lapses at the local lease deadline without renewing', async () => {
+  const harness = leaseHarness({});
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 0 });
+  clock.monotonic += 299_000;
+  await harness.leaseTimers()[0].callback();
+  assert.equal(harness.renewals(), 0, 'a paused client cannot extend its claim');
+  assert.equal(context.state.player.ownership.activeClaim, null);
+  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
 });
 
 {

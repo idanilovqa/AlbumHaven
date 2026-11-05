@@ -12764,14 +12764,18 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
   return accepted;
 }
 
+function isPlaybackClaimRenewable() {
+  const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+  return !playback?.paused && !playback?.ended;
+}
+
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
     if (ownership.activeClaim) {
-      const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
-      if (!playback?.paused && !playback?.ended) void refreshPlaybackOwnershipClaim();
+      if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
     }
     else void handlePlaybackOwnershipEvent();
   }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
@@ -12832,16 +12836,24 @@ function acceptPlaybackClaim(result, prepared) {
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
-  ownership.expiryTimer = setTimeout(async () => {
-    // A claim request in flight confirms or drops this claim itself within its request deadline,
-    // and a newer request queued behind it decides ownership in its turn.
-    const version = ownership.requestVersion || 0;
-    await ownership.pendingOperation;
-    if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
-  }, Math.max(0, leaseDeadline - performance.now()));
+  ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
+    Math.max(0, leaseDeadline - performance.now()));
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+async function expirePlaybackClaim(claim) {
+  const ownership = getPlaybackOwnershipState();
+  // A claim request in flight confirms or drops this claim itself within its request deadline,
+  // and a newer request queued behind it decides ownership in its turn.
+  const version = ownership.requestVersion || 0;
+  await ownership.pendingOperation;
+  if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return;
+  // A jump in this document's clock can reach this deadline while the server's lease still runs,
+  // so a playing claim asks the server once; the renewal drops it on refusal or failure.
+  if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+  else losePlaybackOwnership();
 }
 
 async function refreshPlaybackOwnershipClaim(track = null) {

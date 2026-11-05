@@ -64,7 +64,7 @@ const ANDROID_PATH_PATTERNS = Object.freeze([
 // A release bump (scripts/prepare_release.py always writes version.py) names the version stable
 // promotion builds and the changelog it requires; promotion accepts only a head whose own run
 // passed the Android jobs, so a release head always runs them.
-const RELEASE_BUMP_PATHS = Object.freeze(['version.py', 'CHANGELOG.md']);
+const RELEASE_BUMP_PATHS = Object.freeze(['version.py']);
 // The Android job definitions live in this workflow beside every other job; editing them runs them.
 const PIPELINE_WORKFLOW = '.github/workflows/pr-gates.yml';
 const ANDROID_JOBS = Object.freeze(['test_android', 'test_android_instrumentation']);

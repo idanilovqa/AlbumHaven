@@ -20,8 +20,8 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
    `Android Instrumentation (API 29)` jobs must also have succeeded; a run that
    skipped them (no Android change) cannot be promoted. They build and test that
    exact head commit, not the pull request's merge with its base, so they
-   verified the sources promotion builds. A release bump (`version.py` or
-   `CHANGELOG.md`) always runs them.
+   verified the sources promotion builds. A release bump (a `version.py`
+   change) always runs them.
    Stable also needs the published GitHub release `v<RELEASE_VERSION>` from the
    commit's `version.py`: not a draft or prerelease, published by the repository
    owner, with release notes, a matching `CHANGELOG.md` section, and a tagged

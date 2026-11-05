@@ -395,7 +395,7 @@ for (const forceFull of [false, true]) {
 
 test('Android paths cover the shell, native modules, shared contract fixtures and release bumps only', () => {
   for (const filePath of [
-    'version.py', 'CHANGELOG.md', 'apps/android-shell/app/build.gradle.kts', 'apps/android-shell/gradle/libs.versions.toml',
+    'version.py', 'apps/android-shell/app/build.gradle.kts', 'apps/android-shell/gradle/libs.versions.toml',
     'apps\\android-shell\\app\\src\\main\\java\\Shell.kt', 'packages/native/native-media/android/Engine.kt',
     'tests/fixtures/android-bridge/v1.json', 'tests/fixtures/android-bridge/stable-shells.json',
     'tests/fixtures/listen-sessions-v1.json', 'tests/fixtures/playback-protocol-v1.json',
@@ -403,7 +403,7 @@ test('Android paths cover the shell, native modules, shared contract fixtures an
   for (const filePath of [
     'apps/android-shell/README.md', 'docs/android-update-artifacts.md', 'music_app/static/js/runtime/android-bridge-client.js',
     'tests/fixtures/android-attestation/akita-tee-ec.pem', 'apps/android-shell-other/x.kt', '.github/workflows/pr-gates.yml',
-    '.github/workflows/android-promote.yml', 'docs/version.py', 'docs/CHANGELOG.md', 'README.md',
+    '.github/workflows/android-promote.yml', 'docs/version.py', 'CHANGELOG.md', 'README.md',
   ]) assert.equal(isAndroidPath(filePath), false, filePath);
 });
 
@@ -481,7 +481,7 @@ test('Android jobs follow the whole pull request even when the review is increme
   const releaseBump = '1\t1\tversion.py\n4\t0\tCHANGELOG.md\n1\t1\tpackage.json\n';
   assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: releaseBump } }).run_android, 'true',
     'a release bump verifies the head stable promotion builds');
-  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: '4\t0\tCHANGELOG.md\n' } }).run_android, 'true');
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: '4\t0\tCHANGELOG.md\n' } }).run_android, 'false');
   assert.equal(runScopeCli({
     labels: ['ci:focused-e2e', 'ci:e2e:metadata-mutations'], numstatByBase: { [mergeBase]: android },
   }).run_android, 'false', 'focused runs never authorize and skip Android jobs');

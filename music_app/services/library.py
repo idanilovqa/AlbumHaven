@@ -21,7 +21,7 @@ from music_app.services.album_display_metadata import (
     build_album_display_metadata_payload,
     has_album_display_metadata_values,
 )
-from music_app.services.artist_credits import deduplicate_repeated_album_artist_members
+from music_app.services.artist_credits import deduplicate_repeated_album_artist_members, track_artist_credit_members
 from music_app.services.listen_through import (
     album_top_item_visible_for_viewer,
     default_album_preference_overlay,
@@ -267,6 +267,11 @@ def _dominant_track_artist(track_artist_counts: Counter[str]) -> str:
 
 
 def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str, list[str]]:
+    physical_compilation_states = {
+        entry["compilation_tag"]
+        for entry in entries
+        if type(entry.get("compilation_tag")) is bool
+    }
     persisted_compilation_states = {
         entry.get("is_compilation")
         for entry in entries
@@ -277,6 +282,9 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         if len(persisted_compilation_states) == 1
         else None
     )
+    if physical_compilation_states:
+        # A positive track-level compilation flag must not become an inferred split.
+        persisted_compilation_state = True in physical_compilation_states
 
     def compilation_state(inferred_state: bool) -> bool:
         if persisted_compilation_state is None:
@@ -316,7 +324,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     track_artist_values = []
     for entry in entries:
         structured_artists = entry.get("artists")
-        if isinstance(structured_artists, (list, tuple)):
+        if isinstance(structured_artists, (list, tuple)) and any(str(artist or "").strip() for artist in structured_artists):
             track_artist_values.extend(
                 _normalize_display_artist_name(artist).strip()
                 for artist in structured_artists
@@ -359,7 +367,20 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
     ]
-    if explicit_various and persisted_compilation_state is not True and len(distinct_track_artists) == 2 and all(
+    # A single-performer subset keeps its physical VA credit, but its logical
+    # owner must agree between Edit Tags and the next scan. A known absent tag
+    # is stronger evidence than an older derived compilation classification.
+    known_compilation_tags = all("compilation_tag" in entry for entry in entries)
+    positive_compilation = True in physical_compilation_states or (
+        not known_compilation_tags and persisted_compilation_state is True
+    )
+    if explicit_various and not positive_compilation and len(distinct_track_artists) == 1:
+        solo_artist = distinct_track_artists[0]
+        if (not _is_various_artist(solo_artist) and solo_artist.casefold() != "unknown artist"
+                and len(track_artist_credit_members(solo_artist, solo_artist)) == 1):
+            return False, solo_artist, [solo_artist]
+
+    if explicit_various and not positive_compilation and len(distinct_track_artists) == 2 and all(
         not _is_various_artist(artist) and artist.casefold() != "unknown artist"
         for artist in distinct_track_artists
     ):

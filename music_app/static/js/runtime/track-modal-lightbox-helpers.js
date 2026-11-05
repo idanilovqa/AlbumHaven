@@ -366,6 +366,16 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    if (Array.isArray(cachedAlbum.release_candidate_family_keys)
+      && typeof getManualVersionFamilyKeys === 'function') {
+      const rules = typeof getAlbumReleaseRules === 'function' ? getAlbumReleaseRules(cachedAlbum) : state.view;
+      const currentFamily = [...getManualVersionFamilyKeys(String(cachedAlbum.key || ''), rules?.manual_version_links || {})].sort();
+      const cachedFamily = [...cachedAlbum.release_candidate_family_keys].map(String).sort();
+      if (JSON.stringify(currentFamily) !== JSON.stringify(cachedFamily)) {
+        invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+        return null;
+      }
+    }
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
     const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
     const pendingMutationOwnsCachedMembership = Boolean(

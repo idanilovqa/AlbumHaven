@@ -1358,11 +1358,24 @@ function replaceMatchingReleaseCandidate(albums, preferredAlbum) {
   return nextAlbums;
 }
 
+function getAlbumReleaseRules(album) {
+  const view = state.view;
+  const fallback = album?.release_candidate_rules;
+  return {
+    ignored_version_keys: view?.version_rules_loaded?.ignored === false && fallback
+      ? fallback.ignored_version_keys : view?.ignored_version_keys,
+    manual_version_links: view?.version_rules_loaded?.manual === false && fallback
+      ? fallback.manual_version_links : view?.manual_version_links,
+  };
+}
+
 function getAlbumReleaseSet(album) {
   const visibleAlbums = flattenVisibleAlbums();
-  const sameArtistAlbums = visibleAlbums.filter((item) => String(item.album_artist || '') === String(album.album_artist || ''));
-  const ignoredVersionKeys = new Set(Array.isArray(state.view.ignored_version_keys) ? state.view.ignored_version_keys.map(String) : []);
-  const manualVersionLinks = getManualVersionLinks();
+  const candidates = Array.isArray(album.release_candidates) ? album.release_candidates : visibleAlbums;
+  const sameArtistAlbums = candidates.filter((item) => String(item.album_artist || '') === String(album.album_artist || ''));
+  const rules = getAlbumReleaseRules(album);
+  const ignoredVersionKeys = new Set(Array.isArray(rules?.ignored_version_keys) ? rules.ignored_version_keys.map(String) : []);
+  const manualVersionLinks = rules?.manual_version_links || {};
   const manualFamilyKeys = getManualVersionFamilyKeys(String(album.key || ''), manualVersionLinks);
   const hasManualFamily = manualFamilyKeys.size > 1;
   if (ignoredVersionKeys.has(String(album.key || '')) && !hasManualFamily) {
@@ -1377,7 +1390,7 @@ function getAlbumReleaseSet(album) {
   const targetBase = normalizeAlbumBaseName(album.name);
   const grouped = [];
   if (hasManualFamily) {
-    visibleAlbums.forEach((item) => {
+    [...candidates, ...visibleAlbums].forEach((item) => {
       if (manualFamilyKeys.has(String(item.key || ''))) {
         grouped.push(item);
       }

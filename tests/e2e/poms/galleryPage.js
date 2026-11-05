@@ -945,7 +945,7 @@ export class GalleryPage extends BasePage {
     throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
-  async readAlbumTargetState(expected = {}) {
+  async readAlbumTargetState(expected = {}, { fullProjection = false } = {}) {
     let initialObservation = this.productionViewObserver.read();
     if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
       throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
@@ -978,7 +978,7 @@ export class GalleryPage extends BasePage {
     const canReadAppliedProjection = typeof this.page.evaluate === 'function'
       || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
     const readAppliedProjection = () => (
-      expectedQuery && typeof this.page.evaluate === 'function'
+      expectedQuery && !fullProjection && typeof this.page.evaluate === 'function'
         ? this.readAppliedAlbumTargetProjection({
           artist: expectedArtist,
           album: expectedAlbum,

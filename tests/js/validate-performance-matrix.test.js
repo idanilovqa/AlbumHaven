@@ -18,9 +18,9 @@ const runnerModule = require('../../scripts/run-performance-playwright.cjs');
 const validator = require('../../scripts/ci/validate-performance-matrix.cjs');
 const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest.cjs');
 
-const FIXTURE_RELEASE = 'fixtures-v1.0.27';
-const FIXTURE_MANIFEST_SHA256 = '1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA';
-const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
+const FIXTURE_RELEASE = 'fixtures-v1.0.29';
+const FIXTURE_MANIFEST_SHA256 = '9EA722991C29E42E0A4115B73E06A4D24D31048A60207032F0A4A44F05B4A7AA';
+const ARTWORK_GENERATOR_COMMIT = '38aa02ef034c6235362950946fdf15a4a9a65dc4';
 const EXPECTED_SHARDS = [
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },

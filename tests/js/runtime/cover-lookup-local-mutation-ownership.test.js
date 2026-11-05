@@ -56,6 +56,8 @@ function harness() {
   const confirm = { hidden: true, style: {} };
   const requests = [], galleries = [], notifications = [], painted = new Map(), server = new Map();
   const context = vm.createContext({
+    setTimeout,
+    clearTimeout,
     ButtonComponent: require(path.join(runtime, '../button-component.js')),
     state: { coverRefreshTokens: {}, coverLookup: { modal: { pastedImages: [] }, tasks: [], optimisticAlbumCovers: {} } },
     window: {}, HTMLButtonElement: Button, URL, URLSearchParams, console: { log() {}, error() {}, warn() {} },
@@ -114,6 +116,30 @@ function harness() {
   };
   return { context, markSeen, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, server };
 }
+
+test('lookup identity previews leave the caller hydrated album and its virtual release reference untouched', async () => {
+  const h = harness();
+  const original = { ...album('A'), id: 7, album_id: 7, key: 'album-a', album_ref: 'edition:album-a',
+    preview_only: false, tracks: [{ path: '/A/track.mp3', title: 'Rich track', duration: 180 }] };
+  const before = clone(original);
+  const richTracks = original.tracks;
+  await h.open(original);
+  assert.notEqual(h.context.state.coverLookup.modal.album, original);
+  h.context.applyCoverLookupGalleryPayload({ album: {
+    id: 7, album_id: 7, key: 'album-a', name: 'A', preview_only: true,
+    tracks: [{ path: '/A/track.mp3' }],
+  } });
+  assert.deepEqual(original, before);
+  assert.equal(original.tracks, richTracks);
+  assert.equal(h.context.state.coverLookup.modal.album.album_ref, 'edition:album-a');
+  let requested;
+  h.context.usesMobilePageLayout = () => false;
+  h.context.openTrackModal = value => { requested = value; };
+  h.context.openCoverLookupAlbumDetails();
+  assert.equal(requested.preview_only, true, 'the existing details cache owner checks freshness');
+  assert.equal(requested.album_ref, 'edition:album-a');
+  assert.deepEqual(original, before);
+});
 
 test('local cover delete confirmation foregrounds the desktop and mobile Cover Lookup layers', async () => {
   const h = harness();
@@ -636,6 +662,35 @@ test('mark-seen completion preserves a newer same-token gallery snapshot', async
   await pending;
   assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, newerRead);
   assert.strictEqual(a.cover_candidate_snapshot, first);
+});
+
+test('mark-seen does not propagate a rebound release snapshot to the historical source album', async () => {
+  const h = harness(), a = album('A'), first = unseen('generation-1', 1);
+  h.context.getAlbumRequestKey = value => value?.key || '';
+  a.key = 'historical-release';
+  a.cover_candidate_snapshot = first;
+  await h.open(a);
+  h.context.state.coverLookup.modal.album.key = 'current-release';
+  h.context.state.coverLookup.modal.candidateSnapshot = first;
+  const pending = h.markSeen(first);
+  settleSeen(h.requests[0], first);
+  await pending;
+  assert.strictEqual(a.cover_candidate_snapshot, first);
+  assert.equal(a.key, 'historical-release');
+});
+
+test('mark-seen does not replace a newer snapshot on the hydrated source album', async () => {
+  const h = harness(), a = album('A'), first = unseen('generation-1', 1);
+  a.cover_candidate_snapshot = first;
+  await h.open(a);
+  h.context.state.coverLookup.modal.candidateSnapshot = first;
+  const pending = h.markSeen(first);
+  const next = unseen('generation-2', 2);
+  a.cover_candidate_snapshot = next;
+  settleSeen(h.requests[0], first);
+  await pending;
+  assert.strictEqual(a.cover_candidate_snapshot, next);
+  assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, first);
 });
 
 test('mark-seen may update an unchanged original resource after opening a different album', async () => {

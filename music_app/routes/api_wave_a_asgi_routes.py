@@ -212,14 +212,6 @@ _MEDIA_TAG_EDIT_FIELDS = {
     "album_type",
     "album_rating",
 }
-_TARGETED_INVENTORY_EDIT_FIELDS = {
-    "title",
-    "genre",
-    "track_number",
-    "disc_number",
-    "total_discs",
-    "disc_subtitle",
-}
 _SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS = _STRUCTURAL_EDIT_FIELDS | _MEDIA_TAG_EDIT_FIELDS
 
 
@@ -822,19 +814,8 @@ def _is_selected_postgres_targeted_structural_edit_request(
         if not isinstance(raw_edits, Mapping):
             return False
         field_sets.add(frozenset(str(field or "") for field in raw_edits))
-    if len(field_sets) == 1 and next(iter(field_sets)) in {
-        frozenset({"album"}),
-        frozenset({"year"}),
-        frozenset({"artist"}),
-        frozenset({"album_artist"}),
-        frozenset({"artist", "album_artist"}),
-        frozenset({"album", "artist"}),
-        frozenset({"album", "album_artist"}),
-        frozenset({"album", "artist", "album_artist"}),
-    }:
-        return True
-    return bool(field_sets) and all(
-        bool(fields) and fields <= _TARGETED_INVENTORY_EDIT_FIELDS
+    return any(fields & _MEDIA_TAG_EDIT_FIELDS for fields in field_sets) and all(
+        bool(fields) and fields <= (_MEDIA_TAG_EDIT_FIELDS | {"exception_type", "custom_collection_name"})
         for fields in field_sets
     )
 

@@ -225,29 +225,45 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   }
 });
 
-test('watcher cleanup emits a validated runner-owned directory identity and waits for ready acknowledgment', async () => {
+for (const ownedDirectoryName of ['watcher-grouped-feature-credit', 'watcher-artist-collation-curly']) {
+  test(`watcher cleanup emits validated ${ownedDirectoryName} identity and waits for ready acknowledgment`, async () => {
+    const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+    const { root, controlDirectory } = createOwnedDirectories();
+    try {
+      const lifecycle = createManagedAppLifecycle({
+        environment: createValidEnvironment(root, controlDirectory), createNonce: () => 'watcher-cleanup-2',
+        pollIntervalMs: 1, timeoutMs: 100,
+        async sleep() {
+          assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
+            {
+              nonce: 'watcher-cleanup-2',
+              operation: 'watcher-cleanup',
+              ownedDirectoryName,
+            });
+          fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
+        },
+      });
+      assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
+      assert.deepEqual(
+        await lifecycle.cleanupWatcherFixture(ownedDirectoryName),
+        { nonce: 'watcher-cleanup-2', status: 'ready' },
+      );
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('watcher cleanup rejects unowned directories without sending a lifecycle request', async () => {
   const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
   const { root, controlDirectory } = createOwnedDirectories();
   try {
-    const lifecycle = createManagedAppLifecycle({
-      environment: createValidEnvironment(root, controlDirectory), createNonce: () => 'watcher-cleanup-2',
-      pollIntervalMs: 1, timeoutMs: 100,
-      async sleep() {
-        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
-          {
-            nonce: 'watcher-cleanup-2',
-            operation: 'watcher-cleanup',
-            ownedDirectoryName: 'watcher-grouped-feature-credit',
-          });
-        fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
-      },
-    });
-    assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
-    assert.deepEqual(
-      await lifecycle.cleanupWatcherFixture('watcher-grouped-feature-credit'),
-      { nonce: 'watcher-cleanup-2', status: 'ready' },
-    );
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    const lifecycle = createManagedAppLifecycle({ environment: createValidEnvironment(root, controlDirectory) });
+    for (const directory of ['arbitrary-directory', '../watcher-artist-collation-curly', 'watcher-artist-collation-curly/child']) {
+      await assert.rejects(lifecycle.cleanupWatcherFixture(directory), /runner-owned directory identity/);
+    }
+    assert.equal(fs.existsSync(path.join(controlDirectory, 'restart-request.json')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('concurrent watcher cleanups with different owners are serialized independently', async () => {

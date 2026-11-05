@@ -342,12 +342,38 @@ class UpdaterTest {
         updater.onForeground()
         assertEquals(UpdateState.Installing(manifest()), updater.state)
 
+        // Nothing can be shown again before Android asks for the confirmation.
+        assertFalse(updater.install { error("not reached") })
+
         // The user approved; Android is still installing when its confirmation closes.
         updater.onInstallStatus(3, InstallStatus.PendingUserAction {})
         updater.onForeground()
         assertEquals(UpdateState.Installing(manifest()), updater.state)
-        assertFalse(updater.install { error("not reached") })
         assertTrue(ports.abandoned.isEmpty())
+        assertEquals(listOf(3), ports.committed)
+    }
+
+    @Test
+    fun `a confirmation left with Home is shown again by Install update`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(3))
+        var confirmed = 0
+        updater.onInstallStatus(3, InstallStatus.PendingUserAction { confirmed++ })
+        // Android keeps the session waiting for the answer while the user is away.
+        updater.onForeground()
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+
+        assertTrue(updater.install { error("not reached") })
+        assertEquals(2, confirmed)
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        assertTrue(ports.abandoned.isEmpty())
+        assertEquals(listOf(3), ports.committed)
+
+        // Any later status for the session ends the confirmation it kept.
+        updater.onInstallStatus(3, InstallStatus.Succeeded)
+        assertFalse(updater.install { error("not reached") })
+        assertEquals(2, confirmed)
     }
 
     @Test

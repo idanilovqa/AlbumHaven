@@ -23,20 +23,14 @@ interface NativePlaybackPort {
     fun documentDetached()
 }
 
-/**
- * [controller] names the current origin's controller, which a sandbox switch replaces. A play
- * [mayPlay] holds back, as while another app has audio focus for a moment, is accepted and left
- * for the focus owner to resume.
- */
+/** [controller] names the current origin's controller, which a sandbox switch replaces. */
 class ControllerPlaybackPort(
     private val controller: () -> NativePlaybackController,
-    private val mayPlay: () -> Boolean = { true },
     private val attachment: (attached: Boolean) -> Unit = {},
 ) : NativePlaybackPort {
     override val snapshot get() = controller().snapshot
     override fun loadQueue(load: QueueLoad) = controller().loadQueue(load)
-    override fun play(queueRevision: Long) =
-        if (mayPlay()) controller().play(queueRevision) else CommandResult.ACCEPTED
+    override fun play(queueRevision: Long) = controller().play(queueRevision)
     override fun pause() = controller().pause()
     override fun stop() = controller().stop()
     override fun next(queueRevision: Long) = controller().next(queueRevision)

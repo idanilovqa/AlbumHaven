@@ -11,14 +11,31 @@ sealed interface FocusEffect {
     data class WatchNoisy(val enabled: Boolean) : FocusEffect
 }
 
+/** What the controller asks before any start; called on the playback thread. */
+interface StartGate {
+    /** Whether a start may be heard now; one refused is the gate's to resume. */
+    fun mayStart(): Boolean
+
+    /** The user paused or stopped, so a start held for later is dropped. */
+    fun dropHeldStart()
+
+    companion object {
+        val OPEN = object : StartGate {
+            override fun mayStart() = true
+            override fun dropHeldStart() = Unit
+        }
+    }
+}
+
 /**
  * Media3's audio-focus and becoming-noisy defaults for a music player, kept pure: focus is held
  * while playback is wanted; a permanent loss pauses; a transient loss (a call, an alarm) pauses
  * and resumes only when the platform gives focus back, and a start meanwhile waits for it too, so
  * nothing plays over a call; a may-duck loss is ducked by the platform itself because the request
- * does not pause when ducked; headphones unplugging or Bluetooth audio dropping pauses.
+ * does not pause when ducked; headphones unplugging or Bluetooth audio dropping pauses. The main
+ * thread drives it, and the playback thread asks it as the controller's [StartGate].
  */
-class AudioFocusPolicy {
+class AudioFocusPolicy : StartGate {
     private var held = false
     private var active = false
     private var resumeOnGain = false
@@ -26,6 +43,7 @@ class AudioFocusPolicy {
     /** The request is held but another app has focus for a moment, so nothing may be heard until it returns. */
     private var transientlyLost = false
 
+    @Synchronized
     fun onState(state: NativePlaybackState): List<FocusEffect> {
         val wasActive = active
         val wanted = state == NativePlaybackState.LOADING || state == NativePlaybackState.BUFFERING ||
@@ -59,22 +77,30 @@ class AudioFocusPolicy {
     }
 
     /**
-     * Whether a play may reach the player now. While another app has focus for a moment the play
-     * is remembered for the platform's gain instead, so nothing claims or announces playback meanwhile.
+     * While another app has focus for a moment a start is remembered for the platform's gain
+     * instead, so nothing claims or announces playback meanwhile.
      */
-    fun mayPlay(): Boolean {
+    @Synchronized
+    override fun mayStart(): Boolean {
         if (!transientlyLost) return true
         resumeOnGain = true
         return false
     }
 
+    @Synchronized
+    override fun dropHeldStart() {
+        resumeOnGain = false
+    }
+
     /** A refused request (for example during a call) leaves playback paused. */
+    @Synchronized
     fun onRequestResult(granted: Boolean): List<FocusEffect> {
         if (granted) return emptyList()
         held = false
         return if (active) listOf(FocusEffect.Pause) else emptyList()
     }
 
+    @Synchronized
     fun onFocusChange(change: FocusChange): List<FocusEffect> = when (change) {
         FocusChange.LOSS -> {
             resumeOnGain = false
@@ -103,5 +129,6 @@ class AudioFocusPolicy {
         }
     }
 
+    @Synchronized
     fun onBecomingNoisy(): List<FocusEffect> = if (active) listOf(FocusEffect.Pause) else emptyList()
 }

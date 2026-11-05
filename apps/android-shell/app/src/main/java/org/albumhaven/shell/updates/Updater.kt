@@ -167,6 +167,9 @@ class Updater(
     private var passiveChecked = false
     private var sessionId: Int? = null
 
+    /** Shows the committed session's confirmation again until Android reports anything else for it. */
+    private var confirm: (() -> Unit)? = null
+
     var state: UpdateState = restore()
         private set(value) {
             field = value
@@ -291,9 +294,12 @@ class Updater(
      * Installs the verified update. Without install-source permission the first request explains
      * it and the next opens Android's setting. [prepare] stops playback, writes the final listen
      * checkpoint and releases the claim, then runs its callback; only then is the session committed.
+     * While installing, a confirmation the user left unanswered, for example with Home, is shown
+     * again; an approved installation keeps installing.
      */
     fun install(prepare: (done: () -> Unit) -> Unit): Boolean {
         val manifest = when (val current = state) {
+            is UpdateState.Installing -> return confirm?.also { it() } != null
             is UpdateState.Ready -> current.manifest
             is UpdateState.Authorization -> {
                 if (!ports.canRequestInstalls()) {
@@ -311,6 +317,7 @@ class Updater(
         // The previous session, whose confirmation Android dropped, gives way to a fresh one.
         sessionId?.let(ports::abandon)
         sessionId = null
+        confirm = null
         state = UpdateState.Installing(manifest)
         ports.stage(manifest) { result -> staged(manifest, result, prepare) }
         return true
@@ -347,8 +354,12 @@ class Updater(
             is UpdateState.Ready -> current.manifest
             else -> return
         }
+        confirm = null
         when (status) {
-            is InstallStatus.PendingUserAction -> if (state is UpdateState.Installing) status.confirm()
+            is InstallStatus.PendingUserAction -> if (state is UpdateState.Installing) {
+                confirm = status.confirm
+                status.confirm()
+            }
             // Android replaces the package and ends this process; nothing is left to show.
             InstallStatus.Succeeded -> {
                 sessionId = null

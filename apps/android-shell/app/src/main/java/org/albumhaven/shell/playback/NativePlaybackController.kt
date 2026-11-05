@@ -184,6 +184,8 @@ class NativePlaybackController(
     private val startThread: (Runnable) -> Unit = { Thread(it, "AlbumHavenPlayback").start() },
     /** Hears each failure that stopped playback on the playback thread, so it can be logged. */
     private val failures: (RuntimeException) -> Unit = {},
+    /** Audio focus: every start asks it, so nothing claims, announces or plays over a call. */
+    private val startGate: StartGate = StartGate.OPEN,
 ) {
     private val tasks = LinkedBlockingQueue<Runnable>()
 
@@ -304,9 +306,18 @@ class NativePlaybackController(
 
     fun setLoop(queueRevision: Long, range: LoopRange48k?) = revisioned(queueRevision) { applyLoop(range) }
 
-    fun pause(from: CommandSource = CommandSource.WEB) = post(from) { pauseNow() }
+    fun pause(from: CommandSource = CommandSource.WEB) = post(from) {
+        startGate.dropHeldStart()
+        pauseNow()
+    }
 
-    fun stop(from: CommandSource = CommandSource.WEB) = post(from) { stopNow() }
+    fun stop(from: CommandSource = CommandSource.WEB) = post(from) {
+        startGate.dropHeldStart()
+        stopNow()
+    }
+
+    /** Audio focus pauses playback for a moment; unlike [pause], a start held for its return stays. */
+    fun interrupt() = post(CommandSource.SYSTEM) { pauseNow() }
 
     /**
      * A new document of the same origin re-attaches to the running queue: playback, the claim and
@@ -531,6 +542,12 @@ class NativePlaybackController(
     private fun requestPlay() {
         val item = queue.getOrNull(index) ?: return
         if (wantPlay && state != NativePlaybackState.PAUSED) return
+        // Held for the gate, the queue waits paused; a skip has already silenced the old track.
+        if (!startGate.mayStart()) {
+            retireClaim()
+            setState(NativePlaybackState.PAUSED)
+            return
+        }
         wantPlay = true
         releasePending = false
         startRetried = false
@@ -954,8 +971,9 @@ class NativePlaybackController(
         closeTransport()
         releaseOutput()
         retired = true
-        dropRetiredWork()
+        // Shutdowns that already waited finish first; one posted since runs at once after them.
         shutdownFinished()
+        dropRetiredWork()
     }
 
     /** One listen write as the owner, once a pending claim settles; [done] runs on the playback thread. */

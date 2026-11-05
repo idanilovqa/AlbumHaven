@@ -140,6 +140,30 @@ class PlaybackThreadTest {
     }
 
     @Test
+    fun aShutdownPostedWhileTheFirstFinishesAnswersAfterIt() {
+        val finished = mutableListOf<String>()
+        lateinit var harness: ControllerHarness
+        var finishing = false
+        // The claim is given back as the first shutdown finishes; another shutdown arrives meanwhile.
+        val claimIo = Executor { task ->
+            task.run()
+            if (finishing) {
+                finishing = false
+                harness.controller.shutdown { finished += "origin" }
+            }
+        }
+        harness = ControllerHarness(long, claimIo = claimIo)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.controller.shutdown { finished += "update" }
+        finishing = true
+        harness.runUntil(maxSteps = 100) { finished.size == 2 }
+
+        assertEquals(listOf("update", "origin"), finished)
+        assertEquals(1, harness.claims.calls.count { it.startsWith("release:") })
+    }
+
+    @Test
     fun aClaimAnswerArrivingAfterShutdownNeverReachesTheRetiredExecutors() {
         val pending = ManualExecutor()
         var retired = false

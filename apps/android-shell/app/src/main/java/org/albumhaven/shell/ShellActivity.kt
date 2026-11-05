@@ -50,7 +50,8 @@ import java.util.concurrent.Executors
 class ShellActivity : ComponentActivity(), BridgeHost {
 
     private val originPolicy = OriginPolicy.forBuild
-    private val probeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    /** Sandbox probes and download requests, which touch the network and storage. */
+    private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var preferences: ShellPreferences
@@ -171,7 +172,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         updater?.removeListener(updateEvents)
         if (playbackBound) unbindService(playbackConnection)
         playback = null
-        probeExecutor.shutdownNow()
+        // A download already asked for is still handed to Android.
+        ioExecutor.shutdown()
         mainHandler.removeCallbacksAndMessages(null)
         fileChooserCallback?.onReceiveValue(null)
         webView.destroy()
@@ -204,7 +206,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             return
         }
         sandboxProbePending = true
-        probeExecutor.execute {
+        ioExecutor.execute {
             val reachable = isReachable(origin)
             mainHandler.post {
                 if (isDestroyed) return@post
@@ -302,10 +304,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private fun enqueueSameOriginDownload(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
         if (!originPolicy.isSameOrigin(url, selectedOrigin)) return
+        val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
         // Without a working Download Manager the page simply stays where it is.
-        downloadManagerOrNull {
+        enqueueDownload(ioExecutor, mainHandler::post, {
             val request = DownloadManager.Request(url.toUri())
-                .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url).orEmpty())
+                .addRequestHeader("Cookie", cookie)
                 .addRequestHeader("User-Agent", userAgent)
                 .setMimeType(mimeType)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -315,7 +318,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                     URLUtil.guessFileName(url, contentDisposition, mimeType),
                 )
             getSystemService(DownloadManager::class.java).enqueue(request)
-        }
+        }) {}
     }
 
     private fun openExternally(url: String) {

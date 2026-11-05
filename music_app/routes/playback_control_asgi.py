@@ -6,14 +6,15 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.access_log_redaction import redact_access_log_paths
 from music_app.routes.auth_asgi import _same_origin
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.auth_session_csrf import matches_session_csrf
 from music_app.services.capability_artwork import sanitized_artwork
 from music_app.services.lastfm import get_saved_lastfm_session, lastfm_scrobbling_available, scrobble_track
 from music_app.services.lastfm_sync_bridge import (
-    playback_handoff_completion_fingerprint,
     persist_measured_playback_completion,
+    prepare_handoff_completion,
     record_playback_session_complete,
 )
 from music_app.services.listen_history import (
@@ -31,8 +32,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SCROBBLING_ACTIONS = ("integration.lastfm.now_playing", "integration.lastfm.scrobble")
+_SCROBBLE_ACTION = "integration.lastfm.scrobble"
 # The Android 13+ media card fills its width with the artwork; larger only costs bytes.
 _NOTIFICATION_ARTWORK_EDGE = 768
+ARTWORK_PREFIX = "/playback/artwork/"
+# A resume token never expires, and its payload names library files.
+redact_access_log_paths(ARTWORK_PREFIX)
 
 
 def playback_config(request):
@@ -44,6 +49,12 @@ async def playback_call(function, *args, **kwargs):
         return await run_in_threadpool(function, *args, **kwargs)
     except PlaybackContractError as error:
         raise HTTPException(error.status_code, str(error)) from None
+
+
+async def reference_call(request, call):
+    """Runs ``call`` on a PlaybackReferenceService built inside the same guarded call, so a
+    misconfigured reference key answers 503 instead of escaping as an unhandled error."""
+    return await playback_call(lambda: call(PlaybackReferenceService(playback_config(request))))
 
 
 async def playback_payload(request: Request) -> dict:
@@ -62,8 +73,7 @@ async def playback_refs(request: Request) -> JSONResponse:
     tracks = payload.get("tracks")
     if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
         raise HTTPException(400, "Invalid playback reference batch.")
-    service = PlaybackReferenceService(playback_config(request))
-    result = await playback_call(service.issue_batch, request.state.current_actor, tracks)
+    result = await reference_call(request, lambda service: service.issue_batch(request.state.current_actor, tracks))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -71,16 +81,16 @@ async def playback_refs(request: Request) -> JSONResponse:
 async def resume_playback_refs(request: Request) -> JSONResponse:
     """Fresh references for the resume tokens a native player persisted instead of references."""
     payload = await playback_payload(request)
-    service = PlaybackReferenceService(playback_config(request))
-    result = await playback_call(service.exchange_resume_tokens, request.state.current_actor, payload.get("tracks"))
+    result = await reference_call(request, lambda service: service.exchange_resume_tokens(
+        request.state.current_actor, payload.get("tracks")))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/playback/artwork/{resume_token}")
+@router.get(ARTWORK_PREFIX + "{resume_token}")
 async def playback_artwork(request: Request, resume_token: str) -> Response:
     """A resume token's cover, re-encoded at media-notification size; no path in the URL or any answer."""
-    service = PlaybackReferenceService(playback_config(request))
-    path = await playback_call(service.resolve_artwork, request.state.current_actor, resume_token)
+    path = await reference_call(request, lambda service: service.resolve_artwork(
+        request.state.current_actor, resume_token))
     image = await run_in_threadpool(sanitized_artwork, path, max_edge=_NOTIFICATION_ARTWORK_EDGE, image_format="JPEG")
     # The token names a track, not an image revision, so a changed cover shows within the hour.
     return Response(image, media_type="image/jpeg",
@@ -142,14 +152,16 @@ async def stage_playback_handoff(request: Request):
     if "completion" not in payload:
         raise HTTPException(400, "Invalid playback completion.")
     completion = payload.get("completion")
-    if completion is not None and (not isinstance(completion, dict)
-            or completion.get("measurement_version") != "rendered-pcm-v1"
-            or completion.get("finalized") is not True):
-        raise HTTPException(400, "Invalid playback completion.")
-    persisted = []
+    if completion is not None:
+        if (not isinstance(completion, dict)
+                or completion.get("measurement_version") != "rendered-pcm-v1"
+                or completion.get("finalized") is not True):
+            raise HTTPException(400, "Invalid playback completion.")
+        # Recording the listen is the same write as /playback/session/complete.
+        await require_action("integration.lastfm.complete")(request)
     actor = request.state.current_actor
     try:
-        completion_digest = playback_handoff_completion_fingerprint(
+        entry, completion_digest = prepare_handoff_completion(
             completion,
             user_timezone="UTC",
             account_id=actor.account_id,
@@ -160,18 +172,10 @@ async def stage_playback_handoff(request: Request):
         raise HTTPException(getattr(error, "status_code", 400), str(error)) from None
 
     def persist_completion(connection, account_id, library_id):
-        receipt = persist_measured_playback_completion(
-            config,
-            completion,
-            account_id=account_id,
-            library_id=library_id,
-            connection=connection,
-            user_timezone="UTC",
-            is_meaningful_listen_session=is_meaningful_listen_session,
+        persist_measured_playback_completion(
+            config, entry, account_id=account_id, library_id=library_id, connection=connection,
             append_listen_history_entry=append_listen_history_entry,
         )
-        persisted.append((receipt, account_id, library_id))
-        return receipt
 
     try:
         result = await playback_call(PostgresPlaybackClaims(config).stage_handoff,
@@ -179,20 +183,27 @@ async def stage_playback_handoff(request: Request):
             claim_token=payload.get("claimToken"), handoff_id=handoff.get("id"),
             handoff_token=handoff.get("token"),
             completion_digest=completion_digest,
-            persist_completion=persist_completion if completion is not None else None)
+            persist_completion=persist_completion if entry is not None else None)
     except ValueError as error:
         raise HTTPException(getattr(error, "status_code", 400), "Invalid playback completion.") from None
+    if entry is not None and allowed_actions_for_request(request, (_SCROBBLE_ACTION,)).allows(_SCROBBLE_ACTION):
+        await _scrobble_staged_completion(config, completion, entry, actor)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
-    if persisted:
-        receipt, account_id, library_id = persisted[0]
-        lastfm_session = await playback_call(
-            get_saved_lastfm_session, config, account_id=account_id)
-        await playback_call(
+
+async def _scrobble_staged_completion(config, completion, entry, actor):
+    """Submits a committed handoff listen to Last.fm; the handoff stays staged whatever happens.
+
+    A failure leaves the stored listen marked as not yet scrobbled, for a later retry.
+    """
+    try:
+        lastfm_session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=actor.account_id)
+        await run_in_threadpool(
             record_playback_session_complete,
             config,
             completion,
-            account_id=account_id,
-            library_id=library_id,
+            account_id=actor.account_id,
+            library_id=actor.current_library_id,
             lastfm_session=lastfm_session,
             user_timezone="UTC",
             normalize_playback_track_payload=normalize_playback_track_payload,
@@ -201,9 +212,10 @@ async def stage_playback_handoff(request: Request):
             update_listen_history_entry=update_listen_history_entry,
             scrobble_track=scrobble_track,
             log_lastfm_scrobble_event=lambda *_args, **_kwargs: None,
-            persisted_measured_entry=receipt,
+            persisted_entry=entry,
         )
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except Exception as error:
+        logger.warning("A staged playback handoff's Last.fm submission failed (%s).", type(error).__name__)
 
 
 @router.delete("/playback/state")
@@ -230,6 +242,6 @@ async def resolve_listen_track(request, payload):
     if "path" in payload or "cover_path" in payload:
         raise HTTPException(400, "Invalid playback request.")
     await require_action("library.media.read")(request)
-    service = PlaybackReferenceService(playback_config(request))
-    path = await playback_call(service.resolve_library_path, request.state.current_actor, payload["playbackRef"])
+    path = await reference_call(request, lambda service: service.resolve_library_path(
+        request.state.current_actor, payload["playbackRef"]))
     return {**{key: value for key, value in payload.items() if key != "playbackRef"}, "path": path}

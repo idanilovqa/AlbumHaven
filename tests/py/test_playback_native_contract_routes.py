@@ -198,6 +198,31 @@ def test_invalid_resume_tokens_are_refused_without_naming_anything(playback_app,
     assert status in {400, 403}
 
 
+@pytest.mark.parametrize("method,path,body", [
+    ("POST", "/playback/refs", {"protocol": 1, "tracks": [{"clientKey": "a", "path": "/private/library/song.flac"}]}),
+    ("POST", "/playback/refs/resume", {"protocol": 1, "tracks": [{"clientKey": "a", "resumeToken": "a.b"}]}),
+    ("GET", "/playback/artwork/opaque.token", None),
+], ids=["refs", "resume", "artwork"])
+def test_a_misconfigured_reference_key_is_unavailable_not_an_error(playback_app, monkeypatch, method, path, body):
+    configured = playback_control_asgi.playback_config
+    monkeypatch.setattr(playback_control_asgi, "playback_config",
+                        lambda request: {**configured(request), "hmac": {"secret": "too-short", "key_version": 1}})
+    status, _, response = run_asgi_request(playback_app, method, path, json_body=body)
+    assert status == 503
+    assert "/private/library" not in response.decode()
+
+
+def test_access_logs_never_record_an_artwork_resume_token():
+    import logging
+
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                               ("127.0.0.1:5", "GET", "/playback/artwork/secret.payload", "1.1", 200), None)
+    for item in logging.getLogger("uvicorn.access").filters:
+        assert item.filter(record)
+    assert "secret" not in record.getMessage()
+    assert "/playback/artwork/[redacted]" in record.getMessage()
+
+
 @pytest.mark.parametrize("protocol", [None, 0, 2, True, "1"])
 def test_reference_batch_rejects_unsupported_protocol(playback_app, protocol):
     status, _, _ = run_asgi_request(

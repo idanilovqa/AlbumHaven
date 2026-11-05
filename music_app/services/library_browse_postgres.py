@@ -11261,16 +11261,6 @@ def _problematic_files_sql(
               where octet_length(file_album) <> length(file_album)
             )
         ),
-        non_ascii_year_album_ids as (
-          -- Broad candidate superset: problem reasons that no other branch
-          -- prefilters still depend on it (FTC-TAGS-020 split releases).
-          select candidate.album_id
-          from active_problem_rows candidate
-          where candidate.file_year in (
-              select file_year from active_problem_rows
-              where octet_length(file_album) <> length(file_album)
-            )
-        ),
     """
     if candidate_summary and not selected_album_ids:
         album_text_expressions = (
@@ -11290,7 +11280,9 @@ def _problematic_files_sql(
             max(active_problem_rows.file_album_artist) as max_file_album_artist,
             count(active_problem_rows.file_album_artist) < count(*) as has_blank_album_artist,
             min(active_problem_rows.file_year) as min_file_year,
-            max(active_problem_rows.file_year) as max_file_year
+            max(active_problem_rows.file_year) as max_file_year,
+            -- A blank file year splits a release by year in Python ("Missing year").
+            count(active_problem_rows.file_year) < count(*) as has_blank_year
           from active_problem_rows
           group by active_problem_rows.album_id
         ),
@@ -11404,6 +11396,7 @@ def _problematic_files_sql(
               )
             )
             or active_album_rollup.min_file_year <> active_album_rollup.max_file_year
+            or active_album_rollup.has_blank_year
             or (
               library.local_albums.release_year is not null
               and (
@@ -11459,9 +11452,18 @@ def _problematic_files_sql(
           select required_text_missing_album_ids.album_id
           from required_text_missing_album_ids
           union
-          select duplicate_album_ids.album_id from duplicate_album_ids
+          -- Superset of edition_title_normalization.parse_edition_title: a title
+          -- ending in a bracketed edition, Russian издание, or expanded remaster.
+          select active_problem_rows.album_id
+          from active_problem_rows
+          where active_problem_rows.file_album ~ '[])]$'
+            and (
+              position('edition' in active_problem_rows.file_album) > 0
+              or position('издание' in active_problem_rows.file_album) > 0
+              or position('remaster' in active_problem_rows.file_album) > 0
+            )
           union
-          select non_ascii_year_album_ids.album_id from non_ascii_year_album_ids
+          select duplicate_album_ids.album_id from duplicate_album_ids
           union
           select active_track_order_rollup.album_id
           from active_track_order_rollup

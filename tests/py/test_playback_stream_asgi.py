@@ -1059,7 +1059,10 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         }
         request_task = asyncio.create_task(playback_app(scope, receive, send))
         try:
-            await asyncio.wait_for(monitor_started.wait(), timeout=1)
+            # Setup only: the first request through the full middleware stack can
+            # exceed one second late in the single-process CI suite. The
+            # behavior under test is the 0.1 s response bound asserted below.
+            await asyncio.wait_for(monitor_started.wait(), timeout=10)
             response_wait = asyncio.create_task(response_started.wait())
             completed, _pending = await asyncio.wait({response_wait}, timeout=0.1)
             assert response_wait in completed, (

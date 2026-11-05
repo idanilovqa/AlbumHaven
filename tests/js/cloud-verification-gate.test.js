@@ -286,8 +286,11 @@ test('workflow runs the Android jobs behind reviews only for Android changes and
     assert.match(unit, new RegExp(task));
   }
   assert.match(unit, /listen-session-parity\.test\.js/);
-  assert.match(unit, /name: android-unsigned-apks-/);
-  assert.match(unit, /path: apps\/android-shell\/app\/build\/outputs\/apk\/\*\/release\/\*-unsigned\.apk/);
+  // The repository is public: APKs are never uploaded, only their checksums.
+  assert.doesNotMatch(unit, /\.apk\s*$/m);
+  assert.doesNotMatch(unit, /android-unsigned-apks-/);
+  assert.match(unit, /sha256sum "\$\{apks\[@\]\}"/);
+  assert.match(unit, /unsigned-apk-sha256\.txt/);
   const instrumentation = workflow.slice(workflow.indexOf('  test_android_instrumentation:'), workflow.indexOf('  test_js:'));
   assert.match(instrumentation, /api-level: 29/);
   assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765/);

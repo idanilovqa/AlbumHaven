@@ -1,6 +1,8 @@
 # Android release signing and promotion
 
-Pull requests build unsigned evidence APKs only. Installable APKs come from the
+Pull requests build unsigned APKs only and keep just their SHA-256 checksums as
+evidence; the APKs are never uploaded because the repository is public.
+Installable APKs come from the
 `android-promote` workflow, which promotes one exact commit to one channel
 (`stable` or `sandbox`). It deploys nothing: its output is a data artifact that
 the outbound-only synchronizer in the private deployments repository verifies

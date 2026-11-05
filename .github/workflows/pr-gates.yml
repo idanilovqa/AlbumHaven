@@ -74,13 +74,17 @@ jobs:
       - name: Browser side of the shared Android contract fixtures
         run: node --test --test-concurrency=1 tests/js/runtime/android-*.test.js tests/js/runtime/listen-session-parity.test.js
 
-      - name: Upload unsigned evidence APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-unsigned-apks-${{ github.run_id }}-${{ github.run_attempt }}
-          path: apps/android-shell/app/build/outputs/apk/*/release/*-unsigned.apk
-          if-no-files-found: error
-          retention-days: 14
+      # The repository is public, so APKs are never uploaded (owner decision,
+      # November 4, 2026); only their checksums are kept as build evidence.
+      - name: Record unsigned evidence APK checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(apps/android-shell/app/build/outputs/apk/*/release/*-unsigned.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then echo "No unsigned release APKs were built." >&2; exit 1; fi
+          mkdir -p apps/android-shell/app/build/reports
+          sha256sum "${apks[@]}" | tee apps/android-shell/app/build/reports/unsigned-apk-sha256.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Android reports
         if: ${{ always() }}

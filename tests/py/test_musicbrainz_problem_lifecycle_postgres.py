@@ -261,3 +261,52 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
     assert unavailable["unresolved_reason"] == "MusicBrainz: Provider unavailable"
     assert unavailable["last_attempt_at"] is not None
     assert unavailable["next_attempt_at"] is None
+
+
+def test_background_triggers_cool_off_unresolved_artists_but_owner_sync_retries(monkeypatch: pytest.MonkeyPatch):
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    _apply_pre_delivery_migrations(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+        library_id = connection.execute(
+            """
+            select library.libraries.id from app.bootstrap_owners
+            join library.libraries on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            """
+        ).fetchone()["id"]
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name, metadata) "
+            "values (%s, 'cooloff-artist', 'Unknown Band', '{}'::jsonb) returning id",
+            (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata) "
+            "values (%s, %s, 'cooloff-album', 'Demo', '{}'::jsonb) returning id",
+            (library_id, artist_id),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata) "
+            "values (%s, %s, %s, 'cooloff-track', 'Track', '{}'::jsonb)",
+            (library_id, album_id, artist_id),
+        )
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="not_found", artist=None, confidence=0,
+        evidence_summary="All bounded search pages completed.", observed_at=NOW,
+    )
+
+    later = NOW + timedelta(days=1)
+    assert repository.enqueue_eligible_artists(reason="periodic_scan", observed_at=later) == {"enqueued_count": 0}
+    assert repository.enqueue_eligible_artists(reason="library_menu_sync", observed_at=later) == {"enqueued_count": 1}
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("delete from ops.metadata_enrichment_jobs where local_artist_id = %s", (artist_id,))
+    assert repository.enqueue_eligible_artists(
+        reason="periodic_scan", observed_at=NOW + timedelta(days=8),
+    ) == {"enqueued_count": 1}

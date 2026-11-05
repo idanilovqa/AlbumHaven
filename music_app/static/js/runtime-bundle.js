@@ -4470,6 +4470,7 @@ function buildGalleryArtistMetadataHtml(albumCount, artistMusicBrainz = null) {
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
+const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
 const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
@@ -4493,7 +4494,10 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
     return Promise.resolve(false);
   }
   if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
-  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS) {
+  // Poll quickly only while a first lookup is pending; otherwise back off.
+  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
+  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
     return Promise.resolve(false);
   }
   galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })

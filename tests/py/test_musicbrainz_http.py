@@ -346,3 +346,40 @@ def test_blocked_service_unavailable_is_not_retried_inside_the_same_call(monkeyp
     assert payload is None
     assert request_count == 1
     assert metadata["blocked_reason"] == "http_blocked"
+
+
+def test_loopback_mirror_skips_public_throttle_lock_and_block(monkeypatch):
+    _reset_transport_state(monkeypatch)
+    monkeypatch.setattr(musicbrainz_http, "_BLOCKED_UNTIL", musicbrainz_http.time.time() + 600)
+    monkeypatch.setattr(musicbrainz_http, "_BLOCK_REASON", "http_429")
+    waits = []
+    monkeypatch.setattr(musicbrainz_http, "_wait_for_slot", lambda *_args: waits.append(True) or True)
+
+    class ExplodingLock:
+        def __enter__(self):
+            raise AssertionError("loopback mirror requests must not take the public request lock")
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(musicbrainz_http, "_REQUEST_LOCK", ExplodingLock())
+    monkeypatch.setattr(
+        musicbrainz_http.urllib.request, "urlopen", lambda *_args, **_kwargs: _JsonResponse(b'{"id":"local"}'),
+    )
+
+    payload, metadata = musicbrainz_http.get_json("http://127.0.0.1:5050/ws/2/artist/x", "AlbumHaven/Test")
+
+    assert payload == {"id": "local"}
+    assert metadata["status"] == "network"
+    assert waits == []
+
+
+def test_public_service_keeps_the_rate_limit_block(monkeypatch):
+    _reset_transport_state(monkeypatch)
+    monkeypatch.setattr(musicbrainz_http, "_BLOCKED_UNTIL", musicbrainz_http.time.time() + 600)
+    monkeypatch.setattr(musicbrainz_http, "_BLOCK_REASON", "http_429")
+
+    payload, metadata = musicbrainz_http.get_json("https://musicbrainz.org/ws/2/artist/x", "AlbumHaven/Test")
+
+    assert payload is None
+    assert metadata["status"] == "blocked"

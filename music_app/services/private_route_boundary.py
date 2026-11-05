@@ -66,6 +66,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/problematic-files/detail"): "library.problems.read",
     ("GET", "/utilities/problematic-files/{album_key:path}"): "library.problems.read",
     ("GET", "/api/musicbrainz/artists/review"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/status"): "library.problems.read",
     ("GET", "/api/musicbrainz/artists/{local_artist_id}"): "library.problems.read",
     (
         "POST",

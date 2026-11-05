@@ -11,6 +11,7 @@ from music_app.services.postgres_connections import pooled_connection
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _JOB_KIND = "musicbrainz_artist_enrichment"
+_OWNER_SYNC_REASON = "library_menu_sync"
 _MAX_ALIASES = 24
 _MAX_CANDIDATES = 25
 _MAX_TAGS = 64
@@ -68,6 +69,9 @@ class MusicBrainzEnrichmentPostgresRepository:
             "reason": _bounded_text(reason, 128, required=True),
             "observed_at": _aware_utc(observed_at),
             "job_kind": _JOB_KIND,
+            # Background triggers re-try a recorded unresolved outcome only after
+            # a cool-off; the owner's explicit sync re-tries it immediately.
+            "retry_recent_unresolved": reason == _OWNER_SYNC_REASON,
         }
         sql = _active_library_cte() + """
             , eligible_artists as (
@@ -92,6 +96,11 @@ class MusicBrainzEnrichmentPostgresRepository:
                       matches.state = 'matched'
                       and matches.last_verified_at is not null
                       and matches.last_verified_at >= %(observed_at)s - interval '30 days'
+                    )
+                    and (
+                      %(retry_recent_unresolved)s
+                      or matches.state in ('matched', 'pending')
+                      or matches.last_observed_at < %(observed_at)s - interval '7 days'
                     )
                   )
                 )

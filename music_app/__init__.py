@@ -628,7 +628,12 @@ def create_asgi_app():
                 _app.state.musicbrainz_enrichment_api_service = (
                     build_musicbrainz_enrichment_api_service(runtime.config)
                 )
-                schedule_startup_backfill(enrichment_scheduler)
+                try:
+                    schedule_startup_backfill(enrichment_scheduler)
+                except Exception:
+                    # Enrichment is optional; a missing migration or transient
+                    # database error must not keep the application down.
+                    runtime.logger.warning("MusicBrainz startup backfill could not be scheduled.")
             start_musicbrainz_enrichment_worker(_app)
             start_lastfm_retry_worker(runtime)
             welcome_worker = start_welcome_retry_worker(_app)

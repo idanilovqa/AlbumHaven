@@ -177,6 +177,7 @@ def test_routes_are_registered_with_exact_capability_actions():
 
     expected = {
         "/api/musicbrainz/artists/review": ("GET", "library.problems.read"),
+        "/api/musicbrainz/artists/status": ("GET", "library.problems.read"),
         "/api/musicbrainz/artists/{local_artist_id}": (
             "GET",
             "library.problems.read",

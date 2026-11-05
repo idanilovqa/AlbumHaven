@@ -48,10 +48,10 @@ def _read_provider_config(overrides: dict[str, str]) -> dict[str, object]:
     return json.loads(result.stdout)
 
 
-def test_provider_endpoint_config_defaults_to_expected_services():
+def test_provider_endpoint_config_defaults_to_public_services():
     assert _read_provider_config({}) == {
         "apple": "https://itunes.apple.com",
-        "musicbrainz": "http://localhost:5050/ws/2",
+        "musicbrainz": "https://musicbrainz.org/ws/2",
         "cover_art_archive": "https://coverartarchive.org",
         "enabled_music_services": ["apple", "deezer", "genius", "spotify", "youtube_music"],
     }

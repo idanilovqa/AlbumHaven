@@ -8,6 +8,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from contextlib import nullcontext
+from urllib.parse import urlparse
 
 from music_app.services.cover_provider_deadline import (
     automatic_cover_budget_active,
@@ -84,6 +86,11 @@ def _mark_request_complete() -> None:
     global _NEXT_ALLOWED_AT_MONOTONIC
     with _STATE_LOCK:
         _NEXT_ALLOWED_AT_MONOTONIC = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
+
+
+def _is_loopback_url(url: str) -> bool:
+    host = (urlparse(str(url or "")).hostname or "").casefold()
+    return host in {"localhost", "127.0.0.1", "::1"}
 
 
 def _wait_for_delay(delay: float, should_cancel: Callable[[], bool] | None = None) -> bool:
@@ -174,7 +181,11 @@ def get_json(
     if isinstance(cached, dict):
         return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
-    with _REQUEST_LOCK:
+    # The public service is shared and rate limited; a loopback mirror is not,
+    # so its requests skip the process-wide lock, spacing and public block.
+    throttled = not _is_loopback_url(url)
+    mark_complete = _mark_request_complete if throttled else (lambda: None)
+    with _REQUEST_LOCK if throttled else nullcontext():
         if callable(should_cancel) and should_cancel():
             return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
         cached = _get_cached_value(url, accept)
@@ -183,7 +194,7 @@ def get_json(
         if isinstance(cached, dict):
             return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
-        blocked, retry_after_seconds, blocked_reason = _blocked_state()
+        blocked, retry_after_seconds, blocked_reason = _blocked_state() if throttled else (False, 0.0, "")
         if blocked:
             return failed({
                 "status": "blocked",
@@ -203,7 +214,9 @@ def get_json(
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
-            slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
+            slot_ready = True
+            if throttled:
+                slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
             if slot_ready is False:
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             if callable(should_cancel) and should_cancel():
@@ -213,7 +226,7 @@ def get_json(
             try:
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 if isinstance(payload, dict):
@@ -226,7 +239,7 @@ def get_json(
                     body = exc.read()
                 except Exception:
                     body = b""
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_http_error(int(getattr(exc, "code", 0) or 0), body)
@@ -248,7 +261,7 @@ def get_json(
                     metadata["blocked_reason"] = block_reason
                 return failed(metadata)
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as exc:
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_exception(getattr(exc, "reason", exc))
@@ -264,10 +277,10 @@ def get_json(
                 status = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "connection_error"
                 return failed({"status": status, "cache_hit": False, "attempt": attempt})
             except (json.JSONDecodeError, UnicodeDecodeError):
-                _mark_request_complete()
+                mark_complete()
                 return failed({"status": "invalid_response", "cache_hit": False, "attempt": attempt})
             except Exception as exc:
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_exception(exc)

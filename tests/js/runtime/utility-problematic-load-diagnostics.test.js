@@ -471,6 +471,48 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.completeLoadPromise, null);
 });
 
+test('a render-suppressed complete load paints the refreshed detail that replaced a clicked album request', async () => {
+  const fullResponse = createDeferred();
+  const clickedDetail = createDeferred();
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const detailBody = (name) => ({
+    key: 'clicked',
+    name,
+    detail_loaded: true,
+    tracks: [],
+    repair_preview_rows: [],
+    track_problem_rows: [],
+    problematic_track_paths: [],
+  });
+  let detailRequests = 0;
+  const { context, calls } = loadHelper({
+    async fetch(url) {
+      const target = String(url);
+      if (target.endsWith('?limit=50')) {
+        return json({ complete: false, items: [{ key: 'clicked', name: 'Clicked', issue_count: 1, detail_loaded: false }] });
+      }
+      if (target.includes('/detail?')) {
+        detailRequests += 1;
+        return detailRequests === 1 ? clickedDetail.promise : json(detailBody('Clicked refreshed detail'));
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, { render: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.state.utility.selectedProblematicKey = 'clicked';
+  void context.loadProblematicAlbumDetail('clicked');
+  fullResponse.resolve(json({ items: [{ key: 'clicked', name: 'Clicked', issue_count: 2, detail_loaded: false }] }));
+  await load;
+  clickedDetail.resolve(json(detailBody('Clicked stale detail')));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(detailRequests, 2);
+  assert.equal(context.state.utility.problematicFiles[0].name, 'Clicked refreshed detail');
+  assert.ok(calls.renders >= 1, 'the refreshed detail replaced the clicked request, so it must paint');
+});
+
 test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
   const fullResponse = createDeferred();
   const requestedUrls = [];

@@ -30,7 +30,24 @@ def physical_catalog(request):
     with psycopg.connect(database_url, row_factory=psycopg.rows.dict_row) as connection:
         try:
             if fixture_mode == "c-collation":
+                # Stored path projections block a collation change, so rebuild
+                # them unchanged around it inside this rolled-back transaction.
+                projections = connection.execute("""
+                    select a.attname as name, format_type(a.atttypid, a.atttypmod) as type,
+                           pg_get_expr(d.adbin, d.adrelid) as expression
+                    from pg_attribute a
+                    join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+                    where a.attrelid = 'library.local_track_files'::regclass and a.attgenerated = 's'
+                    order by a.attnum
+                """).fetchall()
+                for column in projections:
+                    connection.execute(f'ALTER TABLE library.local_track_files DROP COLUMN "{column["name"]}"')
                 connection.execute('ALTER TABLE library.local_track_files ALTER COLUMN private_path TYPE text COLLATE "C"')
+                for column in projections:
+                    connection.execute(
+                        f'ALTER TABLE library.local_track_files ADD COLUMN "{column["name"]}" {column["type"]} '
+                        f'GENERATED ALWAYS AS ({column["expression"]}) STORED'
+                    )
             owner = connection.execute("""
                 select l.id, l.owner_account_id from library.libraries l
                 join app.bootstrap_owners b on b.account_id = l.owner_account_id

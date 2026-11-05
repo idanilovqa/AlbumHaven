@@ -755,13 +755,20 @@ def create_asgi_app():
 
         automatic_recovery_started_at: dict[frozenset[str], str] = {}
 
+        def scan_in_progress() -> bool:
+            return bool(runtime.library_state.get("scan_in_progress"))
+
+        def wait_for_scan() -> None:
+            while scan_in_progress():
+                if targeted_reconciler.wait_for_stop(_CATCH_UP_SCAN_POLL_SECONDS):
+                    raise RuntimeError("Library watcher catch-up stopped before the scan finished.")
+
         def catch_up_library_roots(root_ids: frozenset[str]) -> None:
             # A running full scan re-reads every root; a concurrent catch-up
             # doubled disk reads and contended its publication (sandbox2
-            # 2026-11-05). Start after it, when unchanged files are reused.
-            while runtime.library_state.get("scan_in_progress"):
-                if targeted_reconciler.wait_for_stop(_CATCH_UP_SCAN_POLL_SECONDS):
-                    raise RuntimeError("Library watcher catch-up stopped before the scan finished.")
+            # 2026-11-05, where a catch-up started just before the startup
+            # repair scan). Start after it, and yield to one that starts midway.
+            wait_for_scan()
             recovery_started_at = datetime.now(timezone.utc).isoformat()
             roots_by_id = {
                 str(root.get("id") or ""): dict(root)
@@ -776,19 +783,24 @@ def create_asgi_app():
                 root_path = Path(str(root.get("path") or ""))
                 if not root_path.is_dir():
                     raise LibraryRootUnavailableError(root_id)
-                result = targeted_reconciler.reconcile(
-                    TargetedReconciliationRequest(
-                        root_id=root_id,
-                        paths=frozenset({root_path}),
-                        deleted_subtrees=frozenset({root_path}),
-                    ),
-                    root_healthy=True,
-                    publication_guard=(
-                        runtime.library_watch_health_service
-                        .recovery_publication_guard(recovery_started_at)
-                    ),
-                    reuse_unchanged_entries=True,
-                )
+                while True:
+                    result = targeted_reconciler.reconcile(
+                        TargetedReconciliationRequest(
+                            root_id=root_id,
+                            paths=frozenset({root_path}),
+                            deleted_subtrees=frozenset({root_path}),
+                        ),
+                        root_healthy=True,
+                        publication_guard=(
+                            runtime.library_watch_health_service
+                            .recovery_publication_guard(recovery_started_at)
+                        ),
+                        reuse_unchanged_entries=True,
+                        interrupted=scan_in_progress,
+                    )
+                    if getattr(result, "health", None) != "deferred":
+                        break
+                    wait_for_scan()
                 if getattr(result, "health", None) != "healthy":
                     raise RuntimeError(
                         f"Library watcher catch-up failed for root {root_id}."

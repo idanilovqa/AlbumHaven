@@ -1344,3 +1344,17 @@ def test_public_health_projection_preserves_same_clock_event_identity(as_mapping
         assert "Private Music" not in json.dumps(projected)
         tokens.append(warning_token(projected))
     assert tokens[0] != tokens[1]
+
+
+def test_a_forced_full_scan_clears_the_roots_it_observed():
+    health = _health_module()
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+        connect=lambda _url: connection,
+    )
+    service = health.LibraryWatchHealthService(store)
+    service.record_event(health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music")))
+    assert service.clear_after_scan(scan_mode="background", observed_root_ids=["main"]) == 0
+    assert service.clear_after_scan(scan_mode=health.FORCED_FULL_SCAN_MODE, observed_root_ids=["main"]) == 1
+    assert service.root_allows_destructive_reconciliation("main")

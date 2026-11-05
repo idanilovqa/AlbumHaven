@@ -95,6 +95,13 @@ class LibraryRootUnhealthyError(RuntimeError):
     """A destructive publication cannot establish healthy affected roots."""
 
 
+# Scans that walk every root and re-read every changed or outdated file, so
+# their observed roots are known current: a manual full rescan, and a forced
+# scan such as the startup metadata repair.
+FORCED_FULL_SCAN_MODE = "forced_full_scan"
+_ROOT_CLEARING_SCAN_MODES = frozenset({"manual_full_rescan", FORCED_FULL_SCAN_MODE})
+
+
 @contextmanager
 def guard_destructive_library_publication(connection, root_ids):
     # Use the publisher's transaction and a fresh statement after its advisory
@@ -432,7 +439,7 @@ class LibraryWatchHealthService:
         observed_root_ids: Iterable[object],
         scan_started_at: object | None = None,
     ) -> int:
-        if str(scan_mode or "").strip() != "manual_full_rescan":
+        if str(scan_mode or "").strip() not in _ROOT_CLEARING_SCAN_MODES:
             return 0
         return self._clear_recovered(
             observed_root_ids,

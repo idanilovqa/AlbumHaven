@@ -14,7 +14,8 @@ sealed interface FocusEffect {
 /**
  * Media3's audio-focus and becoming-noisy defaults for a music player, kept pure: focus is held
  * while playback is wanted; a permanent loss pauses; a transient loss (a call, an alarm) pauses
- * and resumes only when the platform gives focus back; a may-duck loss is ducked by the platform
+ * and resumes only when the platform gives focus back, and a start meanwhile waits for it too, so
+ * nothing plays over a call; a may-duck loss is ducked by the platform
  * itself because the request does not pause when ducked; headphones unplugging or Bluetooth
  * audio dropping pauses.
  */
@@ -23,10 +24,18 @@ class AudioFocusPolicy {
     private var active = false
     private var resumeOnGain = false
 
+    /** The request is held but another app has focus for a moment, so nothing may be heard until it returns. */
+    private var transientlyLost = false
+
     fun onState(state: NativePlaybackState): List<FocusEffect> {
         val wasActive = active
-        active = state == NativePlaybackState.LOADING || state == NativePlaybackState.BUFFERING ||
+        val wanted = state == NativePlaybackState.LOADING || state == NativePlaybackState.BUFFERING ||
             state == NativePlaybackState.PLAYING
+        if (wanted && transientlyLost) {
+            resumeOnGain = true
+            return listOf(FocusEffect.Pause)
+        }
+        active = wanted
         val effects = mutableListOf<FocusEffect>()
         if (active) {
             // Any start, including the user's own, supersedes a pending resume.
@@ -44,6 +53,7 @@ class AudioFocusPolicy {
         resumeOnGain = false
         if (held) {
             held = false
+            transientlyLost = false
             effects += FocusEffect.Abandon
         }
         return effects
@@ -60,20 +70,27 @@ class AudioFocusPolicy {
         FocusChange.LOSS -> {
             resumeOnGain = false
             held = false
+            transientlyLost = false
             if (active) listOf(FocusEffect.Abandon, FocusEffect.Pause) else listOf(FocusEffect.Abandon)
         }
-        FocusChange.LOSS_TRANSIENT -> if (active) {
-            resumeOnGain = true
-            listOf(FocusEffect.Pause)
-        } else {
-            emptyList()
+        FocusChange.LOSS_TRANSIENT -> {
+            transientlyLost = held
+            if (active) {
+                resumeOnGain = true
+                listOf(FocusEffect.Pause)
+            } else {
+                emptyList()
+            }
         }
         FocusChange.LOSS_TRANSIENT_CAN_DUCK -> emptyList()
-        FocusChange.GAIN -> if (resumeOnGain && !active) {
-            resumeOnGain = false
-            listOf(FocusEffect.Resume)
-        } else {
-            emptyList()
+        FocusChange.GAIN -> {
+            transientlyLost = false
+            if (resumeOnGain && !active) {
+                resumeOnGain = false
+                listOf(FocusEffect.Resume)
+            } else {
+                emptyList()
+            }
         }
     }
 

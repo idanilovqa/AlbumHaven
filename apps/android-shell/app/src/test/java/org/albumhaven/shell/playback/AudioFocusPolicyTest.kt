@@ -41,13 +41,27 @@ class AudioFocusPolicyTest {
     }
 
     @Test
-    fun aStartDuringTheInterruptionCancelsTheResume() {
+    fun aStartDuringACallWaitsForFocusInsteadOfPlayingOverIt() {
         policy.onState(NativePlaybackState.PLAYING)
         policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
         policy.onState(NativePlaybackState.PAUSED)
-        policy.onState(NativePlaybackState.LOADING)
+        // As Media3's player does, a play while another app holds focus waits for it to come back.
+        assertEquals(listOf(FocusEffect.Pause), policy.onState(NativePlaybackState.LOADING))
+        assertEquals(emptyList<FocusEffect>(), policy.onState(NativePlaybackState.PAUSED))
+        assertEquals(listOf(FocusEffect.Resume), policy.onFocusChange(FocusChange.GAIN))
+        assertEquals(listOf(FocusEffect.WatchNoisy(true)), policy.onState(NativePlaybackState.LOADING))
+    }
+
+    @Test
+    fun aStartDuringACallFromAPausedPlayerAlsoWaits() {
+        policy.onState(NativePlaybackState.PLAYING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
         policy.onState(NativePlaybackState.PAUSED)
-        assertEquals(emptyList<FocusEffect>(), policy.onFocusChange(FocusChange.GAIN))
+        policy.onFocusChange(FocusChange.GAIN)
+        policy.onState(NativePlaybackState.LOADING)
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        policy.onState(NativePlaybackState.PAUSED)
+        assertEquals(listOf(FocusEffect.Pause), policy.onState(NativePlaybackState.BUFFERING))
     }
 
     @Test

@@ -56,8 +56,9 @@ function androidUpdateView(info, update) {
     case 'downloading': return ['info', `Downloading update · ${update.progress}%`,
       'Android will confirm installation after verification.', 'Downloading…', null, update.progress];
     case 'verifying': return ['info', 'Verifying update…', 'Android will confirm installation after verification.', 'Verifying…', null];
-    case 'ready': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Install update', 'install'];
-    case 'installing': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Installing…', null];
+    case 'ready': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Update', 'install'];
+    // Pressing it again shows a confirmation left unanswered; an approved install keeps installing.
+    case 'installing': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Installing…', 'install'];
     case 'authorization': return ['warning', 'Allow Album Haven to install updates.',
       'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'];
     case 'failed': {

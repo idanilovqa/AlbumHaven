@@ -101,7 +101,7 @@ enum class UpdateStep(
     CHECKING(AlertSeverity.INFO, R.string.recovery_update_checking_title, R.string.recovery_update_checking_message, R.string.recovery_update_checking_action, false),
     DOWNLOADING(AlertSeverity.INFO, R.string.recovery_update_downloading_title, R.string.recovery_update_downloading_message, R.string.recovery_update_downloading_action, false),
     READY(AlertSeverity.SUCCESS, R.string.recovery_update_ready_title, R.string.recovery_update_ready_message, R.string.recovery_update_install, true),
-    INSTALLING(AlertSeverity.SUCCESS, R.string.recovery_update_ready_title, R.string.recovery_update_ready_message, R.string.recovery_update_installing_action, false),
+    INSTALLING(AlertSeverity.SUCCESS, R.string.recovery_update_ready_title, R.string.recovery_update_ready_message, R.string.recovery_update_installing_action, true),
     AUTHORIZATION(AlertSeverity.WARNING, R.string.recovery_update_authorization_title, R.string.recovery_update_authorization_message, R.string.recovery_update_authorization_action, true),
     INVALID(AlertSeverity.ERROR, R.string.recovery_update_invalid_title, R.string.recovery_update_invalid_message, R.string.recovery_update_retry_download, true),
 }

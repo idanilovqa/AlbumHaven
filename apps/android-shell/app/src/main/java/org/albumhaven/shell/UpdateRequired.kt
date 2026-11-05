@@ -33,7 +33,7 @@ data class UpdateRequiredView(val step: UpdateStep, val progress: Int? = null, v
  * Runs the updater from the native Update required screen for a site speaking [webProtocols], so
  * only an update that can open it is accepted. Check for update on this screen is the user's
  * explicit request for the app the site needs: a newer update it finds downloads at once.
- * Installation still waits for Install update and Android's confirmation. Main-thread confined.
+ * Installation still waits for Update and Android's confirmation. Main-thread confined.
  */
 class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtocols: IntRange) {
     private var checkRequested = false
@@ -47,7 +47,8 @@ class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtoco
                 if (!updates.check(webProtocols)) checkRequested = false
             }
             UpdateStep.INVALID -> updates.download()
-            UpdateStep.READY, UpdateStep.AUTHORIZATION -> updates.install()
+            // While installing, Update shows a confirmation the user left unanswered again.
+            UpdateStep.READY, UpdateStep.INSTALLING, UpdateStep.AUTHORIZATION -> updates.install()
             else -> Unit
         }
     }

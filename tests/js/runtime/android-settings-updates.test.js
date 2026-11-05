@@ -124,8 +124,8 @@ const STATES = [
   [update({ state: 'available', ...ready }), 'warning', 'Album Haven 0.10.0-sandbox.763af93 is available.', 'Download starts only when you ask.', 'Download update', 'download'],
   [update({ state: 'downloading', progress: 42, ...ready }), 'info', 'Downloading update · 42%', 'Android will confirm installation after verification.', 'Downloading…', null],
   [update({ state: 'verifying', ...ready }), 'info', 'Verifying update…', 'Android will confirm installation after verification.', 'Verifying…', null],
-  [update({ state: 'ready', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Install update', 'install'],
-  [update({ state: 'installing', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Installing…', null],
+  [update({ state: 'ready', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Update', 'install'],
+  [update({ state: 'installing', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Installing…', 'install'],
   [update({ state: 'authorization', ...ready }), 'warning', 'Allow Album Haven to install updates.', 'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'],
   [update({ state: 'failed', error: 'check_failed' }), 'error', 'Update check failed.', 'Check your connection and try again.', 'Retry', 'check'],
   [update({ state: 'failed', error: 'manifest_rejected', reason: 'wrong_certificate' }), 'error', 'Update check failed.', 'The published update doesn’t match this app. Try again later.', 'Retry', 'check'],
@@ -244,6 +244,19 @@ test('every card action maps to its own update command', async () => {
     await new Promise(setImmediate);
     assert.equal(bridge.sent.at(-1).name, `updates.${action}`);
   }
+});
+
+test('Installing… asks the shell to show an unanswered confirmation again, and an approved install keeps installing', async () => {
+  const installing = update({ state: 'installing', ...ready });
+  const { api, bridge, holder } = await connected(installing, {
+    respond: () => ({ ok: false, error: { code: 'update_unavailable', message: 'Not available' } }),
+  });
+  const target = { getAttribute: () => 'install' };
+  api.handleAndroidSettingsClick({ target: { closest: selector => (selector === '[data-android-update-action]' ? target : null) }, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(bridge.sent.at(-1).name, 'updates.install');
+  assert.equal(api.androidSettings.update.state, 'installing');
+  assert.deepEqual(button(alertOf(holder.innerHTML)[0]), { label: 'Installing…', disabled: false, action: 'install' });
 });
 
 test('a refused command keeps the current state for the next event', async () => {

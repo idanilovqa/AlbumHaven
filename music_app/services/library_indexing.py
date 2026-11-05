@@ -19,6 +19,8 @@ from music_app.services.storage_devices import physical_disk_key
 from music_app.services.metadata import (
     file_metadata_schema_is_current,
     read_metadata_for_file,
+    schema_upgrade_requires_file_read,
+    upgrade_stored_file_entry,
 )
 
 
@@ -315,6 +317,14 @@ class ScanCancelled(RuntimeError):
     pass
 
 
+def _file_is_unchanged(existing: dict[str, object] | None, stat: os.stat_result) -> bool:
+    return (
+        existing is not None
+        and existing.get("mtime") == stat.st_mtime
+        and existing.get("size") == stat.st_size
+    )
+
+
 def _ordered_scan_metadata_entries(
     library_state: dict[str, object],
     all_file_stats: list[tuple[Path, os.stat_result]],
@@ -374,13 +384,9 @@ def _ordered_scan_metadata_entries(
             path_str = str(path)
             cached = previous.get(path_str)
             existing = dict(cached) if isinstance(cached, dict) else None
-            if (
-                existing is not None
-                and existing.get("mtime") == stat.st_mtime
-                and existing.get("size") == stat.st_size
-                and file_metadata_schema_is_current(existing)
-            ):
-                pending.append((path, stat, existing, dict(existing), None))
+            if _file_is_unchanged(existing, stat) and not schema_upgrade_requires_file_read(existing):
+                current = existing if file_metadata_schema_is_current(existing) else upgrade_stored_file_entry(existing)
+                pending.append((path, stat, existing, dict(current), None))
             else:
                 pending.append(
                     (
@@ -403,6 +409,9 @@ def _ordered_scan_metadata_entries(
             else:
                 try:
                     entry = dict(metadata_future.result())
+                    if _file_is_unchanged(existing, stat):
+                        # Only the fields newer reader versions added change.
+                        entry = upgrade_stored_file_entry(existing, entry)
                 except Exception as error:
                     _record_scan_file_error(
                         record_file_error,

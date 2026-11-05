@@ -28,6 +28,21 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album_haven_exception",
 ]
 FILE_METADATA_SCHEMA_VERSION = 6
+# What each reader version changed in a file entry. A version that only adds
+# or re-derives the listed fields names them, and an unchanged file stored by an
+# older reader takes just those fields from its fresh read; "fields": None means
+# the version changed derivations broadly and the fresh read replaces the
+# entry. A version computable from stored values says requires_file_read False
+# and gives "derive" (entry -> changed fields), so unchanged files upgrade
+# without being opened. Versions 3-6 changed album, edition, disc, artist and
+# compilation derivations and are full re-reads.
+FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
+    3: {"fields": None, "requires_file_read": True},
+    4: {"fields": None, "requires_file_read": True},
+    5: {"fields": None, "requires_file_read": True},
+    6: {"fields": None, "requires_file_read": True},
+}
+_OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -70,6 +85,53 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and "release_date" in entry
         and "compilation_tag" in entry
     )
+
+
+def _upgradable_schema_changes(entry: object) -> list[dict[str, object]] | None:
+    version = entry.get("metadata_schema_version") if isinstance(entry, dict) else None
+    if not isinstance(version, int) or isinstance(version, bool):
+        return None
+    # A current-version entry that is still not current lacks keys the reader
+    # writes; only a fresh read can supply them.
+    if version < _OLDEST_UPGRADABLE_SCHEMA_VERSION or version >= FILE_METADATA_SCHEMA_VERSION:
+        return None
+    changes = [FILE_METADATA_SCHEMA_CHANGES[step] for step in range(version + 1, FILE_METADATA_SCHEMA_VERSION + 1)]
+    return None if any(change["fields"] is None for change in changes) else changes
+
+
+def schema_upgrade_requires_file_read(entry: object) -> bool:
+    """Whether an unchanged file's stored entry needs its tags read to become current."""
+    if file_metadata_schema_is_current(entry):
+        return False
+    changes = _upgradable_schema_changes(entry)
+    return changes is None or any(change["requires_file_read"] for change in changes)
+
+
+def upgrade_stored_file_entry(entry: dict[str, object], fresh: dict[str, object] | None = None) -> dict[str, object]:
+    """Bring an unchanged file's older entry to the current reader version.
+
+    Only fields a newer version introduced are taken from ``fresh`` (a current
+    read of the same unchanged file); without a usable stored version the
+    fresh read replaces the entry.
+    """
+    if file_metadata_schema_is_current(entry):
+        return dict(entry)
+    changes = _upgradable_schema_changes(entry)
+    if changes is None:
+        if fresh is None:
+            raise ValueError("A stored entry without a known reader version needs a fresh read.")
+        return dict(fresh)
+    upgraded = dict(entry)
+    for change in changes:
+        if not change["requires_file_read"]:
+            upgraded.update(change["derive"](upgraded))
+            continue
+        if fresh is None:
+            raise ValueError("This reader version needs a fresh read of the file.")
+        for field in change["fields"]:
+            upgraded[field] = fresh.get(field)
+    upgraded["metadata_schema_version"] = FILE_METADATA_SCHEMA_VERSION
+    return upgraded
 
 
 def normalize_exception_value(value: object) -> str:

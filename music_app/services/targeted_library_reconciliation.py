@@ -461,7 +461,7 @@ class TargetedLibraryReconciler:
 
 
 def _unchanged_persisted_entry(persisted: object, path: Path) -> dict[str, object] | None:
-    from music_app.services.metadata import file_metadata_schema_is_current
+    from music_app.services.metadata import schema_upgrade_requires_file_read, upgrade_stored_file_entry
 
     if not isinstance(persisted, dict):
         return None
@@ -472,7 +472,7 @@ def _unchanged_persisted_entry(persisted: object, path: Path) -> dict[str, objec
     if (
         persisted.get("mtime") == stat.st_mtime
         and persisted.get("size") == stat.st_size
-        and file_metadata_schema_is_current(persisted)
+        and not schema_upgrade_requires_file_read(persisted)
     ):
-        return dict(persisted)
+        return upgrade_stored_file_entry(persisted)
     return None

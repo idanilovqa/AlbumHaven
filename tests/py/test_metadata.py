@@ -781,3 +781,47 @@ def test_read_metadata_strips_nul_from_every_tag_value(monkeypatch, tmp_path):
     assert entry["album"] == "Album"
     assert all("\x00" not in str(value) for value in entry.values())
     assert all("\x00" not in name for name in entry["artists"])
+
+
+def test_unchanged_file_from_an_older_reader_takes_only_a_versions_declared_fields(monkeypatch):
+    current = metadata.FILE_METADATA_SCHEMA_VERSION
+    monkeypatch.setattr(metadata, "FILE_METADATA_SCHEMA_VERSION", current + 1)
+    monkeypatch.setitem(metadata.FILE_METADATA_SCHEMA_CHANGES, current + 1, {
+        "fields": ("label",), "requires_file_read": True,
+    })
+    stored = {"album": "Stored Album", "cover_path": "cover.jpg", "metadata_schema_version": current}
+    fresh = {"album": "Read Album", "label": "Label", "metadata_schema_version": current + 1}
+    assert metadata.schema_upgrade_requires_file_read(stored) is True
+
+    assert metadata.upgrade_stored_file_entry(stored, fresh) == {
+        **stored, "label": "Label", "metadata_schema_version": current + 1,
+    }
+
+
+def test_historical_reader_versions_replace_the_whole_entry():
+    stored = {"album": "Unknown Album", "cover_path": "cover.jpg", "metadata_schema_version": 2}
+    fresh = {"album": "Read Album", "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION}
+    assert metadata.upgrade_stored_file_entry(stored, fresh) == fresh
+
+
+def test_a_derivation_only_reader_version_upgrades_without_reading(monkeypatch):
+    current = metadata.FILE_METADATA_SCHEMA_VERSION
+    monkeypatch.setattr(metadata, "FILE_METADATA_SCHEMA_VERSION", current + 1)
+    monkeypatch.setitem(metadata.FILE_METADATA_SCHEMA_CHANGES, current + 1, {
+        "fields": ("title_sort",), "requires_file_read": False,
+        "derive": lambda entry: {"title_sort": str(entry["title"]).casefold()},
+    })
+    stored = {"title": "Fugata", "metadata_schema_version": current, "release_date": None, "compilation_tag": None}
+
+    assert metadata.schema_upgrade_requires_file_read(stored) is False
+    assert metadata.upgrade_stored_file_entry(stored) == {
+        **stored, "title_sort": "fugata", "metadata_schema_version": current + 1,
+    }
+
+
+@pytest.mark.parametrize("version", [None, 1, "6", metadata.FILE_METADATA_SCHEMA_VERSION + 1])
+def test_unknown_reader_versions_are_replaced_by_a_fresh_read(version):
+    stored = {"title": "Old", "metadata_schema_version": version}
+    fresh = {"title": "New", "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION}
+    assert metadata.schema_upgrade_requires_file_read(stored) is True
+    assert metadata.upgrade_stored_file_entry(stored, fresh) == fresh

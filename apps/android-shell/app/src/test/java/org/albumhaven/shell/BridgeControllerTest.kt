@@ -9,6 +9,8 @@ import org.albumhaven.shell.playback.SyntheticTrack
 import org.albumhaven.shell.playback.NativePlaybackEvent
 import org.albumhaven.shell.playback.NativePlaybackSnapshot
 import org.albumhaven.shell.playback.NativePlaybackState
+import org.albumhaven.shell.updates.UpdateState
+import org.albumhaven.shell.updates.manifest
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -44,12 +46,28 @@ class BridgeControllerTest {
         }
     }
 
+    private class FakeUpdates : UpdatePort {
+        override var state: UpdateState = UpdateState.Idle(null)
+        val calls = mutableListOf<String>()
+        var checkedWith: IntRange? = null
+        var applies = true
+
+        override fun check(webProtocols: IntRange): Boolean {
+            calls += "check"
+            checkedWith = webProtocols
+            return applies
+        }
+        override fun download() = applies.also { calls += "download" }
+        override fun install() = applies.also { calls += "install" }
+    }
+
     private val host = FakeHost()
+    private val updates = FakeUpdates()
     private val playback = ControllerHarness()
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
-    private fun controller(channel: ShellChannel, id: String) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }))
+    private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates) =
+        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }), updates)
 
     private fun send(
         controller: BridgeController,
@@ -369,6 +387,56 @@ class BridgeControllerTest {
     )
 
     private fun ok(reply: JSONObject?): Boolean = reply!!.getJSONObject("payload").getBoolean("ok")
+
+    @Test
+    fun updateCommandsReachTheUpdaterWithTheSiteBridgeRange() {
+        send(sandbox, handshake(1, 2))
+        for (name in listOf("updates.check", "updates.download", "updates.install")) {
+            val payload = send(sandbox, command(name))!!.getJSONObject("payload")
+            assertTrue(payload.getBoolean("ok"))
+            assertEquals("idle", payload.getJSONObject("updates").getString("state"))
+        }
+        assertEquals(listOf("check", "download", "install"), updates.calls)
+        assertEquals(1..2, updates.checkedWith)
+    }
+
+    @Test
+    fun updateCommandsNeedAHandshakeAnEmptyPayloadAndAnApplicableState() {
+        assertEquals("handshake_required", errorCode(send(sandbox, command("updates.check"))))
+        send(sandbox, handshake())
+        assertEquals("invalid_payload", errorCode(send(sandbox, command("updates.download", """{"url":"https://evil.example/a.apk"}"""))))
+        updates.applies = false
+        assertEquals("update_unavailable", errorCode(send(sandbox, command("updates.install"))))
+        assertEquals(listOf("install"), updates.calls)
+    }
+
+    @Test
+    fun aBuildWithoutUpdatesAdvertisesAndAcceptsNone() {
+        val plain = controller(ShellChannel.STABLE, "org.albumhaven.app", updates = null)
+        val payload = send(plain, handshake())!!.getJSONObject("payload")
+        val names = payload.getJSONArray("capabilities").let { array -> (0 until array.length()).map(array::getString) }
+        assertFalse(names.contains("updates.manual.v1"))
+        assertFalse(payload.has("updates"))
+        assertEquals("unsupported_command", errorCode(send(plain, command("updates.check"))))
+    }
+
+    @Test
+    fun updateEventsMatchTheSharedFixtureAndGoOnlyToTheNegotiatedDocument() {
+        val expected = fixture.getJSONObject("updateStateEvent")
+        val sent = mutableListOf<JSONObject>()
+        val state = UpdateState.Downloading(manifest(), 1721)
+        sandbox.emit(state)
+        sandbox.handle(handshake(), ORIGIN, true) { sent += JSONObject(it) }
+        sandbox.emit(state)
+        val event = sent.last()
+        assertEquals(2, sent.size)
+        assertEquals(expected.getString("name"), event.getString("name"))
+        assertEquals("event", event.getString("type"))
+        assertSameJson(expected.getJSONObject("payload"), event.getJSONObject("payload"))
+        sandbox.reset()
+        sandbox.emit(state)
+        assertEquals(2, sent.size)
+    }
 
     private fun errorCode(reply: JSONObject?): String =
         reply!!.getJSONObject("payload").getJSONObject("error").getString("code")

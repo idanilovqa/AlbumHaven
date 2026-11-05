@@ -7,7 +7,8 @@
       "playback.queue.v1",
       "playback.loops.v1",
       "playback.media_session.v1",
-      "playback.resumption.v1"
+      "playback.resumption.v1",
+      "updates.manual.v1"
     ],
     "sandbox": [
       "sandbox.select.v1",
@@ -15,7 +16,8 @@
       "playback.queue.v1",
       "playback.loops.v1",
       "playback.media_session.v1",
-      "playback.resumption.v1"
+      "playback.resumption.v1",
+      "updates.manual.v1"
     ]
   },
   "handshakeRequest": {
@@ -48,7 +50,8 @@
         "playback.queue.v1",
         "playback.loops.v1",
         "playback.media_session.v1",
-        "playback.resumption.v1"
+        "playback.resumption.v1",
+        "updates.manual.v1"
       ],
       "origin": "https://sandbox2.albumhaven.org",
       "playback": {
@@ -58,6 +61,15 @@
         "currentIndex": null,
         "positionMs": 0,
         "durationMs": 0
+      },
+      "updates": {
+        "state": "idle",
+        "versionName": null,
+        "versionCode": null,
+        "progress": null,
+        "checkedAt": null,
+        "error": null,
+        "reason": null
       },
       "sandbox": {
         "slot": 2,
@@ -129,5 +141,20 @@
     "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"other\",\"name\":\"bridge.handshake\",\"payload\":{}}",
     "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"Bad Name\",\"payload\":{}}",
     "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":[]}"
-  ]
+  ],
+  "updateStateEvent": {
+    "protocol": 1,
+    "id": "3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a99",
+    "type": "event",
+    "name": "updates.state",
+    "payload": {
+      "state": "downloading",
+      "versionName": "0.10.0-sandbox.763af93",
+      "versionCode": 2,
+      "progress": 42,
+      "checkedAt": null,
+      "error": null,
+      "reason": null
+    }
+  }
 }

@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Media-session notifications are exempt from the Android 13 runtime prompt; declared, never requested. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Settings > Android app installs verified updates; Android asks the user to allow this source and to confirm each install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="false"
@@ -54,5 +56,10 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- PackageInstaller reports this app's own update sessions here. -->
+        <receiver
+            android:name=".updates.UpdateInstallReceiver"
+            android:exported="false" />
     </application>
 </manifest>

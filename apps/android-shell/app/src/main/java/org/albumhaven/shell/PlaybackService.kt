@@ -58,6 +58,7 @@ import org.albumhaven.shell.playback.SystemRequest
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns native playback for as long as it may be heard: the controller, its Media3 session and
@@ -192,6 +193,40 @@ class PlaybackService : MediaLibraryService() {
         controller = createController(selected)
         player.showRestored(null)
         player.showResumption(false)
+    }
+
+    /**
+     * Before Android replaces the package: the origin's shutdown path stops playback, writes the
+     * final listen checkpoint and releases the claim, and [done] runs on the main thread once those
+     * requests have finished, or after [REPLACEMENT_WAIT_MS]. The stopped controller keeps reporting
+     * until then, so the document sees playback stop; a fresh idle one with the same client ID then
+     * takes over in case the installation is cancelled. The saved queue and the origin stay.
+     */
+    fun prepareForPackageReplacement(done: () -> Unit) {
+        val retiring = controller
+        val retiredPlaybackIo = playbackIo
+        val retiredListenIo = listenIo
+        var finished = false
+        val finish = Runnable {
+            if (finished) return@Runnable
+            finished = true
+            if (!destroyed && controller === retiring) {
+                playbackIo = Executors.newSingleThreadExecutor()
+                listenIo = Executors.newSingleThreadExecutor()
+                controller = createController(origin, retiring.snapshot.clientId)
+            }
+            done()
+        }
+        main.postDelayed(finish, REPLACEMENT_WAIT_MS)
+        retiring.shutdown {
+            retiredPlaybackIo.shutdown()
+            retiredListenIo.shutdown()
+            Thread {
+                retiredListenIo.awaitTermination(REPLACEMENT_WAIT_MS, TimeUnit.MILLISECONDS)
+                retiredPlaybackIo.awaitTermination(REPLACEMENT_WAIT_MS, TimeUnit.MILLISECONDS)
+                main.post(finish)
+            }.start()
+        }
     }
 
     override fun onDestroy() {
@@ -455,5 +490,8 @@ class PlaybackService : MediaLibraryService() {
         private const val LISTEN_PREFERENCES = "listen"
         private const val KEY_DEVICE_ID = "device_id"
         private const val SAVE_INTERVAL_MS = 10_000L
+
+        /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */
+        private const val REPLACEMENT_WAIT_MS = 8_000L
     }
 }

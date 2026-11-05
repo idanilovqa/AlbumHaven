@@ -38,6 +38,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.albumhaven.shell.playback.NativePlaybackEvent
+import org.albumhaven.shell.updates.UpdateState
+import org.albumhaven.shell.updates.Updater
+import org.albumhaven.shell.updates.Updates
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ExecutorService
@@ -59,6 +62,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var playbackBound = false
     private var pendingWebState: Bundle? = null
     private val playbackEvents: (NativePlaybackEvent) -> Unit = { event -> bridge.emit(event) }
+    private var updater: Updater? = null
+    private val updateEvents: (UpdateState) -> Unit = { state -> bridge.emit(state) }
     private val playbackConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val service = (binder as PlaybackService.LocalBinder).service
@@ -95,11 +100,16 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         preferences = ShellPreferences(this)
         selectedOrigin = originPolicy.initialOrigin(preferences.selectedSandboxSlot)
+        updater = Updates.get(this)
         bridge = BridgeController(
             ShellIdentity(packageName, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
             this,
             ControllerPlaybackPort { checkNotNull(playbackService).controller },
+            updater?.let(::ShellUpdatePort),
         )
+        updater?.addListener(updateEvents)
+        // Once per process: a cold launch checks when the last successful check is six hours old.
+        updater?.passiveCheckIfDue()
         recovery = RecoveryPanel(findViewById(R.id.recovery_root)) { reload() }
         webView = findViewById(R.id.shell_web_view)
 
@@ -134,6 +144,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         outState.putBundle(STATE_WEB_VIEW, pendingWebState ?: Bundle().also { webView.saveState(it) })
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Returning from Android's install-source setting.
+        updater?.onForeground()
+    }
+
     override fun onPause() {
         super.onPause()
         CookieManager.getInstance().flush()
@@ -142,6 +158,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     override fun onDestroy() {
         // Playback belongs to the service and outlives the Activity; only this listener goes.
         playbackService?.removeListener(playbackEvents)
+        updater?.removeListener(updateEvents)
         if (playbackBound) unbindService(playbackConnection)
         playbackService = null
         probeExecutor.shutdownNow()
@@ -185,6 +202,19 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 }
             }
         }
+    }
+
+    private inner class ShellUpdatePort(private val updater: Updater) : UpdatePort {
+        override val state get() = updater.state
+        override fun check(webProtocols: IntRange) = updater.check(webProtocols)
+        override fun download() = updater.download()
+        override fun install() = updater.install(::prepareForPackageReplacement)
+    }
+
+    /** Sessions are flushed and playback is stopped, checkpointed and released before the package is replaced. */
+    private fun prepareForPackageReplacement(done: () -> Unit) {
+        CookieManager.getInstance().flush()
+        playbackService?.prepareForPackageReplacement(done) ?: done()
     }
 
     private fun isReachable(origin: String): Boolean = try {

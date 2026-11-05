@@ -72,7 +72,7 @@ test('current-view delivery retains the non-overlap failure and never dismisses 
   assert.equal(page.listenerCount('response'), 0);
 });
 
-function timedToast(placement) {
+function timedToast(...recorded) {
   const events = [];
   const locator = name => ({
     _apiName: 'Locator',
@@ -85,36 +85,41 @@ function timedToast(placement) {
   });
   return {
     events,
+    presentations: { jsonValue: async () => { events.push('read-presentations'); return recorded; } },
     editor: {
       repairAlertMessage: locator('message'), repairAlert: locator('alert'),
-      readRepairAlertOverlap: async () => { events.push('measure-overlap'); return placement; },
       repairAlertDismiss: { click: async () => events.push('dismiss') },
     },
   };
 }
 
-test('a timed saved toast still on screen is confirmed in place and closes on its own', async () => {
+const PLACED = { rendered: true, withinViewport: true, overlaps: [] };
+
+test('a timed saved toast recorded while shown is confirmed without clicking and closes on its own', async () => {
   const { confirmTimedSavedNotification } = await import('../e2e/helpers/savedNotificationDelivery.js');
-  const { editor, events } = timedToast({ rendered: true, withinViewport: true, overlaps: [] });
-  await confirmTimedSavedNotification(editor, 'Tag changes saved.', { timeout: 60000 });
-  assert.deepEqual(events, ['message:to.have.text', 'measure-overlap', 'alert:to.be.hidden']);
+  const { editor, events, presentations } = timedToast({ message: 'Tag changes saved.', ...PLACED });
+  await confirmTimedSavedNotification(editor, presentations, 'Tag changes saved.', { timeout: 60000 });
+  assert.deepEqual(events, ['read-presentations', 'alert:to.be.hidden']);
 });
 
-test('a timed saved toast that already closed keeps its message and must stay closed', async () => {
+test('a timed saved toast that was never recorded as shown fails even though its message remains', async () => {
   const { confirmTimedSavedNotification } = await import('../e2e/helpers/savedNotificationDelivery.js');
-  const { editor, events } = timedToast({ rendered: false, withinViewport: false, overlaps: [] });
-  await confirmTimedSavedNotification(editor, 'Tag changes saved.', { timeout: 60000 });
-  assert.deepEqual(events, ['message:to.have.text', 'measure-overlap', 'alert:to.be.hidden']);
+  const { editor, events, presentations } = timedToast();
+  await assert.rejects(confirmTimedSavedNotification(editor, presentations, 'Tag changes saved.', { timeout: 100 }));
+  assert.equal(events.includes('alert:to.be.hidden'), false);
+  assert.equal(events.includes('dismiss'), false);
 });
 
-test('a timed saved toast shown off screen or over a control still fails', async () => {
+test('a timed saved toast shown off screen, over a control, unrendered or with another message still fails', async () => {
   const { confirmTimedSavedNotification } = await import('../e2e/helpers/savedNotificationDelivery.js');
-  for (const placement of [
-    { rendered: true, withinViewport: false, overlaps: [] },
-    { rendered: true, withinViewport: true, overlaps: ['Save'] },
+  for (const recorded of [
+    { message: 'Tag changes saved.', ...PLACED, withinViewport: false },
+    { message: 'Tag changes saved.', ...PLACED, overlaps: ['Save'] },
+    { message: 'Tag changes saved.', rendered: false, withinViewport: false, overlaps: [] },
+    { message: 'Another notice.', ...PLACED },
   ]) {
-    const { editor, events } = timedToast(placement);
-    await assert.rejects(confirmTimedSavedNotification(editor, 'Tag changes saved.', { timeout: 60000 }));
+    const { editor, events, presentations } = timedToast(recorded);
+    await assert.rejects(confirmTimedSavedNotification(editor, presentations, 'Tag changes saved.', { timeout: 100 }));
     assert.equal(events.includes('alert:to.be.hidden'), false);
     assert.equal(events.includes('dismiss'), false);
   }

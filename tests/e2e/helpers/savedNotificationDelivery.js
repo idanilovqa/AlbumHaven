@@ -13,20 +13,18 @@ export async function acknowledgeSavedNotification(tagEditor, expectedMessage, {
 }
 
 // A completed save shows a timed toast that can close at any moment, even mid-click, so it is
-// confirmed without clicking: its message and, while it is still shown, its placement are read, and
-// it must then close on its own.
-export async function confirmTimedSavedNotification(tagEditor, expectedMessage, { timeout }) {
-  await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
-  const placement = await tagEditor.readRepairAlertOverlap();
-  if (placement.rendered) {
-    expect(placement).toEqual({ rendered: true, withinViewport: true, overlaps: [] });
-  }
+// confirmed without clicking: one of the presentations recorded while it was shown must carry its
+// message and a clear on-screen placement, and it must then close on its own.
+export async function confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout }) {
+  await expect.poll(() => presentations.jsonValue(), { timeout })
+    .toContainEqual({ message: expectedMessage, rendered: true, withinViewport: true, overlaps: [] });
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
 export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
   const appBar = new AppBarActions(new AppBar(tagEditor.page));
   const scan = new ScanPageActions(new ScanPage(tagEditor.page));
+  const presentations = autoDismisses ? await tagEditor.recordRepairAlertPresentations() : null;
   await expect(tagEditor.overlay).toBeHidden({ timeout });
   await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
   const previous = await tagEditor.readLibraryReturnState();
@@ -36,7 +34,7 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   try {
     await scan.openStatusPageFromMenu();
     if (autoDismisses) {
-      await confirmTimedSavedNotification(tagEditor, expectedMessage, { timeout });
+      await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }

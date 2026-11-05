@@ -104,7 +104,14 @@ def _start_library_warmup(
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
                 if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
-                ensure_relations(runtime, cancel_requested=stop_requested)
+                try:
+                    ensure_relations(runtime, cancel_requested=stop_requested)
+                except InterruptedError:
+                    raise
+                except Exception:
+                    # A retained journal (e.g. an unprovable legacy publication)
+                    # is cleared only by a full publication, so still repair.
+                    runtime.logger.exception("Postgres relation warm-up failed.")
                 if stop_requested.is_set() or metadata_repair_required is None:
                     return
                 try:

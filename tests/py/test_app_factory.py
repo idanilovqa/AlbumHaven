@@ -1788,6 +1788,36 @@ def test_postgres_warmup_rereads_files_stored_by_an_older_metadata_reader(monkey
     expected_scan = [("scan", {"force": True, "scan_mode": "background"})] if outdated else []
     assert calls == ["relations", "check", *expected_scan]
 
+
+def test_postgres_warmup_still_repairs_metadata_when_the_relation_journal_is_retained(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
+    calls = []
+
+    def retained_journal(_runtime, **_kwargs):
+        calls.append("relations")
+        raise RuntimeError("Legacy publication differs from the scoped source rebuild; journal retained.")
+
+    runtime = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"},
+        logger=Mock(), library_state={},
+    )
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: None,
+        retained_journal,
+        lambda _state, _config, _logger, **kwargs: calls.append(("scan", kwargs)),
+        lambda _url: None,
+        metadata_repair_required=lambda _runtime: calls.append("check") or True,
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    assert calls == ["relations", "check", ("scan", {"force": True, "scan_mode": "background"})]
+    runtime.logger.exception.assert_called_once_with("Postgres relation warm-up failed.")
+
 @pytest.mark.parametrize("lease_held_elsewhere", [True, False])
 def test_postgres_metadata_repair_scan_runs_once_across_instances_sharing_a_database(monkeypatch, lease_held_elsewhere):
     from types import SimpleNamespace

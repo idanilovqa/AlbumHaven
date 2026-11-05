@@ -160,6 +160,9 @@ function buildAndroidSettingsHtml(info) {
     return buildOnPageAlertHtml({ severity: 'warning', title: 'Update required',
       message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' });
   }
+  if (!info && androidBridge.connection) {
+    return buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: 'Connecting to the app…', role: 'status' });
+  }
   if (!info) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
       message: 'This app could not connect to the current site.', role: 'status' });
@@ -188,11 +191,14 @@ function adoptAndroidSettingsHandshake(info) {
 }
 
 // Settings without a shell connection asks again each time it renders; a pending handshake is
-// shared, and a failed one waits for the next render rather than retrying in a loop.
+// shared, and a failed one waits for the next render rather than retrying in a loop. A success
+// renders through adoptAndroidSettingsHandshake; a refusal or failure replaces the pending state.
 function connectAndroidSettings() {
   if (androidBridge.info || isAndroidUpdateRequired()) return;
   void connectAndroidBridge().then(() => {
-    if (isAndroidUpdateRequired() && state.utility.activeTab === 'android') renderUtilityAndroid();
+    if (androidBridge.info || state.utility.activeTab !== 'android') return;
+    const { detail } = getUtilityModalElements();
+    if (detail) detail.innerHTML = buildAndroidSettingsHtml(null);
   });
 }
 

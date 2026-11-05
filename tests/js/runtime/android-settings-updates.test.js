@@ -283,10 +283,11 @@ test('opening the Android tab after a failed handshake asks the shell again and 
   assert.equal(handshakes(), 1);
   state.utility.activeTab = 'android';
   api.renderUtilityAndroid();
-  assert.match(pane.detail.innerHTML, /This app could not connect to the current site/);
+  assert.match(pane.detail.innerHTML, /data-on-page-alert="info".*Connecting to the app…/);
+  assert.doesNotMatch(pane.detail.innerHTML, /could not connect/);
   await new Promise(setImmediate);
   assert.equal(handshakes(), 2);
-  assert.doesNotMatch(pane.detail.innerHTML, /could not connect/);
+  assert.doesNotMatch(pane.detail.innerHTML, /Connecting to the app/);
   assert.match(pane.detail.innerHTML, /Check for updates/);
   assert.match(pane.detail.innerHTML, /Connected to sandbox3\./);
 });
@@ -309,8 +310,10 @@ test('a Settings retry that fails again waits for the next time the tab opens', 
   api.renderUtilityAndroid();
   for (let turn = 0; turn < 5; turn += 1) await new Promise(setImmediate);
   assert.equal(bridge.sent.length, 1, 'a pending handshake is shared, and a failure is not retried in a loop');
+  assert.match(pane.detail.innerHTML, /data-on-page-alert="error".*This app could not connect to the current site/);
   api.renderUtilityAndroid();
+  assert.match(pane.detail.innerHTML, /Connecting to the app…/, 'the retry shows that it is still asking');
   await new Promise(setImmediate);
   assert.equal(bridge.sent.length, 2);
-  assert.match(pane.detail.innerHTML, /This app could not connect to the current site/);
+  assert.match(pane.detail.innerHTML, /data-on-page-alert="error".*This app could not connect to the current site/);
 });

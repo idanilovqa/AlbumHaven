@@ -701,3 +701,19 @@ def test_apply_text_repairs_round_trips_release_structure_fields(tmp_path: Path)
     physical_tags = ID3(track_path)
     assert [str(value) for value in physical_tags.getall("TPOS")[0].text] == ["3/4"]
     assert [str(value) for value in physical_tags.getall("TSST")[0].text] == ["Act III"]
+
+
+def test_read_metadata_strips_nul_from_every_tag_value(monkeypatch, tmp_path):
+    from music_app.services import metadata
+
+    track = tmp_path / "01 - Track.flac"
+    track.write_bytes(b"fixture")
+    monkeypatch.setattr(metadata, "read_tags", lambda _path: {
+        "title": "Bad\x00Title", "album": "Album\x00", "artist": "Artist\x00Name", "albumartist": "Artist\x00Name",
+        "tracknumber": "1",
+    })
+    entry = metadata.read_metadata_for_file(track)
+    assert entry["title"] == "Bad; Title"
+    assert entry["album"] == "Album"
+    assert all("\x00" not in str(value) for value in entry.values())
+    assert all("\x00" not in name for name in entry["artists"])

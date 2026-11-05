@@ -630,7 +630,31 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
             raise RuntimeError(f"Could not read {field} tag for {path}: {exc}") from exc
     return values
 
+def without_nul_characters(value: object) -> object:
+    """Remove NUL from tag text: Postgres rejects it in text and jsonb.
+
+    One malformed tag must not stop a scan or watcher catch-up from publishing
+    the rest of its library root.
+    """
+    if isinstance(value, str):
+        if "\x00" not in value:
+            return value
+        # NUL separates multiple tag values (as in _decode_tag_bytes).
+        return "; ".join(part for part in value.split("\x00") if part.strip())
+    if isinstance(value, list):
+        return [without_nul_characters(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(without_nul_characters(item) for item in value)
+    if isinstance(value, dict):
+        return {without_nul_characters(key): without_nul_characters(item) for key, item in value.items()}
+    return value
+
+
 def read_metadata_for_file(path: Path) -> dict[str, object]:
+    return without_nul_characters(_read_metadata_for_file(path))
+
+
+def _read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""

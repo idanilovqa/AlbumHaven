@@ -58,6 +58,8 @@ class _LibraryWarmupHandle:
             )
 
 
+_CATCH_UP_SCAN_POLL_SECONDS = 5.0
+
 def _start_library_warmup(
     runtime,
     hydrate,
@@ -747,6 +749,12 @@ def create_asgi_app():
         automatic_recovery_started_at: dict[frozenset[str], str] = {}
 
         def catch_up_library_roots(root_ids: frozenset[str]) -> None:
+            # A running full scan re-reads every root; a concurrent catch-up
+            # doubled disk reads and contended its publication (sandbox2
+            # 2026-11-05). Start after it, when unchanged files are reused.
+            while runtime.library_state.get("scan_in_progress"):
+                if targeted_reconciler.wait_for_stop(_CATCH_UP_SCAN_POLL_SECONDS):
+                    raise RuntimeError("Library watcher catch-up stopped before the scan finished.")
             recovery_started_at = datetime.now(timezone.utc).isoformat()
             roots_by_id = {
                 str(root.get("id") or ""): dict(root)

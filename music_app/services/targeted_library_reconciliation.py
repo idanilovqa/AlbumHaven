@@ -72,6 +72,9 @@ class TargetedLibraryReconciler:
     def stop(self) -> None:
         self._stop_event.set()
 
+    def wait_for_stop(self, timeout: float) -> bool:
+        return self._stop_event.wait(timeout)
+
     def replace_roots(self, roots: Iterable[dict[str, object]]) -> None:
         with self._roots_lock:
             self._roots = tuple(dict(root) for root in roots)

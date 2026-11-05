@@ -2182,10 +2182,6 @@ class PostgresScanCacheAdapter:
             ]
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
-            if rebuild_relation_projection:
-                # This publication rebuilds every relation fact and clears the
-                # whole journal before commit; skip per-row journaling (0112).
-                connection.execute("set local album_haven.full_inventory_publication = 'on'")
             _ensure_bootstrap_context(connection)
             if _load_cover_mutation_revision(connection) != prepared_cover_mutation_revision:
                 raise ScanCachePublicationSuperseded(

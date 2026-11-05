@@ -21,7 +21,7 @@ from music_app.services.library_roots import (
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.relation_state import empty_relation_views
-from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded, select_scan_cache_adapter
 from music_app.services.separate_releases import load_separate_release_keys
 
 
@@ -375,6 +375,12 @@ def hydrate_library_state_from_disk(
         if adapter_was_selected or strict_scan_cache_load
         else scan_cache_adapter.load_snapshot
     )
+    # Read before the snapshot, so a publication after it supersedes the repair save.
+    load_inventory_revision = getattr(scan_cache_adapter, "load_inventory_mutation_revision", None)
+    snapshot_inventory_revision = (
+        int(load_inventory_revision())
+        if validate_cache and callable(load_inventory_revision) else None
+    )
     file_cache, disk_last_scan, relation_views, relations_last_built, disk_error = load_snapshot(
         config["CACHE_PATH"],
         root_identity,
@@ -447,20 +453,28 @@ def hydrate_library_state_from_disk(
             # Only repaired entries: the loaded snapshot may already be older
             # than a scan's publication. Dropped entries still need the full save.
             snapshot_options["publish_paths"] = set(changed_entries)
-        committed_relations = scan_cache_adapter.save_snapshot(
-            config["CACHE_PATH"],
-            sanitized_file_cache,
-            root_identity,
-            disk_last_scan,
-            relation_views=relation_views,
-            relations_last_built=relations_last_built,
-            **snapshot_options,
-        )
-        saved_sanitized_snapshot = True
-        if relations_changed:
+        if snapshot_inventory_revision is not None:
+            snapshot_options["expected_inventory_mutation_revision"] = snapshot_inventory_revision
+        try:
+            committed_relations = scan_cache_adapter.save_snapshot(
+                config["CACHE_PATH"],
+                sanitized_file_cache,
+                root_identity,
+                disk_last_scan,
+                relation_views=relation_views,
+                relations_last_built=relations_last_built,
+                **snapshot_options,
+            )
+        except ScanCachePublicationSuperseded:
+            # A newer publication landed after this snapshot was read; the queued
+            # update below rebases the repairs onto it instead.
+            committed_relations = None
+        else:
+            saved_sanitized_snapshot = True
+        if saved_sanitized_snapshot and relations_changed:
             library_state["relation_projection_ready"] = False
             library_state["relation_projection_rebuild_reason"] = "hydration_inventory_changed"
-        if ensure_relations and relations_changed and isinstance(committed_relations, dict):
+        if saved_sanitized_snapshot and ensure_relations and relations_changed and isinstance(committed_relations, dict):
             relation_views = committed_relations["relation_views"]
             relations_last_built = committed_relations["relations_last_built"]
             library_state["relation_projection_ready"] = True

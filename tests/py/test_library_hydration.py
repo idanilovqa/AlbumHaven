@@ -371,6 +371,63 @@ def test_refresh_cached_cover_paths_in_library_state_rebuilds_albums_and_schedul
     ]
 
 
+def test_hydration_repairs_never_overwrite_a_publication_made_after_their_snapshot(tmp_path: Path, monkeypatch):
+    from music_app.services.scan_cache_persistence import ScanCacheInventorySuperseded
+
+    track_path = tmp_path / "Artist" / "Album" / "song.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    (track_path.parent / "cover.jpg").write_bytes(b"cover")
+    events = []
+
+    class PublishedMeanwhileAdapter(FakeSelectedScanCacheAdapter):
+        def load_inventory_mutation_revision(self):
+            events.append("revision read")
+            return 7
+
+        def load_snapshot_strict(self, *args):
+            events.append("snapshot read")
+            return super().load_snapshot_strict(*args)
+
+        def save_snapshot(self, *args, **kwargs):
+            super().save_snapshot(*args, **kwargs)
+            raise ScanCacheInventorySuperseded("a scan published after this snapshot")
+
+    adapter = PublishedMeanwhileAdapter(
+        {str(track_path): {"path": str(track_path), "album": "Album", "artist": "Artist", "cover_path": None}}, 12.5,
+    )
+    scheduled = []
+    monkeypatch.setattr("music_app.services.library_hydration.select_scan_cache_adapter", lambda config: adapter)
+    monkeypatch.setattr("music_app.services.library_hydration.library_root_cache_identity", lambda config: "root")
+    monkeypatch.setattr("music_app.services.library_hydration.get_library_roots", lambda config: [])
+    monkeypatch.setattr(
+        "music_app.services.library_hydration.select_runtime_persistence_adapter",
+        lambda seam_id, config: SimpleNamespace(effective_backend="postgres"),
+    )
+    monkeypatch.setattr("music_app.services.library_hydration.load_separate_release_keys", lambda config: set())
+    monkeypatch.setattr(
+        "music_app.services.library_hydration.build_albums_from_file_cache",
+        lambda *_args: [SimpleNamespace(key="album", tracks=[])],
+    )
+    monkeypatch.setattr(
+        "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
+        lambda config, cache_path, changed_entries: scheduled.append(set(changed_entries)),
+    )
+
+    library_state = {"albums": []}
+    assert hydrate_library_state_from_disk(
+        library_state,
+        {"CACHE_PATH": tmp_path / "cache.json", "MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
+        ensure_relations=False,
+    ) is True
+
+    assert events[:2] == ["revision read", "snapshot read"]
+    assert adapter.save_calls[0][4]["expected_inventory_mutation_revision"] == 7
+    # The superseded repair save leaves the repairs to the rebasing queued update.
+    assert scheduled == [{str(track_path)}]
+    assert "relation_projection_ready" not in library_state
+
+
 def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Path, monkeypatch):
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)

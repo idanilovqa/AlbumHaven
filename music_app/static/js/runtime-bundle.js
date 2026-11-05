@@ -12828,9 +12828,11 @@ function acceptPlaybackClaim(result, prepared) {
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(async () => {
-    // A claim request in flight confirms or drops this claim itself within its request deadline.
+    // A claim request in flight confirms or drops this claim itself within its request deadline,
+    // and a newer request queued behind it decides ownership in its turn.
+    const version = ownership.requestVersion || 0;
     await ownership.pendingOperation;
-    if (ownership.activeClaim === claim) losePlaybackOwnership();
+    if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
   }, PLAYBACK_CLAIM_LEASE_MS);
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();

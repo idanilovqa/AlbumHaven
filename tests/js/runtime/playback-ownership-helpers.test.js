@@ -1068,6 +1068,35 @@ test('lease expiry defers to an in-flight renewal that the server confirms', asy
   assert.deepEqual(stopStreamingPlaybackCalls, []);
 });
 
+test('lease expiry leaves a play queued behind a slow renewal to decide ownership', async () => {
+  const pendingRenewal = deferred();
+  let slow = true;
+  const harness = leaseHarness({ renew: (answer) => {
+    if (!slow) return answer();
+    slow = false;
+    return pendingRenewal.promise.then(answer);
+  } });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  clock.monotonic = 20_000;
+  harness.heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.renewals(), 1);
+
+  clock.monotonic = 30_000;
+  const expiry = harness.leaseTimers()[0].callback();
+  clock.monotonic = 32_000;
+  const play = context.claimPlaybackOwnership(localTrack);
+  clock.monotonic = 35_000;
+  pendingRenewal.resolve();
+  await expiry;
+  assert.equal(await play, true, 'the queued play acquires once the renewal settles');
+  assert.equal(harness.renewals(), 2);
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.equal(context.state.player.ownership.blockedReason, '');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
 test('lease expiry still drops ownership when renewals stop answering', async () => {
   const harness = leaseHarness({ renew: (_answer, signal) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(new Error('aborted')));

@@ -26,7 +26,7 @@ sealed interface UpdateState {
     /** Android blocks this install source until the user allows it in system Settings. */
     data class Authorization(val manifest: UpdateManifest) : UpdateState
 
-    /** Playback is stopping, or Android is asking the user to confirm the installation. */
+    /** Playback is stopping, Android is asking the user to confirm the installation, or it is installing. */
     data class Installing(val manifest: UpdateManifest) : UpdateState
 
     /** [manifest] is kept when retrying means downloading it again. */
@@ -129,9 +129,6 @@ interface UpdateStore {
 /** Android work the [Updater] asks for. Every callback arrives on the main thread. */
 interface UpdatePorts {
     fun nowMs(): Long
-
-    /** The origin this app is signed in to, which alone serves its artifacts. */
-    fun artifactOrigin(): String
     fun fetchManifest(url: String, done: (FetchResult) -> Unit)
 
     /** Downloads [manifest]'s APK into app-private storage, reporting bytes received so far. */
@@ -147,6 +144,9 @@ interface UpdatePorts {
     fun stage(manifest: UpdateManifest, done: (StageResult) -> Unit)
     fun commit(sessionId: Int): Boolean
     fun abandon(sessionId: Int)
+
+    /** Whether Android still holds the install session: awaiting its confirmation, or installing. */
+    fun sessionExists(sessionId: Int): Boolean
 }
 
 /**
@@ -156,19 +156,16 @@ interface UpdatePorts {
  * manifest whose version code exceeds the installed one is ever downloaded.
  */
 class Updater(
-    private val basePolicy: UpdatePolicy,
+    /** The compiled policy, trusting only the origin the app is signed in to now. */
+    private val currentPolicy: () -> UpdatePolicy,
     private val ports: UpdatePorts,
     private val store: UpdateStore,
 ) {
-    /** The compiled policy, trusting only the origin currently selected. */
-    private val policy: UpdatePolicy get() = basePolicy.copy(artifactOrigin = ports.artifactOrigin())
+    private val policy: UpdatePolicy get() = currentPolicy()
 
     private val listeners = mutableSetOf<(UpdateState) -> Unit>()
     private var passiveChecked = false
     private var sessionId: Int? = null
-
-    /** Android showed its confirmation for [sessionId]; leaving it unanswered reports nothing. */
-    private var confirming = false
 
     var state: UpdateState = restore()
         private set(value) {
@@ -311,9 +308,9 @@ class Updater(
             state = UpdateState.Authorization(manifest)
             return true
         }
-        // A confirmation left unanswered is asked again with a fresh session.
+        // The previous session, whose confirmation Android dropped, gives way to a fresh one.
         sessionId?.let(ports::abandon)
-        endSession()
+        sessionId = null
         state = UpdateState.Installing(manifest)
         ports.stage(manifest) { result -> staged(manifest, result, prepare) }
         return true
@@ -329,7 +326,7 @@ class Updater(
                 sessionId = result.sessionId
                 prepare {
                     if (sessionId == result.sessionId && !ports.commit(result.sessionId)) {
-                        endSession()
+                        sessionId = null
                         fail(UpdateError.INSTALL_FAILED, null, manifest)
                     }
                 }
@@ -339,30 +336,31 @@ class Updater(
         }
     }
 
-    /** Reported by `PackageInstaller` for the committed session, also after its confirmation was left unanswered. */
-    fun onInstallStatus(status: InstallStatus) {
+    /**
+     * Reported by `PackageInstaller` for the committed session, also after its confirmation was left
+     * unanswered. A status for any other session, such as one abandoned for a retry, is ignored.
+     */
+    fun onInstallStatus(statusSessionId: Int, status: InstallStatus) {
+        if (statusSessionId != sessionId) return
         val manifest = when (val current = state) {
             is UpdateState.Installing -> current.manifest
-            is UpdateState.Ready -> current.manifest.takeIf { sessionId != null } ?: return
+            is UpdateState.Ready -> current.manifest
             else -> return
         }
         when (status) {
-            is InstallStatus.PendingUserAction -> if (state is UpdateState.Installing) {
-                confirming = true
-                status.confirm()
-            }
+            is InstallStatus.PendingUserAction -> if (state is UpdateState.Installing) status.confirm()
             // Android replaces the package and ends this process; nothing is left to show.
             InstallStatus.Succeeded -> {
-                endSession()
+                sessionId = null
                 store.stagedManifest = null
             }
             // The verified file stays, so Install update can ask Android again.
             InstallStatus.Cancelled -> {
-                endSession()
+                sessionId = null
                 state = UpdateState.Ready(manifest)
             }
             InstallStatus.Failed -> {
-                endSession()
+                sessionId = null
                 fail(UpdateError.INSTALL_FAILED, null, manifest)
             }
         }
@@ -370,19 +368,19 @@ class Updater(
 
     /**
      * The user came back to the app: from system Settings, a granted install source makes the
-     * update ready again; from Android's confirmation without answering it, so does Install update.
+     * update ready again. From Android's confirmation, an approved installation is still running,
+     * so the update stays installing while Android holds the session; once the session is gone
+     * without a status, as when its confirmation was left and dropped, Install update asks again.
      */
     fun onForeground() {
         when (val current = state) {
             is UpdateState.Authorization -> if (ports.canRequestInstalls()) state = UpdateState.Ready(current.manifest)
-            is UpdateState.Installing -> if (confirming) state = UpdateState.Ready(current.manifest)
+            is UpdateState.Installing -> {
+                val id = sessionId
+                if (id != null && !ports.sessionExists(id)) state = UpdateState.Ready(current.manifest)
+            }
             else -> Unit
         }
-    }
-
-    private fun endSession() {
-        sessionId = null
-        confirming = false
     }
 
     /** [reason] is a [Rejection] or [AccessFailure] wire name. */

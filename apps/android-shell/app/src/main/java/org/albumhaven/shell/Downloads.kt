@@ -1,5 +1,7 @@
 package org.albumhaven.shell
 
+import java.util.concurrent.Executor
+
 /**
  * One `DownloadManager` call, or null when the system download service refuses it: a disabled
  * Download Manager throws IllegalArgumentException ("Unknown URL"), unavailable storage
@@ -13,4 +15,13 @@ inline fun <T> downloadManagerOrNull(call: () -> T): T? = try {
     null
 } catch (_: SecurityException) {
     null
+}
+
+/**
+ * Builds and enqueues one `DownloadManager` request on [io], since both touch storage and the
+ * download provider, and answers its ID on [main], or null when the system refused it.
+ */
+fun enqueueDownload(io: Executor, main: (Runnable) -> Unit, enqueue: () -> Long, done: (Long?) -> Unit) = io.execute {
+    val id = downloadManagerOrNull(enqueue)
+    main(Runnable { done(id) })
 }

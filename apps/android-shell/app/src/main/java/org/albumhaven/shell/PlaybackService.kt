@@ -477,6 +477,7 @@ class PlaybackService : MediaLibraryService() {
         effects.forEach { effect ->
             when (effect) {
                 FocusEffect.Pause -> controller.interrupt()
+                FocusEffect.PauseForUnplug -> controller.pause(CommandSource.SYSTEM)
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
                 is FocusEffect.WatchNoisy -> watchNoisy(effect.enabled)
             }

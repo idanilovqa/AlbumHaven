@@ -4,7 +4,12 @@ enum class FocusChange { GAIN, LOSS, LOSS_TRANSIENT, LOSS_TRANSIENT_CAN_DUCK }
 
 /** What the focus policy asks the platform and the player to do, in order. */
 sealed interface FocusEffect {
+    /** Focus is gone for now; the playback thread pauses unless a later start took it back. */
     data object Pause : FocusEffect
+
+    /** Output was lost: playback pauses as if the user had paused. */
+    data object PauseForUnplug : FocusEffect
+
     data object Resume : FocusEffect
     data class WatchNoisy(val enabled: Boolean) : FocusEffect
 }
@@ -20,11 +25,16 @@ interface StartGate {
     /** Playback stopped being wanted ([state] is not [NativePlaybackState.wanted]), told before any later start. */
     fun stopped(state: NativePlaybackState)
 
+    /** Whether focus is held and heard now, so a focus pause posted before a start that took it back is skipped. */
+    fun holdsFocus(): Boolean
+
     companion object {
         val OPEN = object : StartGate {
             override fun mayStart() = true
             override fun dropHeldStart() = Unit
             override fun stopped(state: NativePlaybackState) = Unit
+            // Holding no focus, every focus pause pauses.
+            override fun holdsFocus() = false
         }
     }
 }
@@ -59,7 +69,8 @@ class AudioFocusPolicy(
             resumeOnGain = true
             return listOf(FocusEffect.Pause)
         }
-        // Every start passes the gate holding focus, so focus lost since then pauses it.
+        // Every start passes the gate holding focus, so a start reported without it pauses, unless a
+        // later start took focus back before the pause runs.
         if (wanted && !held) return listOf(FocusEffect.Pause)
         active = wanted
         // Any start, including the user's own, supersedes a pending resume.
@@ -73,6 +84,9 @@ class AudioFocusPolicy(
         if (state != NativePlaybackState.PAUSED) resumeOnGain = false
         if (!resumeOnGain) release()
     }
+
+    @Synchronized
+    override fun holdsFocus() = held && !transientlyLost
 
     private fun release() {
         transientlyLost = false
@@ -143,7 +157,7 @@ class AudioFocusPolicy(
     /** Output lost during a call drops the held resume, so the call's end does not play on the speaker. */
     @Synchronized
     fun onBecomingNoisy(): List<FocusEffect> {
-        if (active) return listOf(FocusEffect.Pause)
+        if (active) return listOf(FocusEffect.PauseForUnplug)
         if (!resumeOnGain) return watchNoisy()
         resumeOnGain = false
         release()

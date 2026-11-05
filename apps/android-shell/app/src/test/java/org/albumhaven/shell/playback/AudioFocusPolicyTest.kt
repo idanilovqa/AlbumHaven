@@ -207,6 +207,7 @@ class AudioFocusPolicyTest {
         fun apply(effects: List<FocusEffect>): Unit = effects.forEach { effect ->
             when (effect) {
                 FocusEffect.Pause -> controller.interrupt()
+                FocusEffect.PauseForUnplug -> controller.pause(CommandSource.SYSTEM)
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
                 is FocusEffect.WatchNoisy -> watchingNoisy = effect.enabled
             }
@@ -474,6 +475,102 @@ class AudioFocusPolicyTest {
     fun becomingNoisyPausesOnlyActivePlayback() {
         assertEquals(emptyList<FocusEffect>(), policy.onBecomingNoisy())
         startPlaying()
-        assertEquals(listOf(FocusEffect.Pause), policy.onBecomingNoisy())
+        assertEquals(listOf(FocusEffect.PauseForUnplug), policy.onBecomingNoisy())
+    }
+
+    @Test
+    fun holdsFocusOnlyWhileTheRequestIsHeldAndHeard() {
+        assertFalse(policy.holdsFocus())
+        startPlaying()
+        assertTrue(policy.holdsFocus())
+        policy.onFocusChange(FocusChange.LOSS_TRANSIENT)
+        assertFalse(policy.holdsFocus())
+        policy.onFocusChange(FocusChange.GAIN)
+        assertTrue(policy.holdsFocus())
+        policy.onFocusChange(FocusChange.LOSS)
+        assertFalse(policy.holdsFocus())
+    }
+
+    /** The first track plays and is heard. */
+    private fun Focused.playing() {
+        harness.load(1, first)
+        runUntil { harness.state() == NativePlaybackState.PLAYING && written() > 0 }
+    }
+
+    @Test
+    fun unpluggingHeadphonesPausesPlaybackThatHoldsFocus() {
+        val focused = Focused(first)
+        val harness = focused.harness
+        focused.playing()
+        focused.unplug()
+        focused.runUntil { harness.state() == NativePlaybackState.PAUSED }
+        val written = focused.written()
+        repeat(20) { focused.step() }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(written, focused.written())
+        assertEquals(1, abandons)
+    }
+
+    @Test
+    fun aStaleFocusPauseAfterAStartThatTookFocusBackLeavesItPlaying() {
+        val focused = Focused(first)
+        val harness = focused.harness
+        focused.playing()
+        // The playback thread pauses while the main thread still holds an older playing report.
+        harness.controller.pause()
+        harness.step()
+        val stale = policy.onState(NativePlaybackState.PLAYING)
+        assertEquals(listOf(FocusEffect.Pause), stale)
+        // The user's play takes focus back before the pause that report asked for runs.
+        harness.controller.play(1)
+        harness.step()
+        focused.apply(stale)
+        val written = focused.written()
+        focused.runUntil { harness.state() == NativePlaybackState.PLAYING && focused.written() > written }
+        repeat(20) { focused.step() }
+
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertEquals(2, requests)
+    }
+
+    @Test
+    fun aPlayQueuedBeforeAPermanentLossPausesWhenItTookNoFocus() {
+        val focused = Focused(first)
+        val harness = focused.harness
+        focused.playing()
+        // Another music app takes focus; a play already queued finds the player playing and asks nothing.
+        val loss = policy.onFocusChange(FocusChange.LOSS)
+        harness.controller.play(1)
+        focused.apply(loss)
+        focused.runUntil { harness.state() == NativePlaybackState.PAUSED }
+        val written = focused.written()
+        repeat(20) { focused.step() }
+
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(written, focused.written())
+        assertEquals(1, requests)
+        assertEquals(1, abandons)
+    }
+
+    @Test
+    fun aPauseAndPlayQueuedBeforeAPermanentLossEndPlayingOnlyWhenThePlayRegainedFocus() {
+        for (regained in listOf(false, true)) {
+            granted = true
+            val focused = Focused(first)
+            val harness = focused.harness
+            focused.playing()
+            val loss = policy.onFocusChange(FocusChange.LOSS)
+            harness.controller.pause()
+            harness.controller.play(1)
+            granted = regained
+            focused.apply(loss)
+            val written = focused.written()
+            val expected = if (regained) NativePlaybackState.PLAYING else NativePlaybackState.PAUSED
+            focused.runUntil { harness.state() == expected && (!regained || focused.written() > written) }
+            repeat(20) { focused.step() }
+
+            assertEquals("regained=$regained", expected, harness.state())
+            assertEquals("regained=$regained", regained, policy.holdsFocus())
+        }
     }
 }

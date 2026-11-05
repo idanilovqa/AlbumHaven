@@ -320,8 +320,12 @@ class NativePlaybackController(
         stopNow()
     }
 
-    /** Audio focus pauses playback for a moment; unlike [pause], a start held for its return stays. */
-    fun interrupt() = post(CommandSource.SYSTEM) { pauseNow() }
+    /**
+     * Audio focus pauses playback for a moment; unlike [pause], a start held for its return stays.
+     * It pauses only if the gate no longer holds focus when it runs, so a start that took focus back
+     * after it was posted keeps playing.
+     */
+    fun interrupt() = post(CommandSource.SYSTEM) { if (!startGate.holdsFocus()) pauseNow() }
 
     /**
      * A new document of the same origin re-attaches to the running queue: playback, the claim and

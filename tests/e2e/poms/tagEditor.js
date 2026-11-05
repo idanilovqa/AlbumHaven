@@ -52,8 +52,11 @@ function inspectRepairAlert(alert, messageSelector) {
     }
     shown = visible;
   };
-  new MutationObserver(record).observe(alert, { attributes: true, attributeFilter: ['class'] });
+  const observer = new MutationObserver(record);
+  observer.observe(alert, { attributes: true, attributeFilter: ['class'] });
   record();
+  // The alert node outlives the delivery, so the caller stops observing once it has read the list.
+  presentations.stop = () => observer.disconnect();
   return presentations;
 }
 
@@ -166,6 +169,12 @@ export class TagEditor extends BasePage {
   async recordRepairAlertPresentations() {
     // parity-check: allow-read-only-measurement-evaluate -- observe the alert's class without changing it and measure each presentation
     return this.repairAlert.evaluateHandle(inspectRepairAlert, this.repairAlertMessageSelector);
+  }
+
+  async stopRecordingRepairAlertPresentations(presentations) {
+    // parity-check: allow-read-only-measurement-evaluate -- disconnect this probe's own observer; the app is untouched
+    await presentations.evaluate((list) => list.stop());
+    await presentations.dispose();
   }
 
   async readFormAndStripeColors() {

@@ -25,6 +25,14 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   const appBar = new AppBarActions(new AppBar(tagEditor.page));
   const scan = new ScanPageActions(new ScanPage(tagEditor.page));
   const presentations = autoDismisses ? await tagEditor.recordRepairAlertPresentations() : null;
+  try {
+    await deliverAndRestore(tagEditor, appBar, scan, presentations, expectedMessage, { timeout, autoDismisses, beforeNavigation });
+  } finally {
+    if (presentations) await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+  }
+}
+
+async function deliverAndRestore(tagEditor, appBar, scan, presentations, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
   await expect(tagEditor.overlay).toBeHidden({ timeout });
   await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
   const previous = await tagEditor.readLibraryReturnState();

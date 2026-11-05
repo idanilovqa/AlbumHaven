@@ -138,9 +138,23 @@ def guard_recovery_library_publication(
             )
         except (TypeError, ValueError):
             raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE) from None
-        if not detected_at or normalized_detected_at > detected_before:
+        if not detected_at or (
+            normalized_detected_at > detected_before
+            and not _catch_up_may_publish_over(problem.get("state"))
+        ):
             raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
     yield
+
+
+def _catch_up_may_publish_over(state: object) -> bool:
+    """A newer overflow keeps the root flagged but must not discard a catch-up.
+
+    The catch-up read every file itself, so its result is never older than the
+    published one; the newer overflow survives clearing and schedules another
+    catch-up. A root that became unavailable could make files look deleted,
+    so every other newer problem still refuses publication.
+    """
+    return str(state or "") == "overflow"
 
 _CLEAR_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
 /* watch_health_clear */
@@ -397,6 +411,7 @@ class LibraryWatchHealthService:
             with self._lock:
                 if any(
                     problem.detected_at > detected_before
+                    and not _catch_up_may_publish_over(problem.state)
                     for root_id in roots
                     if (problem := self._pending.get(root_id)) is not None
                 ):

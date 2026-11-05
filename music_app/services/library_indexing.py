@@ -415,6 +415,27 @@ def _ordered_scan_metadata_entries(
         )
 
 
+# A USB or network disk that resets mid-scan fails reads for a few seconds.
+# Retrying keeps one reset from dropping a whole subtree from publication;
+# permission and missing-path errors are permanent and are not retried.
+_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS = (1.0, 5.0, 15.0)
+_PERMANENT_DIRECTORY_ERRORS = (PermissionError, FileNotFoundError, NotADirectoryError)
+
+
+def _read_directory_entries(current: Path) -> list[os.DirEntry]:
+    for delay in (*_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS, None):
+        try:
+            with os.scandir(current) as iterator:
+                return sorted(list(iterator), key=lambda entry: entry.name.casefold())
+        except _PERMANENT_DIRECTORY_ERRORS:
+            raise
+        except OSError:
+            if delay is None:
+                raise
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def _iter_scandir_entries(
     root: Path,
     *,
@@ -424,8 +445,7 @@ def _iter_scandir_entries(
     while stack:
         current = stack.pop()
         try:
-            with os.scandir(current) as iterator:
-                entries = sorted(list(iterator), key=lambda entry: entry.name.casefold())
+            entries = _read_directory_entries(current)
         except OSError as error:
             _record_scan_file_error(
                 record_file_error,

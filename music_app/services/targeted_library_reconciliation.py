@@ -82,6 +82,7 @@ class TargetedLibraryReconciler:
         *,
         root_healthy: bool = True,
         publication_guard: object = _DEFAULT_PUBLICATION_GUARD,
+        reuse_unchanged_entries: bool = False,
     ) -> TargetedReconciliationResult:
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
@@ -251,13 +252,22 @@ class TargetedLibraryReconciler:
                 else self._exception_overrides
             )
             active_entries: dict[str, dict[str, object]] = {}
+            # A whole-root catch-up re-reads only files whose size, mtime or
+            # reader schema changed, exactly as a full scan does; on a slow
+            # disk re-reading every tag kept catch-ups running for hours.
+            persisted_entries = (
+                self._repository.load_file_entries(list(active_by_path))
+                if reuse_unchanged_entries else {}
+            )
             for path, matched_root in sorted(
                 active_by_path.values(),
                 key=lambda item: str(item[0]).casefold(),
             ):
                 if self._stop_event.is_set():
                     return TargetedReconciliationResult(0, (), "cancelled")
-                entry = self._metadata_reader(path)
+                entry = _unchanged_persisted_entry(persisted_entries.get(str(path)), path)
+                if entry is None:
+                    entry = self._metadata_reader(path)
                 enriched = enrich_library_file_entry(
                     entry,
                     path=path,
@@ -445,3 +455,21 @@ class TargetedLibraryReconciler:
         except (OSError, ValueError):
             return resolved_root
         return album_directory
+
+
+def _unchanged_persisted_entry(persisted: object, path: Path) -> dict[str, object] | None:
+    from music_app.services.metadata import file_metadata_schema_is_current
+
+    if not isinstance(persisted, dict):
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if (
+        persisted.get("mtime") == stat.st_mtime
+        and persisted.get("size") == stat.st_size
+        and file_metadata_schema_is_current(persisted)
+    ):
+        return dict(persisted)
+    return None

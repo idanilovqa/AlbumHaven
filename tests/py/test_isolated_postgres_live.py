@@ -807,8 +807,9 @@ def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_alb
     assert members[untagged["path"]] is None and members[no_album["path"]] is None
     assert set(albums) == {"owner::real album"}
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        problems = dict(connection.execute("""select private_path,
-            metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' from library.local_track_files""").fetchall())
+        problems = {row["private_path"]: row["problem"] for row in connection.execute("""select private_path,
+            metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
+            from library.local_track_files""").fetchall()}
     assert problems[untagged["path"]] == "Missing artist and album"
     assert problems[no_album["path"]] == "Missing album"
     repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
@@ -835,6 +836,44 @@ def test_live_slash_band_name_is_one_artist(watcher_repair_inventory):
     sidebar = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect).build_root_sidebar_payload()
     counts = {item["artist"]: item.get("count") for item in sidebar["artists_sidebar"]}
     assert "To" not in counts and "To/Die/For" in counts
+
+
+def test_live_root_catch_up_rereads_only_changed_files(watcher_repair_inventory):
+    # sandbox2 2026-11-04: an N: catch-up re-read all 54k files and never finished.
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    unchanged, edited = (
+        {**fixture.entry(f"Owner/Catch Up/0{index}.flac", album="Catch Up"), "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+         "release_date": None, "compilation_tag": None}
+        for index in (1, 2)
+    )
+    fixture.seed(unchanged, edited)
+    Path(edited["path"]).write_bytes(b"retagged media fixture")
+    read = []
+
+    def reader(path):
+        read.append(str(path))
+        stat = Path(path).stat()
+        return {**edited, "title": "Retagged", "mtime": stat.st_mtime, "size": stat.st_size}
+
+    root = Path(fixture.roots[0]["path"])
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=reader, wait=lambda _seconds: None,
+    ).reconcile(
+        SimpleNamespace(root_id="repair-main", paths=(root,), deleted_paths=(), deleted_subtrees=(root,), moves=()),
+        reuse_unchanged_entries=True,
+    )
+
+    assert result.health == "healthy"
+    assert read == [edited["path"]]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        titles = {row["private_path"]: row["title"] for row in connection.execute("""
+            select files.private_path, tracks.title from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id where files.scan_cache_stale is false""").fetchall()}
+    assert titles == {unchanged["path"]: "01", edited["path"]: "Retagged"}
 
 
 def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):

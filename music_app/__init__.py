@@ -772,6 +772,7 @@ def create_asgi_app():
                         runtime.library_watch_health_service
                         .recovery_publication_guard(recovery_started_at)
                     ),
+                    reuse_unchanged_entries=True,
                 )
                 if getattr(result, "health", None) != "healthy":
                     raise RuntimeError(

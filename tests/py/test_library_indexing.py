@@ -105,6 +105,33 @@ def test_iter_scandir_entries_reports_directory_read_failure_with_path_and_error
     }]
 
 
+def test_iter_scandir_entries_retries_a_transient_device_reset(tmp_path: Path, monkeypatch):
+    # sandbox2 2026-11-04: the N: USB disk reset mid-scan and whole subtrees
+    # were skipped. A transient device error is retried before it is recorded.
+    root = tmp_path / "Library"
+    root.mkdir()
+    (root / "01.flac").write_bytes(b"media")
+    real_scandir = library_indexing.os.scandir
+    calls = []
+    failures = []
+
+    def flaky_scandir(path):
+        calls.append(path)
+        if len(calls) <= 2:
+            raise OSError(5, "The I/O device reported an I/O error")
+        return real_scandir(path)
+
+    monkeypatch.setattr(library_indexing, "_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(library_indexing.os, "scandir", flaky_scandir)
+
+    entries = list(library_indexing._iter_scandir_entries(
+        root, record_file_error=lambda action, **fields: failures.append(action),
+    ))
+
+    assert [entry.name for entry in entries] == ["01.flac"]
+    assert failures == [] and len(calls) == 3
+
+
 def test_iter_scandir_entries_reports_directory_entry_inspection_failure(
     tmp_path: Path,
     monkeypatch,

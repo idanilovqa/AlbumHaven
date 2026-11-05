@@ -293,7 +293,7 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(singleArtistBar, /data-artist-info-trigger/);
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
   assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary[^>]*><span>4 albums<\/span></);
+  assert.match(singleArtistBar, /data-gallery-context-summary[^>]*>4 albums</);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -357,7 +357,8 @@ test('current GalleryBar owner renders stored artist metadata on one compact sha
 
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--genre\s*\{[^}]*background:\s*#11202a[^}]*border[^;]*#4199c3[^}]*color:\s*#8bd9ff/is);
-  assert.match(galleryMainCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*display:\s*flex[^}]*flex-wrap:/s);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*display:\s*inline-flex[^}]*flex-wrap:/s);
+  assert.match(markup, /data-gallery-context-summary>4 albums</, 'the summary keeps only the album count');
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
@@ -416,9 +417,8 @@ test('stored artist metadata survives the existing sticky-context projection int
 
   assert.match(galleryMainInteractionsSource, /data-gallery-context-metadata/);
   assert.match(galleryMainInteractionsSource, /buildGalleryArtistMetadataHtml\s*\(/);
-  assert.equal((galleryBarTemplateSource.match(/data-gallery-context-metadata/g) || []).length, 2,
-    'the shared GalleryBar macro keeps the metadata slot for the gallery and mobile PageHeader variants');
-  assert.match(indexTemplateSource, /gallery_bar\([^)]*mobile_page=true/);
+  assert.equal((galleryBarTemplateSource.match(/data-gallery-context-metadata/g) || []).length, 1,
+    'the shared GalleryBar macro keeps one metadata slot for the gallery context');
   assert.match(indexTemplateSource, /gallery_bar\([^)]*gallery_context=true/);
 });
 

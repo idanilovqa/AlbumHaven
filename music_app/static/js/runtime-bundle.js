@@ -4449,7 +4449,8 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
-function buildGalleryArtistMetadataHtml(albumCount, artistMusicBrainz = null) {
+// Country and genre pills only; the album count stays in the context summary.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
@@ -4466,7 +4467,7 @@ function buildGalleryArtistMetadataHtml(albumCount, artistMusicBrainz = null) {
       ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
       : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
   )).join('');
-  return `<span>${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span>${countryHtml}${genreHtml}`;
+  return `${countryHtml}${genreHtml}`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
@@ -4627,10 +4628,11 @@ function buildGalleryBarHtml(config = {}) {
   const isFamily = config.contextKind === 'family';
   const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
   const summary = isArtist
-    ? buildGalleryArtistMetadataHtml(config.albumCount, config.artist_musicbrainz)
+    ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
+  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
   const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary${isArtist ? ' gallery-bar__artist-metadata' : ''}" data-gallery-context-summary${isArtist ? ' data-gallery-context-metadata' : ''}>${isArtist ? summary : escapeHtml(summary)}</span></div>
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${pills ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -7116,13 +7118,11 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else {
     name.textContent = context.artist;
-    summary.hidden = true;
+    summary.textContent = galleryMainPlural(context.albumCount, 'album');
     if (metadata) {
-      metadata.hidden = false;
-      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
-    } else {
-      summary.hidden = false;
-      summary.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
+      const pills = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+      metadata.hidden = !pills;
+      metadata.innerHTML = pills;
     }
     if (isSearch) oldInfo?.remove();
     else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);

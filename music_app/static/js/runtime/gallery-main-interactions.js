@@ -619,13 +619,11 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else {
     name.textContent = context.artist;
-    summary.hidden = true;
+    summary.textContent = galleryMainPlural(context.albumCount, 'album');
     if (metadata) {
-      metadata.hidden = false;
-      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
-    } else {
-      summary.hidden = false;
-      summary.innerHTML = buildGalleryArtistMetadataHtml(context.albumCount, context.artist_musicbrainz);
+      const pills = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+      metadata.hidden = !pills;
+      metadata.innerHTML = pills;
     }
     if (isSearch) oldInfo?.remove();
     else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);

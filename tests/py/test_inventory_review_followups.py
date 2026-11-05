@@ -258,6 +258,8 @@ def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
 @pytest.mark.parametrize("owned_directory_name", [
     "watcher-reconciliation",
     "gallery-native-response-overlap",
+    "watcher-grouped-feature-credit",
+    "generated-preview-storage",
 ])
 @pytest.mark.parametrize("mixed_album", [False, True])
 def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(
@@ -298,10 +300,14 @@ def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(
             assert connection.execute("select metadata ->> 'inventory_mutation_revision' as revision from library.libraries where library_kind = 'local'").fetchone()["revision"] == revision
 
 
-def test_watcher_cleanup_accepts_exact_response_overlap_owner_before_database_access(monkeypatch, tmp_path):
+@pytest.mark.parametrize("owned_directory_name", [
+    "watcher-reconciliation", "gallery-native-response-overlap",
+    "watcher-grouped-feature-credit", "generated-preview-storage",
+])
+def test_watcher_cleanup_accepts_exact_response_overlap_owner_before_database_access(monkeypatch, tmp_path, owned_directory_name):
     from tests.e2e.support import watcherFixture
 
-    owned_root = tmp_path / "cases" / "gallery-native-response-overlap"
+    owned_root = tmp_path / "cases" / owned_directory_name
     owned_root.mkdir(parents=True)
 
     def accepted_owner():

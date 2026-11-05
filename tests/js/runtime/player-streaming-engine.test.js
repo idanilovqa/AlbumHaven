@@ -524,7 +524,7 @@ test('facade receives bounded position updates and one active terminal ended eve
     trackPath: track.path,
     timelineFrame: 72_000,
     currentTime: 1.5,
-    sampleRateChangeTrackPath: '',
+    startNextTrackPath: '',
   }]);
   assert.equal(harness.api.snapshot().currentTime, 1.5);
   assert.equal(harness.api.snapshot().paused, true);
@@ -601,7 +601,7 @@ test('non-zero initial starts keep zero-relative worklet messages on the absolut
     trackPath: makeTrack().path,
     timelineFrame: startFrame + 48_000,
     currentTime: (startFrame + 48_000) / 48_000,
-    sampleRateChangeTrackPath: '',
+    startNextTrackPath: '',
   }]);
   assert.equal(harness.api.snapshot().currentTime, (startFrame + 48_000) / 48_000);
   assert.equal(harness.api.snapshot().renderedFrame, 48_000, 'terminal rendered frames stay worklet-relative');
@@ -6009,7 +6009,7 @@ test('a queued track at another rate opens no continuity and is handed over on e
     streamId: current.streamId,
     timelineFrame: 44_100,
   });
-  assert.equal(ended[0].sampleRateChangeTrackPath, nextTrack.path);
+  assert.equal(ended[0].startNextTrackPath, nextTrack.path);
 
   await harness.api.start(nextTrack);
   assert.equal(harness.contexts.length, 2);

@@ -506,8 +506,10 @@ async function handleStreamingPlaybackEnded(event = {}) {
     await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
-  if (event.sampleRateChangeTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window.
+  if (event.startNextTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
     // A locked phone may refuse the new context; stay paused so a tap can resume it.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }

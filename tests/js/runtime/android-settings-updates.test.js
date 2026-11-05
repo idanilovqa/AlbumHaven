@@ -150,6 +150,60 @@ test('downloading shows the approved progress label and bar', async () => {
   assert.match(html, /<label class="on-page-alert__progress">Download progress: 42%<progress max="100" value="42" aria-label="Download progress: 42%"><\/progress><\/label>/);
 });
 
+test('download progress changes the bar in place, never re-rendering the status region', async () => {
+  const { bridge, holder } = await connected(update());
+  const downloading = progress => ({ ...fixture.updateStateEvent.payload, state: 'downloading', progress });
+  bridge.event('updates.state', downloading(10));
+  const rendered = holder.innerHTML;
+  assert.match(rendered, /Downloading update · 10%/);
+  // The rendered alert's nodes the progress touches.
+  const attributes = node => Object.assign(node, { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } });
+  const nodes = {
+    '[role="status"]': attributes({}),
+    progress: attributes({ value: 10 }),
+    '.on-page-alert__progress': { firstChild: { nodeValue: 'Download progress: 10%' } },
+    '.on-page-alert__title': { textContent: 'Downloading update · 10%' },
+  };
+  holder.querySelector = selector => nodes[selector] ?? null;
+
+  bridge.event('updates.state', downloading(42));
+  assert.equal(holder.innerHTML, rendered);
+  assert.equal(nodes.progress.value, 42);
+  assert.equal(nodes.progress.attributes['aria-label'], 'Download progress: 42%');
+  assert.equal(nodes['.on-page-alert__progress'].firstChild.nodeValue, 'Download progress: 42%');
+  assert.equal(nodes['.on-page-alert__title'].textContent, 'Downloading update · 42%');
+  // Screen readers wait while the download runs instead of reading every tick.
+  assert.equal(nodes['[role="status"]'].attributes['aria-busy'], 'true');
+
+  bridge.event('updates.state', { ...downloading(100), state: 'verifying' });
+  assert.match(holder.innerHTML, /Verifying update…/);
+});
+
+test('the sandbox server selector is the shared dropdown trigger, unpatched', async () => {
+  const { api, window } = await connected(update());
+  const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
+  const trigger = html.match(/<button[^>]*data-android-sandbox-trigger[\s\S]*?<\/button>/)[0];
+  assert.equal(trigger, window.ButtonComponent.renderButton({
+    label: 'sandbox2',
+    attributes: {
+      'data-android-sandbox-trigger': '', 'aria-labelledby': 'android-sandbox-label',
+      'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-describedby': 'android-sandbox-origin',
+    },
+  }));
+});
+
+test('an unknown failure code reads as a failed check', async () => {
+  for (const name of ['constructor', '__proto__', 'toString']) {
+    for (const failure of [{ error: name }, { error: 'check_failed', reason: name }]) {
+      const { api } = await connected(update({ state: 'failed', ...failure }));
+      const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
+      const alert = alertOf(html.slice(html.indexOf('data-android-update')));
+      assert.equal(text(alert[0]), 'Update check failed. Check your connection and try again. Retry', name);
+      assert.deepEqual(button(alert[0]), { label: 'Retry', disabled: false, action: 'check' }, name);
+    }
+  }
+});
+
 test('without updates.manual.v1 the card shows only the version', async () => {
   const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['playback.native.v1'] }));
   const { api } = loadRuntime({ bridge });

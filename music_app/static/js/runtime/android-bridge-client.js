@@ -1,21 +1,30 @@
 // Web side of Android bridge v1. `AlbumHavenBridge` exists only inside the APK,
 // injected by the shell for its exact allowed origins.
-// Production keeps the latest and the immediately previous stable shell protocol inside this range
-// (tests/fixtures/android-bridge/stable-shells.json; checked by android-release-compatibility.cjs).
-const ANDROID_BRIDGE_PROTOCOL_MIN = 1;
-const ANDROID_BRIDGE_PROTOCOL_MAX = 1;
-const ANDROID_BRIDGE_TIMEOUT_MS = 15000;
-
-// Every shell capability this site reads. `optional`: without it the feature hides or fails closed.
+//
+// The bridge policy. `protocolMin`-`protocolMax` keeps the latest and the immediately previous
+// stable shell protocol (tests/fixtures/android-bridge/stable-shells.json). `capabilities` names
+// every shell capability this site reads. `optional`: without it the feature hides or fails closed.
 // `required`: the site cannot run without it, so the shell refuses the handshake and shows its
-// Update required screen. CI reads this table to order web releases after the APKs they need.
-const ANDROID_BRIDGE_CAPABILITY_USE = Object.freeze({
-  'playback.native.v1': 'optional',
-  'playback.webview.v1': 'optional',
-  'playback.media_session.v1': 'optional',
-  'playback.resumption.v1': 'optional',
-  'updates.manual.v1': 'optional',
-});
+// Update required screen. scripts/ci/android-release-compatibility.cjs reads the JSON between the
+// two markers as data, without running this file, to order web releases after the APKs they need.
+const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
+  "protocolMin": 1,
+  "protocolMax": 1,
+  "capabilities": {
+    "playback.native.v1": "optional",
+    "playback.webview.v1": "optional",
+    "playback.queue.v1": "optional",
+    "playback.loops.v1": "optional",
+    "playback.media_session.v1": "optional",
+    "playback.resumption.v1": "optional",
+    "sandbox.select.v1": "optional",
+    "updates.manual.v1": "optional"
+  }
+} /* end android-bridge-policy */;
+const ANDROID_BRIDGE_PROTOCOL_MIN = ANDROID_BRIDGE_POLICY.protocolMin;
+const ANDROID_BRIDGE_PROTOCOL_MAX = ANDROID_BRIDGE_POLICY.protocolMax;
+const ANDROID_BRIDGE_CAPABILITY_USE = Object.freeze({ ...ANDROID_BRIDGE_POLICY.capabilities });
+const ANDROID_BRIDGE_TIMEOUT_MS = 15000;
 const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
   .filter(capability => ANDROID_BRIDGE_CAPABILITY_USE[capability] === 'required').sort();
 
@@ -23,8 +32,11 @@ const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
 // required capability. Every bridge feature then stays off, as it does with no shell at all.
 const androidBridge = { info: null, pending: new Map(), connection: null, events: new Map(), updateRequired: false };
 
+// The shell injects a plain script object with `postMessage`. Named access can expose an element or
+// a frame's window under the same global name; neither is the shell (capability-ui.js agrees).
 function isAndroidShell() {
-  return typeof window !== 'undefined' && Boolean(window.AlbumHavenBridge);
+  const bridge = typeof window !== 'undefined' ? window.AlbumHavenBridge : null;
+  return typeof bridge?.postMessage === 'function' && bridge.window !== bridge;
 }
 
 function hasAndroidCapability(capability) {
@@ -114,6 +126,8 @@ function connectAndroidBridge() {
       return info;
     }, (error) => {
       androidBridge.updateRequired = error.code === 'incompatible_bridge' || error.code === 'update_required';
+      // A shell that refused this site stays refused; a timeout or other failure is asked again.
+      if (!androidBridge.updateRequired) androidBridge.connection = null;
       return null;
     });
   }
@@ -126,6 +140,10 @@ function connectAndroidBridge() {
 // Android owns the audible clock, the PCM socket, the server playback claim and every listen write
 // (now-playing, scrobble, completion), so listening is recorded with or without this document.
 const ANDROID_NATIVE_PLAYBACK_CAPABILITY = 'playback.native.v1';
+// Album queue groups and a queue replaced around the playing item (`keepCurrent`).
+const ANDROID_NATIVE_QUEUE_CAPABILITY = 'playback.queue.v1';
+// `playback.setLoop` with the web's loop kind, and `playback.clearLoop`.
+const ANDROID_NATIVE_LOOPS_CAPABILITY = 'playback.loops.v1';
 const ANDROID_NATIVE_QUEUE_LIMIT = 100;
 const ANDROID_NATIVE_TEXT_LIMIT = 512;
 const ANDROID_NATIVE_MESSAGE_BUDGET_BYTES = 60 * 1024;
@@ -276,11 +294,12 @@ function androidNativeListenKey(item) {
 }
 
 // The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
-function buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay, keepCurrent = false) {
+function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent = false) {
   const resumable = hasAndroidCapability(ANDROID_NATIVE_RESUMPTION_CAPABILITY);
+  const grouped = hasAndroidCapability(ANDROID_NATIVE_QUEUE_CAPABILITY);
   const payload = {
     queueRevision: revision,
-    items: window.items.map((item, index) => ({
+    items: queueWindow.items.map((item, index) => ({
       playbackRef: refs[index].playbackRef,
       listenKey: androidNativeListenKey(item),
       title: androidNativeText(item.title),
@@ -290,10 +309,10 @@ function buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, au
       artworkUrl: refs[index].resumeToken ? `/playback/artwork/${refs[index].resumeToken}` : null,
       durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
       trackNumber: androidNativeText(item.trackNumber),
-      queueGroup: window.groups[index],
+      ...(grouped ? { queueGroup: queueWindow.groups[index] } : {}),
       ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
     })),
-    currentIndex: window.currentIndex,
+    currentIndex: queueWindow.currentIndex,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
     loop: null,
     autoplay: Boolean(autoplay),
@@ -331,16 +350,24 @@ async function startAndroidNativePlaybackTrack(track, {
   const native = androidNativePlayback;
   const revision = ++native.revision;
   native.ownerIntent = Boolean(autoplay);
-  const window = androidNativeQueueWindow(track);
+  const queueWindow = androidNativeQueueWindow(track);
   // A refused reference may be stale; the retry asks for fresh ones.
-  if (referenceRetry) window.items.forEach(item => native.refs.delete(String(item.path)));
-  const refs = await requestAndroidNativePlaybackRefs(window.items);
-  if (revision !== native.revision) return null;
-  const { payload, first } = buildAndroidNativeQueuePayload(revision, window, refs, startSeconds, autoplay, keepCurrent);
-  await sendAndroidBridgeCommand('playback.loadQueue', payload);
+  if (referenceRetry) queueWindow.items.forEach(item => native.refs.delete(String(item.path)));
+  let payload;
+  let first;
+  try {
+    const refs = await requestAndroidNativePlaybackRefs(queueWindow.items);
+    if (revision !== native.revision) return null;
+    ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    await sendAndroidBridgeCommand('playback.loadQueue', payload);
+  } catch (error) {
+    // Nothing Android plays came from this start, so it acquires nothing for it.
+    if (revision === native.revision) native.ownerIntent = false;
+    throw error;
+  }
   if (revision !== native.revision) return null;
   native.appliedRevision = revision;
-  native.items = window.items.slice(first, first + payload.items.length);
+  native.items = queueWindow.items.slice(first, first + payload.items.length);
   saveAndroidNativeAttachment(revision, native.items);
   native.index = payload.currentIndex;
   // Android keeps playing the same item, so its first frame and listen are not new.
@@ -451,7 +478,7 @@ function adoptAndroidNativePlayback(persistedState) {
   }
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
-  void sendAndroidNativeTransport('playback.clearLoop', { queueRevision: native.appliedRevision }).catch(() => {});
+  clearAndroidNativeLoop();
   notifyAndroidNativeWaveformReady();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
   if (typeof persistPlayerState === 'function') persistPlayerState(true);
@@ -476,7 +503,13 @@ async function resumeAndroidNativePlayback(onPlaybackStarted = null) {
   if (!native.items.length) return false;
   if (native.snapshot.paused === false) return true;
   native.ownerIntent = true;
-  const resumed = await sendAndroidNativeTransport('playback.play', { queueRevision: native.appliedRevision });
+  let resumed = false;
+  try {
+    resumed = await sendAndroidNativeTransport('playback.play', { queueRevision: native.appliedRevision });
+  } finally {
+    // A refused play acquires nothing.
+    if (!resumed) native.ownerIntent = false;
+  }
   if (!resumed) return false;
   native.snapshot.paused = false;
   native.snapshot.ended = false;
@@ -506,15 +539,19 @@ async function scheduleAndroidNativeContinuity(track, options = {}) {
     if (String(native.items[native.index + 1]?.path || '') === String(track?.path || '')) {
       return androidNativeCurrentRole();
     }
-    // The queue changed under Android; replace the queue around the playing item unless that cannot help.
-    const window = androidNativeQueueWindow(current);
-    if (String(window.items[window.currentIndex + 1]?.path || '') !== String(track?.path || '')) {
+    // The queue changed under Android; replace the queue around the playing item unless that cannot
+    // help. A shell without queue replacement keeps its own queue.
+    const queueWindow = androidNativeQueueWindow(current);
+    if (!hasAndroidCapability(ANDROID_NATIVE_QUEUE_CAPABILITY)
+        || String(queueWindow.items[queueWindow.currentIndex + 1]?.path || '') !== String(track?.path || '')) {
       return androidNativeCurrentRole();
     }
     return startAndroidNativePlaybackTrack(current, {
       startSeconds: native.snapshot.currentTime, autoplay: !native.snapshot.paused, keepCurrent: true,
     });
   }
+  // Without native loops the loop stays off, as when the web cannot schedule one.
+  if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return null;
   const startFrame = Math.round(Math.max(0, Number(options.startSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
   const endFrame = Math.round(Math.max(0, Number(options.endSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
   if (endFrame <= startFrame) return null;
@@ -526,12 +563,16 @@ async function scheduleAndroidNativeContinuity(track, options = {}) {
   return androidNativeCurrentRole();
 }
 
-function setAndroidNativeLoop(active) {
-  if (active) return true;
+function clearAndroidNativeLoop() {
   androidNativePlayback.loopKind = null;
+  if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return;
   void sendAndroidNativeTransport('playback.clearLoop', {
     queueRevision: androidNativePlayback.appliedRevision,
   }).catch(() => {});
+}
+
+function setAndroidNativeLoop(active) {
+  if (!active) clearAndroidNativeLoop();
   return true;
 }
 
@@ -557,7 +598,11 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
     src: preserveSnapshot ? native.snapshot.src : '',
     readyState: 0,
   });
-  if (wasLoaded) await sendAndroidNativeTransport('playback.stop');
+  const stopped = wasLoaded ? sendAndroidNativeTransport('playback.stop') : null;
+  // Android releases its claim with the stop; no event of the stopped queue applies any more.
+  native.appliedRevision = 0;
+  native.ownership = 'none';
+  await stopped;
 }
 
 function failAndroidNativePlayback(source, message) {
@@ -649,9 +694,11 @@ function handleAndroidNativeState(payload) {
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
   snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-  // Android plays only while it holds the claim.
-  if (nativeState === 'playing') native.ownership = 'owned';
-  else if (nativeState !== 'buffering' && nativeState !== 'loading') native.ownerIntent = false;
+  // Android plays only while it holds the claim, and only with valid references.
+  if (nativeState === 'playing') {
+    native.ownership = 'owned';
+    native.referenceRetried = false;
+  } else if (nativeState !== 'buffering' && nativeState !== 'loading') native.ownerIntent = false;
   if (nativeState === 'playing' || nativeState === 'buffering' || nativeState === 'loading') {
     Object.assign(snapshot, { paused: false, ended: false });
     native.mode = nativeState === 'playing' ? 'playing' : nativeState === 'loading' ? 'starting' : 'buffering';
@@ -674,8 +721,8 @@ function handleAndroidNativeState(payload) {
       observeAndroidNativeFacade(handleStreamingPlaybackEnded({
         generation: native.generation, streamId: native.streamId, trackPath,
         timelineFrame: 0, currentTime: snapshot.currentTime,
-        // Reuses the web engine's continue-on-a-new-start path for a queue longer than the window.
-        sampleRateChangeTrackPath: queuedBeyondWindow,
+        // The queue continues past the native window, so its next track starts anew.
+        startNextTrackPath: queuedBeyondWindow,
       }), 'ended-facade-error');
     }
   } else {
@@ -804,8 +851,9 @@ function registerAndroidNativePlaybackEvents() {
   };
   for (const [name, handler] of Object.entries(handlers)) {
     androidBridge.events.set(name, (payload) => {
-      // Events echo the applied revision so a replaced queue cannot overwrite newer state.
-      if (payload.queueRevision !== androidNativePlayback.appliedRevision) return;
+      // Events echo the applied revision so a replaced or stopped queue cannot overwrite newer state.
+      const applied = androidNativePlayback.appliedRevision;
+      if (!applied || payload.queueRevision !== applied) return;
       handler(payload);
     });
   }

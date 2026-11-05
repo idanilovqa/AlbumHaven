@@ -311,6 +311,8 @@ async function claimPlaybackOwnership(track, options = {}) {
   const handoff = options.handoff || null;
   const operation = (async () => {
     await previousOperation;
+    // Inside the APK only the handshake says whether Android plays natively or at all.
+    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
     // Android acquires, heartbeats and releases its own claim before any native output.

@@ -897,7 +897,7 @@ test('ended hands the queue to a track that needs another sample rate', async ()
 
   await context.handleStreamingPlaybackEnded({
     generation: 3, streamId: 9, trackPath: track.path, currentTime: 42,
-    sampleRateChangeTrackPath: nextTrack.path,
+    startNextTrackPath: nextTrack.path,
   });
 
   assert.deepEqual(JSON.parse(JSON.stringify(played)), [

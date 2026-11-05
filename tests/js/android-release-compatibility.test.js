@@ -18,6 +18,7 @@ const {
 
 const CLIENT = 'music_app/static/js/runtime/android-bridge-client.js';
 const RECORD = 'tests/fixtures/android-bridge/stable-shells.json';
+const FIXTURE = 'tests/fixtures/android-bridge/v1.json';
 const realClient = fs.readFileSync(path.join(root, CLIENT), 'utf8');
 const realRecord = fs.readFileSync(path.join(root, RECORD), 'utf8');
 const record = JSON.parse(realRecord);
@@ -35,6 +36,20 @@ test('the site policy and the stable shell record in the repository are readable
   assert.deepEqual(readStableShells(realRecord).errors, []);
   assert.equal(readSitePolicy(null), null);
   assert.equal(readSitePolicy('const ANDROID_BRIDGE_PROTOCOL = 1;'), null);
+});
+
+test('the site policy is read as data, never by running the bridge client', () => {
+  // Code a browser runs at load, such as reading window or state, never reaches the classifier.
+  const loadTime = `window.addEventListener('load', () => {});\nstate.player.ready = true;\nthrow new Error('ran');\n`;
+  assert.deepEqual(readSitePolicy(`${loadTime}${realClient}`), policy);
+  const block = (json) => `const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ ${json} /* end android-bridge-policy */;`;
+  assert.deepEqual(readSitePolicy(block('{"protocolMin": 1, "protocolMax": 2, "capabilities": {"a.v1": "required"}}')),
+    { min: 1, max: 2, use: { 'a.v1': 'required' } });
+  for (const json of ['{ protocolMin: 1 }', '{"protocolMin": 2, "protocolMax": 1, "capabilities": {}}',
+    '{"protocolMin": 1, "protocolMax": 1, "capabilities": {"a.v1": "sometimes"}}', '{"protocolMin": 1, "protocolMax": 1}']) {
+    assert.equal(readSitePolicy(block(json)), null, json);
+  }
+  assert.match(checkSupportedShells(readSitePolicy(block('[]')), record).errors[0], /declares no bridge protocol range/);
 });
 
 test('changes that do not touch the bridge, its contracts or APK routes are web-only', () => {
@@ -87,8 +102,10 @@ test('shell sources, shared contracts, protocol changes and capabilities the sta
 });
 
 test('the guard requires both supported stable shells to run the site', () => {
-  const legacy = 'The latest stable shell lacks playback.webview.v1; the site gates it at runtime';
-  assert.deepEqual(checkSupportedShells(policy, record), { errors: [], notes: [legacy] });
+  // The interim WebView player predates the stable shells; sandbox selection exists only in sandbox shells.
+  const legacy = ['playback.webview.v1', 'sandbox.select.v1']
+    .map((name) => `The latest stable shell lacks ${name}; the site gates it at runtime`);
+  assert.deepEqual(checkSupportedShells(policy, record), { errors: [], notes: legacy });
   const previousLacks = structuredClone(record);
   previousLacks.shells.previous.capabilities = latest.filter((name) => name !== 'updates.manual.v1');
   assert.deepEqual(checkSupportedShells(withUse({ 'updates.manual.v1': 'required' }), previousLacks).errors, [
@@ -96,7 +113,7 @@ test('the guard requires both supported stable shells to run the site', () => {
   ]);
   const gated = checkSupportedShells(withUse({ 'playback.lyrics.v1': 'optional' }), record);
   assert.deepEqual(gated.errors, []);
-  assert.deepEqual(gated.notes, [legacy, 'The latest stable shell lacks playback.lyrics.v1; the site gates it at runtime']);
+  assert.deepEqual(gated.notes, [...legacy, 'The latest stable shell lacks playback.lyrics.v1; the site gates it at runtime']);
   assert.equal(checkSupportedShells({ ...policy, min: 2, max: 2 }, record).errors.length, 2);
   const newer = structuredClone(record);
   newer.shells.latest = { ...newer.shells.latest, bridgeProtocolMin: 1, bridgeProtocolMax: 2, fixture: 'v2.json' };
@@ -161,6 +178,11 @@ test('promoted stable shell records must match their android-promote tags', () =
   assert.match(checkRecordAgainstTags(fakeGit({ tags, tagCommit: 'd'.repeat(40) }), promoted()).errors[0], /but the tag is d{40}/);
   const fewer = { capabilities: { stable: latest.slice(1) } };
   assert.equal(checkRecordAgainstTags(fakeGit({ tags, fixture: fewer }), promoted()).errors.length, 2);
+  // A tag whose fixture is not JSON is a guard error, not a crash.
+  const broken = fakeGit({ tags });
+  const unreadable = checkRecordAgainstTags((args) => (args[0] === 'show' && args[1].endsWith('v1.json') ? '{' : broken(args)), promoted());
+  assert.deepEqual(unreadable.errors, ['latest', 'previous'].map((role) =>
+    `The ${role} stable shell record's capabilities differ from android/stable/${role === 'latest' ? 3 : 2}'s ${FIXTURE}`));
   const range = checkRecordAgainstTags(fakeGit({ tags, controller: CONTROLLER.replace('MAX = 1', 'MAX = 2') }), promoted());
   assert.match(range.errors[0], /bridge range differs from android\/stable\/3's BridgeController/);
 });
@@ -202,13 +224,14 @@ test('a pull request range is classified and guarded from its own commits', (t) 
   assert.equal(bridgeUse.releaseClass, 'existing-bridge');
   assert.deepEqual(bridgeUse.reasons, ['music_app/static/js/runtime/mobile-navigation.js changes bridge use']);
 
-  repo.write(CLIENT, realClient.replace("'updates.manual.v1': 'optional',", "'updates.manual.v1': 'optional',\n  'playback.lyrics.v1': 'required',"));
+  const using = (use) => realClient.replace('"updates.manual.v1": "optional"', `"updates.manual.v1": "optional",\n    "playback.lyrics.v1": "${use}"`);
+  repo.write(CLIENT, using('required'));
   const required = evaluate({ git: repo.git, base, head: repo.commit('require lyrics') });
   assert.equal(required.releaseClass, 'native-impact');
   assert.equal(required.errors.length, 2);
   assert.match(summaryMarkdown(required), /Release class: \*\*native-impact\*\*[\s\S]*Release-order guard failed/);
 
-  repo.write(CLIENT, realClient.replace("'updates.manual.v1': 'optional',", "'updates.manual.v1': 'optional',\n  'playback.lyrics.v1': 'optional',"));
+  repo.write(CLIENT, using('optional'));
   const gated = evaluate({ git: repo.git, base, head: repo.commit('gate lyrics') });
   assert.equal(gated.releaseClass, 'native-impact');
   assert.deepEqual(gated.errors, []);

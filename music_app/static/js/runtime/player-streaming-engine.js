@@ -1735,7 +1735,8 @@ function handleStreamingWorkletMessage(message) {
           trackPath: String(current.track?.path || ''),
           timelineFrame,
           currentTime,
-          sampleRateChangeTrackPath: engine.sampleRateChangeNext?.generation === message.generation
+          // A successor at another sample rate cannot continue gaplessly; it starts anew.
+          startNextTrackPath: engine.sampleRateChangeNext?.generation === message.generation
             ? engine.sampleRateChangeNext.path
             : '',
         }), 'ended-facade-error');

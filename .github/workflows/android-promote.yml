@@ -1,6 +1,9 @@
 name: Android Promote
+run-name: Android ${{ inputs.channel }} promotion of ${{ inputs.commit }}
 
-# Promotes one exact, already-verified commit to an Android channel. It builds the release APK
+# Promotes one exact commit to an Android channel: stable needs its complete PR Gates pipeline and
+# release, sandbox only a branch of this repository (test builds; see android-test-build.yml,
+# which dispatches this workflow for `test_build` pull requests). It builds the release APK
 # once, signs it with the channel key held by the protected environment, and records the result
 # as a data-only workflow artifact: promotion.json (provenance and the Update Manifest v1) plus
 # the APK encrypted to the deployment synchronizer's key. No APK, signed or unsigned, is ever
@@ -10,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       commit:
-        description: Exact 40-character commit SHA whose complete PR Gates pipeline passed
+        description: Exact 40-character commit SHA (stable needs its passed PR Gates pipeline, sandbox a branch here)
         required: true
         type: string
       channel:
@@ -65,7 +68,28 @@ jobs:
           git fetch --no-tags --depth=1 origin "$COMMIT"
           git cat-file -e "$COMMIT^{commit}"
 
-      - name: Verify pipeline, release and allocate the version code
+      # Stable's complete pipeline already proves a same-repository head. Sandbox has no such proof,
+      # and a fork's pull request head is fetchable from this repository too, so a branch of this
+      # repository must contain the commit (history only: no trees or blobs are fetched).
+      - name: Require a branch of this repository to contain a sandbox commit
+        if: ${{ inputs.channel == 'sandbox' }}
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          branches="$RUNNER_TEMP/branches"
+          git init --quiet --bare "$branches"
+          git -C "$branches" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          git -C "$branches" fetch --quiet --no-tags --filter=tree:0 origin '+refs/heads/*:refs/heads/*'
+          # Only what the branches hold: never fetch the commit itself on demand.
+          export GIT_NO_LAZY_FETCH=1
+          refuse() { echo "::error::No branch of $GITHUB_REPOSITORY contains $COMMIT"; exit 1; }
+          git -C "$branches" cat-file -e "$COMMIT^{commit}" 2>/dev/null || refuse
+          branch="$(git -C "$branches" for-each-ref --contains "$COMMIT" --count=1 --format='%(refname:short)' refs/heads)"
+          test -n "$branch" || refuse
+          echo "Branch $branch contains $COMMIT"
+
+      - name: Apply the CI gate, verify the release and allocate the version code
         id: plan
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
@@ -98,7 +122,7 @@ jobs:
                 owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
               }),
             });
-            if (!pipeline) throw new Error(`Commit ${commit} has no successful complete PR Gates pipeline that ran the Android jobs`);
+            const gate = promotion.ciGateFor(channel, pipeline);
 
             const releaseVersion = promotion.readReleaseVersion(git('show', `${commit}:version.py`));
             const versionName = promotion.versionNameFor(channel, releaseVersion, commit);
@@ -146,7 +170,7 @@ jobs:
               releaseNotesUrl,
               runId: Number(process.env.GITHUB_RUN_ID),
               runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
-              pipelineRunId: pipeline.runId,
+              ...gate,
             };
             core.setOutput('plan', JSON.stringify(plan));
             core.setOutput('version_code', String(versionCode));
@@ -156,7 +180,7 @@ jobs:
             await core.summary.addHeading(`Android ${channel} promotion plan`)
               .addList([
                 `Commit ${commit}`,
-                `Complete pipeline run ${pipeline.url}`,
+                `CI gate ${gate.ciGate}; complete pipeline run ${pipeline ? pipeline.url : 'none'}`,
                 `Version code ${versionCode}, version name ${versionName}`,
                 `Release notes ${releaseNotesUrl}`,
               ]).write();

@@ -12,7 +12,13 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
 ## What a promotion does
 
 1. **Verify** (no secrets). The workflow must run from `main`. The commit must
-   be 40 lowercase hex characters, exist in this repository, and have a
+   be 40 lowercase hex characters and exist in this repository.
+   **Sandbox** needs no pipeline, so a build can be tested before the full suite
+   passes (owner decision, November 5, 2026): a branch of this repository must
+   contain the commit, which refuses fork pull request heads and unknown SHAs.
+   Its `promotion.json` records `ciGate: "not-required"` and the `pipelineRunId`
+   of a complete pipeline (below) when one already existed, otherwise `null`.
+   **Stable** records `ciGate: "complete-pipeline"` and must have a
    successful `PR Gates` pull-request run for exactly that head whose
    `Cloud Verification Gate` job succeeded. That gate fails for focused,
    `skip_tests`, draft and fork runs, so it is the complete-pipeline proof.
@@ -53,7 +59,7 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
 5. **Record.** A separate job, the only one with `contents: write` and without
    secrets, creates the version tag and only then uploads the workflow artifact
    `android-promotion-<channel>-<code>` (90-day retention): `promotion.json`
-   (repository, workflow, run, pipeline run, version tag and manifest) and
+   (repository, workflow, run, CI gate, pipeline run, version tag and manifest) and
    `<apk>.enc`, the APK encrypted to the synchronizer's X25519 key
    (HKDF-SHA256, AES-256-GCM).
 6. **Clean up.** A last job (`actions: write` only) deletes both intermediate
@@ -112,8 +118,10 @@ every other field is published unchanged.
    - optional `ANDROID_VERSION_CODE_FLOOR`, the highest version code already
      installed anywhere from earlier manual test builds.
 6. **Environments** `android-stable` and `android-sandbox` (Settings >
-   Environments): required reviewer the owner, deployment branches `main` only,
-   and these environment secrets, set without printing them:
+   Environments): deployment branches `main` only for both, required reviewer
+   the owner for `android-stable`; `android-sandbox` has no required reviewer,
+   so test builds never wait. Both take these environment secrets, set without
+   printing them:
 
    ```powershell
    [Convert]::ToBase64String([IO.File]::ReadAllBytes('D:\album-haven-signing\album-haven-stable.p12')) |
@@ -138,8 +146,26 @@ every other field is published unchanged.
 gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-hex sha> -f channel=sandbox
 ```
 
-Approve the `android-<channel>` deployment when the sign job waits. Promote and
+Approve the `android-stable` deployment when the sign job waits. Promote and
 accept sandbox before stable.
+
+### Sandbox test builds from a pull request
+
+Add the `test_build` label to a same-repository pull request to promote its
+head to sandbox without waiting for `PR Gates`. `android-test-build.yml` then
+dispatches `android-promote.yml` on `main` for the head commit on every later
+push and reopen, until the label is removed. It runs the pull request's own
+workflow definition with an `actions: write` token, no secret and no checkout;
+everything else is main's sandbox promotion above, under the main-only
+`android-sandbox` environment. Forks never qualify. `PR Gates` ignores the
+label, although adding or removing any label restarts its run, so add it with
+the push to test.
+
+The one-promotion-per-channel lock keeps at most one sandbox promotion waiting:
+a newer request, from any pull request or a manual dispatch, replaces a waiting
+one, and a running promotion always finishes, so a version tag is never left
+without its signed artifact by supersession. A replaced request is dropped, not
+queued; dispatch it again by hand if it is still wanted.
 
 ## Web and APK release order
 

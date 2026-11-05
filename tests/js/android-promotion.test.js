@@ -39,8 +39,8 @@ function plan(overrides = {}) {
   return {
     repository: REPOSITORY, channel: 'sandbox', commit: COMMIT, versionCode: 7,
     versionName: '0.10.0-sandbox.b5f585f', certificate: CERT, bridgeProtocolMin: 1, bridgeProtocolMax: 1,
-    releaseNotesUrl: `https://github.com/${REPOSITORY}/commit/${COMMIT}`, runId: 11, runAttempt: 1, pipelineRunId: 10,
-    ...overrides,
+    releaseNotesUrl: `https://github.com/${REPOSITORY}/commit/${COMMIT}`, runId: 11, runAttempt: 1,
+    ciGate: 'not-required', pipelineRunId: 10, ...overrides,
   };
 }
 
@@ -88,8 +88,9 @@ test('bridge range comes from the shell source', () => {
   assert.deepEqual(promotion.readBridgeRange(source), { min: 1, max: 2 });
   assert.throws(() => promotion.readBridgeRange('const val PROTOCOL_MIN = 1'), /PROTOCOL_MAX/);
   assert.throws(() => promotion.readBridgeRange('const val PROTOCOL_MIN = 3\nconst val PROTOCOL_MAX = 2'), /invalid/);
-  const real = fs.readFileSync(path.join(root, 'apps/android-shell/app/src/main/java/org/albumhaven/shell/BridgeController.kt'), 'utf8');
-  assert.ok(promotion.readBridgeRange(real).min >= 1);
+  // The promotion tooling reaches main before the shell does.
+  const shell = path.join(root, 'apps/android-shell/app/src/main/java/org/albumhaven/shell/BridgeController.kt');
+  if (fs.existsSync(shell)) assert.ok(promotion.readBridgeRange(fs.readFileSync(shell, 'utf8')).min >= 1);
 });
 
 function pipelineRun(overrides = {}) {
@@ -138,6 +139,15 @@ test('promotion requires a successful complete PR Gates pipeline for exactly tha
   assert.equal(found.runId, 5);
   assert.deepEqual(asked, [[9, 2], [5, 2]], 'newest runs are checked first');
   await assert.rejects(promotion.findCompletePipelineRun({ repository: REPOSITORY, commit: 'abc', listRuns: async () => [], listJobs: async () => [] }), /40 lowercase/);
+});
+
+test('stable requires its complete pipeline; sandbox records one only when it already exists', () => {
+  const pipeline = { runId: 100, runAttempt: 2, url: 'https://example.test/run/100' };
+  assert.deepEqual(promotion.ciGateFor('stable', pipeline), { ciGate: 'complete-pipeline', pipelineRunId: 100 });
+  assert.throws(() => promotion.ciGateFor('stable', null), /no successful complete PR Gates pipeline/);
+  assert.deepEqual(promotion.ciGateFor('sandbox', pipeline), { ciGate: 'not-required', pipelineRunId: 100 });
+  assert.deepEqual(promotion.ciGateFor('sandbox', null), { ciGate: 'not-required', pipelineRunId: null });
+  assert.throws(() => promotion.ciGateFor('beta', pipeline), /stable or sandbox/);
 });
 
 function release(overrides = {}) {
@@ -190,12 +200,13 @@ test('finalize writes an Update Manifest v1 and an APK only the synchronizer can
   });
   assert.deepEqual({ ...result, manifest: undefined }, {
     schemaVersion: 1, repository: REPOSITORY, workflow: '.github/workflows/android-promote.yml', runId: 11, runAttempt: 1,
-    pipelineRunId: 10, versionTag: 'android/sandbox/7', encryptedApk: 'album-haven-sandbox-7.apk.enc', manifest: undefined,
+    ciGate: 'not-required', pipelineRunId: 10, versionTag: 'android/sandbox/7', encryptedApk: 'album-haven-sandbox-7.apk.enc', manifest: undefined,
   });
   const blob = fs.readFileSync(path.join(outDir, 'album-haven-sandbox-7.apk.enc'));
   assert.equal(blob.includes(apkBytes), false, 'the APK is never uploaded in plaintext');
   assert.deepEqual(decrypt(blob, keys.privateKey), apkBytes);
   assert.throws(() => decrypt(blob, recipient().privateKey));
+  assert.equal(finalize({ plan: plan({ pipelineRunId: null }) }).result.pipelineRunId, null, 'a sandbox test build needs no pipeline');
 });
 
 function rawPrivateKey(privateKey) {
@@ -242,6 +253,18 @@ test('the workflow CLI encrypts, decrypts and generates recipient keys without p
   assert.throws(() => promotion.cli(['sign'], {}), /Usage/);
 });
 
+function stable() {
+  return {
+    plan: plan({ channel: 'stable', versionName: '0.10.0', ciGate: 'complete-pipeline' }),
+    badging: badging({ packageName: 'org.albumhaven.app', versionName: '0.10.0' }),
+  };
+}
+
+test('a stable promotion records its complete pipeline', () => {
+  const { result } = finalize(stable());
+  assert.deepEqual([result.ciGate, result.pipelineRunId, result.versionTag], ['complete-pipeline', 10, 'android/stable/7']);
+});
+
 test('finalize refuses an APK that does not match the plan, channel or certificate', () => {
   for (const [overrides, message] of [
     [{ signerDigest: 'd'.repeat(64) }, /not signed by the channel certificate/],
@@ -254,6 +277,13 @@ test('finalize refuses an APK that does not match the plan, channel or certifica
     [{ recipientPublicKey: 'not-a-key' }, /Recipient public key/],
     [{ plan: plan({ releaseNotesUrl: 'http://insecure.test/' }) }, /releaseNotesUrl/],
     [{ plan: plan({ versionName: '0.10.0-sandbox.1234567' }) }, /allocated version|versionName/],
+    [{ plan: plan({ ciGate: 'complete-pipeline' }) }, /CI gate/],
+    [{ ...stable(), plan: plan({ ...stable().plan, pipelineRunId: null }) }, /CI gate/],
+    [{ ...stable(), plan: plan({ ...stable().plan, ciGate: 'not-required' }) }, /CI gate/],
+    [{ plan: plan({ ciGate: undefined }) }, /CI gate/],
+    [{ plan: plan({ pipelineRunId: 0 }) }, /CI gate/],
+    [{ plan: plan({ pipelineRunId: '10' }) }, /CI gate/],
+    [{ plan: plan({ pipelineRunId: undefined }) }, /CI gate/],
   ]) assert.throws(() => finalize(overrides), message, JSON.stringify(Object.keys(overrides)));
 });
 
@@ -290,6 +320,17 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   const verify = jobBlock(workflow, 'verify');
   assert.match(verify, /test "\$GITHUB_REF" = refs\/heads\/main/);
   assert.match(verify, /findCompletePipelineRun/);
+  assert.match(verify, /const gate = promotion\.ciGateFor\(channel, pipeline\);/);
+  assert.match(verify, /\.\.\.gate,\n/);
+  // A sandbox commit needs no pipeline but must be on a branch here: a fork's pull request head is
+  // fetchable from this repository too, so the check reads only branch history and never fetches
+  // the commit on demand.
+  const branch = verify.slice(verify.indexOf('- name: Require a branch of this repository to contain a sandbox commit'));
+  assert.match(branch, /^ {8}if: \$\{\{ inputs\.channel == 'sandbox' \}\}\n/m);
+  assert.match(branch, /fetch --quiet --no-tags --filter=tree:0 origin '\+refs\/heads\/\*:refs\/heads\/\*'\n {10}# [^\n]+\n {10}export GIT_NO_LAZY_FETCH=1\n/);
+  assert.match(branch, /for-each-ref --contains "\$COMMIT" --count=1 --format='%\(refname:short\)' refs\/heads\)"\n {10}test -n "\$branch" \|\| refuse\n/);
+  assert.match(branch, /cat-file -e "\$COMMIT\^\{commit\}" 2>\/dev\/null \|\| refuse\n/);
+  assert.ok(verify.indexOf('Require a branch') < verify.indexOf('ciGateFor'), 'the branch check runs before allocation');
   assert.match(verify, /checkStableRelease/);
   assert.match(verify, /listMatchingRefs/);
   assert.doesNotMatch(verify, /secrets\.|environment:/);
@@ -345,4 +386,35 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   assert.doesNotMatch(workflow, /echo[^\n]*(?:KEYSTORE|PASSWORD|PRIVATE_KEY)/);
   // A moved tag cannot change what runs next to the signing key: every action is a full commit.
   for (const uses of workflow.match(/uses: [^\n]+/g)) assert.match(uses, /^uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/, uses);
+});
+
+test('the test_build label only asks main to promote a same-repository pull request head to sandbox', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/android-test-build.yml'), 'utf8').replaceAll('\r\n', '\n');
+  // pull_request, never pull_request_target: forks get no write token, and this run cannot reach
+  // the signing environment, whose deployment branch is main only.
+  assert.match(workflow, /^on:\n {2}pull_request:\n {4}types:\n {6}- labeled\n {6}- synchronize\n {6}- reopened\n\n/m);
+  assert.doesNotMatch(workflow, /pull_request_target|workflow_run|workflow_call|unlabeled/);
+  assert.match(workflow, /^permissions: \{\}$/m);
+  assert.match(workflow, /^concurrency:\n {2}group: android-test-build-\$\{\{ github\.event\.pull_request\.number \}\}\n {2}cancel-in-progress: true$/m);
+  const dispatch = jobBlock(workflow, 'dispatch');
+  assert.match(dispatch, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository\n/);
+  assert.match(dispatch, /&& github\.event\.pull_request\.state == 'open'\n/);
+  assert.match(dispatch, /github\.event\.action == 'labeled' && github\.event\.label\.name == 'test_build'\n/);
+  assert.match(dispatch, /github\.event\.action != 'labeled' && contains\(github\.event\.pull_request\.labels\.\*\.name, 'test_build'\)\)\n/);
+  assert.match(dispatch, /permissions:\n {6}actions: write\n {4}steps:/);
+  assert.match(dispatch, /COMMIT: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n/);
+  assert.match(dispatch, /workflow_id: 'android-promote\.yml',\n {14}ref: 'main',\n {14}inputs: \{ commit, channel: 'sandbox' \},/);
+  assert.doesNotMatch(workflow, /secrets\.|environment:|checkout|contents: write|stable/);
+  const uses = workflow.match(/uses: [^\n]+/g);
+  assert.deepEqual(uses, ['uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0']);
+});
+
+test('PR Gates ignores the test_build label', () => {
+  const { applyPipelineSkips, classifyPipelineLabels } = require('../../scripts/ci/classify-pr-review-scope.cjs');
+  const trusted = { repository: REPOSITORY, headRepository: REPOSITORY };
+  for (const labels of [[], ['skip_tests'], ['run_reviews'], ['skip_reviews', 'skip_tests']]) {
+    const withLabel = [...labels, 'test_build'];
+    assert.deepEqual(classifyPipelineLabels(withLabel, undefined, 'labeled', COMMIT), classifyPipelineLabels(labels, undefined, 'labeled', COMMIT));
+    assert.deepEqual(applyPipelineSkips({ mode: 'full' }, { ...trusted, labels: withLabel }), applyPipelineSkips({ mode: 'full' }, { ...trusted, labels }));
+  }
 });

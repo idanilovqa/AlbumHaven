@@ -264,6 +264,27 @@ def test_ambiguous_result_atomically_replaces_candidates_and_needs_review():
     assert repository.retry_calls == []
 
 
+def test_unconfirmed_single_name_match_is_stored_for_review_not_as_multiple_matches():
+    api = enrichment_api()
+    repository = Repository()
+    repository.claims.append({"id": 17, "local_artist_id": 41, "attempt_count": 1})
+    repository.contexts[17] = {"local_artist_id": 41, "local_name": "A.A.Williams", "manual_decision": False}
+    candidates = [{"artist_mbid": ARTIST_MBID, "candidate_score": 1}]
+    processor = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository,
+        client=object(),
+        resolve_artist=Resolver({"classification": "unconfirmed", "candidates": candidates,
+                                 "evidence_summary": "One name match."}),
+        now=lambda: NOW,
+    )
+
+    result = processor.process_next(worker_id="worker-a")
+
+    assert result["state"] == "needs_review"
+    assert repository.candidate_replacements[0]["match_state"] == "manual_review"
+    assert repository.candidate_replacements[0]["candidates"] == candidates
+
+
 @pytest.mark.parametrize("classification", ["invalid_response", "permanent_mismatch"])
 def test_invalid_or_contradictory_results_need_review_instead_of_retry(classification):
     api = enrichment_api()

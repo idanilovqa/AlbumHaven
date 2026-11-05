@@ -27,6 +27,26 @@ def normalize_name(value: object) -> str:
     return unicodedata.normalize("NFC", _text(value)).casefold()
 
 
+_NAME_KEY_DROP = re.compile(r"[\W_]+")
+_LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/])')
+_LUCENE_OPERATOR = re.compile(r"\b(AND|OR|NOT)\b")
+
+
+def name_match_key(value: object) -> str:
+    """Compare artist names regardless of case, punctuation, spacing and "&"/"and".
+
+    "A.A.Williams" and "A.A. Williams", or "...And Oceans" and "…and Oceans",
+    share a key. A name made only of punctuation keeps its exact form.
+    """
+    text = unicodedata.normalize("NFKC", _text(value)).casefold()
+    return _NAME_KEY_DROP.sub("", text.replace("&", " and ")) or text
+
+
+def _plain_artist_query(name: str) -> str:
+    escaped = _LUCENE_SPECIAL.sub(r"\\\1", name)
+    return _LUCENE_OPERATOR.sub(lambda match: match.group(1).lower(), escaped)
+
+
 _BRACKETED_SUFFIX = re.compile(r"[\(\[][^\)\]]*[\)\]]")
 _NON_WORD = re.compile(r"[^\w]+")
 
@@ -207,6 +227,9 @@ def _candidate(payload: object) -> JsonDict | None:
         "canonical_name": name,
         "score": _integer(payload.get("score")),
     }
+    sort_name = _text(payload.get("sort-name") or payload.get("sort_name"))
+    if sort_name:
+        result["sort_name"] = sort_name
     for sources, target in (
         (("type", "artist_type"), "artist_type"),
         (("country", "country_code"), "country_code"),
@@ -300,17 +323,24 @@ class MusicBrainzClient:
                 break
         return {"classification": "complete", "titles": titles}
 
-    def search_artists(self, name: object) -> JsonDict:
+    def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
+        """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.
+
+        The phrase query misses names whose punctuation or spacing differs from
+        MusicBrainz ("A.A.Williams"); the plain query ranks those first.
+        """
         query_name = _text(name)
         if not query_name:
             return {"classification": "invalid_request", "candidates": [], "truncated": False}
+        query_text = f'artist:"{query_name}"' if phrase else _plain_artist_query(query_name)
+        page_limit = self.max_search_pages if max_pages is None else max(1, min(max_pages, self.max_search_pages))
         candidates: dict[str, JsonDict] = {}
         advertised_count = 0
         pages_completed = 0
-        for page in range(self.max_search_pages):
+        for page in range(page_limit):
             offset = page * self.search_page_size
             query = urllib.parse.urlencode({
-                "query": f'artist:"{query_name}"',
+                "query": query_text,
                 "fmt": "json",
                 "limit": self.search_page_size,
                 "offset": offset,

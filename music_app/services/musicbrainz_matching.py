@@ -3,7 +3,12 @@ from __future__ import annotations
 import unicodedata
 from copy import deepcopy
 
-from music_app.services.musicbrainz_client import artist_url, normalize_name, release_title_key
+from music_app.services.musicbrainz_client import (
+    artist_url,
+    name_match_key,
+    normalize_name,
+    release_title_key,
+)
 
 
 JsonDict = dict[str, object]
@@ -14,9 +19,13 @@ def _values(value: object) -> list[object]:
 
 
 def candidate_names(candidate: JsonDict) -> set[str]:
-    names = {normalize_name(candidate.get("canonical_name"))}
+    """Name keys (see ``name_match_key``) of a candidate's name, sort name and aliases."""
+    names = {
+        name_match_key(candidate.get("canonical_name")),
+        name_match_key(candidate.get("sort_name")),
+    }
     names.update(
-        normalize_name(alias.get("name"))
+        name_match_key(alias.get("name"))
         for alias in _values(candidate.get("aliases"))
         if isinstance(alias, dict)
     )
@@ -82,11 +91,11 @@ def _evidence(local: JsonDict, candidate: JsonDict) -> tuple[int, list[str]]:
         reasons.append("release_evidence_conflict")
 
     names = candidate_names(candidate)
-    name_match = normalize_name(local.get("name")) in names
+    name_match = name_match_key(local.get("name")) in names
     credited_names = {
-        normalize_name(credit.get("credited_artist"))
+        name_match_key(credit.get("credited_artist"))
         for credit in _values(local.get("release_credits"))
-        if isinstance(credit, dict) and normalize_name(credit.get("credited_artist"))
+        if isinstance(credit, dict) and name_match_key(credit.get("credited_artist"))
     }
     credit_match = bool(credited_names) and all(name in names for name in credited_names)
     if not name_match:
@@ -162,7 +171,17 @@ def match_artist(local_evidence: object, candidates: object) -> JsonDict:
     else:
         strongest = [item for item in assessed if item[1] == 3]
         if len(strongest) != 1:
-            classification = "not_found" if not assessed else "ambiguous"
+            named = [
+                item for item in assessed
+                if not {"name_conflict", "artist_type_conflict"}.intersection(item[2])
+            ]
+            if not assessed:
+                classification = "not_found"
+            elif not strongest and len(named) == 1:
+                # One artist has the name but no album confirms it: never auto-accepted.
+                classification = "unconfirmed"
+            else:
+                classification = "ambiguous"
             return {"classification": classification, "candidates": ordered}
         selected = strongest[0][0]
         trusted_path = "search"

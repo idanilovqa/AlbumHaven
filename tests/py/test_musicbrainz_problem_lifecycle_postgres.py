@@ -144,6 +144,22 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
     assert attention["problem_occurrence_id"] == detail["problem_occurrence_id"]
     assert attention["unresolved_reason"] == "MBID: Multiple matches"
 
+    # One name match without album agreement is an unconfirmed match, not several.
+    repository.replace_candidates(
+        local_artist_id=artist_id,
+        candidates=[{"artist_mbid": GERMAN, "canonical_name": "Axxis", "candidate_score": 1,
+                     "evidence_summary": "0 of 1 album agree"}],
+        match_state="manual_review",
+        evidence_summary="One MusicBrainz artist has this name, but none of your albums confirm it.",
+        observed_at=NOW + timedelta(minutes=1, seconds=30),
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _active(connection, artist_id) == ["musicbrainz_manual_review_required"]
+        assert _problems(connection, artist_id)[0]["lifecycle_state"] == "resolved"
+    [attention] = repository.list_artist_attention()
+    assert attention["unresolved_reason"] == "MBID: Unconfirmed match"
+    assert repository.get_artist_problem(local_artist_id=artist_id)["match_state"] == "manual_review"
+
     # A provider failure during a retry never replaces a durable identity problem.
     repository.enqueue_artist(local_artist_id=artist_id, reason="authorized_retry", observed_at=NOW)
     job = repository.claim_due_job(worker_id="worker-a", now=NOW + timedelta(minutes=2),
@@ -155,7 +171,7 @@ def test_problem_lifecycle_follows_stored_matches_on_real_postgres(monkeypatch: 
         observed_at=NOW + timedelta(minutes=2),
     )
     with isolatedPostgres._connect(setup_url) as connection:
-        assert _active(connection, artist_id) == ["musicbrainz_artist_ambiguous"]
+        assert _active(connection, artist_id) == ["musicbrainz_manual_review_required"]
 
     # Manual assignment resolves the active problem with its source.
     assert repository.assign_manual_match(

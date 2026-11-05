@@ -648,7 +648,8 @@ PROBLEM_LABELS = {
 }
 # Provisional: the owner has not approved labels for these reasons yet.
 PROVISIONAL_PROBLEM_LABELS = {
-    "musicbrainz_manual_review_required": "MBID: Metadata conflict",
+    # One artist has the name but no album confirms it.
+    "musicbrainz_manual_review_required": "MBID: Unconfirmed match",
     # A matched entity that stops resolving is mirror catch-up; the prior match is kept.
     "musicbrainz_matched_entity_unavailable": "MusicBrainz: Metadata pending",
 }

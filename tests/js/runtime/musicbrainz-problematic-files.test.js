@@ -144,6 +144,23 @@ test('metadata conflict compares current and suggested identities with keep and 
     'the suggested identity starts selected');
 });
 
+test('an unconfirmed single name match is offered as a candidate to confirm, not as a conflict', async () => {
+  const item = artistItem({ problem_reasons: ['MBID: Unconfirmed match'] });
+  const unconfirmed = detail({
+    problem_reason_code: 'musicbrainz_manual_review_required', unresolved_reason: 'MBID: Unconfirmed match',
+    candidates: [{ artist_mbid: GERMAN, canonical_name: 'Axxis', evidence_summary: '0 of 2 albums agree',
+      musicbrainz_url: `https://musicbrainz.org/artist/${GERMAN}` }],
+  });
+  const { context, requests } = loadContext({ item, responses: { 'GET /api/musicbrainz/artists/7': { status: 200, body: { artist: unconfirmed } } } });
+  await context.loadMusicBrainzArtistProblemDetail(item, { render: false });
+
+  const html = context.buildMusicBrainzArtistProblemDetail(item);
+  assert.match(html, /Candidate artists/);
+  assert.match(html, /0 of 2 albums agree/);
+  assert.doesNotMatch(html, /Identity comparison|Keep current MBID/);
+  assert.ok(!requests.some(([method]) => method === 'PUT'), 'nothing is assigned until the owner clicks Assign MBID');
+});
+
 test('not found offers manual search, a gated artist-page link and verified assignment only', async () => {
   const item = artistItem({ problem_reasons: ['MBID: Not found'] });
   const notFound = detail({ problem_reason_code: 'musicbrainz_artist_not_found', unresolved_reason: 'MBID: Not found', candidates: [] });

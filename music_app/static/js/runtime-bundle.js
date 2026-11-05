@@ -21990,8 +21990,9 @@ function readMusicBrainzArtistMbid(value) {
 function getMusicBrainzArtistProblemView(detail = {}) {
   const reason = String(detail.problem_reason_code || '');
   if (reason === 'musicbrainz_artist_not_found') return 'not-found';
-  if (reason === 'musicbrainz_artist_ambiguous') return 'multiple';
-  if (reason === 'musicbrainz_artist_metadata_conflict' || reason === 'musicbrainz_manual_review_required') return 'conflict';
+  // An unconfirmed single name match is a candidate to confirm, like several matches.
+  if (reason === 'musicbrainz_artist_ambiguous' || reason === 'musicbrainz_manual_review_required') return 'multiple';
+  if (reason === 'musicbrainz_artist_metadata_conflict') return 'conflict';
   if (reason === 'musicbrainz_mirror_replication_pending' || reason === 'musicbrainz_matched_entity_unavailable') return 'pending';
   return 'provider';
 }

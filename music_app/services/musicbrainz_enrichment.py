@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from music_app.services.musicbrainz_client import normalize_name, release_title_key
+from music_app.services.musicbrainz_client import name_match_key, release_title_key
 from music_app.services.musicbrainz_matching import candidate_names, match_artist
 
 
@@ -22,6 +22,9 @@ APPROVED_TRIGGERS = frozenset(
 _TRANSIENT_CLASSIFICATIONS = frozenset(
     {"rate_limited", "provider_unavailable", "catch_up_pending"}
 )
+# Outcomes that store their candidates for an owner decision. A single name
+# match without album agreement is "manual_review": not several matches.
+_CANDIDATE_MATCH_STATES = {"ambiguous": "ambiguous", "unconfirmed": "manual_review"}
 
 
 class MusicBrainzEnrichmentScheduler:
@@ -184,7 +187,7 @@ class MusicBrainzArtistEnrichmentProcessor:
                 evidence_summary=evidence_summary,
                 observed_at=observed_at,
             )
-        elif classification == "ambiguous" or (
+        elif classification in _CANDIDATE_MATCH_STATES or (
             classification == "permanent_mismatch" and outcome.get("candidates")
         ):
             # Contradicted identities keep their candidates so the owner can
@@ -192,7 +195,7 @@ class MusicBrainzArtistEnrichmentProcessor:
             self._repository.replace_candidates(
                 local_artist_id=local_artist_id,
                 candidates=list(outcome.get("candidates") or []),
-                match_state="ambiguous" if classification == "ambiguous" else "conflict",
+                match_state=_CANDIDATE_MATCH_STATES.get(classification, "conflict"),
                 evidence_summary=evidence_summary,
                 observed_at=observed_at,
             )
@@ -233,21 +236,16 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
             return _provider_outcome(lookup)
         candidates = [lookup["artist"]]
     else:
-        search = client.search_artists(context.get("local_name"))
-        if search.get("classification") not in {"complete", "not_found"}:
-            return _provider_outcome(search)
-        if search.get("classification") == "not_found":
+        named, failure = _name_matching_candidates(client, local_name)
+        if failure is not None:
+            return failure
+        if not named:
             return {
                 "classification": "not_found",
-                "evidence_summary": "All bounded search pages completed.",
+                "evidence_summary": "No MusicBrainz artist has this name.",
             }
         candidates = []
-        local_key = normalize_name(local_name)
-        for candidate in search.get("candidates") or []:
-            # Only a candidate whose name or alias agrees can ever be selected,
-            # so others cost no lookup or release-group requests.
-            if local_key not in candidate_names(candidate):
-                continue
+        for candidate in named:
             lookup = client.lookup_artist(candidate.get("mbid"), discovered_by_search=True)
             if lookup.get("classification") != "matched":
                 return _provider_outcome(lookup)
@@ -274,14 +272,43 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
             "confidence": 1,
             "evidence_summary": f"MusicBrainz {match.get('evidence_path')} evidence agreed.",
         }
+    classification = match.get("classification", "invalid_response")
     return {
-        "classification": match.get("classification", "invalid_response"),
+        "classification": classification,
         "candidates": [
             _candidate_for_storage(candidate, album_titles)
             for candidate in match.get("candidates") or []
         ],
-        "evidence_summary": "MusicBrainz candidates require manual review.",
+        "evidence_summary": (
+            "One MusicBrainz artist has this name, but none of your albums confirm it."
+            if classification == "unconfirmed"
+            else "MusicBrainz candidates require manual review."
+        ),
     }
+
+
+def _name_matching_candidates(
+    client, local_name: object
+) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
+    """Search candidates whose name, sort name or alias agrees with the local name.
+
+    Only these can ever be selected, so others cost no lookup or release-group
+    requests. The exact-phrase search runs first; when it yields no name match,
+    one page of an escaped plain search catches punctuation and spacing variants.
+    The second value is the provider outcome when the mirror cannot answer.
+    """
+    local_key = name_match_key(local_name)
+    for options in ({}, {"phrase": False, "max_pages": 1}):
+        search = client.search_artists(local_name, **options)
+        if search.get("classification") not in {"complete", "not_found"}:
+            return [], _provider_outcome(search)
+        named = [
+            candidate for candidate in search.get("candidates") or []
+            if local_key in candidate_names(candidate)
+        ]
+        if named:
+            return named, None
+    return [], None
 
 
 def _provider_outcome(result: dict[str, object]) -> dict[str, object]:

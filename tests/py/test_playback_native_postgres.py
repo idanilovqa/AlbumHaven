@@ -224,6 +224,7 @@ def test_claim_heartbeat_exact_expiry_matching_release_and_side_effect_guard(pla
     claim = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)
     token = claim["claimToken"]
     assert datetime.fromisoformat(claim["expiresAt"].replace("Z", "+00:00")) == now + timedelta(seconds=30)
+    assert claim["leaseMs"] == 30_000
     service.require_claim(fixture.actor, client_id=client_id, claim_token=token)
     assert service.get(fixture.actor, client_id)["is_playing_here"] is True
     with pytest.raises(ValueError):
@@ -235,6 +236,7 @@ def test_claim_heartbeat_exact_expiry_matching_release_and_side_effect_guard(pla
     renewed = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track, claim_token=token)
     assert renewed["claimToken"] == token
     assert datetime.fromisoformat(renewed["expiresAt"].replace("Z", "+00:00")) == now + timedelta(seconds=30)
+    assert renewed["leaseMs"] == 30_000
     now += timedelta(seconds=30)
     with pytest.raises(ValueError):
         service.require_claim(fixture.actor, client_id=client_id, claim_token=token)
@@ -536,6 +538,7 @@ def test_live_handoff_consumes_after_predecessor_lease_expires(playback_inventor
         handoff=handoff,
     )
     assert consumed["claimToken"] == runtime_token
+    assert consumed["leaseMs"] == 30_000
 
 
 @pytest.mark.parametrize(
@@ -907,6 +910,7 @@ def test_http_reference_and_claim_lifecycle_round_trip(playback_inventory, playb
     assert status == 200
     claim = decode_json(body)
     assert claim["playbackState"]["is_playing_here"] is True
+    assert claim["leaseMs"] == 30_000
     for client, here in ((client_id, True), (str(uuid4()), False)):
         status, _, body = run_asgi_request(playback_app, "GET", "/playback/state", query={"client_id": client})
         assert status == 200
@@ -1607,6 +1611,7 @@ def test_handoff_migration_preserves_rows_enforces_shape_and_retains_runtime_acc
         handoff=handoff,
     )
     assert consumed["claimToken"] == runtime_token
+    assert consumed["leaseMs"] == 30_000
 
 
 def measured_listen_body(client_id, claim_token, *, session_id, track, sequence=2):

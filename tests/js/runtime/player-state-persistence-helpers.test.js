@@ -373,7 +373,7 @@ test('delayed pageshow cannot autoplay with an expired restore claim', async () 
     setCurrentPlayerTrack: track => { context.state.player.current = track; },
     fetch: async url => ({ ok: true, json: async () => url === '/playback/refs'
       ? { protocol: 1, expiresAt: new Date(now + 86_400_000).toISOString(), tracks: [{ playbackRef: 'restore-ref' }] }
-      : { protocol: 1, claimToken: 'restore-claim', expiresAt: new Date(now + 30_000).toISOString() } }),
+      : { protocol: 1, claimToken: 'restore-claim', expiresAt: new Date(now + 30_000).toISOString(), leaseMs: 30_000 } }),
     window: { crypto: { randomUUID: () => 'restore-client' }, addEventListener(type, listener) {
       if (type === 'pageshow') initialPageshow = listener;
     } },

@@ -3550,7 +3550,7 @@ function loadLeaseRecoveryRuntime(harness) {
     clearInterval: () => {},
     fetch: async (url) => ({ ok: true, json: async () => url === '/playback/refs'
       ? { protocol: 1, expiresAt: '2099-10-24T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] }
-      : { ok: true, protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(context.Date.now() + 30_000).toISOString(),
+      : { ok: true, protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(context.Date.now() + 30_000).toISOString(), leaseMs: 30_000,
         is_playing_elsewhere: false, is_playing_here: false } }),
   });
   for (const filename of ['playback-ownership-helpers.js', 'player-loop-playback.js']) {

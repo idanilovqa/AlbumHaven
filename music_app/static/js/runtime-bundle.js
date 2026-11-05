@@ -12577,9 +12577,6 @@ function registerAndroidNativePlaybackEvents() {
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
-// The server's claim lease (_CLAIM_LEASE_SECONDS). Its answer's expiresAt is on the server's clock,
-// so this document times the lease on its own monotonic clock from each answer's arrival instead.
-const PLAYBACK_CLAIM_LEASE_MS = 30000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -12815,15 +12812,23 @@ async function deletePlaybackClaim(claim) {
   });
 }
 
+async function requestPlaybackClaim(payload, timeoutMs) {
+  // The answer's expiresAt is on the server's clock, so this document times the lease on its own
+  // monotonic clock, from before the request: the server starts the lease before it answers.
+  const sentAt = performance.now();
+  return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt };
+}
+
 function acceptPlaybackClaim(result, prepared) {
-  if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))) {
+  if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))
+      || !(Number.isFinite(result.leaseMs) && result.leaseMs > 0)) {
     throw new Error('Playback claim is unavailable.');
   }
   const ownership = getPlaybackOwnershipState();
   // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
   const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
-  const claim = { ...prepared, claimToken: result.claimToken,
-    leaseDeadline: performance.now() + PLAYBACK_CLAIM_LEASE_MS, scrobblingAvailable };
+  const leaseDeadline = result.sentAt + result.leaseMs;
+  const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
@@ -12833,7 +12838,7 @@ function acceptPlaybackClaim(result, prepared) {
     const version = ownership.requestVersion || 0;
     await ownership.pendingOperation;
     if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
-  }, PLAYBACK_CLAIM_LEASE_MS);
+  }, Math.max(0, leaseDeadline - performance.now()));
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
@@ -12853,7 +12858,7 @@ async function refreshPlaybackOwnershipClaim(track = null) {
     try {
       const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
-      const result = await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+      const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
         state: 'playing', track: prepared.track });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
@@ -12874,7 +12879,7 @@ async function acquirePlaybackOwnershipHandoff(prepared, handoff) {
   const deadline = Math.min(Date.parse(handoff.expiresAt), Date.now() + PLAYBACK_HANDOFF_WINDOW_MS);
   while (Date.now() < deadline) {
     try {
-      return await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+      return await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
         claimToken: playbackOwnershipRuntimeClaimToken, state: 'playing', track: prepared.track,
         handoff: { id: handoff.id, token: handoff.token } },
@@ -12908,7 +12913,7 @@ async function claimPlaybackOwnership(track, options = {}) {
       if (version !== ownership.requestVersion) return false;
       const result = handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
-        : await playbackOwnershipRequest('PUT', '/playback/state', { protocol: 1,
+        : await requestPlaybackClaim({ protocol: 1,
           clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
           claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
       if (version !== ownership.requestVersion) {

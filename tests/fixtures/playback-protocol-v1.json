@@ -58,6 +58,7 @@
       "protocol": 1,
       "claimToken": "claim-token-1",
       "expiresAt": "2099-10-23T23:00:30Z",
+      "leaseMs": 30000,
       "playbackState": {
         "is_playing_here": true,
         "is_playing_elsewhere": false,

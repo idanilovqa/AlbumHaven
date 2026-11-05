@@ -160,7 +160,8 @@ class PostgresPlaybackClaims:
                     (expires, json.dumps(track), account_id, library_id, client_id, digest, now)).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
-        return {"protocol": 1, "claimToken": token, "expiresAt": expires.isoformat(), "playbackState": self._state(row, client_id)}
+        return {"protocol": 1, "claimToken": token, "expiresAt": expires.isoformat(),
+                "leaseMs": _CLAIM_LEASE_SECONDS * 1000, "playbackState": self._state(row, client_id)}
 
     def stage_handoff(self, actor, *, client_id, claim_token, handoff_id,
                       handoff_token, completion_digest, persist_completion=None):

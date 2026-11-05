@@ -156,7 +156,7 @@ for (const failureMode of ['beacon', 'storage']) {
         if (url === '/playback/refs') return jsonResponse({ protocol: 1,
           tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
         return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
       },
     });
 
@@ -200,7 +200,7 @@ test('expired handoff renews the still-live retained claim without a null acquir
       if (url === '/playback/refs') return jsonResponse({ protocol: 1,
         tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'retained-ref' }] });
       return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+        expiresAt: new Date(now + 30_000).toISOString(), leaseMs: 30_000, playbackState: { is_playing_here: true } });
     },
   });
 
@@ -320,7 +320,7 @@ test('BFCache valid handoff ignores the retained heartbeat until consume complet
       if (options.method === 'PUT') {
         await pendingConsume.promise;
         return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
       }
       if (options.method === 'GET') return jsonResponse({ protocol: 1,
         is_playing_here: false, is_playing_elsewhere: true, track: localTrack });
@@ -365,7 +365,7 @@ test('BFCache retained-claim fallback defers its heartbeat until the exact renew
         puts.push(body);
         if (puts.length === 1) await pendingRenewal.promise;
         return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
       }
       return jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });
     },
@@ -416,7 +416,7 @@ test('handoff retry reuses the same fresh runtime pair', async () => {
       puts.push(body);
       if (puts.length === 1) return jsonResponse({ error: 'not staged yet' }, { ok: false, status: 409 });
       return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+        expiresAt: new Date(now + 30_000).toISOString(), leaseMs: 30_000, playbackState: { is_playing_here: true } });
     },
   });
 
@@ -453,7 +453,7 @@ test('lost committed consume response retries the exact runtime pair', async () 
         throw new Error('response lost after commit');
       }
       return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-        expiresAt: new Date(now + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+        expiresAt: new Date(now + 30_000).toISOString(), leaseMs: 30_000, playbackState: { is_playing_here: true } });
     },
   });
 
@@ -495,7 +495,7 @@ test('copied handoff envelope has one winner and bounded loser with fresh docume
         if (!acceptedRuntimeClaim) {
           acceptedRuntimeClaim = body.claimToken;
           return jsonResponse({ protocol: 1, claimToken: body.claimToken,
-            expiresAt: new Date(baseNow + 30_000).toISOString(), playbackState: { is_playing_here: true } });
+            expiresAt: new Date(baseNow + 30_000).toISOString(), leaseMs: 30_000, playbackState: { is_playing_here: true } });
         }
         return jsonResponse({ error: 'handoff consumed' }, { ok: false, status: 409 });
       },
@@ -653,7 +653,7 @@ test('late acquisition releases its stale token without replacing the newer clai
   await new Promise((resolve) => setImmediate(resolve));
   if (acquisitions.length === 1) {
     acquisitions[0].pending.resolve(jsonResponse({
-      protocol: 1, claimToken: 'older-token', expiresAt: '2099-10-23T23:00:30Z',
+      protocol: 1, claimToken: 'older-token', expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
       playbackState: { is_playing_here: true },
     }));
     assert.equal(await olderClaim, false);
@@ -662,14 +662,14 @@ test('late acquisition releases its stale token without replacing the newer clai
   acquisitions[1].pending.resolve(jsonResponse({
     protocol: 1,
     claimToken: 'newer-token',
-    expiresAt: '2099-10-23T23:00:30Z',
+    expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
     playbackState: { is_playing_here: true },
   }));
   assert.equal(await newerClaim, true);
   acquisitions[0].pending.resolve(jsonResponse({
     protocol: 1,
     claimToken: 'older-token',
-    expiresAt: '2099-10-23T23:00:30Z',
+    expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
     playbackState: { is_playing_here: true },
   }));
 
@@ -708,7 +708,7 @@ test('resume waits for server release before acquiring a replacement claim', asy
       return jsonResponse({
         protocol: 1,
         claimToken: `claim-token-${claimNumber}`,
-        expiresAt: '2099-10-23T23:00:30Z',
+        expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
         playbackState: { is_playing_here: true },
       });
     },
@@ -741,7 +741,7 @@ test('overlapping selections sharing a claim token never delete the newer select
         return jsonResponse({ protocol: 1 });
       }
       if (!body.claimToken) return jsonResponse({ protocol: 1, claimToken: 'shared-token',
-        expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+        expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
       const pending = deferred();
       acquisitions.push({ body, pending });
       return pending.promise;
@@ -753,7 +753,7 @@ test('overlapping selections sharing a claim token never delete the newer select
   const newer = context.claimPlaybackOwnership({ ...localTrack, path: 'newer.flac' });
   await new Promise((resolve) => setImmediate(resolve));
   const response = () => jsonResponse({ protocol: 1, claimToken: 'shared-token',
-    expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+    expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
   if (acquisitions.length === 1) {
     acquisitions[0].pending.resolve(response());
     assert.equal(await older, false);
@@ -811,7 +811,7 @@ test('release drains claim-scoped listen requests before clearing and deleting t
       return jsonResponse({
         protocol: 1,
         claimToken: 'claim-token-1',
-        expiresAt: '2099-10-23T23:00:30Z',
+        expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
         playbackState: { is_playing_here: true },
       });
     },
@@ -853,7 +853,7 @@ test('heartbeat does not renew a paused claim while its listen requests are drai
         return jsonResponse({
           protocol: 1,
           claimToken: 'claim-token-1',
-          expiresAt: '2099-10-23T23:00:30Z',
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
           playbackState: { is_playing_here: true },
         });
       }
@@ -894,7 +894,7 @@ test('new selection renews while old listen drain is pending and obsolete releas
       }
       writes.push(body);
       return jsonResponse({ protocol: 1, claimToken: 'shared-token',
-        expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+        expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
     },
   });
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
@@ -933,7 +933,7 @@ test('renewal failure stops audible output and clears local ownership', async ()
         return jsonResponse({
           protocol: 1,
           claimToken: 'claim-token-1',
-          expiresAt: '2099-10-23T23:00:30Z',
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000,
           playbackState: { is_playing_here: true },
         });
       }
@@ -972,7 +972,7 @@ for (const replacement of [false, true]) {
         }
         acquisitions += 1;
         return jsonResponse({ protocol: 1, claimToken: `claim-${acquisitions}`,
-          expiresAt: '2099-10-23T23:00:30Z', playbackState: { is_playing_here: true } });
+          expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
       },
     });
     assert.equal(await context.claimPlaybackOwnership(localTrack), true);
@@ -982,7 +982,7 @@ for (const replacement of [false, true]) {
     assert.equal(renewals, 1);
     const release = context.releasePlaybackOwnership();
     pendingRenewal.resolve(jsonResponse({ protocol: 1, claimToken: 'claim-1',
-      expiresAt: '2099-10-24T00:00:30Z', playbackState: { is_playing_here: true } }));
+      expiresAt: '2099-10-24T00:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } }));
     assert.equal(await renewal, false);
     await release;
     if (replacement) assert.equal(await context.claimPlaybackOwnership(localTrack), true);
@@ -1011,7 +1011,7 @@ function leaseHarness({ clientOffsetMs = 0, renew }) {
         clientKey: body.tracks[0].clientKey, playbackRef: 'playback-ref-1',
       }], expiresAt: new Date(serverNow + clock.monotonic + 86_400_000).toISOString() });
       const answer = () => jsonResponse({ protocol: 1, claimToken: 'claim-1',
-        expiresAt: new Date(serverNow + clock.monotonic + 30_000).toISOString(),
+        expiresAt: new Date(serverNow + clock.monotonic + 30_000).toISOString(), leaseMs: 30_000,
         playbackState: { is_playing_here: true } });
       if (!body.claimToken) return answer();
       renewals += 1;
@@ -1095,6 +1095,26 @@ test('lease expiry leaves a play queued behind a slow renewal to decide ownershi
   assert.equal(context.isActivePlaybackOwner(), true);
   assert.equal(context.state.player.ownership.blockedReason, '');
   assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('the local lease runs for the answer\'s leaseMs from before the request was sent', async () => {
+  let leaseMs = 12_000;
+  const harness = leaseHarness({ renew: (answer) => {
+    harness.clock.monotonic += 4_000;
+    return answer().json().then((body) => jsonResponse({ ...body, leaseMs }));
+  } });
+  const { context, clock } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  clock.monotonic = 10_000;
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal(context.state.player.ownership.activeClaim.leaseDeadline, 22_000);
+  assert.equal(harness.timers.at(-1).delay, 8_000);
+  clock.monotonic = 22_000;
+  assert.equal(context.isActivePlaybackOwner(), false);
+
+  leaseMs = undefined;
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), false);
+  assert.equal(context.state.player.ownership.activeClaim, null, 'an answer without leaseMs is refused');
 });
 
 test('lease expiry still drops ownership when renewals stop answering', async () => {

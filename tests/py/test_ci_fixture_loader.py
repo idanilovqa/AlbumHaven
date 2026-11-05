@@ -1997,7 +1997,15 @@ function Invoke-FakePsql {
         return 'authentication failed'
     }
     $global:LASTEXITCODE = 0
+    if ($args[-1] -like '*postmaster.pid*') { return "4242`t$env:TEST_SERVER_DATA_DIRECTORY" }
     return $env:TEST_SERVER_VERSION
+}
+function Get-CimInstance {
+    [CmdletBinding()] param([string]$ClassName, [string]$Filter)
+    if ($ClassName -eq 'Win32_Process') {
+        return [pscustomobject]@{ ExecutablePath = (Join-Path $Pgbin 'postgres.exe') }
+    }
+    [pscustomobject]@{ PathName = "`"$(Join-Path $Pgbin 'pg_ctl.exe')`" runservice -N `"$ServiceName`" -D `"$env:TEST_SERVICE_DATA_DIRECTORY`" -w" }
 }
 
 $script:serviceCalls = @()
@@ -2013,8 +2021,12 @@ $AdminRole = 'postgres'
 $requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
 $contract = [pscustomobject]@{ preflight = [pscustomobject]@{ readinessTimeoutSeconds = 1 } }
 
-function Invoke-Scenario([bool]$Ready, [string]$ClientVersion, [string]$ServerVersion, [bool]$AuthFails) {
+function Invoke-Scenario(
+    [bool]$Ready, [string]$ClientVersion, [string]$ServerVersion, [bool]$AuthFails,
+    [string]$ServerDataDirectory = $env:TEST_SERVICE_DATA_DIRECTORY
+) {
     $script:serviceCalls = @()
+    $env:TEST_SERVER_DATA_DIRECTORY = $ServerDataDirectory
     $env:TEST_POSTGRES_READY = if ($Ready) { '1' } else { '0' }
     $env:TEST_CLIENT_VERSION = $ClientVersion
     $env:TEST_SERVER_VERSION = $ServerVersion
@@ -2033,10 +2045,16 @@ function Invoke-Scenario([bool]$Ready, [string]$ClientVersion, [string]$ServerVe
     wrongClientMajor = Invoke-Scenario $true '17.0' '180000' $false
     wrongServerMajor = Invoke-Scenario $true '18.0' '170000' $false
     authenticationFailure = Invoke-Scenario $true '18.0' '180000' $true
+    foreignDataDirectory = Invoke-Scenario $true '18.0' '180000' $false $env:TEST_FOREIGN_DATA_DIRECTORY
 } | ConvertTo-Json -Depth 4 -Compress
 '''
     environment = dict(os.environ)
-    environment.update(TEST_BOOTSTRAP_PATH=str(BOOTSTRAP_PATH), TEST_PGBIN=str(pgbin))
+    environment.update(
+        TEST_BOOTSTRAP_PATH=str(BOOTSTRAP_PATH),
+        TEST_PGBIN=str(pgbin),
+        TEST_SERVICE_DATA_DIRECTORY=str(tmp_path / "PostgreSQL" / "18" / "data"),
+        TEST_FOREIGN_DATA_DIRECTORY=str(tmp_path / "other-cluster" / "data"),
+    )
     result = subprocess.run(
         [executable, "-NoProfile", "-Command", harness],
         capture_output=True,
@@ -2056,6 +2074,8 @@ function Invoke-Scenario([bool]$Ready, [string]$ClientVersion, [string]$ServerVe
     assert "server version" in outcomes["wrongServerMajor"]["error"].casefold()
     assert outcomes["authenticationFailure"]["ok"] is False
     assert "server version" in outcomes["authenticationFailure"]["error"].casefold()
+    assert outcomes["foreignDataDirectory"]["ok"] is False
+    assert "service boundary" in outcomes["foreignDataDirectory"]["error"].casefold()
 
 
 def test_bootstrap_contract_uses_strict_suffixed_database_and_role_names(tmp_path: Path) -> None:

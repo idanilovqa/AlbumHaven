@@ -324,6 +324,10 @@ def _is_public(method: str, path: str) -> bool:
         return normalized_method in _READ_METHODS
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS
+    # Signed Android update artifacts: a Sandbox app reads them from albumhaven.org without that
+    # origin's session, and they hold nothing private.
+    if path.startswith("/artifacts/android/"):
+        return normalized_method in _READ_METHODS
     return False
 
 

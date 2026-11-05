@@ -46,6 +46,8 @@ def test_private_routes_have_explicit_action_classification():
                 "/accept-invitation/continue",
                 "/favicon.ico",
                 "/static",
+                "/artifacts/android/{channel}/manifest.json",
+                "/artifacts/android/{channel}/{name}",
             }:
                 continue
             action = private_action_for_route(method, path)

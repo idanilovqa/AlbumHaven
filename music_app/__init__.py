@@ -263,6 +263,7 @@ def _configure_asgi_app(app, runtime) -> None:
         router as playback_stream_asgi_router,
     )
     from music_app.routes.playback_control_asgi import router as playback_control_router
+    from music_app.routes.android_artifacts_asgi import router as android_artifacts_router
     from music_app.services.waveform_peak_cache_postgres import (
         PostgresWaveformPeakCacheRepository,
     )
@@ -379,6 +380,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(api_wave_d_asgi_router)
     app.include_router(playback_stream_asgi_router)
     app.include_router(playback_control_router)
+    app.include_router(android_artifacts_router)
 
 
 def create_asgi_app():

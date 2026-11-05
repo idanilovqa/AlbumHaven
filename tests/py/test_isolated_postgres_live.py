@@ -743,6 +743,33 @@ def test_live_watcher_album_of_a_new_year_never_rewrites_another_years_album(wat
     assert members[old_year["path"]] != members[new_year["path"]]
 
 
+def test_live_watcher_follows_the_year_split_key_a_full_scan_created(watcher_repair_inventory):
+    # Mirrors sandbox2 2026-11-04: incoming 'unknown artist::' (2021) collided
+    # with the full scan's 'unknown artist::::year::2021'.
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Seed/01.flac", album="Seed Album"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%(library)s, %(artist)s, 'owner::unknown album', 'Unknown Album', 2020, '{"source": "legacy"}'::jsonb),
+                   (%(library)s, %(artist)s, 'owner::unknown album::year::2021', 'Unknown Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            {"library": owner["library_id"], "artist": owner["id"]},
+        )
+    arrival = {**fixture.entry("Owner/Untagged 2021/01.flac", album="Unknown Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {arrival["path"]: arrival}, Path(arrival["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    assert members[arrival["path"]] == "owner::unknown album::year::2021"
+    assert albums["owner::unknown album"]["release_year"] == 2020, "the other year's album is not rewritten"
+
+
 def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Unknown Album"), "year": 2020}
@@ -751,11 +778,11 @@ def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_r
         owner = connection.execute(
             "select id, library_id from library.local_artists where artist_key = 'owner'"
         ).fetchone()
-        # A year-qualified row already holds Owner / Unknown Album / 2021.
+        # A row keyed from another owner spelling already holds Owner / Unknown Album / 2021.
         connection.execute(
             """
             insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
-            values (%s, %s, 'owner::unknown album::year::2021', 'Unknown Album', 2021, '{"source": "legacy"}'::jsonb)
+            values (%s, %s, 'owner (legacy)::unknown album', 'Unknown Album', 2021, '{"source": "legacy"}'::jsonb)
             """,
             (owner["library_id"], owner["id"]),
         )
@@ -770,7 +797,7 @@ def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_r
     assert result.revision > 0, "the rest of the root still publishes"
     albums, members = _live_album_rows(fixture)
     assert members[clean["path"]] == "owner::clean album"
-    assert albums["owner::unknown album::year::2021"]["source"] == "legacy", "existing rows are untouched"
+    assert albums["owner (legacy)::unknown album"]["source"] == "legacy", "existing rows are untouched"
     assert albums["owner::unknown album"]["release_year"] == 2020, "the colliding album is withheld, not merged"
     assert members[retagged["path"]] == "owner::unknown album"
 

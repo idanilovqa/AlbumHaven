@@ -570,6 +570,12 @@ class PostgresScanCacheAdapter:
                 ),
                 excluded_paths=stale_context_paths,
             )
+            _follow_existing_year_split_album_keys(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+            )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
@@ -3167,6 +3173,45 @@ def _targeted_preferred_paths(
         ):
             preferred_paths.add(path)
     return preferred_paths
+
+
+def _follow_existing_year_split_album_keys(
+    connection: Any,
+    *,
+    album_rows: list[dict[str, object]],
+    featured_artist_rows: list[dict[str, object]],
+    track_rows: list[dict[str, object]],
+) -> None:
+    """Use the year-qualified key a full scan already created for this album.
+
+    A full scan splits one artist/title across years into ``<key>::year::<Y>``.
+    A watcher batch that only sees one year builds the bare ``<key>``; when the
+    bare row belongs to another year, upserting it would rewrite that album's
+    year onto the identity the year-qualified row already holds.
+    """
+    candidates = {
+        str(row.get("album_key") or ""): f"{row.get('album_key')}::year::{safe_int(row.get('release_year'))}"
+        for row in album_rows
+        if "::year::" not in str(row.get("album_key") or "")
+        and safe_int(row.get("release_year")) is not None
+    }
+    if not candidates:
+        return
+    existing = {
+        str(_row_mapping(row).get("album_key"))
+        for row in connection.execute(
+            "select album_key from library.local_albums where album_key = any(%(keys)s::text[])",
+            {"keys": sorted(candidates.values())},
+        ).fetchall()
+    }
+    remaps = {bare: qualified for bare, qualified in candidates.items() if qualified in existing}
+    if not remaps:
+        return
+    for rows in (album_rows, featured_artist_rows, track_rows):
+        for row in rows:
+            key = str(row.get("album_key") or "")
+            if key in remaps:
+                row["album_key"] = remaps[key]
 
 
 def _remap_targeted_album_identity_rows(

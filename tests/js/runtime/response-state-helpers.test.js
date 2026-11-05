@@ -543,6 +543,7 @@ test('new cover run explicit zero discards previous completed count', () => {
     app_version: '0.0.0-test',
     ignored_version_keys: [],
     manual_version_links: {},
+    version_rules_loaded: { ignored: false, manual: false },
     non_album_tracks: [],
     non_album_exception_values: [],
     initial_view_partial: true,
@@ -726,6 +727,7 @@ test('new cover run explicit zero discards previous completed count', () => {
       app_version: '0.0.0-test',
       ignored_version_keys: [],
       manual_version_links: {},
+      version_rules_loaded: { ignored: false, manual: false },
       non_album_tracks: [],
       non_album_exception_values: [],
       initial_view_partial: false,
@@ -2760,4 +2762,29 @@ test('paged source hydration retains navigation location but captures continuati
   c.applyViewPayload({ ...c.state.view, album_count: 5 });
   assert.equal(c.state.view.gallery_page_scope.gallery_scope, 'all');
   assert.deepEqual(Array.from(c.state.view.gallery_page_scope.visible_library_categories), ['hoard']);
+});
+
+test('version rule readiness tracks explicit mutation responses independently of shell defaults', () => {
+  const { normalizeViewPayload } = loadHelpers();
+  const shell = normalizeViewPayload({ ignored_version_keys: [], manual_version_links: {}, version_rules_loaded: { ignored: false, manual: false } });
+  assert.equal(shell.version_rules_loaded.ignored, false);
+  assert.equal(shell.version_rules_loaded.manual, false);
+  const updated = normalizeViewPayload({ manual_version_links: { child: 'parent' } }, shell);
+  assert.equal(updated.version_rules_loaded.manual, true);
+  assert.equal(updated.version_rules_loaded.ignored, false);
+  const loaded = normalizeViewPayload({ ignored_version_keys: [] }, updated);
+  assert.equal(loaded.version_rules_loaded.manual, true);
+  assert.equal(loaded.version_rules_loaded.ignored, true);
+  const restoredShell = normalizeViewPayload(shell, loaded);
+  assert.equal(restoredShell.manual_version_links.child, 'parent');
+  assert.equal(restoredShell.version_rules_loaded.manual, true);
+});
+
+test('manual rule mutation is authoritative even while empty-shell exclusions are pending', () => {
+  const context = loadHelpers();
+  context.state.view = context.normalizeViewPayload({ artist_groups: [], ignored_version_keys: [], manual_version_links: {}, version_rules_loaded: { ignored: false, manual: false } });
+  context.mergeViewPayload({ manual_version_links: { child: 'parent' } }, { trackSidebarReveal: false });
+  assert.equal(context.state.view.version_rules_loaded.manual, true);
+  assert.equal(context.state.view.version_rules_loaded.ignored, false);
+  assert.equal(context.state.view.manual_version_links.child, 'parent');
 });

@@ -11,6 +11,66 @@ import pytest
 from music_app.services import metadata
 
 
+@pytest.mark.parametrize("compilation_tag", ["TCMP", "compilation", "cpil"])
+def test_explicit_compilation_tag_preserves_various_artist_owner_with_two_track_artists(
+    monkeypatch, tmp_path, compilation_tag
+):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, artist in enumerate(["Belle Stars", "Watcher Compilation Performer"], start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": ["Rain Man"], "albumartist": ["Various Artists"],
+            "artist": [artist], "title": [f"Soundtrack Track {number}"],
+            "tracknumber": [str(number)], "date": ["1988"], compilation_tag: ["1"],
+        }
+        if compilation_tag == "TCMP":
+            from mutagen.id3 import TCMP
+
+            tags[compilation_tag] = TCMP(encoding=3, text=["1"])
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entry = metadata.read_metadata_for_file(path)
+        assert entry.get("is_compilation") is True
+        entries[str(path)] = entry
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 1
+    assert albums[0].album_artist == "Various Artists"
+    assert albums[0].is_compilation is True
+    assert len(albums[0].tracks) == 2
+
+
+@pytest.mark.parametrize("flag, expected", [("0", False), (False, False), (True, True), ("", None), ("unknown", None), (None, None)])
+def test_compilation_flag_preserves_false_and_unknown_semantics(monkeypatch, tmp_path, flag, expected):
+    path = tmp_path / "track.mp3"
+    path.touch()
+    tags = {"album": ["Split Release"], "albumartist": ["Various Artists"], "artist": ["First Artist"]}
+    if flag is not None:
+        tags["cpil"] = [flag]
+    monkeypatch.setattr(metadata, "MutagenFile", lambda _path: SimpleNamespace(tags=tags))
+    assert metadata.read_metadata_for_file(path)["is_compilation"] is expected
+
+
+@pytest.mark.parametrize("flag", [None, "0"])
+def test_two_artist_split_inference_remains_without_positive_compilation_tag(monkeypatch, tmp_path, flag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, artist in enumerate(["Jordsjø", "Breidablik"], start=1):
+        path = tmp_path / f"{number}.mp3"
+        path.touch()
+        tags = {"album": ["Split Release"], "albumartist": ["Various Artists"], "artist": [artist]}
+        if flag is not None:
+            tags["TCMP"] = [flag]
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entries[str(path)] = metadata.read_metadata_for_file(path)
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 1
+    assert albums[0].album_artist == "Jordsjø / Breidablik"
+
+
 @pytest.mark.parametrize("subtitle_tag", ["subtitle", "discsubtitle", "TSST", "TIT3", "TXXX:part"])
 def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_path, subtitle_tag):
     from music_app.services.library import build_albums_from_file_cache
@@ -165,8 +225,12 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": 4, "release_date": "2004-07-16"}, False),
         ({"metadata_schema_version": 5, "release_date": None}, False),
         ({"metadata_schema_version": 5, "release_date": "2004-07-16"}, False),
-        ({"metadata_schema_version": 6, "release_date": None}, True),
-        ({"metadata_schema_version": 6, "release_date": "2004-07-16"}, True),
+        ({"metadata_schema_version": 6, "release_date": None}, False),
+        ({"metadata_schema_version": 6, "release_date": "2004-07-16"}, False),
+        ({"metadata_schema_version": 6, "release_date": None, "is_compilation": False}, False),
+        ({"metadata_schema_version": 6, "release_date": None, "compilation_tag": None}, True),
+        ({"metadata_schema_version": 6, "release_date": None, "compilation_tag": False}, True),
+        ({"metadata_schema_version": 6, "release_date": "2004-07-16", "compilation_tag": True}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(

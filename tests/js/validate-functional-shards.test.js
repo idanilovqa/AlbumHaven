@@ -17,11 +17,11 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual-1', 32],
-  ['gallery-search-visual-2', 36],
+  ['gallery-search-visual-1', 33],
+  ['gallery-search-visual-2', 37],
   ['cover-providers-1', 22],
   ['cover-providers-2', 14],
-  ['metadata-mutations', 16],
+  ['metadata-mutations', 17],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
   ['playback-utilities-3', 14],
@@ -43,8 +43,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.27';
-const FIXTURE_MANIFEST_SHA256 = '1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA';
+const FIXTURE_RELEASE = 'fixtures-v1.0.29';
+const FIXTURE_MANIFEST_SHA256 = '9EA722991C29E42E0A4115B73E06A4D24D31048A60207032F0A4A44F05B4A7AA';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -118,7 +118,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 162-case assignment', () => {
+test('functional shard contract pins the approved eight-way 165-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -132,7 +132,7 @@ test('functional shard contract pins the approved eight-way 162-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 162);
+  assert.equal(total, 165);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -458,11 +458,11 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     });
 
     assert.deepEqual(result, { exitCode: 1, signal: null });
-    const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
+  const checkpointCalls = calls.filter((call) => call.args[0].endsWith('functional-fixture-checkpoint.py'));
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-    const invocationCount = 15;
-    assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 16);
+  const invocationCount = 16;
+  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 17);
     assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
@@ -481,9 +481,12 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
       call.args.includes(`--source-media-root=${path.join(sourceFixtureRoot, 'media')}`)
       && call.args.includes(`--writable-media-root=${path.join(fixtureRoot, 'media')}`)
     )));
-    assert.ok(calls.every((call) => (
-      !call.args.some((arg) => arg.includes('load-fixture-profile.py'))
-    )));
+  const scenarios = calls.filter((call) => call.args[0].endsWith('load-fixture-profile.py'));
+  assert.equal(scenarios.length, 1);
+  assert.ok(scenarios[0].args.includes('--scenario=notificationIdentity'));
+  assert.equal(scenarios[0].options.windowsHide, true);
+  const scenarioIndex = calls.indexOf(scenarios[0]);
+  assert.ok(calls[scenarioIndex + 1].args[0].endsWith('run-playwright.cjs'));
     for (const call of playwrightCalls) {
       assert.equal(call.options.env.ALBUM_HAVEN_FIXTURE_ROOT, fixtureRoot);
       assert.equal(call.options.env.ALBUM_HAVEN_MEDIA_ROOT, path.join(fixtureRoot, 'media'));
@@ -652,7 +655,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
     assert.ok(globalMutations.length <= 1);
     for (const ownedCase of cases) waveByCase.set(ownedCase.case, wave.wave);
   }
-  assert.equal(waveByCase.size, 16);
+  assert.equal(waveByCase.size, 17);
   for (const caseName of [
     'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
     'FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split',
@@ -787,7 +790,7 @@ validatorTest('gallery startup projections share one early app process before is
   const sharedReaderNames = waves[0].invocations
     .filter((invocation) => invocation.baselineMode === 'shared-setup')
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
-  assert.equal(sharedReaderNames.length, 32);
+  assert.equal(sharedReaderNames.length, 34);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -933,11 +936,11 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 36, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-1', { cases: 33, waves: [1, 2] }],
+    ['gallery-search-visual-2', { cases: 37, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 14, waves: [1, 2] }],
-    ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
+    ['metadata-mutations', { cases: 17, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],

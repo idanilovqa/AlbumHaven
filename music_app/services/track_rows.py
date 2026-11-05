@@ -89,7 +89,25 @@ def _stable_artist_credit_members(value: object) -> list[str]:
     text = " ".join(str(value or "").strip().split())
     if not text:
         return []
-    return [member.strip() for member in _STABLE_ARTIST_COMPOSITE_RE.split(text) if member.strip()]
+    members: list[str] = []
+    for segment in text.split(";"):
+        featured = _extract_terminal_featured_credit(segment, allow_plain_full_words=True)[1]
+        if featured and all(part.strip().isdecimal() for part in featured.split("/")):
+            members.extend(track_artist_credit_members(segment, ""))
+            continue
+        segment_members: list[str] = []
+        for member in _STABLE_ARTIST_COMPOSITE_RE.split(segment):
+            member = member.strip()
+            if not member:
+                continue
+            if segment_members and member.isdecimal():
+                previous = _LEADING_FEAT_CREDIT_RE.sub(r"\g<featured>", segment_members[-1])
+                if all(part.isdecimal() for part in previous.split("/")):
+                    segment_members[-1] += "/" + member
+                    continue
+            segment_members.append(member)
+        members.extend(segment_members)
+    return members
 
 
 def _stable_unique_artist_credits(values: Iterable[object]) -> list[str]:

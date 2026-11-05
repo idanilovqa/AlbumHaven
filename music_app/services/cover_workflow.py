@@ -64,10 +64,12 @@ def is_disc_like_folder(path: Path) -> bool:
     return bool(_ALBUM_DISC_MARKER_RE.search(path.name or ""))
 
 
-def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str]) -> Path:
+def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str], *, cancel_requested=None) -> Path:
     resolved_album_root = album_root.resolve(strict=False)
     represented_roots: dict[str, Path] = {}
     for raw_path in track_paths:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover context resolution cancelled")
         if not str(raw_path or "").strip():
             continue
         track_root = Path(str(raw_path)).resolve(strict=False).parent
@@ -82,12 +84,15 @@ def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[s
     ):
         return resolved_album_root
     try:
-        has_unrepresented_disc_sibling = any(
-            child.is_dir()
-            and is_disc_like_folder(child)
-            and child.resolve(strict=False) != track_root
-            for child in resolved_album_root.iterdir()
-        )
+        has_unrepresented_disc_sibling = False
+        for child in resolved_album_root.iterdir():
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Local cover context resolution cancelled")
+            if child.is_dir() and is_disc_like_folder(child) and child.resolve(strict=False) != track_root:
+                has_unrepresented_disc_sibling = True
+                break
+    except InterruptedError:
+        raise
     except OSError:
         return track_root
     return track_root if has_unrepresented_disc_sibling else resolved_album_root
@@ -105,6 +110,8 @@ def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> boo
 def resolve_album_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
+    *,
+    cancel_requested=None,
 ) -> Path | None:
     configured_roots = get_library_roots(config)
     configured_root_paths = [
@@ -115,6 +122,8 @@ def resolve_album_root_from_track_paths(
     resolved_dirs: list[Path] = []
     has_existing_track = False
     for raw_path in track_paths:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover context resolution cancelled")
         raw_text = str(raw_path or "")
         if not raw_text:
             continue
@@ -170,7 +179,7 @@ def resolve_album_root_from_track_paths(
             parent_config, parent_root = parent_roots[0]
             parent_depth = len(album_root.parent.relative_to(parent_root).parts)
             if parent_depth == _minimum_album_folder_depth(parent_config):
-                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths)
+                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths, cancel_requested=cancel_requested)
     if not _is_valid_album_root(
         config,
         album_root,

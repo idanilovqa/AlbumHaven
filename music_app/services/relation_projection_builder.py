@@ -49,6 +49,10 @@ _ARTIST_PUNCT_TRANSLATION = str.maketrans(
         "`": "'",
     }
 )
+CURRENT_ALIAS_POLICY = 'current-v11-explicit-collaboration'
+LEGACY_ALIAS_POLICY = 'legacy-v11-broad-aliases'
+
+
 _EXPLICIT_COLLABORATION_RE = re.compile(
     r"\s+(?:feat\.?|featuring|with|vs|x)\s+",
     re.IGNORECASE,
@@ -234,11 +238,26 @@ def _prefix_match(alias_key: str, solo_key: str) -> bool:
     )
 
 
-def _contains_single_base(alias_key: str, solo_keys: set[str]) -> str | None:
+def _possessive_project_match(alias_key: str, solo_key: str) -> bool:
+    if not alias_key or not solo_key or alias_key == solo_key:
+        return False
+    suffix = f" {solo_key}"
+    if not alias_key.endswith(suffix):
+        return False
+    owner = alias_key[: -len(suffix)].rstrip()
+    return bool(owner) and (owner.endswith("'s") or owner.endswith("s'"))
+
+
+def _contains_single_base(
+    alias_key: str, solo_keys: set[str], *, legacy_possessive: bool = False,
+) -> str | None:
     matches = [
         solo
         for solo in solo_keys
-        if solo and (alias_key == solo or _prefix_match(alias_key, solo))
+        if solo and (
+            alias_key == solo or _prefix_match(alias_key, solo)
+            or (legacy_possessive and _possessive_project_match(alias_key, solo))
+        )
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -291,7 +310,7 @@ def _merge_artist_alias(
     if not canonical or not alternate or canonical == alternate:
         return
     alternate_canonical = str(alias_to_canonical.get(alternate, alternate) or "").strip()
-    if not alternate_canonical:
+    if not alternate_canonical or alternate_canonical == canonical:
         return
     canonical_aliases = canonical_to_aliases.setdefault(canonical, set())
     alternate_aliases = canonical_to_aliases.pop(alternate_canonical, set())
@@ -416,8 +435,11 @@ def _album_facts(
 def _build_alias_views(
     albums: tuple[PostgresRelationAlbumFact, ...],
     *,
+    alias_policy: str = CURRENT_ALIAS_POLICY,
     cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
+    if alias_policy not in {CURRENT_ALIAS_POLICY, LEGACY_ALIAS_POLICY}:
+        raise ValueError(f'Unknown relation alias policy: {alias_policy}')
     artist_counts: Counter[str] = Counter()
     normalized_buckets: dict[str, list[str]] = defaultdict(list)
     container_to_artists: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
@@ -507,16 +529,16 @@ def _build_alias_views(
                     solo_candidates[normalized] = canonical_artist
         solo_keys = set(solo_candidates)
         for artist in artists:
-            if (
-                not artist
-                or _is_va_name(artist)
-                or (
-                    artist not in structured_collaboration_names
-                    and not _EXPLICIT_COLLABORATION_RE.search(artist)
-                )
-            ):
+            collaboration_candidate = (
+                _looks_like_collaboration(artist) if alias_policy == LEGACY_ALIAS_POLICY
+                else artist in structured_collaboration_names or bool(_EXPLICIT_COLLABORATION_RE.search(artist))
+            )
+            if not artist or _is_va_name(artist) or not collaboration_candidate:
                 continue
-            matched = _contains_single_base(_normalize_key(artist), solo_keys)
+            matched = _contains_single_base(
+                _normalize_key(artist), solo_keys,
+                legacy_possessive=alias_policy == LEGACY_ALIAS_POLICY,
+            )
             if matched:
                 _merge_artist_alias(
                     solo_candidates[matched],
@@ -658,29 +680,31 @@ def _build_family_views(
 def build_postgres_relation_alias_views(
     rows: list[object],
     *,
+    alias_policy: str = CURRENT_ALIAS_POLICY,
     cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
-    """Build current search aliases without unrelated family projections."""
+    """Build aliases under the selected policy without unrelated family projections."""
     if cooperate is None:
-        return _build_alias_views(_album_facts(rows, include_family_data=False))
+        return _build_alias_views(_album_facts(rows, include_family_data=False), alias_policy=alias_policy)
     return _build_alias_views(
         _album_facts(rows, include_family_data=False, cooperate=cooperate),
-        cooperate=cooperate,
+        alias_policy=alias_policy, cooperate=cooperate,
     )
 
 
 def build_postgres_relation_views(
     rows: list[object],
     *,
+    alias_policy: str = CURRENT_ALIAS_POLICY,
     cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     if cooperate is None:
         albums = _album_facts(rows)
-        alias_views = _build_alias_views(albums)
+        alias_views = _build_alias_views(albums, alias_policy=alias_policy)
         family_views = _build_family_views(albums, alias_views["alias_to_canonical"])
     else:
         albums = _album_facts(rows, cooperate=cooperate)
-        alias_views = _build_alias_views(albums, cooperate=cooperate)
+        alias_views = _build_alias_views(albums, alias_policy=alias_policy, cooperate=cooperate)
         family_views = _build_family_views(
             albums,
             alias_views["alias_to_canonical"],

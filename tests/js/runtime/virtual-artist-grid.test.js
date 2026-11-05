@@ -6,6 +6,49 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('retained source and destination cards refresh action identity without replacing artwork', () => {
+  for (const reuse of ['cached', 'mounted']) {
+    for (const oldRevision of [0, undefined]) {
+      const albumKey = oldRevision === undefined ? 'artist::destination' : 'artist::source';
+      const { context } = createRuntimeContext();
+      const grid = vm.runInContext('virtualGrid', context);
+      const image = new context.HTMLImageElement();
+      image.complete = true;
+      image.naturalWidth = 480;
+      const action = (revision) => ({
+        attributes: { 'data-album': JSON.stringify({ key: albumKey, identity_revision: revision }),
+          'data-album-key': albumKey, 'data-album-version-key': 'current-version' },
+        getAttribute(name) { return this.attributes[name] ?? null; },
+        setAttribute(name, value) { this.attributes[name] = value; },
+        removeAttribute(name) { delete this.attributes[name]; },
+      });
+      const oldActions = [action(oldRevision), action(oldRevision)];
+      const freshAction = action(1);
+      const retained = {
+        getAttribute(name) { return name === 'data-gallery-card-key' ? albumKey : 'same-visual'; },
+        querySelector(selector) { return selector.includes('img') ? image : oldActions[0]; },
+        querySelectorAll() { return oldActions; },
+      };
+      let replacement;
+      const fresh = {
+        getAttribute: retained.getAttribute,
+        querySelector() { return freshAction; },
+        replaceWith(node) { replacement = node; },
+      };
+      const nextRoot = { querySelectorAll() { return [fresh]; } };
+      if (reuse === 'cached') {
+        grid.albumCardNodeCache.set(albumKey, retained);
+        grid.reuseRenderedAlbumCards(nextRoot);
+      } else {
+        grid.reuseMatchingMountedAlbumCards({ querySelectorAll() { return [retained]; } }, nextRoot);
+      }
+      assert.equal(replacement, retained);
+      assert.equal(retained.querySelector('img'), image);
+      assert.deepEqual(oldActions.map(node => JSON.parse(node.getAttribute('data-album')).identity_revision), [1, 1]);
+    }
+  }
+});
 const alertComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'alert-components.js');
 const alertComponentSource = fs.readFileSync(alertComponentPath, 'utf8');
 const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');

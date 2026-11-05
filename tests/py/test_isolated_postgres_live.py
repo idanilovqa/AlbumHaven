@@ -2405,6 +2405,33 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 },
             )
         before_by_path = {str(row["private_path"]): dict(row) for row in before_rows}
+        from music_app.services import relation_projection_postgres as relations
+        from music_app.services import gallery_projection_postgres as gallery
+        from music_app.services import scan_cache_persistence as persistence
+
+        relations.ensure_relation_projection_ready(config, connect=isolatedPostgres._connect)
+        gallery.ensure_gallery_projection_ready(config, connect=isolatedPostgres._connect)
+        with isolatedPostgres._connect(setup_url) as connection:
+            unrelated_relation_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+        assert unrelated_relation_entries
+
+        source_query = relations.load_relation_source_rows_sql
+
+        def scoped_source_query(*, scoped=False):
+            assert scoped, "a targeted rename must not reload the full relation inventory"
+            return source_query(scoped=True)
+
+        monkeypatch.setattr(relations, "load_relation_source_rows_sql", scoped_source_query)
+        monkeypatch.setattr(
+            persistence, "load_relation_source_rows_sql",
+            lambda: pytest.fail("a targeted rename must not rebuild the full relation inventory"),
+        )
         prepared_inventory_revision = adapter.load_inventory_mutation_revision()
         updated = {
             path: {**entry, "album": "New Album"}
@@ -2417,11 +2444,51 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             previous_file_entries=previous,
             updated_file_entries={**previous, **updated},
             changed_field_names={"album"},
+            rebuild_relation_projection=True,
         )
 
         assert result["track_rows_updated"] == 2
         assert result["track_file_rows_updated"] == 2
         assert result["inventory_mutation_revision"] == prepared_inventory_revision + 1
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted_unrelated_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+            aliases = connection.execute(
+                """select entry_key,payload from library.local_relation_projection_entries
+                   where library_id=%s and section='alias_to_canonical'
+                     and entry_key=any(%s) order by entry_key""",
+                (old_album["library_id"], ["Other Artist", "Structural Artist"]),
+            ).fetchall()
+            compatibility = connection.execute(
+                """select current.source_fingerprint, current.last_publication_xid::text xid,
+                          legacy.source_fingerprint legacy_fingerprint,
+                          legacy.last_publication_xid::text legacy_xid,
+                          legacy.legacy_semantics,legacy.current_semantics
+                   from library.local_relation_projection_state current
+                   join library.local_relation_compatibility_state legacy using(library_id)
+                   where current.library_id=%s""",
+                (old_album["library_id"],),
+            ).fetchone()
+            pending_relations = connection.execute(
+                "select album_id from library.local_relation_dirty_albums where library_id=%s",
+                (old_album["library_id"],),
+            ).fetchall()
+        assert persisted_unrelated_entries == unrelated_relation_entries
+        assert {row["entry_key"]: row["payload"] for row in aliases} == {
+            "Other Artist": "Other Artist", "Structural Artist": "Structural Artist",
+        }
+        assert compatibility["source_fingerprint"]
+        assert compatibility["xid"] is not None
+        assert compatibility["source_fingerprint"] == compatibility["legacy_fingerprint"]
+        assert compatibility["xid"] == compatibility["legacy_xid"]
+        assert compatibility["legacy_semantics"] == "legacy-v11-broad-aliases"
+        assert compatibility["current_semantics"] == "current-v11-explicit-collaboration"
+        assert pending_relations == []
         with isolatedPostgres._connect(setup_url) as connection:
             after_rows = connection.execute(
                 """
@@ -2513,6 +2580,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             previous_file_entries={**previous, **updated},
             updated_file_entries={**previous, **merge_update},
             changed_field_names={"album"},
+            rebuild_relation_projection=True,
         )
         assert merge_result["track_rows_updated"] == 2
         assert merge_result["track_file_rows_updated"] == 2
@@ -2556,6 +2624,53 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 expected_inventory_mutation_revision=prepared_inventory_revision,
             observed_library_root_ids={"structural-root"},
             )
+
+        current_entries = {**previous, **merge_update}
+        artist_paths = set(merge_update) | {str(conflict_path)}
+        renamed_entries = {
+            path: {**current_entries[path], "artist": "Corrected Structural Artist",
+                   "album_artist": "Corrected Structural Artist"}
+            for path in artist_paths
+        }
+        renamed = adapter.persist_structural_tag_edit(
+            changed_paths=artist_paths,
+            previous_file_entries=current_entries,
+            updated_file_entries={**current_entries, **renamed_entries},
+            changed_field_names={"artist", "album_artist"},
+            rebuild_relation_projection=True,
+        )
+        assert renamed["track_rows_updated"] == 3
+        assert "Structural Artist" in renamed["orphaned_source_artists"]
+        with isolatedPostgres._connect(setup_url) as connection:
+            old_artist_entries = connection.execute(
+                """select section,entry_key from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   union all
+                   select section,entry_key from library.local_relation_compatibility_entries
+                   where library_id=%s and %s=any(artist_names)""",
+                (old_album["library_id"], "Structural Artist",
+                 old_album["library_id"], "Structural Artist"),
+            ).fetchall()
+            corrected_alias = connection.execute(
+                """select payload from library.local_relation_projection_entries
+                   where library_id=%s and section='alias_to_canonical' and entry_key=%s""",
+                (old_album["library_id"], "Corrected Structural Artist"),
+            ).fetchone()
+            final_unrelated_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+            final_journal = connection.execute(
+                "select album_id from library.local_relation_dirty_albums where library_id=%s",
+                (old_album["library_id"],),
+            ).fetchall()
+        assert old_artist_entries == []
+        assert corrected_alias["payload"] == "Corrected Structural Artist"
+        assert final_unrelated_entries == unrelated_relation_entries
+        assert final_journal == []
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import pytest
 
 from music_app.services.album_cover_candidate_publisher import (
     AlbumCoverCandidatePublisher,
@@ -9,6 +10,39 @@ from music_app.services.album_cover_candidate_publisher import (
 
 ALBUM_ID = 41
 GENERATION = "1d17c70f-dfa1-41e5-a335-c7c835b0d0ad"
+
+
+@pytest.mark.parametrize("empty_final", [False, True])
+def test_completion_replaces_retained_running_candidates_with_final_results(empty_final):
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    old = {"url": "https://images.example/old.jpg", "source": "discogs"}
+    new = {"url": "https://images.example/new.jpg", "source": "apple"}
+    assert publisher.publish_candidates([old])
+    assert publisher.publish_candidates([new])
+    assert {item["url"] for item in repository.snapshot["candidates"]} == {old["url"], new["url"]}
+
+    assert publisher.complete(final_candidates=[] if empty_final else [new])
+
+    assert repository.snapshot["status"] == "completed"
+    assert [item["url"] for item in repository.snapshot["candidates"]] == ([] if empty_final else [new["url"]])
+    assert (repository.snapshot["best_candidate_id"] is None) is empty_final
+
+
+def test_completion_preserves_published_card_order_when_later_result_ranks_higher():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    first = {"url": "https://images.example/first.jpg", "source": "discogs", "score": 0.5}
+    better = {"url": "https://images.example/better.jpg", "source": "apple", "score": 1.0}
+    assert publisher.publish_candidates([first])
+    assert publisher.publish_candidates([better])
+    urls = [item["url"] for item in repository.snapshot["candidates"]]
+    assert urls == [first["url"], better["url"]]
+
+    assert publisher.complete(final_candidates=[better, first])
+
+    assert [item["url"] for item in repository.snapshot["candidates"]] == urls
+    assert repository.snapshot["best_candidate_id"] == repository.snapshot["candidates"][1]["id"]
 
 
 class FakeSnapshotRepository:
@@ -67,7 +101,7 @@ class FakeSnapshotRepository:
         }
         return True
 
-    def finish_generation(self, *, album_id, search_generation, status):
+    def finish_generation(self, *, album_id, search_generation, status, candidates=None, best_candidate_id=None):
         self.finish_attempts += 1
         if (
             self.snapshot is None
@@ -76,6 +110,9 @@ class FakeSnapshotRepository:
         ):
             return False
         self.snapshot["status"] = status
+        if candidates is not None:
+            self.snapshot["candidates"] = deepcopy(candidates)
+            self.snapshot["best_candidate_id"] = best_candidate_id
         self.snapshot["updated_at"] = "2026-08-03T12:00:02+00:00"
         self.snapshot["finished_at"] = "2026-08-03T12:00:02+00:00"
         return True
@@ -381,6 +418,64 @@ def test_publish_caps_the_ranked_snapshot_at_24_candidates():
     )
     assert stored[0]["url"] == "https://images.example/29.jpg"
     assert stored[-1]["url"] == "https://images.example/6.jpg"
+
+
+def test_progressive_publication_does_not_evict_a_full_page_of_visible_candidates():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    original = [raw_candidate(f"https://images.example/old-{index}.jpg", score=0.5) for index in range(24)]
+    assert publisher.publish_candidates(original)
+    visible_ids = [item["id"] for item in repository.snapshot["candidates"]]
+
+    assert publisher.publish_candidates([raw_candidate("https://images.example/new-best.jpg", score=1.0)])
+
+    stored = repository.snapshot["candidates"]
+    assert [item["id"] for item in stored[:24]] == visible_ids
+    assert stored[24]["url"] == "https://images.example/new-best.jpg"
+    assert repository.snapshot["best_candidate_id"] == stored[24]["id"]
+
+
+def test_retry_seed_preserves_visible_order_and_more_than_24_candidates():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    original = [raw_candidate(f"https://images.example/old-{index}.jpg", score=index / 100) for index in range(80)]
+
+    assert publisher.publish_candidates(original, preserve_order=True)
+
+    assert [item["url"] for item in repository.snapshot["candidates"]] == [item["url"] for item in original]
+    assert publisher.publish_candidates([raw_candidate("https://images.example/new-best.jpg", score=1.0)])
+    stored = repository.snapshot["candidates"]
+    assert [item["url"] for item in stored[:80]] == [item["url"] for item in original]
+    assert stored[80]["url"] == "https://images.example/new-best.jpg"
+
+
+def test_full_progressive_snapshot_keeps_visible_cards_when_another_candidate_arrives():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    original = [raw_candidate(f"https://images.example/old-{index}.jpg", score=0.5) for index in range(64)]
+    assert publisher.publish_candidates(original[:24])
+    assert publisher.publish_candidates(original[24:])
+    visible_ids = [item["id"] for item in repository.snapshot["candidates"]]
+
+    assert publisher.publish_candidates([raw_candidate("https://images.example/new-best.jpg", score=1.0)])
+
+    assert [item["id"] for item in repository.snapshot["candidates"]] == visible_ids
+    assert repository.snapshot["best_candidate_id"] in visible_ids
+
+
+def test_completion_keeps_every_visible_candidate_present_in_final_results():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    old = [raw_candidate(f"https://images.example/old-{index}.jpg", score=0.2) for index in range(80)]
+    current = [raw_candidate(f"https://images.example/current-{index}.jpg", score=0.8) for index in range(30)]
+    assert publisher.publish_candidates(old, preserve_order=True)
+    assert publisher.publish_candidates(current)
+    visible_current_ids = [item["id"] for item in repository.snapshot["candidates"][80:]]
+
+    assert publisher.complete(final_candidates=current)
+
+    assert [item["id"] for item in repository.snapshot["candidates"]] == visible_current_ids
+    assert repository.snapshot["status"] == "completed"
 
 
 def test_first_valid_candidate_starts_replacement_but_invalid_stage_preserves_old_snapshot():

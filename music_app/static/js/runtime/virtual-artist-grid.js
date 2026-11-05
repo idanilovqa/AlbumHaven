@@ -113,6 +113,18 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function refreshRetainedAlbumCardActions(retainedCard, nextCard) {
+  const freshAction = nextCard.querySelector?.('[data-open-tracklist="1"]');
+  if (!freshAction) return;
+  retainedCard.querySelectorAll?.('[data-open-tracklist="1"]').forEach((action) => {
+    ['data-album', 'data-album-key', 'data-album-version-key'].forEach((name) => {
+      const value = freshAction.getAttribute(name);
+      if (value === null) action.removeAttribute(name);
+      else action.setAttribute(name, value);
+    });
+  });
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -1993,6 +2005,7 @@ class VirtualArtistGrid {
         return;
       }
       const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
+      refreshRetainedAlbumCardActions(retainedCard, nextCard);
       if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
         const retainedCover = retainedCard.querySelector?.('.cover');
         const nextCover = nextCard.querySelector?.('.cover');
@@ -2073,6 +2086,7 @@ class VirtualArtistGrid {
           existingCard.innerHTML = nextCard.innerHTML;
         }
       }
+      refreshRetainedAlbumCardActions(existingCard, nextCard);
       nextCard.replaceWith(existingCard);
       existingCardsByIdentity.delete(identity);
     });

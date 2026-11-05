@@ -785,6 +785,33 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
   });
 });
 
+test('FTC-SEARCH-NAV-003 finds accented artist names through visible search and direct links', { tag: '@area:gallery-search' }, async ({
+  galleryActions,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  const artist = 'Onségen Ensemble';
+  await galleryActions.goto('/');
+  await galleryActions.waitForGalleryReady();
+  for (const query of ['Onsegen', 'Onségen', 'Onse\u0301gen']) {
+    await stepLogger.step(`Search ${query} and retain the accented artist display name`, async () => {
+      await searchToolbarActions.search(query, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(query);
+      await navigationPanelActions.waitForSidebarArtistNames([artist]);
+      await navigationPanelActions.waitForSidebarSelection(artist);
+      await galleryActions.waitForSelectedArtistGallery(artist, { queryValue: query });
+      expect(await galleryActions.readAlbumNamesByHeading(artist)).toEqual(['Awalaï']);
+    });
+    await stepLogger.step(`Reload ${query} directly with the same artist and album`, async () => {
+      await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(query)}`);
+      await navigationPanelActions.waitForSidebarArtistNames([artist]);
+      await galleryActions.waitForSelectedArtistGallery(artist, { queryValue: query });
+      expect(await galleryActions.readAlbumNamesByHeading(artist)).toEqual(['Awalaï']);
+    });
+  }
+});
+
 test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,

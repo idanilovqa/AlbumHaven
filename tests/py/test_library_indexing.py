@@ -354,6 +354,7 @@ def test_scan_library_file_cache_reuses_unchanged_cached_entry(tmp_path: Path, m
         "size": stat.st_size,
         "cover_path": str(cover_path),
         "remote_cover_url": "https://example.test/cover.jpg",
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
     library_state = {"file_cache": {str(track_path): existing_entry}}
@@ -718,6 +719,7 @@ def test_scan_library_file_cache_reuses_existing_cover_validation_for_multiple_c
         "mtime": stat.st_mtime,
         "size": stat.st_size,
         "cover_path": str(cover_path),
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
 
@@ -787,6 +789,7 @@ def test_incremental_scan_reuses_unchanged_persisted_cover_validation(tmp_path: 
         "cover_validation_path": str(cover_path),
         "cover_validation_mtime_ns": cover_stat.st_mtime_ns,
         "cover_validation_size": cover_stat.st_size,
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
 
@@ -992,6 +995,7 @@ def test_cache_aware_incremental_scan_skips_unchanged_partial_album_publication(
             "mtime": stat.st_mtime,
             "size": stat.st_size,
             "cover_path": None,
+            "compilation_tag": None,
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         }
 
@@ -1146,6 +1150,7 @@ def test_scan_library_file_cache_recovers_unchanged_v2_unknown_album_metadata(
         }
         if complete:
             entry["metadata_schema_version"] = FILE_METADATA_SCHEMA_VERSION
+            entry["compilation_tag"] = None
             entry["release_date"] = None
         return entry
 
@@ -1233,6 +1238,7 @@ def test_force_scan_preserves_persisted_album_compilation_classification(
         "size": 0,
         "cover_path": None,
         "is_compilation": False,
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
     monkeypatch.setattr(
@@ -1262,6 +1268,52 @@ def test_force_scan_preserves_persisted_album_compilation_classification(
     )
 
     assert updated_file_cache[str(track_path)]["is_compilation"] is False
+
+
+def test_cached_album_classification_cannot_mask_unread_physical_compilation_tag(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from mutagen.id3 import TCMP
+    from music_app.services import metadata
+    from music_app.services.library import build_albums_from_file_cache
+
+    folder = tmp_path / "Rain Man"
+    folder.mkdir()
+    previous = {}
+    tags_by_path = {}
+    for number, artist in enumerate(["Belle Stars", "Watcher Compilation Performer"], start=1):
+        path = folder / f"{number}.mp3"
+        path.write_bytes(b"synthetic soundtrack")
+        stat = path.stat()
+        previous[str(path)] = {
+            "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
+            "album": "Rain Man", "album_artist": "Various Artists", "artist": artist,
+            "title": f"Track {number}", "track_number": number, "year": 1988,
+            "release_date": None, "is_compilation": False,
+            "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        }
+        tags_by_path[str(path)] = {
+            "TALB": ["Rain Man"], "TPE2": ["Various Artists"], "TPE1": [artist],
+            "TIT2": [f"Track {number}"], "TRCK": [str(number)], "TDRC": ["1988"],
+            "TCMP": TCMP(encoding=3, text=["1"]),
+        }
+    monkeypatch.setattr(metadata, "MutagenFile", lambda path: SimpleNamespace(tags=tags_by_path[str(path)]))
+    reads = []
+    def read_metadata(path):
+        reads.append(str(path))
+        return metadata.read_metadata_for_file(path)
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
+    monkeypatch.setattr(library_indexing, "find_cover_for_track_folder", lambda *_args, **_kwargs: None)
+
+    updated, _ = library_indexing.scan_library_file_cache(
+        {"file_cache": previous}, roots=[tmp_path], supported_extensions={".mp3"},
+        image_extensions={".jpg"}, exception_overrides={}, use_existing_cache=True,
+    )
+    assert sorted(reads) == sorted(previous)
+    assert all(entry["compilation_tag"] is True for entry in updated.values())
+    albums = build_albums_from_file_cache(updated)
+    assert len(albums) == 1
+    assert albums[0].album_artist == "Various Artists"
+    assert albums[0].is_compilation is True
 
 
 def test_partial_scan_publish_schedule_keeps_first_browse_and_bounds_rebuilds():
@@ -1767,6 +1819,7 @@ def test_cache_aware_scan_resolves_root_provenance_once_per_track_folder(
                 "mtime": 1.0,
                 "size": album_index + 1,
                 "cover_path": None,
+                "compilation_tag": None,
                 "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
             }
             existing_file_cache[str(path)] = entry

@@ -112,6 +112,10 @@ enum class NativePlaybackState(val wire: String) {
     PAUSED("paused"),
     ENDED("ended"),
     ERROR("error"),
+    ;
+
+    /** Playback is wanted: starting, waiting for audio or heard. */
+    val wanted: Boolean get() = this == LOADING || this == BUFFERING || this == PLAYING
 }
 
 /** Path-free state reported by the handshake, `playback.snapshot` and every event. */
@@ -1106,6 +1110,7 @@ class NativePlaybackController(
             return
         }
         state = next
+        if (!next.wanted) startGate.stopped(next)
         emit { NativePlaybackEvent.State(it, source) }
     }
 

@@ -99,7 +99,7 @@ class PlaybackService : MediaLibraryService() {
 
     /** Whether a document negotiated the bridge, so it refreshes the references it handed over. */
     private var documentAttached = false
-    private val focusPolicy = AudioFocusPolicy(::requestFocus)
+    private val focusPolicy = AudioFocusPolicy(::requestFocus) { audioManager.abandonAudioFocusRequest(focusRequest) }
     private val port = ControllerPlaybackPort({ controller }) { attached -> documentAttached = attached }
 
     // One executor per controller lifetime, so a retired controller's release reaches its own origin.
@@ -290,6 +290,7 @@ class PlaybackService : MediaLibraryService() {
         pendingReplacement?.run()
         artwork.release()
         resumeIo.shutdownNow()
+        focusPolicy.stopped(NativePlaybackState.IDLE)
         apply(focusPolicy.onState(NativePlaybackState.IDLE))
         main.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -476,7 +477,6 @@ class PlaybackService : MediaLibraryService() {
     private fun apply(effects: List<FocusEffect>) {
         effects.forEach { effect ->
             when (effect) {
-                FocusEffect.Abandon -> audioManager.abandonAudioFocusRequest(focusRequest)
                 FocusEffect.Pause -> controller.interrupt()
                 FocusEffect.Resume -> controller.play(controller.snapshot.queueRevision, CommandSource.SYSTEM)
                 is FocusEffect.WatchNoisy -> watchNoisy(effect.enabled)

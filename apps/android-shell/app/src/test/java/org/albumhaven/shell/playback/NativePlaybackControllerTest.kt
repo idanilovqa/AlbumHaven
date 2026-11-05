@@ -80,11 +80,14 @@ class ControllerHarness(
     /** Android refuses every new output, as `AudioTrack.Builder.build()` can. */
     var outputUnavailable = false
 
+    /** False keeps a new socket connecting until the test opens it through [listener]. */
+    var openOnConnect = true
+
     val controller = NativePlaybackController(
         transports = { socketListener ->
             connects += 1
             listener = socketListener
-            socketListener.onOpen()
+            if (openOnConnect) socketListener.onOpen()
             object : PcmTransport {
                 override fun send(text: String) = server.receive(text)
                 override fun close() {

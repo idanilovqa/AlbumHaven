@@ -85,8 +85,7 @@ object SessionMapping {
             NativePlaybackState.ENDED -> SessionPlaybackState.ENDED
             NativePlaybackState.IDLE, NativePlaybackState.ERROR -> SessionPlaybackState.IDLE
         }
-        val playWhenReady = snapshot.state == NativePlaybackState.LOADING ||
-            snapshot.state == NativePlaybackState.BUFFERING || snapshot.state == NativePlaybackState.PLAYING
+        val playWhenReady = snapshot.state.wanted
         val controls = if (snapshot.state == NativePlaybackState.IDLE) {
             emptySet()
         } else {

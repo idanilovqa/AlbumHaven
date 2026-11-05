@@ -82,10 +82,11 @@ for (const mobile of [true, false]) {
     vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
     const panel = element();
     panel.contains = target => target === panel;
+    panel.matches = selector => selector.includes('.shell-navigation-rail');
     let closes = 0;
     context.activateTriggerSurface(panel, () => { closes += 1; panel.hidden = true; });
     const dismissal = createDismissal(() => context.getDismissibleForegroundSurface());
-    const albumCard = { className: 'album-card' };
+    const albumCard = { className: 'album-card', closest: selector => (selector === '#albums-scroll' ? {} : null) };
     const reachedAlbum = [];
     for (const type of ['pointerdown', 'pointerup', 'click']) {
       let stopped = false;
@@ -101,3 +102,20 @@ for (const mobile of [true, false]) {
     }
   });
 }
+
+test('mobile: an always-visible surface such as the view switcher never swallows gallery swipes', () => {
+  const context = vm.createContext({ window: {}, usesMobilePageLayout: () => true });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
+  const viewCluster = element();
+  viewCluster.contains = target => target === viewCluster;
+  viewCluster.matches = () => false;
+  context.activateTriggerSurface(viewCluster, () => {});
+  const dismissal = createDismissal(() => context.getDismissibleForegroundSurface());
+  const albumCard = { closest: selector => (selector === '#albums-scroll' ? {} : null) };
+  for (const type of ['pointerdown', 'pointerup', 'click']) {
+    let stopped = false;
+    dismissal[type]({ target: albumCard, pointerId: 1, isPrimary: true, button: 0, detail: 1, clientX: 5, clientY: 5,
+      preventDefault() {}, stopImmediatePropagation() { stopped = true; } });
+    assert.equal(stopped, false, type);
+  }
+});

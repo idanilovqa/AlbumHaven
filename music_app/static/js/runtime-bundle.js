@@ -6421,6 +6421,7 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
 
 // The existing surface/modal owners remain authoritative. This adapter only
 // reserves a real backdrop gesture before any target or document handler sees it.
+const MOBILE_DISMISSIBLE_SURFACE_SELECTOR = '.shell-navigation-rail, .mobile-settings-drawer, .artist-family-panel, .gallery-anchored-menu';
 function getDismissibleForegroundSurface() {
   const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
   const isBackdrop = target => Boolean(modal && target === modal)
@@ -6430,12 +6431,18 @@ function getDismissibleForegroundSurface() {
   const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
   if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
       || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
-    // On mobile a tap outside an open side panel or dropdown only closes it;
-    // it must never also select or frame the gallery album underneath.
-    const mobileOutsideTapDismisses = !modal && typeof usesMobilePageLayout === 'function'
-      && usesMobilePageLayout();
+    // On mobile a gallery tap outside an open side panel or dropdown only
+    // closes it; it must never also select or frame the album underneath.
+    // Always-visible surfaces (such as the view switcher) keep normal taps.
+    const mobileGalleryTapDismisses = !modal && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+      && Boolean(owner.surface.matches?.(MOBILE_DISMISSIBLE_SURFACE_SELECTOR)
+        || owner.surface.classList?.contains('trigger-anchor-surface'));
     return { surface: owner.surface, anchor,
-      isBackdrop: mobileOutsideTapDismisses ? () => true : isBackdrop, dismiss() {
+      isBackdrop: mobileGalleryTapDismisses
+        ? target => isBackdrop(target) || Boolean(target?.closest?.('#albums-scroll'))
+        : isBackdrop,
+      dismiss() {
       if (activeTriggerSurface !== owner) return;
       owner.close();
       if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });

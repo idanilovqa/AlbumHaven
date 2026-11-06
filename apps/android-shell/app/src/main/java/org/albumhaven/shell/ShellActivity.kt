@@ -42,6 +42,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.Lifecycle
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -343,10 +344,16 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
         parent.addView(webView, index, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         configureWebView()
+        documentGone()
+    }
+
+    /** The document goes with its bridge, its unanswered messages and the wait for its handshake. */
+    private fun documentGone() {
         earlyBridgeMessages.clear()
         if (::bridge.isInitialized) bridge.reset()
         handshakes.pageStarted()
         mainHandler.removeCallbacks(handshakeTimeout)
+        sandboxWarning.isVisible = false
     }
 
     private fun originHost(): String = siteOrigin.toUri().host.orEmpty()
@@ -359,6 +366,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            // The native screens end above it instead, so the chooser's field stays in view as it is typed in.
+            val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            view.findViewById<View>(R.id.recovery_root).updateLayoutParams<FrameLayout.LayoutParams> {
+                bottomMargin = (keyboard - bars.bottom).coerceAtLeast(0)
+            }
             WindowInsetsCompat.CONSUMED
         }
     }
@@ -471,13 +483,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // The same origin's next document re-attaches to the running queue from its handshake.
-            earlyBridgeMessages.clear()
-            if (::bridge.isInitialized) bridge.reset()
+            documentGone()
             incompatibleWeb = false
             updateRequired = null
-            handshakes.pageStarted()
-            mainHandler.removeCallbacks(handshakeTimeout)
-            sandboxWarning.isVisible = false
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {

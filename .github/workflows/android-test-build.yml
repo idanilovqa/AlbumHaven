@@ -17,20 +17,22 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: android-test-build-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   dispatch:
     name: Request Sandbox Promotion
     # Forks never qualify: their heads are not on a branch here and their token cannot dispatch.
-    # Adding any other label to a labeled pull request requests nothing.
+    # Only the owner's own label or push requests a build; adding any other label requests nothing.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.sender.login == github.repository_owner
       && github.event.pull_request.state == 'open'
       && (github.event.action == 'labeled' && github.event.label.name == 'test_build'
       || github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'test_build'))
+    # On the job, not the workflow: a run whose job is skipped (another label) never joins the
+    # group, so it cannot cancel the request of the push before it.
+    concurrency:
+      group: android-test-build-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

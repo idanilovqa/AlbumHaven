@@ -185,16 +185,16 @@
 .artist-info-overlay h2 { margin: 4px 0; font-size: 1.1rem; }
 .artist-info-overlay__image { width: 112px; height: 112px; display: grid; place-items: center; flex: 0 0 auto; object-fit: cover; object-position: center top; border-radius: 11px; background: var(--panel-2, var(--app-active, #1b3047)); }
 .artist-info-overlay__body { max-height: 300px; overflow: auto; padding: 0 16px 16px; line-height: 1.5; user-select: text; }
-.artist-info-overlay__body [data-artist-info-summary] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 5; }
-.artist-info-overlay__body [data-artist-info-summary].is-expanded { display: block; overflow: visible; }
-/* Service links stack on the left under the text; the panel's own actions sit on the right. */
-.artist-info-overlay__links { display: flex; align-items: flex-start; gap: 14px; }
-.artist-info-overlay__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-left: auto; }
-.artist-info-overlay__links :is(a:not(.ui-external-link), button) { border: 0; background: transparent; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); padding: 0; }
-:root .artist-info-overlay__links :is(a:not(.ui-external-link), button):is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: transparent !important; box-shadow: none; }
-.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]) { cursor: pointer; text-underline-offset: .2em; }
-.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) { text-decoration: underline; }
-.artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]):focus-visible { text-decoration-thickness: 2px; }
+/* A long biography shows five lines, ending in "… Read more" over a fade in the panel colour; expanded, it ends in "Read less". */
+.artist-info-overlay__body [data-artist-info-summary][data-artist-info-long]:not(.is-expanded) { position: relative; max-height: 7.5em; overflow: hidden; }
+.artist-info-overlay__body [data-artist-info-long]:not(.is-expanded) .artist-info-overlay__read-more { position: absolute; right: 0; bottom: 0; padding-left: 2.5em; --artist-info-read-more-background: linear-gradient(to right, transparent, var(--panel) 2em); }
+.artist-info-overlay__body [data-artist-info-long]:not(.is-expanded) .artist-info-overlay__read-more::before { content: "…"; display: inline-block; margin-right: .3em; color: var(--text); }
+.artist-info-overlay__read-more { border: 0; padding: 0; font: inherit; line-height: inherit; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); background: var(--artist-info-read-more-background, transparent); }
+:root .artist-info-overlay__read-more:is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: var(--artist-info-read-more-background, transparent) !important; box-shadow: none; }
+.artist-info-overlay__read-more:not(:disabled) { cursor: pointer; text-underline-offset: .2em; }
+.artist-info-overlay__read-more:not(:disabled):is(:hover, :focus-visible) { text-decoration: underline; }
+.artist-info-overlay__read-more:not(:disabled):focus-visible { text-decoration-thickness: 2px; }
+.artist-info-overlay__read-more:disabled { opacity: .45; cursor: default; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
@@ -221,7 +221,6 @@
 .artist-info-overlay__body { max-height: min(360px, calc(100dvh - 330px)); }
 .artist-info-overlay__body [data-artist-info-summary] { white-space: pre-line; }
 .artist-info-overlay__links { padding: 8px 0 14px; }
-.artist-info-overlay__links [aria-disabled="true"] { opacity: .45; cursor: default; }
 .artist-info-overlay__source { color: var(--muted); font-size: .7rem; }
 @media (max-width: 480px) {
   .artist-info-overlay__image { width: 132px; height: 132px; flex-basis: 132px; }

@@ -195,8 +195,8 @@ white-space: nowrap;
 }
 .ui-metadata-pill--genre { background: #11202a; border: 1px solid #4199c3; color: #8bd9ff; }
 
-/* External service links: a small service icon and plain text, listed one per line like MusicBrainz's own links list. */
-.ui-external-link-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+/* External service links: a small service icon and plain text, in one left-aligned row. */
+.ui-external-link-list { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px 16px; }
 .ui-external-link {
 display: inline-flex;
 align-items: center;

@@ -27,6 +27,10 @@ const galleryMainCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'),
   'utf8',
 );
+const mobileLayoutCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'mobile-layout.css'),
+  'utf8',
+);
 const buttonComponentCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'button-component.css'),
   'utf8',
@@ -560,7 +564,7 @@ test('artist info triggers use a larger plain information glyph with neutral env
   assert.match(markup, /gallery-info-button__glyph/);
   assert.doesNotMatch(markup, /ⓘ/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay\s*\{[^}]*background:\s*var\(--panel\);[^}]*color:\s*var\(--text\);/);
-  assert.match(galleryMainCssSource, /\.artist-info-overlay__links :is\(a:not\(\.ui-external-link\), button\)\s*\{[^}]*color:\s*var\(--appearance-accent,/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__read-more\s*\{[^}]*color:\s*var\(--appearance-accent,/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
@@ -1961,11 +1965,37 @@ test('artist information links MusicBrainz and Discogs only for an accepted matc
     'only the public MusicBrainz and Discogs artist pages are linked');
 });
 
-test('the artist panel leaves external service links to the shared component', () => {
+test('the artist panel ends its text with one Read more and lists service links below it', () => {
   assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)/);
   assert.doesNotMatch(galleryMainCssSource, /\.ui-external-link[^,{]*\{/, 'no page-local external link styling');
-  assert.match(galleryMainCssSource, /\.artist-info-overlay__actions\s*\{[^}]*margin-left:\s*auto/, 'panel actions sit on the right');
-  assert.match(galleryMainInteractionsSource,
-    /<p data-artist-info-summary>\$\{escapeHtml\(summary\)\}<\/p><div class="artist-info-overlay__links">\$\{buildGalleryArtistExternalLinksHtml\(group\.artist_musicbrainz, artist\)\}<div class="artist-info-overlay__actions">[^`]*data-artist-info-full-page aria-disabled="true" disabled[^`]*Full page<\/button><\/div><\/div>/,
-    'service links come directly under the summary, and the disabled Full page action sits in the right-hand actions');
+  assert.doesNotMatch(galleryMainInteractionsSource + galleryMainCssSource, /artist-info-overlay__actions|data-artist-info-full-page|Full page/,
+    'Full page and the right-side actions group are gone');
+
+  const builder = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
+  assert.match(builder, /<p data-artist-info-summary\$\{canReadMore \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{readMore\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,
+    'Read more is the last item of the text, and the service links follow below it');
+  const readMoreButtons = builder.match(/<button type="button" class="artist-info-overlay__read-more"[^>]*>Read more<\/button>/g) || [];
+  assert.equal(readMoreButtons.length, 2, 'one control with an enabled and a disabled form');
+  assert.match(readMoreButtons[0], /data-artist-info-read-more aria-expanded="false"/, 'a long biography can expand');
+  assert.match(readMoreButtons[1], /aria-disabled="true" disabled title="Artist pages are not available yet"/, 'elsewhere it stays the disabled placeholder');
+  assert.doesNotMatch(readMoreButtons[1], /data-artist-info-read-more/);
+  assert.match(builder, /scrollHeight <= summaryElement\.clientHeight \+ 1\) summaryElement\.removeAttribute\('data-artist-info-long'\)/,
+    'text that fits in five lines gets no clamp or fade');
+
+  const clamp = galleryMainCssSource.match(/\.artist-info-overlay__body \[data-artist-info-summary\]\[data-artist-info-long\]:not\(\.is-expanded\)\s*\{([^}]*)\}/);
+  assert.ok(clamp, 'only a collapsed long biography is clamped');
+  assert.match(clamp[1], /max-height:\s*7\.5em;\s*overflow:\s*hidden/, 'five 1.5-line-height lines');
+  assert.match(galleryMainCssSource, /\[data-artist-info-long\]:not\(\.is-expanded\) \.artist-info-overlay__read-more\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*0;[^}]*--artist-info-read-more-background:\s*linear-gradient\(to right, transparent, var\(--panel\) 2em\)/,
+    'the clamped Read more sits at the end of line five over a fade in the panel colour of either theme');
+  assert.match(galleryMainCssSource, /\[data-artist-info-long\]:not\(\.is-expanded\) \.artist-info-overlay__read-more::before\s*\{\s*content:\s*"…";\s*display:\s*inline-block/,
+    'the ellipsis stays outside the focus underline');
+  assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /-webkit-line-clamp/, 'one clamp mechanism, on desktop and mobile');
+  assert.match(galleryMainCssSource, /:root \.artist-info-overlay__read-more:is\(:hover, :focus-visible, :active\)\s*\{[^}]*background:\s*var\(--artist-info-read-more-background, transparent\) !important/,
+    'hover and focus keep the fade');
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__read-more:not\(:disabled\):focus-visible\s*\{\s*text-decoration-thickness:\s*2px/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__read-more:disabled\s*\{\s*opacity:\s*\.45;\s*cursor:\s*default/);
+
+  const toggle = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf("const readMore = event.target.closest?.('[data-artist-info-read-more]')"));
+  assert.match(toggle, /readMore\.textContent = expanded \? 'Read more' : 'Read less'/);
+  assert.match(toggle, /querySelector\('\[data-artist-info-summary\]'\)\?\.classList\.toggle\('is-expanded', !expanded\)/);
 });

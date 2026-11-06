@@ -211,7 +211,9 @@ test('external service link CSS uses panel text, a non-colour cue and the real s
   assert.match(rule('.ui-external-link:focus-visible'), /text-decoration:\s*underline;\s*text-decoration-thickness:\s*2px/,
     'keyboard focus shows a thicker underline');
   assert.match(rule('.ui-external-link'), /outline:\s*none/, 'no outline box in any state, including the browser focus ring');
-  assert.match(rule('.ui-external-link-list'), /flex-direction:\s*column;\s*align-items:\s*flex-start/, 'links stack one per line, left-aligned');
+  assert.match(rule('.ui-external-link-list'), /display:\s*flex;\s*flex-wrap:\s*wrap;\s*align-items:\s*center;\s*justify-content:\s*flex-start;\s*gap:\s*8px 16px/,
+    'links share one left-aligned row with a normal inline gap');
+  assert.doesNotMatch(rule('.ui-external-link-list'), /flex-direction:\s*column/);
 
   const icon = rule('.ui-external-link__icon');
   assert.match(icon, /width:\s*16px;/);

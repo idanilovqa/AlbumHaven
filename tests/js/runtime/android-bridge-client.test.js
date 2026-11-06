@@ -167,7 +167,7 @@ test('stable card shows the version with no selector or native update action', (
   const html = api.buildAndroidSettingsHtml({ variant: 'stable', versionName: '0.9.50', versionCode: 1, capabilities: [] });
   assert.match(html, /Stable · 0\.9\.50 \(1\)/);
   assert.match(html, /<badge neutral>Stable<\/badge>/);
-  assert.doesNotMatch(html, /Sandbox server|Check for updates/);
+  assert.doesNotMatch(html, /Sandbox server|Check for update/);
 });
 
 test('sandbox card shows the approved selector and notice without ownership wording', async () => {

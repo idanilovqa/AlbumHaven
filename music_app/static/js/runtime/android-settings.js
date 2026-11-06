@@ -1,4 +1,4 @@
-// Settings > Android app. Rendered in the existing Settings shell, only inside the APK.
+// Settings > Android app, and the Update row of the cogwheel menu. Both show only inside the APK.
 const ANDROID_SANDBOX_SWITCH_NOTICE = 'Changing sandbox stops playback, clears the current queue, and loads the selected server.';
 const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
   value: String(index + 1), label: `sandbox${index + 1}`,
@@ -10,100 +10,65 @@ const ANDROID_SANDBOX_CAPABILITY = 'sandbox.select.v1';
 // `update` is the shell's latest `updates.state` payload; null until the handshake reports one.
 const androidSettings = { status: null, switching: false, update: null };
 
-function formatAndroidCheckedAgo(checkedAt, now = Date.now()) {
-  const minutes = Math.floor(Math.max(0, now - checkedAt) / 60000);
-  if (minutes < 1) return 'just now';
-  const [count, unit] = minutes < 60 ? [minutes, 'minute']
-    : minutes < 1440 ? [Math.floor(minutes / 60), 'hour'] : [Math.floor(minutes / 1440), 'day'];
-  return `${count} ${unit}${count === 1 ? '' : 's'} ago`;
-}
-
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
 }
 
-// [severity, title, message, button label, bridge action or null while busy, progress].
-function androidUpdateView(info, update) {
-  const version = androidVersionLabel(info);
-  const name = update.versionName;
-  const checked = update.checkedAt ? formatAndroidCheckedAgo(update.checkedAt) : null;
-  const verifiedMessage = 'Signature and file verified. Android will ask you to confirm installation.';
+// The cogwheel menu's Update row for the shell's update state, or null while it has none to show:
+// [label, bridge action or null while busy, the action named below the label].
+function androidUpdateMenuView() {
+  const update = androidSettings.update;
+  if (!update || !hasAndroidCapability(ANDROID_UPDATES_CAPABILITY)) return null;
   switch (update.state) {
-    case 'checking': return ['info', 'Checking for updates…', 'Keep this screen open.', 'Checking…', null];
-    case 'upToDate': return ['success', 'No updates available', `${version} · Checked ${checked}`, 'Check again', 'check'];
-    case 'available': return ['warning', `Album Haven ${name} is available.`, 'Download starts only when you ask.', 'Download update', 'download'];
-    case 'downloading': return ['info', `Downloading update · ${update.progress}%`,
-      'Android will confirm installation after verification.', 'Downloading…', null, update.progress];
-    case 'verifying': return ['info', 'Verifying update…', 'Android will confirm installation after verification.', 'Verifying…', null];
-    case 'ready': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Update', 'install'];
+    case 'checking': return ['Checking…', null];
+    case 'upToDate': return ['No updates available', 'check'];
+    case 'available': return ['Update available', 'download', 'Download update'];
+    case 'downloading': return [`Downloading ${update.progress}%`, null];
+    case 'verifying': return ['Verifying update…', null];
+    case 'ready': return ['Update', 'install'];
     // Pressing it again shows a confirmation left unanswered; an approved install keeps installing.
-    case 'installing': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Installing…', 'install'];
-    case 'authorization': return ['warning', 'Allow Album Haven to install updates.',
-      'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'];
+    case 'installing': return ['Installing…', 'install'];
+    case 'authorization': return ['Open install settings', 'install'];
     // Every failure reads the same; the shell logs its error and reason. A failure that kept its
     // update downloads it again, as the shell's own retry does; any other checks again.
-    case 'failed': return ['error', 'Update failed. Try again', '', 'Retry', name ? 'download' : 'check'];
-    default: return ['info', 'Android app', checked ? `${version} · Last checked ${checked}` : version, 'Check for updates', 'check'];
+    case 'failed': return ['Update failed. Try again', update.versionName ? 'download' : 'check'];
+    default: return ['Check for update', 'check'];
   }
 }
 
-function buildAndroidUpdateHtml(info) {
-  if (!hasAndroidCapability(ANDROID_UPDATES_CAPABILITY) || !androidSettings.update) {
-    return buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: androidVersionLabel(info), role: 'status' });
+// The row is changed in place, so an open menu keeps its focus while progress arrives. A menu
+// item is not a live region: screen readers read the new state when they reach the row.
+function renderAndroidUpdateMenuItem() {
+  const item = document.querySelector('[data-android-update-menu-item]');
+  if (!item) return;
+  const view = androidUpdateMenuView();
+  item.hidden = !view;
+  if (!view) return;
+  const [label, action, detail = ''] = view;
+  item.querySelector('[data-android-update-label]').textContent = label;
+  const detailElement = item.querySelector('[data-android-update-detail]');
+  detailElement.textContent = detail;
+  detailElement.hidden = !detail;
+  if (action) {
+    item.setAttribute('data-android-update-action', action);
+    item.removeAttribute('aria-disabled');
+  } else {
+    item.removeAttribute('data-android-update-action');
+    item.setAttribute('aria-disabled', 'true');
   }
-  const [severity, title, message, label, action, progress] = androidUpdateView(info, androidSettings.update);
-  const actionsHtml = window.ButtonComponent.renderButton({
-    label, disabled: !action, attributes: action ? { 'data-android-update-action': action } : {},
-  });
-  return buildOnPageAlertHtml({
-    severity, title, message, actionsHtml, role: 'status',
-    progress: progress === undefined ? null : { value: progress, label: androidDownloadProgressLabel(progress) },
-  });
 }
 
-function androidDownloadProgressLabel(progress) {
-  return `Download progress: ${progress}%`;
-}
-
-// Progress arrives every half second. A running download changes only its bar and title in place,
-// with the status region busy, so screen readers are not handed every tick.
-function updateAndroidDownloadProgress(holder) {
-  const bar = holder.querySelector('progress');
-  if (androidSettings.update.state !== 'downloading' || !bar) return false;
-  const [, title, , , , progress] = androidUpdateView(androidBridge.info, androidSettings.update);
-  const label = androidDownloadProgressLabel(progress);
-  bar.value = progress;
-  bar.setAttribute('aria-label', label);
-  holder.querySelector('.on-page-alert__progress').firstChild.nodeValue = label;
-  holder.querySelector('.on-page-alert__title').textContent = title;
-  holder.querySelector('[role="status"]').setAttribute('aria-busy', 'true');
-  return true;
-}
-
-// Only the update alert is replaced, keeping focus on its button.
-function renderAndroidUpdate() {
-  const holder = document.querySelector('[data-android-update]');
-  if (!holder || !androidBridge.info) return;
-  if (updateAndroidDownloadProgress(holder)) return;
-  const focused = holder.contains(document.activeElement);
-  holder.innerHTML = buildAndroidUpdateHtml(androidBridge.info);
-  if (focused) holder.querySelector('button')?.focus();
-}
-
+// Renders even when `update` is not a state, so a pressed row is never left busy.
 function setAndroidUpdate(update) {
-  if (!update || typeof update !== 'object' || typeof update.state !== 'string') return;
-  androidSettings.update = update;
-  renderAndroidUpdate();
+  if (update && typeof update === 'object' && typeof update.state === 'string') androidSettings.update = update;
+  renderAndroidUpdateMenuItem();
 }
 
 async function requestAndroidUpdate(action) {
-  try {
-    const response = await sendAndroidBridgeCommand(`updates.${action}`);
-    setAndroidUpdate(response.updates);
-  } catch (_error) {
-    // Not applicable in the shell's current state; its next `updates.state` event shows that state.
-    renderAndroidUpdate();
-  }
+  // A refused command is not applicable in the shell's current state; its next `updates.state`
+  // event shows that state.
+  const response = await sendAndroidBridgeCommand(`updates.${action}`).catch(() => null);
+  setAndroidUpdate(response?.updates);
 }
 
 function androidSelectsSandbox(info) {
@@ -156,7 +121,8 @@ function buildAndroidSettingsHtml(info) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
       message: 'This app could not connect to the current site.', role: 'status' });
   }
-  return buildAndroidCardHtml(info, `<div data-android-update>${buildAndroidUpdateHtml(info)}</div>
+  // Updates run from the cogwheel menu; this card names the installed version.
+  return buildAndroidCardHtml(info, `${buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: androidVersionLabel(info), role: 'status' })}
     ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}`);
 }
 
@@ -164,6 +130,7 @@ function buildAndroidSettingsHtml(info) {
 // the sandbox it just connected to.
 function adoptAndroidSettingsHandshake(info) {
   if (info.updates) androidSettings.update = info.updates;
+  renderAndroidUpdateMenuItem();
   const connectedSlot = info.sandbox?.connectedSlot;
   if (connectedSlot) {
     androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
@@ -190,7 +157,7 @@ function renderUtilityAndroid() {
   connectAndroidSettings();
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
   const info = androidBridge.info;
-  const rows = [{ key: 'updates', label: 'App & updates' }];
+  const rows = [{ key: 'app', label: 'Android app' }];
   if (androidSelectsSandbox(info)) rows.push({ key: 'sandbox', label: 'Sandbox server' });
   els.count.textContent = String(rows.length);
   if (els.problemFilterButton) {
@@ -200,7 +167,7 @@ function renderUtilityAndroid() {
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   els.list.innerHTML = rows.map(row => window.NavigationTree.renderItem({
-    key: row.key, label: row.label, variant: 'panel', action: true, selected: row.key === 'updates',
+    key: row.key, label: row.label, variant: 'panel', action: true, selected: row.key === 'app',
     attributes: { 'data-utility-android-key': row.key },
   })).join('');
   els.detail.innerHTML = buildAndroidSettingsHtml(info);
@@ -225,10 +192,12 @@ async function selectAndroidSandbox(slot) {
 }
 
 function handleAndroidSettingsClick(event) {
+  // The menu closes on a press (account-menu.js) and rejects a busy row; the row stays busy until
+  // the shell answers, so reopening the menu cannot send the command twice.
   const updateAction = event.target.closest?.('[data-android-update-action]');
   if (updateAction) {
     event.preventDefault();
-    updateAction.disabled = true;
+    updateAction.setAttribute('aria-disabled', 'true');
     void requestAndroidUpdate(updateAction.getAttribute('data-android-update-action'));
     return;
   }

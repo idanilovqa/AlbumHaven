@@ -11,8 +11,44 @@ internal class ShellPage(private val policy: OriginPolicy) {
     var url: String? = null
         private set
 
+    /** The main-frame page that failed to load, which Retry loads again. */
+    private var failedUrl: String? = null
+
+    /** The renderer went while the Activity was stopped, so the page loads again when it starts. */
+    private var reopenOnStart = false
+
     fun visited(url: String?, origin: String) {
         this.url = sameOrigin(url, origin)
+    }
+
+    fun failed(url: String?, origin: String) {
+        failedUrl = sameOrigin(url, origin)
+    }
+
+    /** Retry loads the page that failed, not the site root. */
+    fun retryUrl(origin: String): String = failedUrl ?: url ?: origin
+
+    /**
+     * The renderer is gone, with the document it ran: returns the page to load again now when
+     * [started], or null to wait for [onStart], so nothing loads while the app is in the background.
+     */
+    fun rendererGone(started: Boolean, origin: String): String? {
+        reopenOnStart = !started
+        return if (started) url ?: origin else null
+    }
+
+    /** The page to load again as the Activity starts, if its renderer went while stopped. */
+    fun onStart(origin: String): String? {
+        if (!reopenOnStart) return null
+        reopenOnStart = false
+        return url ?: origin
+    }
+
+    /** Another origin keeps nothing of this one's pages. */
+    fun switched() {
+        url = null
+        failedUrl = null
+        reopenOnStart = false
     }
 
     /** The page a new Activity opens: the saved one when it belongs to [origin], else the site root. */

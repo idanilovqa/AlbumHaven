@@ -1,6 +1,7 @@
 package org.albumhaven.shell
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -9,6 +10,7 @@ import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -16,6 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -28,6 +31,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
@@ -37,6 +41,7 @@ import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.albumhaven.shell.playback.PlaybackServiceBinder
@@ -60,7 +65,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var selectedOrigin: String
     private lateinit var bridge: BridgeController
 
-    // The bridge and the page exist only once the playback service is bound, so the bridge always has a player.
+    // The bridge exists only once the playback service is bound, so it always has a player. The page
+    // loads meanwhile; its messages wait in earlyBridgeMessages.
     private var playback: PlaybackServiceHandle? = null
     private var playbackBound = false
     private val page = ShellPage(originPolicy)
@@ -91,7 +97,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             )
             service.setEventListener { event -> bridge.emit(event) }
             updater?.addListener(updateEvents)
-            if (!isDestroyed) loadSelectedOrigin()
+            earlyBridgeMessages.forEach { it() }
+            earlyBridgeMessages.clear()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -105,7 +112,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var incompatibleWeb = false
     private var sandboxProbePending = false
     private var clearHistoryOnNextPage = false
-    private var startUrl: String? = null
+
+    /** The loading document's bridge messages from before the playback service bound, answered once it has. */
+    private val earlyBridgeMessages = mutableListOf<() -> Unit>()
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -137,8 +146,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         onBackPressedDispatcher.addCallback(this) {
             if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
         }
-        startUrl = page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), selectedOrigin)
-        recovery.showLoading(originHost())
+        val startUrl = page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), selectedOrigin)
+        Log.i(TAG, "create saved_state=${savedInstanceState != null} saved_page=${page.url != null}")
+        logProcessExitReasons()
+        // The page loads while the playback service binds; the bridge answers it once bound.
+        open(startUrl)
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -146,9 +158,16 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         )
     }
 
-    private fun loadSelectedOrigin() {
-        webView.loadUrl(startUrl ?: selectedOrigin)
-        startUrl = null
+    /** Why this app's earlier processes ended, once per process, so a device session tells a crash from a kill. */
+    private fun logProcessExitReasons() {
+        if (exitReasonsLogged || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        exitReasonsLogged = true
+        val activityManager = getSystemService(ActivityManager::class.java)
+        ioExecutor.execute {
+            activityManager.getHistoricalProcessExitReasons(packageName, 0, EXIT_REASONS_LOGGED).forEach {
+                Log.i(TAG, "process_exit reason=${it.reason} status=${it.status} importance=${it.importance} at=${it.timestamp} process=${it.processName}")
+            }
+        }
     }
 
     /** Only the origin and the page's URL: never the WebView's state, which outgrows the transaction limit. */
@@ -156,6 +175,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_ORIGIN, selectedOrigin)
         outState.putString(STATE_URL, page.url)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        page.onStart(selectedOrigin)?.let(::open)
     }
 
     override fun onResume() {
@@ -222,7 +246,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                     // Playback, its claim and its queue stay with the origin that started them.
                     playback?.selectOrigin(origin)
                     clearHistoryOnNextPage = true
-                    reload()
+                    page.switched()
+                    open(origin)
                 }
             }
         }
@@ -255,11 +280,32 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         false
     }
 
-    private fun reload() {
+    /** Covers the page with the Connecting screen until [url] first draws. */
+    private fun open(url: String) {
         mainFrameFailed = false
         recovery.showLoading(originHost())
         webView.visibility = View.VISIBLE
-        webView.loadUrl(selectedOrigin)
+        webView.loadUrl(url)
+    }
+
+    /**
+     * A WebView whose renderer is gone must not be used again. Only the WebView is replaced; the
+     * playback service, its claim and the bridge stay, and the bridge waits for the next document.
+     */
+    private fun replaceWebView() {
+        val gone = webView
+        val parent = gone.parent as ViewGroup
+        val index = parent.indexOfChild(gone)
+        parent.removeView(gone)
+        gone.destroy()
+        webView = WebView(this).apply {
+            id = R.id.shell_web_view
+            setBackgroundColor(getColor(R.color.canvas))
+        }
+        parent.addView(webView, index, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        configureWebView()
+        earlyBridgeMessages.clear()
+        if (::bridge.isInitialized) bridge.reset()
     }
 
     private fun originHost(): String = selectedOrigin.toUri().host.orEmpty()
@@ -302,9 +348,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             BRIDGE_OBJECT,
             originPolicy.allowedOrigins,
         ) { _, message, sourceOrigin, isMainFrame, replyProxy ->
-            bridge.handle(message.data.orEmpty(), sourceOrigin.toString().removeSuffix("/"), isMainFrame) {
-                replyProxy.postMessage(it)
+            val deliver = {
+                bridge.handle(message.data.orEmpty(), sourceOrigin.toString().removeSuffix("/"), isMainFrame) {
+                    replyProxy.postMessage(it)
+                }
             }
+            if (::bridge.isInitialized) deliver() else earlyBridgeMessages += deliver
         }
     }
 
@@ -317,6 +366,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         val origin = selectedOrigin
         val path = sameOriginPath(url, origin) ?: return
         val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+        if (!::bridge.isInitialized) return toast(R.string.download_unavailable)
         val pending = bridge.requestDownloadLink(path) { link ->
             if (isDestroyed) return@requestDownloadLink
             val download = LinkDownload.of(origin, link, userAgent, mimeType, fileName)
@@ -355,11 +405,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
     }
 
-    private fun showConnectionFailure(cause: String) {
-        if (BuildConfig.DEBUG) Log.w(TAG, "Main frame failed: $cause")
+    /** [cause] is a fixed code, logged in every build; [url] is the page Retry loads again. */
+    private fun showConnectionFailure(cause: String, url: String?) {
+        Log.w(TAG, "main_frame_failed $cause")
         mainFrameFailed = true
+        page.failed(url, selectedOrigin)
         webView.visibility = View.INVISIBLE
-        recovery.showError { reload() }
+        recovery.showError { open(page.retryUrl(selectedOrigin)) }
     }
 
     private inner class ShellWebViewClient : WebViewClient() {
@@ -377,7 +429,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // The same origin's next document re-attaches to the running queue from its handshake.
-            bridge.reset()
+            earlyBridgeMessages.clear()
+            if (::bridge.isInitialized) bridge.reset()
             incompatibleWeb = false
             updateRequired = null
         }
@@ -398,21 +451,26 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (request.isForMainFrame) showConnectionFailure("error ${error.errorCode} ${error.description}")
+            if (request.isForMainFrame) showConnectionFailure("error=${error.errorCode}", request.url.toString())
         }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-            if (request.isForMainFrame && response.statusCode >= 500) showConnectionFailure("HTTP ${response.statusCode}")
+            if (request.isForMainFrame && response.statusCode >= 500) showConnectionFailure("http=${response.statusCode}", request.url.toString())
         }
 
         @SuppressLint("WebViewClientOnReceivedSslError")
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
             handler.cancel()
-            if (originPolicy.isSameOrigin(error.url, selectedOrigin)) showConnectionFailure("TLS ${error.primaryError}")
+            if (originPolicy.isSameOrigin(error.url, selectedOrigin)) showConnectionFailure("tls=${error.primaryError}", error.url)
         }
 
+        // The renderer, the app's largest process, is often killed in the background. Its page then
+        // loads again only when the user returns.
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            recreate()
+            val started = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            Log.w(TAG, "renderer_gone crashed=${detail.didCrash()} priority=${detail.rendererPriorityAtExit()} started=$started")
+            replaceWebView()
+            page.rendererGone(started, selectedOrigin)?.let(::open)
             return true
         }
     }
@@ -441,6 +499,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         const val STATE_ORIGIN = "shell_origin"
         const val STATE_URL = "shell_url"
         const val PROBE_TIMEOUT_MS = 5_000
+        const val EXIT_REASONS_LOGGED = 5
+
+        /** Exit reasons are logged once per process, not for every Activity it creates. */
+        var exitReasonsLogged = false
 
         /** As long as the page's own bridge commands wait for the shell. */
         const val DOWNLOAD_LINK_TIMEOUT_MS = 15_000L

@@ -49,4 +49,47 @@ class ShellPageTest {
         assertEquals(ORIGIN, page.restore(ORIGIN, "$ORIGIN/?q=" + "x".repeat(ShellPage.MAX_URL_LENGTH), ORIGIN))
         assertNull(page.url)
     }
+
+    @Test
+    fun retryReloadsThePageThatFailedNotTheSiteRoot() {
+        page.visited("$ORIGIN/?artist=A", ORIGIN)
+        page.failed("$ORIGIN/?artist=B&mobile_page=album&mobile_album=3", ORIGIN)
+        assertEquals("$ORIGIN/?artist=B&mobile_page=album&mobile_album=3", page.retryUrl(ORIGIN))
+        // A failure of no same-origin page, such as a TLS error elsewhere, retries the page last shown.
+        page.failed("https://cdn.example/x.js", ORIGIN)
+        assertEquals("$ORIGIN/?artist=A", page.retryUrl(ORIGIN))
+        page.switched()
+        assertEquals(ORIGIN, page.retryUrl(ORIGIN))
+    }
+
+    @Test
+    fun aRendererLostWhileVisibleReloadsItsPageAtOnce() {
+        page.visited("$ORIGIN/?artist=A", ORIGIN)
+        assertEquals("$ORIGIN/?artist=A", page.rendererGone(started = true, origin = ORIGIN))
+        assertNull(page.onStart(ORIGIN))
+    }
+
+    @Test
+    fun aRendererLostInTheBackgroundReloadsOnlyWhenTheUserReturns() {
+        page.visited("$ORIGIN/?artist=A", ORIGIN)
+        assertNull(page.rendererGone(started = false, origin = ORIGIN))
+        assertEquals("$ORIGIN/?artist=A", page.onStart(ORIGIN))
+        // Once: later returns keep the reloaded page.
+        assertNull(page.onStart(ORIGIN))
+    }
+
+    @Test
+    fun aRendererLostBeforeAnyPageReopensTheSiteRoot() {
+        assertNull(page.rendererGone(started = false, origin = ORIGIN))
+        assertEquals(ORIGIN, page.onStart(ORIGIN))
+    }
+
+    @Test
+    fun aSandboxSwitchForgetsAPendingReopen() {
+        page.visited("$ORIGIN/?artist=A", ORIGIN)
+        page.rendererGone(started = false, origin = ORIGIN)
+        page.switched()
+        assertNull(page.onStart(ORIGIN))
+        assertNull(page.url)
+    }
 }

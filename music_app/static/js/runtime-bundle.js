@@ -21640,6 +21640,8 @@ function getAlbumProblemFilterSortIndex(album) {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
+const renderedProblemFilterOptions = new WeakMap();
+
 function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
@@ -21665,7 +21667,7 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    els.problemFilterMenu.innerHTML = reasonTypes.length
+    const optionsHtml = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
             <span class="utility-problem-filter-check">${selectedSet.has(reason) ? 'on' : ''}</span>
@@ -21673,6 +21675,12 @@ function renderProblemFilterControls(els) {
           </button>
         `).join('')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+    // List refreshes re-render the controls while the menu is open; rewriting
+    // unchanged options would reset its scroll position and keyboard focus.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+      els.problemFilterMenu.innerHTML = optionsHtml;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+    }
   }
 
   if (els.problemFilterChips) {

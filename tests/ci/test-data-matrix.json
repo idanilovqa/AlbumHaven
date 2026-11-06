@@ -906,7 +906,7 @@
       "filesystemCopy": "media/cases/library-data-corrections"
     },
     "globalMutationReason": "Switches the library-wide Library Data Corrections setting to Write in tags, which writes tags for every pending correction, and restores Display only.",
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

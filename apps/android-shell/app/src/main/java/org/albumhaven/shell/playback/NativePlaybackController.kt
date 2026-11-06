@@ -233,6 +233,9 @@ class NativePlaybackController(
     private var index = -1
     private var state = NativePlaybackState.IDLE
     private var heldPositionMs = 0L
+
+    /** The exact frame a paused stream lapsed at, so the stream reopened for [heldPositionMs] resumes on it. */
+    private var heldFrame: HeldFrame? = null
     private var loop: LoopRange48k? = null
     private var wantPlay = false
 
@@ -310,9 +313,13 @@ class NativePlaybackController(
 
     fun setLoop(queueRevision: Long, range: LoopRange48k?) = revisioned(queueRevision) { applyLoop(range) }
 
-    fun pause(from: CommandSource = CommandSource.WEB) = post(from) {
+    /**
+     * Fades the output out at once and pauses on the next frame it holds; [silenceAtOnce] cuts it
+     * at once instead, as output that went to the speaker when headphones were removed must be.
+     */
+    fun pause(from: CommandSource = CommandSource.WEB, silenceAtOnce: Boolean = false) = post(from) {
         startGate.dropHeldStart()
-        pauseNow()
+        pauseNow(silenceAtOnce)
     }
 
     fun stop(from: CommandSource = CommandSource.WEB) = post(from) {
@@ -415,8 +422,11 @@ class NativePlaybackController(
         guarded {
             claims.tick()
             maybeRecoverStalledStart()
-            // A stream may buffer while the claim is requested; only an owner is heard.
-            written = if (loaded && claims.owned) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            // A stream may buffer while the claim is requested; only an owner is heard, and a pause
+            // the owner made finishes its fade even once the claim is given back.
+            val wasPausing = pausing()
+            written = if (loaded && (claims.owned || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            if (wasPausing && !pausing()) pauseSettled()
             maybeFinishDrainedQueue()
             maybeEmitPosition()
             maybeRelease()
@@ -428,6 +438,8 @@ class NativePlaybackController(
 
     private fun waitMs(): Long {
         if (retired) return Long.MAX_VALUE
+        // A fading pause is polled closely, so the output pauses soon after its fade reaches silence.
+        if (loaded && pausing()) return PAUSE_POLL_MS
         if (loaded && claims.owned) return RENDER_WAIT_MS
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
@@ -435,6 +447,15 @@ class NativePlaybackController(
             warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
         ).minOrNull() ?: return Long.MAX_VALUE
         return (next - clock()).coerceAtLeast(1)
+    }
+
+    private fun pausing() = engine?.pausing == true
+
+    /** The output faded out and stopped: the paused position is now the frame its playback head stopped on. */
+    private fun pauseSettled() {
+        if (!loaded || wantPlay) return
+        heldPositionMs = positionMs()
+        emit { NativePlaybackEvent.Position(it) }
     }
 
     /** A failure on the playback thread, such as a dead audio output, stops playback rather than the process. */
@@ -599,6 +620,7 @@ class NativePlaybackController(
         if (!wantPlay || !claims.owned || !transportOpen) return
         val current = engine
         if (loaded && current != null) {
+            heldFrame = null
             current.play()
             if (state == NativePlaybackState.LOADING || state == NativePlaybackState.PAUSED) {
                 // A stream prepared while paused is heard only from its first frame.
@@ -621,11 +643,16 @@ class NativePlaybackController(
         if (measuring) itemHeardBase = itemRenderedFrames()
         val current = engineFor(rate)
         heldPositionMs = positionMs
+        // A stream that lapsed while paused reopens on the very frame it stopped at, fading up.
+        val paused = heldFrame?.takeIf {
+            it.playbackRef == item.playbackRef && it.sampleRate == rate && it.frame * 1000 / rate == positionMs
+        }
+        heldFrame = null
         pendingRateChange = false
         loaded = true
         firstFrameHeard = false
         endDrainUntilMs = null
-        current.start(item.pcmTrack(), msToFrames(positionMs, rate), playWhenReady)
+        current.start(item.pcmTrack(), paused?.frame ?: msToFrames(positionMs, rate), playWhenReady, fadeIn = paused != null)
         startMeasuring()
         queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
         loop?.let { applyEngineLoop(current, it, rate) }
@@ -765,8 +792,13 @@ class NativePlaybackController(
         heldPositionMs = position
         val closeCode = lastCloseCode
         val socketClosed = event.code == "socket-closed"
-        // A paused player keeps its place; the next play reconnects.
-        if (socketClosed && !wantPlay) return
+        // A paused player keeps its place, to the frame its stopped engine names; the next play reconnects.
+        if (socketClosed && !wantPlay) {
+            val stopped = engine
+            val item = queue.getOrNull(index)
+            heldFrame = if (stopped != null && item != null) HeldFrame(item.playbackRef, preferredRate, stopped.timelineFrame) else null
+            return
+        }
         val recoverable = socketClosed && closeCode !in REFUSED_CLOSE_CODES && !recoveryAttempted
         if (recoverable) {
             recoveryAttempted = true
@@ -785,13 +817,13 @@ class NativePlaybackController(
         }
     }
 
-    private fun pauseNow() {
+    private fun pauseNow(silenceAtOnce: Boolean = false) {
         if (state == NativePlaybackState.IDLE || state == NativePlaybackState.ENDED) return
         measureListening()
+        engine?.takeIf { loaded }?.pause(immediate = silenceAtOnce)
         if (loaded) heldPositionMs = positionMs()
         if (wantPlay) listens.pause(heldPositionMs / 1000.0)
         wantPlay = false
-        engine?.takeIf { loaded }?.pause()
         // A drained queue still plays its tail; the next play resumes it and ends the queue.
         if (endDrainUntilMs != null) {
             endDrainUntilMs = null
@@ -1110,7 +1142,7 @@ class NativePlaybackController(
             measureListening()
             if (loaded) heldPositionMs = positionMs()
             wantPlay = false
-            engine?.takeIf { loaded }?.pause()
+            engine?.takeIf { loaded }?.pause(immediate = true)
             setState(NativePlaybackState.PAUSED)
         }
         if (event == ClaimEvent.Lost || event == ClaimEvent.Blocked) listens.ownershipLost(heldPositionMs / 1000.0)
@@ -1166,12 +1198,15 @@ class NativePlaybackController(
 
     private fun msToFrames(positionMs: Long, rate: Int): Long = positionMs * rate / 1000
 
+    private class HeldFrame(val playbackRef: String, val sampleRate: Int, val frame: Long)
+
     companion object {
         /** Most albums are CD audio; a wrong guess costs one refused open, as on the web. */
         const val DEFAULT_RATE = 44_100
         const val RENDER_CHUNK_FRAMES = 4_096
         /** How long the thread waits for work while it feeds the output. */
         const val RENDER_WAIT_MS = 5L
+        const val PAUSE_POLL_MS = 1L
         const val POSITION_INTERVAL_MS = 250L
         const val MAX_KNOWN_RATES = 512
 

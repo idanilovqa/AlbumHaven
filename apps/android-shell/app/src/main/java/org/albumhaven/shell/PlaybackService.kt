@@ -477,7 +477,8 @@ class PlaybackService : MediaLibraryService() {
         effects.forEach { effect ->
             when (effect) {
                 FocusEffect.Pause -> controller.interrupt()
-                FocusEffect.PauseForUnplug -> controller.pause(CommandSource.SYSTEM)
+                // The output already moved to the speaker, so nothing more may be heard there.
+                FocusEffect.PauseForUnplug -> controller.pause(CommandSource.SYSTEM, silenceAtOnce = true)
                 FocusEffect.Resume -> controller.resumeHeldStart()
                 is FocusEffect.WatchNoisy -> watchNoisy(effect.enabled)
             }

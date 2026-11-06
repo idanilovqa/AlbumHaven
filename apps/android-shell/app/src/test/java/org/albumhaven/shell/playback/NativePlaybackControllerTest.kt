@@ -65,6 +65,8 @@ class ControllerHarness(
     listenIo: Executor = Executor { it.run() },
     failures: (RuntimeException) -> Unit = {},
     startGate: StartGate = StartGate.OPEN,
+    /** Each output models an AudioTrack's quarter-second queue, which every step plays for its time. */
+    private val outputModel: Boolean = false,
 ) {
     var now = 0L
     val server = FakeAhpcServer(tracks.toList())
@@ -99,7 +101,10 @@ class ControllerHarness(
         listenApi = listen,
         sinks = { rate ->
             if (outputUnavailable) throw UnsupportedOperationException("Cannot create AudioTrack")
-            RecordingSink(rate, if (realTime) rate * STEP_MS.toInt() / 1000 else Int.MAX_VALUE).also(sinks::add)
+            when {
+                outputModel -> RecordingSink(rate, capacityFrames = rate / 4)
+                else -> RecordingSink(rate, if (realTime) rate * STEP_MS.toInt() / 1000 else Int.MAX_VALUE)
+            }.also(sinks::add)
         },
         io = claimIo,
         listenIo = listenIo,
@@ -139,6 +144,7 @@ class ControllerHarness(
 
     fun step(ms: Long = STEP_MS) {
         now += ms
+        if (outputModel) sinks.lastOrNull()?.let { it.advance((it.sampleRate * ms / 1000).toInt()) }
         deliver()
         controller.runOnce()
         deliver()
@@ -554,6 +560,97 @@ class NativePlaybackControllerTest {
         assertEquals(listOf("acquire:null", "release:token-1", "acquire:null"), harness.claims.calls)
         assertEquals(listOf(Run(3, 0, harness.sinks.last().writtenFrames.toLong())), harness.sinks.last().runs())
         assertEquals(listOf("owned", "released", "owned"), harness.ownership())
+    }
+
+    @Test
+    fun aPauseIsSilentWithinTheFadeAndPlayContinuesTheKeptQueueOnItsNextFrame() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, outputModel = true)
+        harness.load(1, long)
+        harness.runUntil { harness.sinks.lastOrNull()?.heard?.frames ?: 0 >= RATE }
+        val sink = harness.sinks.last()
+        val opens = harness.server.texts.count { it.contains("\"open\"") }
+        val heardAtCommand = sink.heard.frames
+        val commandMs = harness.now
+
+        harness.controller.pause()
+        harness.runUntil { sink.operations.last() == "pause" }
+
+        // Measured from the command: what is heard before silence, and when the output has paused.
+        val heardToSilence = sink.heard.frames - heardAtCommand
+        println("pause command to silence: ${heardToSilence * 1000.0 / RATE} ms of audio; output paused after ${harness.now - commandMs} ms")
+        assertTrue("silent within one callback plus the fade", heardToSilence <= RATE * ControllerHarness.STEP_MS.toInt() / 1000 + sink.fadeFrames)
+        assertTrue("the queue is kept", sink.unplayedAtPause.last() > RATE / 8)
+        val written = sink.writtenFrames
+        val heard = sink.heard.frames
+        repeat(40) { harness.step() }
+        assertEquals(written, sink.writtenFrames)
+        assertEquals(heard, sink.heard.frames)
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        // The paused position is the frame the output stopped on, by its playback head.
+        assertEquals(heard * 1000L / RATE, harness.controller.snapshot.positionMs)
+
+        harness.server.decoding = false
+        harness.controller.play(1)
+        // The step that applies play comes after that step's callback, so the next callback plays.
+        harness.step()
+        harness.step()
+        assertEquals("the kept queue plays at once", heard + RATE * ControllerHarness.STEP_MS.toInt() / 1000, sink.heard.frames)
+        harness.server.decoding = true
+        harness.server.decodeAll()
+        harness.runUntil { sink.heard.frames >= 3 * RATE }
+
+        val quietest = sink.heard.assertFadedStream(3, 0, sink.fadeFrames)
+        assertEquals(listOf(heard - 1, heard), quietest)
+        assertEquals(0, sink.silentlyPlayed)
+        assertEquals(listOf(Run(3, 0, sink.writtenFrames.toLong())), sink.runs())
+        assertEquals(1, harness.connects)
+        assertEquals(opens, harness.server.texts.count { it.contains("\"open\"") })
+        assertEquals(1, sink.operations.count { it == "flush" })
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aResumeAfterTheStreamLapsedReopensOnTheExactFrameTheOutputStoppedOn() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, outputModel = true)
+        harness.load(1, long)
+        harness.runUntil { harness.sinks.lastOrNull()?.heard?.frames ?: 0 >= RATE }
+        val sink = harness.sinks.last()
+        // A stop between two whole milliseconds, which a millisecond position cannot name.
+        sink.advance(7)
+        harness.controller.pause()
+        harness.runUntil { sink.operations.last() == "pause" }
+        val heard = sink.heard.frames
+        assertTrue(heard % (RATE / 1000) != 0)
+
+        checkNotNull(harness.listener).onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        repeat(5) { harness.step() }
+        harness.controller.play(1)
+        harness.runUntil { sink.heard.frames >= 3 * RATE }
+
+        assertEquals(2, harness.connects)
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(heard - 1, heard), sink.heard.assertFadedStream(3, 0, sink.fadeFrames))
+    }
+
+    @Test
+    fun removingHeadphonesSilencesTheOutputAtOnce() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, outputModel = true)
+        harness.load(1, long)
+        harness.runUntil { harness.sinks.lastOrNull()?.heard?.frames ?: 0 >= RATE }
+        val sink = harness.sinks.last()
+
+        harness.controller.pause(CommandSource.SYSTEM, silenceAtOnce = true)
+        harness.deliver()
+        harness.controller.runOnce()
+        val heard = sink.heard.frames
+        repeat(10) { harness.step() }
+
+        assertEquals(heard, sink.heard.frames)
+        assertEquals("pause", sink.operations.last())
+        assertTrue("fade-out" !in sink.operations)
     }
 
     @Test

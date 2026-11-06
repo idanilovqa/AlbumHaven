@@ -6,6 +6,9 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** Five milliseconds at the test rate, a deep-buffer output's callback. */
+const val CALLBACK_FRAMES = RATE / 200
+
 class NativePcmEngineTest {
     private val first = SyntheticTrack(tag = 1, frames = 6L * RATE)
     private val second = SyntheticTrack(tag = 2, frames = 4L * RATE)
@@ -26,6 +29,9 @@ class NativePcmEngineTest {
             override fun heardFrames() = 0L
             override fun play() {}
             override fun pause() {}
+            override fun fadeOutAndPause() {}
+            override fun fadeOutSettled() = true
+            override fun resumeWithFadeIn() {}
             override fun flush() = throw IllegalStateException("flush() called on an uninitialized AudioTrack")
             override fun release() {
                 operations += "release"
@@ -265,6 +271,116 @@ class NativePcmEngineTest {
 
         assertEquals(listOf(PcmClientControl.Credit(1, 1, 48_000)), harness.sent<PcmClientControl.Credit>())
         assertEquals(listOf("pause", "flush", "play"), harness.sink.operations)
+    }
+
+    /** An engine on the modelled output, whose queue holds a quarter second as the AudioTrack's does. */
+    private fun modelled(track: SyntheticTrack = first) =
+        PcmHarness(track, sink = RecordingSink(capacityFrames = RATE / 4))
+
+    /** One five-millisecond output callback, then one engine pass. */
+    private fun PcmHarness.callback() {
+        sink.advance(CALLBACK_FRAMES)
+        step(4_096)
+    }
+
+    private fun PcmHarness.callbackUntil(done: () -> Boolean) {
+        repeat(100_000) {
+            if (done()) return
+            callback()
+        }
+        error("the output did not reach the expected state")
+    }
+
+    @Test
+    fun aPauseIsSilentWithinTheFadeAndKeepsTheQueueThatPlayOnPlaysOnFromItsNextFrame() {
+        val harness = modelled().also { it.engine.start(first.pcm) }
+        harness.callbackUntil { harness.sink.heard.frames >= RATE }
+        val sink = harness.sink
+        val heardAtPause = sink.heard.frames
+        val queued = sink.pendingFrames()
+        assertTrue("the output holds its queue", queued >= RATE / 4 - CALLBACK_FRAMES)
+
+        harness.engine.pause()
+        val written = sink.writtenFrames
+        harness.callbackUntil { sink.operations.last() == "pause" }
+
+        // Silent after the fade alone, not after the queue: the fade's frames are the only ones heard.
+        assertEquals(sink.fadeFrames, sink.heard.frames - heardAtPause)
+        assertEquals(queued - sink.fadeFrames, sink.unplayedAtPause.last())
+        repeat(20) { harness.callback() }
+        assertEquals(written, sink.writtenFrames)
+        assertEquals(heardAtPause + sink.fadeFrames, sink.heard.frames)
+        assertEquals((heardAtPause + sink.fadeFrames).toLong(), harness.engine.timelineFrame - sink.pendingFrames())
+
+        // The queue plays on at once, without new network data, a reopen or a flush.
+        val opens = harness.sent<PcmClientControl.Open>().size
+        harness.server.decoding = false
+        harness.engine.play()
+        harness.callback()
+        assertEquals(heardAtPause + sink.fadeFrames + CALLBACK_FRAMES, sink.heard.frames)
+        harness.server.decoding = true
+        harness.server.decodeAll()
+        harness.callbackUntil { sink.heard.frames >= 3 * RATE }
+
+        val quietest = sink.heard.assertFadedStream(1, 0, sink.fadeFrames)
+        assertEquals(listOf(heardAtPause + sink.fadeFrames - 1, heardAtPause + sink.fadeFrames), quietest)
+        assertEquals(0, sink.silentlyPlayed)
+        assertEquals(listOf(Run(1, 0, sink.writtenFrames.toLong())), sink.runs())
+        assertEquals(opens, harness.sent<PcmClientControl.Open>().size)
+        assertEquals(listOf("pause", "flush", "play", "write", "fade-out", "pause", "fade-in", "write"), sink.operations)
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aPlayDuringTheFadeTurnsItBackUpWithoutAStepOrAPause() {
+        val harness = modelled().also { it.engine.start(first.pcm) }
+        harness.callbackUntil { harness.sink.heard.frames >= RATE }
+        harness.engine.pause()
+        harness.sink.advance(harness.sink.fadeFrames / 3)
+
+        harness.engine.play()
+        harness.callbackUntil { harness.sink.heard.frames >= 2 * RATE }
+
+        assertEquals(emptyList<Int>(), harness.sink.heard.assertFadedStream(1, 0, harness.sink.fadeFrames))
+        assertEquals(listOf("pause"), harness.sink.operations.filter { it == "pause" })
+    }
+
+    @Test
+    fun anImmediatePauseIsSilentAtOnceAndPlayFadesTheKeptQueueUp() {
+        val harness = modelled().also { it.engine.start(first.pcm) }
+        harness.callbackUntil { harness.sink.heard.frames >= RATE }
+        val sink = harness.sink
+        val heardAtPause = sink.heard.frames
+
+        harness.engine.pause(immediate = true)
+        repeat(5) { harness.callback() }
+        assertEquals(heardAtPause, sink.heard.frames)
+        assertTrue(!harness.engine.pausing)
+
+        harness.engine.play()
+        harness.callbackUntil { sink.heard.frames >= 2 * RATE }
+        assertEquals(listOf(Run(1, 0, sink.heard.frames.toLong())), sink.heard.runs(envelopeTag = 1))
+        assertEquals(1.0, sink.heard.gain(heardAtPause - 1, 1), 1e-6)
+        assertEquals(0.5 / sink.fadeFrames, sink.heard.gain(heardAtPause, 1), 1e-6)
+    }
+
+    @Test
+    fun aStartReopenedWherePlaybackLapsedFadesUpFromItsFirstFrame() {
+        val harness = modelled().also { it.engine.start(first.pcm, startFrame = 12_345, fadeIn = true) }
+        harness.callbackUntil { harness.sink.heard.frames >= RATE }
+
+        assertEquals(listOf(0), harness.sink.heard.assertFadedStream(1, 12_345, harness.sink.fadeFrames, fadesIn = true))
+    }
+
+    @Test
+    fun aFailedEngineNamesTheFirstFrameItsOutputDidNotPlay() {
+        val harness = modelled().also { it.engine.start(first.pcm) }
+        harness.callbackUntil { harness.sink.heard.frames >= RATE }
+        assertTrue(harness.sink.pendingFrames() > 0)
+
+        harness.engine.onTransportClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+
+        assertEquals(harness.sink.heard.frames.toLong(), harness.engine.timelineFrame)
     }
 
     @Test

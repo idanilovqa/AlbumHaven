@@ -98,10 +98,19 @@ export function observeProblematicDetails(page) {
   const responseListener = response => {
     const url = new URL(response.url());
     if (!['/utilities/problematic-files', '/utilities/problematic-files/detail'].includes(url.pathname)) return;
+    const isDetail = url.pathname.endsWith('/detail');
     const task = (async () => {
       assert.equal(response.ok(), true, 'Normal problematic data response must succeed');
-      const payload = await response.json();
-      if (url.pathname.endsWith('/detail')) {
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        // Rapid selection aborts superseded detail requests, so the browser may already have
+        // discarded their bodies. Callers still poll for every detail they assert on.
+        if (isDetail && /No resource with given identifier found/.test(String(error?.message))) return;
+        throw error;
+      }
+      if (isDetail) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');

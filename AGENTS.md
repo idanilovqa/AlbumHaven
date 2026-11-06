@@ -186,15 +186,18 @@ The intended behavior is basically: worker still running → keep waiting
 
 ## Review-first CI execution
 
-- Owner-controlled pipeline labels are independent: `skip_reviews` intentionally
-  waives hosted reviewers without recording review coverage; `skip_tests` skips
-  test jobs and cannot satisfy the merge/release gate. Complete tests remain
+- Hosted reviewers are skipped by default for trusted same-repository pull
+  requests: the waiver is intentional, tests proceed, and no review coverage is
+  recorded. Owner-controlled labels are independent: `run_reviews` opts into
+  review-first gating and wins over the now-redundant `skip_reviews`;
+  `skip_tests` skips test jobs and cannot satisfy the merge/release gate.
+  Complete tests and the local review rounds in "Thorough local review" remain
   mandatory for publication. PR1 has an explicit owner-authorized review waiver;
   its preserved review snapshot and later separate review-fixes workflow are
   documented in `docs/ci-pipeline-labels-and-deferred-review.md`.
 
-- In the authoritative pull-request pipeline, classify review scope first and
-  run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
+- When `run_reviews` is set, classify review scope first in the authoritative
+  pull-request pipeline and run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
   after every applicable reviewer succeeds. A failed, cancelled, missing, or
   unexpectedly skipped review holds tests; intentional skips are checked against
   the exact review scope and pull-request context. Collect all applicable review

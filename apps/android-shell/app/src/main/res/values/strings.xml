@@ -10,6 +10,7 @@
     <string name="recovery_update_message">This version of Album Haven can’t open the current site. Install the latest app to continue.</string>
     <string name="recovery_retry">Retry</string>
     <string name="recovery_update_check">Check for update</string>
+    <string name="recovery_update_none_title">No updates available</string>
     <string name="recovery_update_checking_title">Checking for update…</string>
     <string name="recovery_update_checking_message">Keep this screen open.</string>
     <string name="recovery_update_checking_action">Checking…</string>
@@ -17,6 +18,8 @@
     <string name="recovery_update_downloading_message">Album Haven %1$s</string>
     <string name="recovery_update_downloading_action">Downloading…</string>
     <string name="recovery_update_progress">Download progress: %1$d%%</string>
+    <string name="recovery_update_verifying_title">Verifying update…</string>
+    <string name="recovery_update_verifying_action">Verifying…</string>
     <string name="recovery_update_ready_title">Update ready</string>
     <string name="recovery_update_ready_message">Android will ask you to confirm installation.</string>
     <string name="recovery_update_install">Update</string>
@@ -24,9 +27,7 @@
     <string name="recovery_update_authorization_title">Allow Album Haven to install updates.</string>
     <string name="recovery_update_authorization_message">Android blocks this install source. Return here after enabling the permission.</string>
     <string name="recovery_update_authorization_action">Open install settings</string>
-    <string name="recovery_update_invalid_title">Update couldn’t be verified.</string>
-    <string name="recovery_update_invalid_message">The downloaded app did not match Album Haven’s signed release. Download it again.</string>
-    <string name="recovery_update_retry_download">Retry download</string>
+    <string name="recovery_update_failed_title">Update failed. Try again</string>
     <string name="playback_resume_sign_in">Sign in to Album Haven to keep listening</string>
     <string name="playback_resume_unavailable">Open Album Haven to keep listening</string>
     <string name="playback_resume_open_app">Open Album Haven</string>

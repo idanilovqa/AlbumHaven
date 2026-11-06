@@ -64,6 +64,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var pendingWebState: Bundle? = null
     private var updater: Updater? = null
     private val updateEvents: (UpdateState) -> Unit = { state ->
+        // Settings and Update required show one failure message; the details are only logged.
+        if (state is UpdateState.Failed) Log.w(TAG, "Update failed: ${state.error.wireName} (${state.reason ?: "no reason"})")
         bridge.emit(state)
         updateRequired?.let { flow ->
             flow.onState(state)

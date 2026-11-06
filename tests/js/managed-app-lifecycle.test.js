@@ -186,15 +186,19 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   const requestPath = path.join(controlDirectory, 'restart-request.json');
   const ackPath = path.join(controlDirectory, 'restart-ack.json');
   let sleepCalls = 0;
+  // A fake clock advanced only by polling keeps the timeout independent of runner file I/O speed.
+  let currentTime = 0;
 
   try {
     fs.writeFileSync(ackPath, JSON.stringify({ nonce: 'stale-nonce', status: 'ready' }));
     const lifecycle = createManagedAppLifecycle({
       environment: createValidEnvironment(root, controlDirectory),
       createNonce: () => nonce,
+      now: () => currentTime,
       pollIntervalMs: 1,
       timeoutMs: 100,
-      async sleep() {
+      async sleep(milliseconds) {
+        currentTime += milliseconds;
         sleepCalls += 1;
         assert.deepEqual(JSON.parse(fs.readFileSync(requestPath, 'utf8')), { nonce });
         assert.equal(

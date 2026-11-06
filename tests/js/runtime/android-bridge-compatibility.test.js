@@ -294,7 +294,7 @@ test('a shell with no shared protocol leaves the site in its update-required sta
   assert.equal(api.isAndroidUpdateRequired(), true);
   assert.equal(api.isAndroidPlaybackUnavailable(), true);
   assert.equal(await api.androidNativePlaybackRoute(), false);
-  assert.match(api.buildAndroidSettingsHtml(null), /<alert warning>Update required\|This version of Album Haven can’t open the current site\. Install the latest app to continue\.<\/alert>/);
+  assert.match(api.buildAndroidSettingsHtml(null), /<alert info>Update required\|This version of Album Haven can’t open the current site\. Install the latest app to continue\.<\/alert>/);
 });
 
 test('an unreachable shell is a connection failure, not an update requirement', async () => {

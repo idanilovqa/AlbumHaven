@@ -120,23 +120,23 @@ const STATES = [
   [update({ checkedAt: now - 6 * HOUR }), 'info', 'Android app', 'Sandbox · 0.9.50 (1) · Last checked 6 hours ago', 'Check for updates', 'check'],
   [update(), 'info', 'Android app', 'Sandbox · 0.9.50 (1)', 'Check for updates', 'check'],
   [update({ state: 'checking' }), 'info', 'Checking for updates…', 'Keep this screen open.', 'Checking…', null],
-  [update({ state: 'upToDate', checkedAt: now }), 'success', 'Album Haven is up to date.', 'Sandbox · 0.9.50 (1) · Checked just now', 'Check again', 'check'],
+  [update({ state: 'upToDate', checkedAt: now }), 'success', 'No updates available', 'Sandbox · 0.9.50 (1) · Checked just now', 'Check again', 'check'],
   [update({ state: 'available', ...ready }), 'warning', 'Album Haven 0.10.0-sandbox.763af93 is available.', 'Download starts only when you ask.', 'Download update', 'download'],
   [update({ state: 'downloading', progress: 42, ...ready }), 'info', 'Downloading update · 42%', 'Android will confirm installation after verification.', 'Downloading…', null],
   [update({ state: 'verifying', ...ready }), 'info', 'Verifying update…', 'Android will confirm installation after verification.', 'Verifying…', null],
   [update({ state: 'ready', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Update', 'install'],
   [update({ state: 'installing', ...ready }), 'success', 'Album Haven 0.10.0-sandbox.763af93 is ready to install.', 'Signature and file verified. Android will ask you to confirm installation.', 'Installing…', 'install'],
   [update({ state: 'authorization', ...ready }), 'warning', 'Allow Album Haven to install updates.', 'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'],
-  [update({ state: 'failed', error: 'check_failed' }), 'error', 'Update check failed.', 'Check your connection and try again.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'manifest_rejected', reason: 'wrong_certificate' }), 'error', 'Update check failed.', 'The published update doesn’t match this app. Try again later.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'manifest_rejected', reason: 'unsupported_android' }), 'error', 'Update check failed.', 'This update needs a newer version of Android.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'download_failed', ...ready }), 'error', 'Download failed.', 'Check your connection and try again.', 'Retry download', 'download'],
-  [update({ state: 'failed', error: 'verification_failed', reason: 'hash_mismatch', ...ready }), 'error', 'Update couldn’t be verified.', 'The downloaded app did not match Album Haven’s signed release. Download it again.', 'Retry download', 'download'],
-  [update({ state: 'failed', error: 'install_failed', ...ready }), 'error', 'Update couldn’t be installed.', 'Android didn’t install the update. Download it again.', 'Retry download', 'download'],
-  [update({ state: 'failed', error: 'check_failed', reason: 'signed_out' }), 'error', 'Update check failed.', 'Sign in to Album Haven again, then retry.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'check_failed', reason: 'attestation_refused' }), 'error', 'Update check failed.', 'This server didn’t accept this app’s device check. Try again later.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'check_failed', reason: 'device_unsupported' }), 'error', 'Update check failed.', 'This device can’t verify this app for updates.', 'Retry', 'check'],
-  [update({ state: 'failed', error: 'download_failed', reason: 'signed_out', ...ready }), 'error', 'Download failed.', 'Sign in to Album Haven again, then retry.', 'Retry download', 'download'],
+  // Every failed check, download or install reads the same, whatever the shell's error and reason.
+  ...[
+    [{ error: 'check_failed' }, 'check'],
+    [{ error: 'check_failed', reason: 'signed_out' }, 'check'],
+    [{ error: 'manifest_rejected', reason: 'unsupported_android' }, 'check'],
+    [{ error: 'download_failed', ...ready }, 'download'],
+    [{ error: 'download_failed', reason: 'signed_out', ...ready }, 'download'],
+    [{ error: 'verification_failed', reason: 'hash_mismatch', ...ready }, 'download'],
+    [{ error: 'install_failed', ...ready }, 'download'],
+  ].map(([failure, action]) => [update({ state: 'failed', ...failure }), 'error', 'Update failed. Try again', '', 'Retry', action]),
 ];
 
 for (const [state, severity, title, message, label, action] of STATES) {
@@ -198,14 +198,15 @@ test('the sandbox server selector is the shared dropdown trigger, unpatched', as
   }));
 });
 
-test('an unknown failure code reads as a failed check', async () => {
-  for (const name of ['constructor', '__proto__', 'toString']) {
-    for (const failure of [{ error: name }, { error: 'check_failed', reason: name }]) {
+test('a failure shows only the approved copy and retry, never the shell’s error or reason', async () => {
+  for (const name of ['constructor', '__proto__', 'toString', 'hash_mismatch']) {
+    for (const failure of [{ error: name }, { error: 'check_failed', reason: name }, { error: name, reason: name, ...ready }]) {
       const { api } = await connected(update({ state: 'failed', ...failure }));
       const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
       const alert = alertOf(html.slice(html.indexOf('data-android-update')));
-      assert.equal(text(alert[0]), 'Update check failed. Check your connection and try again. Retry', name);
-      assert.deepEqual(button(alert[0]), { label: 'Retry', disabled: false, action: 'check' }, name);
+      assert.equal(alert[1], 'error', name);
+      assert.equal(text(alert[0]), 'Update failed. Try again Retry', name);
+      assert.deepEqual(button(alert[0]), { label: 'Retry', disabled: false, action: failure.versionName ? 'download' : 'check' }, name);
     }
   }
 });
@@ -218,6 +219,16 @@ test('the channel is the shared StatusBadge: warning for sandbox, neutral for st
   const stable = api.buildAndroidSettingsHtml({ ...api.androidBridge.info, variant: 'stable' });
   assert.ok(stable.includes(buildStatusBadgeHtml({ label: 'Stable', variant: 'neutral' })));
   assert.doesNotMatch(sandbox + stable, /android-settings__channel|is-sandbox/);
+});
+
+test('Update required is an info alert at the top of the Android card', () => {
+  const { api } = loadRuntime();
+  api.androidBridge.updateRequired = true;
+  const html = api.buildAndroidSettingsHtml(null);
+  assert.match(html, /^<div class="android-settings">\s*<div class="android-settings__heading">\s*<div><h2>Android app<\/h2><p>Manage this app on your device\.<\/p><\/div>\s*<\/div>\s*<section class="on-page-alert on-page-alert--info"/);
+  assert.equal(text(alertOf(html)[0]), 'Update required This version of Album Haven can’t open the current site. Install the latest app to continue.');
+  // A shell that refused the handshake names no channel, and this page cannot ask it to update.
+  assert.doesNotMatch(html, /ui-status-badge|<button/);
 });
 
 test('without updates.manual.v1 the card shows only the version', async () => {

@@ -882,6 +882,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
+    "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "tag-edit:library-data-corrections-write-in-tags"
+    ],
+    "filesystemScenarios": [
+      "media-copy:unreadable-track-artist"
+    ],
+    "expectedContracts": [
+      "unreadable-credit-shows-album-artist",
+      "unreadable-credit-is-problematic",
+      "write-in-tags-corrects-file-tags",
+      "correction-recorded-in-history"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:library-data-corrections",
+      "filesystemCopy": "media/cases/library-data-corrections"
+    },
+    "globalMutationReason": "Switches the library-wide Library Data Corrections setting to Write in tags, which writes tags for every pending correction, and restores Display only.",
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
     "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
     "profile": "functional-core",

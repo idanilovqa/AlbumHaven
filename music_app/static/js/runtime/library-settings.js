@@ -450,7 +450,6 @@ async function saveUtilityLibrarySettings() {
       scheduleStatusPoll(250);
     }
     if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
-    if (librarySettingsState.settings.metadata_corrections === 'write_tags') void writeLibraryDataCorrections();
     return true;
   } catch (error) {
     settleLibraryStatusAction(statusAction);
@@ -462,61 +461,6 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.saveBusy = false;
     renderCurrent();
   }
-}
-
-// "Write in tags": every album Problematic Files lists with a display
-// correction gets that correction written through the Edit Tags path, so each
-// write has its History entry and undo, and needs the edit-tags permission.
-const LIBRARY_DATA_CORRECTION_REASONS = new Set(['Track artist unreadable — using album artist', 'Undecoded characters', 'Encoding problem']);
-
-async function writeLibraryDataCorrections() {
-  const owner = ensureLibrarySettingsState();
-  if (owner.correctionsBusy || owner.allowedActions?.['library.files.edit_tags'] !== true) return null;
-  owner.correctionsBusy = true;
-  const readJson = async url => {
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) throw new Error(data.error || 'Problematic Files are unavailable.');
-    return data;
-  };
-  let written = 0, failed = 0;
-  try {
-    const summary = await readJson('/utilities/problematic-files');
-    const albumKeys = (summary.items || [])
-      .filter(item => (item.problem_reasons || []).some(reason => LIBRARY_DATA_CORRECTION_REASONS.has(reason)))
-      .map(item => String(item.key || ''));
-    for (const albumKey of albumKeys) {
-      try {
-        const album = await readJson(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(albumKey)}`);
-        const proposals = (album.suggested_edits || []).filter(proposal => proposal.display_correction === true);
-        if (!proposals.length || album.allowed_actions?.['library.files.edit_tags'] !== true) continue;
-        const updates = {};
-        proposals.forEach(proposal => Object.assign(updates[proposal.path] ||= {}, proposal.updates));
-        const response = await fetch('/utilities/edit-tags', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmed: true, album, proposal_ids: proposals.map(proposal => proposal.id), updates, problematic_files_origin: true }),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.ok) throw new Error(data.error || 'Corrections were not written.');
-        written += proposals.length;
-      } catch (error) {
-        failed += 1;
-        console.error('[AlbumHaven][LibrarySettings] Could not write corrections for an album.', error);
-      }
-    }
-  } catch (error) {
-    console.error('[AlbumHaven][LibrarySettings] Could not list library data corrections.', error);
-    showToast(error.message || 'Library data corrections could not be written.', 'error', 3600);
-    return null;
-  } finally {
-    owner.correctionsBusy = false;
-  }
-  if (written || failed) {
-    const count = `${written} correction${written === 1 ? '' : 's'} written to tags`;
-    showToast(failed ? `${count}; ${failed} album${failed === 1 ? '' : 's'} could not be corrected.` : `${count}.`,
-      failed ? 'error' : 'success', 3600);
-  }
-  return { written, failed };
 }
 
 function buildLibrarySettingsRootOptions(roots, placeholder) {
@@ -581,10 +525,13 @@ const LIBRARY_DATA_CORRECTION_MODES = [
 ];
 
 function buildLibraryDataCorrectionsSection(draft) {
-  const disabled = librarySettingsReadOnlyClient() || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true;
+  const actions = ensureLibrarySettingsState().allowedActions || {};
+  const disabled = librarySettingsReadOnlyClient() || actions['library.settings.manage'] !== true;
+  // The app then edits tags for the user, so choosing it needs that permission.
+  const writeDisabled = disabled || (actions['library.files.edit_tags'] !== true && draft.metadata_corrections !== 'write_tags');
   const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option">
       <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
-        ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${mode.label}</span>
+        ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${(mode.value === 'write_tags' ? writeDisabled : disabled) ? 'disabled' : ''}><span>${mode.label}</span>
     </label>`).join('');
   return `<section class="library-settings-section" aria-labelledby="library-data-corrections-heading">
     <div class="library-settings-section-heading">

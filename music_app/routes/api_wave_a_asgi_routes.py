@@ -600,6 +600,14 @@ async def library_settings_write(request: Request) -> JSONResponse:
         return _json_response(
             ({"ok": False, "error": "Library settings payload must be an object."}, 400)
         )
+    if settings_payload.get("metadata_corrections") == "write_tags":
+        # Turning on "Write in tags" lets the app edit tags on the user's behalf.
+        from music_app.services.policy_asgi import allowed_actions_for_request
+
+        current = await run_in_threadpool(load_library_root_settings, _app_config(request), **scope)
+        may_edit_tags = allowed_actions_for_request(request, ("library.files.edit_tags",)).as_payload().get("library.files.edit_tags") is True
+        if current.get("metadata_corrections") != "write_tags" and not may_edit_tags:
+            return _json_response(({"ok": False, "error": "Writing corrections in tags needs permission to edit tags."}, 403))
 
     try:
         replace_live_watch_roots = getattr(
@@ -1792,15 +1800,23 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     history_scope = await history_scope_for_request(request, required=False)
     request_started = perf_counter()
     payload = await _json_payload(request)
+    return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
+
+
+async def run_edit_tags_payload(request: Request, payload, *, history_scope, started: float | None = None) -> ResponseValue:
+    """The whole Edit Tags pipeline for one payload: reservation, intent,
+    media write, save task, History. The route and Library Data Corrections
+    (with a request bound only to the app) both run it."""
+    request_started = perf_counter() if started is None else started
     if payload is None or not payload.get("confirmed"):
-        return _json_response(({"ok": False, "error": "Tag edit was not confirmed"}, 400))
+        return {"ok": False, "error": "Tag edit was not confirmed"}, 400
 
     album, album_error = _require_album_payload(payload)
     updates = payload.get("updates")
     if album_error is not None:
-        return _json_response(album_error)
+        return album_error
     if not isinstance(updates, dict) or not updates:
-        return _json_response(({"ok": False, "error": "No tag edits were provided"}, 400))
+        return ({"ok": False, "error": "No tag edits were provided"}, 400)
 
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}
@@ -1834,7 +1850,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
                 _postgres_exception_only_edit_state, request, payload
             )
         except ValueError as exc:
-            return _json_response(({"ok": False, "error": str(exc)}, 400))
+            return ({"ok": False, "error": str(exc)}, 400)
         get_state = lambda: postgres_edit_state
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
@@ -1966,4 +1982,4 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         result = _selected_postgres_media_write_response(result)
     if isinstance(payload.get("proposal_ids"), list):
         result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
-    return _json_response(result)
+    return result

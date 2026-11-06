@@ -11004,7 +11004,7 @@ def _problematic_files_sql(
             (library.local_track_files.scan_file_entry_is_object is true
               and (library.local_track_files.scan_file_text_mojibake_candidate is true
                 or library.local_track_files.scan_file_metadata_problem_candidate is true
-                or library.local_track_files.scan_file_text_corrections is not null)) as file_problem,
+                or text_corrections.track_file_id is not null)) as file_problem,
             nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
             nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
             nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year
@@ -11017,6 +11017,8 @@ def _problematic_files_sql(
             on roots.id = library.local_track_files.library_root_id
            and roots.library_id = library.local_tracks.library_id
            and roots.is_active is true
+          left join library.local_track_file_text_corrections text_corrections
+            on text_corrections.track_file_id = library.local_track_files.id
           where library.local_track_files.scan_cache_stale is false
             and library.local_path_key(library.local_track_files.private_path) <> ''
         ),
@@ -11429,7 +11431,8 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_year as file_year,
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
-            library.local_track_files.scan_file_text_corrections as file_text_corrections,
+            (select text_corrections.text_corrections from library.local_track_file_text_corrections text_corrections
+              where text_corrections.track_file_id = library.local_track_files.id) as file_text_corrections,
             exception_override.override_payload ->> 'exception_type' as exception_type,
             exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(

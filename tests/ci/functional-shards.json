@@ -1023,6 +1023,13 @@
               "relatedAreas": [
                 "cover-providers"
               ]
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
+              "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+              "area": "tag-edit"
             }
           ]
         }

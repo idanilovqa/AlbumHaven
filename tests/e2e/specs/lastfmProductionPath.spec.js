@@ -12,6 +12,8 @@ const LASTFM_PASSWORD = 'fixture-password';
 const SCROBBLE_TRACK = LASTFM_SCROBBLE_TRACK.title;
 // A 32 s track completes after its scrobble, beyond the default 30 s journey wait.
 const SCROBBLE_JOURNEY_TIMEOUT_MS = 60000;
+// The loop source and three 32 s tracks play back to back, so the last track starts after 60 s.
+const CONSECUTIVE_JOURNEY_TIMEOUT_MS = 180000;
 const FORBIDDEN_HISTORY_VALUES = [
   LASTFM_USER,
   LASTFM_PASSWORD,
@@ -286,11 +288,11 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks over 30 s each scrobble exactly
     const evidencePromises = tracks.map((track) => playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: track.path,
-    }));
+    }, { timeout: CONSECUTIVE_JOURNEY_TIMEOUT_MS }));
     journeys = await trackModalActions.playTrackAtAndWaitForConsecutiveLastfmJourneys(
       0,
       playedTitles,
-      { scrobbleTitles: LASTFM_CONSECUTIVE_PLAYBACK_TRACKS, timeout: 180000 },
+      { scrobbleTitles: LASTFM_CONSECUTIVE_PLAYBACK_TRACKS, timeout: CONSECUTIVE_JOURNEY_TIMEOUT_MS },
     );
     const evidence = await Promise.all(evidencePromises);
     expect(evidence.map((entry) => entry.path)).toEqual(tracks.map((track) => track.path));

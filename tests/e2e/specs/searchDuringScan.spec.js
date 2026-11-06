@@ -32,7 +32,8 @@ test(
       await searchToolbarActions.waitForQuery(QUERY);
       await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);
       await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: QUERY });
-      await expect(page.getByText('Nothing found', { exact: true })).toHaveCount(0);
+      // The empty-state loader stays mounted with its text; it must not be shown.
+      await expect(page.getByText('Nothing found', { exact: true })).toBeHidden();
       expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(FAMILY_ARTIST);
       const canonicalState = await searchToolbarActions.readCanonicalSearchState({ source: 'bootstrap' });
       expect(canonicalState.query).toBe(QUERY);

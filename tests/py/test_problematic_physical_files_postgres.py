@@ -132,7 +132,15 @@ def _query(connection, **modes):
               "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
               "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS}
     params.update(modes.pop("params", {}))
-    return connection.execute(browse._problematic_files_sql(**modes), params).fetchall()
+    # Production reads migration 0112's stored path columns; databases without
+    # them use the inline expressions. Both forms must return the same rows.
+    inline, stored = (
+        connection.execute(browse._problematic_files_sql(**modes, path_columns=path_columns), params).fetchall()
+        for path_columns in (False, True)
+    )
+    rendered = lambda rows: sorted(json.dumps(row, sort_keys=True, default=str) for row in rows)
+    assert rendered(inline) == rendered(stored), modes
+    return stored
 
 
 def test_physical_categories_real_sql_candidates_selection_and_detail(physical_catalog):
@@ -281,8 +289,7 @@ def test_windows_case_variants_keep_global_and_targeted_folder_context_equal(phy
             assert all(row["file_mixed_album_folder"] is True for row in selected_rows), modes
 
 
-@pytest.mark.parametrize("path_columns", [False, True])
-def test_loose_tracks_beside_one_album_do_not_make_its_folder_mixed(physical_catalog, path_columns):
+def test_loose_tracks_beside_one_album_do_not_make_its_folder_mixed(physical_catalog):
     """Loose tracks have no album, so they are not a second album in the folder."""
     connection, album, owned = physical_catalog
     album_id = album("Folder Album", "Album With Loose Tracks")
@@ -306,17 +313,12 @@ def test_loose_tracks_beside_one_album_do_not_make_its_folder_mixed(physical_cat
     }}})))
     _, key = owned["Folder Album"]
 
-    def query(**modes):
-        params = {"album_key": key, "album_ids": [album_id], "album_keys": [key], "file_paths": [],
-                  "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
-                  "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS}
-        sql = browse._problematic_files_sql(**modes, path_columns=path_columns)
-        return connection.execute(sql, params).fetchall()
-
-    assert album_id not in {row["album_id"] for row in query(candidate_summary=True, candidate_ids_only=True)}
+    assert album_id not in {row["album_id"] for row in _query(
+        connection, candidate_summary=True, candidate_ids_only=True)}
     for modes in ({}, {"candidate_summary": True, "selected_album_ids": True},
                   {"targeted_problem_owners": True}, {"duplicate_candidates": True}):
-        selected_rows = [row for row in query(**modes) if row["album_id"] == album_id]
+        rows = _query(connection, **modes, params={"album_key": key, "album_keys": [key], "album_ids": [album_id]})
+        selected_rows = [row for row in rows if row["album_id"] == album_id]
         assert selected_rows, modes
         assert all(row["file_mixed_album_folder"] is False for row in selected_rows), modes
 

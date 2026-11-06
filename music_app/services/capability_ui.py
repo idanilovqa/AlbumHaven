@@ -33,6 +33,8 @@ ACTION_SELECTORS = MappingProxyType({
         "[data-apply-problem-suggestions]",
     ),
     "library.inventory.manage": ("[data-remove-missing-album]",),
+    # Readable file paths in track tables are owner-only; the server also omits loose-track display paths.
+    "library.paths.read": ('.album-track-table [data-cdt-column="path"]',),
     "library.files.move": (
         "[data-move-problematic-album]",
         '[data-album-card-action="move_to_library"]', '[data-album-card-action="move_to_hoard"]',

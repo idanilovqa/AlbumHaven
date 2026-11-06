@@ -4879,6 +4879,14 @@ function buildGalleryCardInfoHtml(config = {}) {
 // BEGIN js/runtime/gallery-main-state.js
 
 const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
+const GALLERY_RELEASE_TYPE_LABELS = Object.freeze({ studio: 'Studio', ep: 'EP', live: 'Live', demo: 'Demo', compilation: 'Compilation', single: 'Single' });
+// Split Albums switch positions, left to right.
+const GALLERY_SPLIT_ALBUM_MODES = ['hide', 'separate', 'show'];
+const GALLERY_SPLIT_ALBUM_LABELS = Object.freeze({ hide: 'Hide Split Albums', separate: 'Separate Split Albums', show: 'Show Split Albums' });
+
+function normalizeGallerySplitAlbumsMode(value) {
+  return GALLERY_SPLIT_ALBUM_MODES.includes(value) ? value : 'show';
+}
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -4891,7 +4899,7 @@ function createGalleryMainState(overrides = {}) {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
     showFeaturedOn: overrides.showFeaturedOn !== false,
-    showSplitAlbums: overrides.showSplitAlbums !== false,
+    splitAlbums: normalizeGallerySplitAlbumsMode(overrides.splitAlbums),
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -4919,8 +4927,8 @@ function reduceGalleryMainState(current, action = {}) {
     next.sources[action.source] = !next.sources[action.source];
   } else if (action.type === 'toggle-featured-on') {
     next.showFeaturedOn = !next.showFeaturedOn;
-  } else if (action.type === 'toggle-split-albums') {
-    next.showSplitAlbums = !next.showSplitAlbums;
+  } else if (action.type === 'set-split-albums') {
+    next.splitAlbums = normalizeGallerySplitAlbumsMode(action.mode);
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -5006,7 +5014,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
       && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
-      && (filterState.showSplitAlbums !== false || !isGallerySplitAlbum(album))
+      && (filterState.splitAlbums !== 'hide' || !isGallerySplitAlbum(album))
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -5117,7 +5125,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     || filterState.albumTypes?.length !== 3
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
-    || filterState.showSplitAlbums === false
+    || filterState.splitAlbums === 'hide'
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;
@@ -5333,21 +5341,13 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 }
 
 function buildLooseTracksHeaderActionsHtml() {
-  return [
-    ButtonComponent.renderActionButton({
-      ariaLabel: 'Edit tags',
-      title: 'Edit tags',
-      className: 'track-modal-edit-tags album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
-      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
-    }),
-    ButtonComponent.renderActionButton({
-      ariaLabel: 'Close loose tracks',
-      className: 'album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
-      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
-    }),
-  ].join('');
+  return ButtonComponent.renderActionButton({
+    ariaLabel: 'Edit tags',
+    title: 'Edit tags',
+    className: 'track-modal-edit-tags album-details-header__action',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+    attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+  });
 }
 
 function buildMissingAlbumDetailsHtml(config = {}) {
@@ -7179,8 +7179,18 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
-  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
-    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  const splitMode = mainState.splitAlbums;
+  // Shown only when the discography in view has a split album, or a non-default position needs undoing.
+  const hasSplitAlbums = splitMode !== 'show' || [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups]
+    .some((groups) => (Array.isArray(groups) ? groups : []).some((group) => (group?.albums || []).some((album) => isGallerySplitAlbum(album))));
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((control) => {
+    const position = GALLERY_SPLIT_ALBUM_MODES.indexOf(splitMode);
+    control.hidden = !hasSplitAlbums;
+    control.dataset.switchPosition = String(position);
+    control.setAttribute('aria-valuenow', String(position));
+    control.setAttribute('aria-valuetext', GALLERY_SPLIT_ALBUM_LABELS[splitMode]);
+    const label = control.querySelector?.('[data-gallery-split-albums-label]');
+    if (label) label.textContent = GALLERY_SPLIT_ALBUM_LABELS[splitMode];
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -7441,6 +7451,27 @@ function openGalleryArtistInfo(anchor) {
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
+function resolveSplitAlbumsSwitchMode(control, event) {
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const rect = control.querySelector?.('.gallery-switch__track')?.getBoundingClientRect?.();
+  if (rect?.width > 0 && event.detail !== 0 && event.clientX >= rect.left && event.clientX <= rect.right) {
+    return GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * 3)))];
+  }
+  return GALLERY_SPLIT_ALBUM_MODES[(current + 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+}
+
+function handleSplitAlbumsSwitchKeydown(event) {
+  if (!event.target?.closest?.('[data-gallery-split-albums]')) return false;
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: 2 }[event.key];
+  if (next === undefined) return false;
+  event.preventDefault();
+  const mode = GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, next))];
+  if (mode !== GALLERY_SPLIT_ALBUM_MODES[current]) transitionGalleryMain({ type: 'set-split-albums', mode });
+  return true;
+}
+
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const readMore = event.target.closest?.('[data-artist-info-read-more]');
@@ -7461,7 +7492,11 @@ function handleGalleryMainClick(event) {
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
-  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
+  if (splitAlbums) {
+    event.preventDefault();
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode(splitAlbums, event) });
+    return true;
+  }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -7588,6 +7623,7 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
+    if (handleSplitAlbumsSwitchKeydown(event)) return;
     if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
       closeGalleryMainSurface(true);
@@ -12303,7 +12339,7 @@ function getVisibleNonAlbumTracks(options = {}) {
   const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))
-    || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
+    || String(track.display_path || track.path || '').split(/[\\/]/).slice(0, -1)
       .some((part) => artistFolders.has(folderKey(part)))
   ));
 }
@@ -12414,12 +12450,15 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+    const knownArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    const yearLabel = String(item.year_label || '').trim();
     return {
       path: trackPath,
+      // Loose Tracks rows read "Artist / Title" with the year underneath.
       title,
+      titlePrefix: knownArtist,
       playbackTitle: title,
       artist: String(item.artist || ''),
       albumArtist: String(item.album_artist || ''),
@@ -12429,14 +12468,60 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       duration,
       originalDuration: duration,
       trackNumber: rowIndex,
-      secondaryArtist,
-      displayPath: displayPath || trackPath,
+      secondaryArtist: yearLabel && yearLabel !== 'Unknown' ? yearLabel : '',
+      displayPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
-      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
+      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
     };
   });
+}
+
+function formatLooseTrackCount(count) {
+  return `${count} ${count === 1 ? 'track' : 'tracks'}`;
+}
+
+function canReadLibraryPaths() {
+  return window.AlbumHavenCapabilities?.allows?.('library.paths.read') === true;
+}
+
+function buildNonAlbumTrackLoadingMarkup() {
+  return buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: canReadLibraryPaths(),
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+    idPrefix: 'loose-track-loading',
+  });
+}
+
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+function closeNonAlbumPageOnTreeNavigation(event) {
+  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
+      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+}
+
+// Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
+function setNonAlbumPagePresentation(overlay, open) {
+  const main = document.getElementById('shell-main-surface');
+  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !overlay.classList.contains('is-mobile-page');
+  overlay.classList.toggle('non-album-modal--page', Boolean(page));
+  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  // Opening from the Album types menu must not leave that menu over the page.
+  if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
+  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  const dialog = overlay.querySelector('.non-album-modal-dialog');
+  if (dialog) {
+    if (page) { dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal'); }
+    else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
+  }
+  document.querySelectorAll('[data-open-non-album-tracks][data-library-wide="1"]').forEach((item) => {
+    if (item.matches('[data-navigation-tree-item]')) window.NavigationTree?.setItemSelected(item, Boolean(open && state.ui.nonAlbumLibraryWide));
+  });
+  return Boolean(page);
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
@@ -12482,12 +12567,20 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return { discLabel: section.title, sectionKey: section.key, tracks };
+    const sectionSeconds = sectionItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+    return {
+      discLabel: section.title,
+      sectionKey: section.key,
+      tracks,
+      countLabel: formatLooseTrackCount(sectionItems.length),
+      lengthDisplay: formatAlbumDuration(sectionSeconds),
+    };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
   return buildAlbumTrackTableHtml({
     groups,
-    showPath: true,
+    // The server sends display paths only to viewers allowed to read library paths.
+    showPath: items.some((item) => String(item?.display_path || '').trim()),
     forceGroupLabels: true,
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
@@ -12585,9 +12678,10 @@ function openNonAlbumModal(options = {}) {
   state.ui.nonAlbumLibraryWide = libraryWide;
   const hydrationPending = Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
-  const subtitle = !libraryWide && state.view.selected_artist
-    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the selected library sources.';
+  const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
+  const subtitle = hydrationPending
+    ? (libraryWide ? 'Loading loose tracks across the library…' : 'Loading loose tracks…')
+    : `${formatLooseTrackCount(looseTracks.length)}${scope}`;
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -12598,9 +12692,9 @@ function openNonAlbumModal(options = {}) {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
-  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
+  if (typeof presentMobilePage === 'function') presentMobilePage({ ...mobilePageDescriptor('non-album'), subtitle });
   els.table.innerHTML = hydrationPending
-    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
+    ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
@@ -12612,7 +12706,7 @@ function openNonAlbumModal(options = {}) {
     details.addEventListener?.('toggle', syncExpanded);
   });
   els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   attachSharedPlayer();
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide })
@@ -12797,6 +12891,7 @@ function closeNonAlbumModal() {
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  setNonAlbumPagePresentation(els.overlay, false);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -13627,7 +13722,6 @@ function getNonAlbumModalElements() {
     overlay: document.getElementById('non-album-modal'),
     header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
-    close: document.getElementById('non-album-modal-close'),
   };
 }
 
@@ -19901,7 +19995,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  // titlePrefix (e.g. "Artist / ") is drawn before the title without becoming part of the title text.
+  const titlePrefix = String(track.titlePrefix || '').trim();
+  const titleHtml = `<span class="album-track-table__title"${titlePrefix ? ` data-title-prefix="${escapeHtml(`${titlePrefix} / `)}"` : ''}>${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -19928,6 +20024,23 @@ function matchesAlbumTrackSearch(query, title, secondaryArtist) {
   const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
   return Boolean(normalizedQuery && [title, secondaryArtist]
     .some(value => String(value || '').toLocaleLowerCase().includes(normalizedQuery)));
+}
+
+// Loading rows keep the real row geometry: number, title and secondary line, optional path, length.
+function buildAlbumTrackTableSkeletonRow(index) {
+  const line = (modifier, width) => `<span class="album-track-table__skeleton album-track-table__skeleton--${modifier}"${width ? ` style="width:${width}%"` : ''}></span>`;
+  const widths = [62, 48, 70, 55];
+  return {
+    key: `skeleton-${index + 1}`,
+    className: 'album-track-table__row album-track-table__row--skeleton',
+    cells: {
+      number: { content: line('number') },
+      title: { content: `${line('title', widths[index % widths.length])}${line('secondary', 28)}` },
+      path: { content: line('path', 74) },
+      problem: { content: '' },
+      duration: { content: line('duration') },
+    },
+  };
 }
 
 function buildAlbumTrackTableHtml(config = {}) {
@@ -19994,11 +20107,12 @@ function buildAlbumTrackTableHtml(config = {}) {
     const table = buildCompactDataTable({
       id: `${idPrefix}-tracks-${groupIndex + 1}`,
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
-      headers: groupIndex === 0 ? 'visible' : 'absent',
+      // Collapsible sections each carry their own column headers so any section can be read alone.
+      headers: groupIndex === 0 || collapsibleGroups ? 'visible' : 'absent',
       columns: 'var(--album-track-table-columns)',
       columnsConfig,
       // A named section (provider tracklist heading) is a shaded full-span row before its first track.
-      rows: tracks.flatMap((track, index) => {
+      rows: group?.loadingRows ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index)) : tracks.flatMap((track, index) => {
         const row = buildAlbumTrackTableRow(track, index, config);
         const sectionTitle = String(track?.sectionTitle || '').trim();
         return sectionTitle ? [{
@@ -20014,15 +20128,22 @@ function buildAlbumTrackTableHtml(config = {}) {
       mobile: 'preserve',
     });
     const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : (groupIndex === lastMainIndex ? mainSummaryHtml : '');
-    if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}${summaryHtml}</details>`;
+    if (collapsibleGroups && (showLabel || group?.loadingRows)) {
+      // Section super-header: title, muted count, and the section length (hidden while collapsed).
+      const count = String(group?.countLabel || '').trim();
+      const length = String(group?.lengthDisplay || '').trim();
+      const headingContent = group?.loadingRows
+        ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
+        : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>`;
     }
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
     return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>`;
   }).join('');
-  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+  const loading = groups.some((group) => group?.loadingRows);
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {
@@ -40501,13 +40622,23 @@ class VirtualArtistGrid {
           && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
         const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
         const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
+        // Separate: split albums leave the artist's own rows for one section per release type.
+        const splitAlbums = state?.gallery?.mainState?.splitAlbums === 'separate'
+          ? ownedAlbums.filter((album) => isGallerySplitAlbum(album)) : [];
+        const artistAlbums = splitAlbums.length ? ownedAlbums.filter((album) => !splitAlbums.includes(album)) : ownedAlbums;
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(ownedAlbums);
+        appendRows(artistAlbums);
+        GALLERY_RELEASE_TYPES.forEach((type) => {
+            const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+            if (!typedSplits.length) return;
+            blocks.push({ kind: 'subheading', title: `${GALLERY_RELEASE_TYPE_LABELS[type]} Split`, count: typedSplits.length });
+            appendRows(typedSplits);
+        });
         if (featuredAlbums.length) {
             blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
             appendRows(featuredAlbums);
@@ -45532,7 +45663,10 @@ function handleGalleryBootstrapClick(event) {
   }
 
   const closeNonAlbumModalButton = event.target.closest('[data-close-non-album-modal="1"]');
-  if (closeNonAlbumModalButton || overlayClickStartedOnOverlay(document.getElementById('non-album-modal'), event)) {
+  const nonAlbumOverlay = document.getElementById('non-album-modal');
+  // The desktop Loose Tracks page has no backdrop; only the modal presentation closes on an outside click.
+  if (closeNonAlbumModalButton || (!nonAlbumOverlay?.classList?.contains('non-album-modal--page')
+      && overlayClickStartedOnOverlay(nonAlbumOverlay, event))) {
     event.preventDefault();
     closeNonAlbumModal();
     return;
@@ -46148,7 +46282,7 @@ function handleSidebarArtistSelectionClick(event) {
     || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
-    || previousGalleryMainState.showSplitAlbums === false
+    || previousGalleryMainState.splitAlbums === 'hide'
   ));
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();
@@ -48122,7 +48256,7 @@ function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {

@@ -821,7 +821,8 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     markup,
     /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__title" data-title-prefix="Main Artist feat\. Guest \/ ">Rare Song</);
+  assert.match(markup, /album-track-table__disc-title">Non-album rarity<\/span><span class="album-track-table__disc-count">1 track<\/span><span class="album-track-table__disc-length">4:05</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
   assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
@@ -837,6 +838,9 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     exception_type: 'Non-album rarity',
   }]);
   assert.match(rarityOnly, />Non-album rarity</);
+  assert.doesNotMatch(rarityOnly, /data-track-path-column/, 'without a display path the File path column is absent');
+  const withYear = context.buildNonAlbumTrackSectionsMarkup([{ path: 'C:/Music/A.mp3', title: 'Song', artist: 'Band', year_label: '2024', exception_type: 'Interview' }]);
+  assert.match(withYear, /album-track-table__secondary" title="2024"><span>2024</);
   assert.doesNotMatch(rarityOnly, />Interviews</);
 
   const otherOnly = context.buildNonAlbumTrackSectionsMarkup([{

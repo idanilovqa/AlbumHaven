@@ -32,9 +32,14 @@ border-bottom: 1px solid var(--border);
 overflow: auto;
 padding: 14px 20px 20px;
 }
-.non-album-modal-table .compact-data-table {
---cdt-mobile-min-width: 620px;
-}
+/* Desktop page: Loose Tracks covers the gallery inside the main surface, on its background. */
+.shell-main-surface:has(> .non-album-modal--page:not([hidden])) { position: relative; }
+.non-album-modal.non-album-modal--page { position: absolute; inset: 0; z-index: 70; display: flex; align-items: stretch; justify-content: stretch; padding: 0; background: var(--appearance-main-surface, var(--bg)); }
+.non-album-modal--page > .non-album-modal-dialog { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.non-album-modal--page .non-album-modal-header { padding: 18px var(--app-page-inline, 24px) 12px; }
+.non-album-modal--page .non-album-modal-table-wrap { flex: 1 1 auto; min-height: 0; padding: 4px var(--app-page-inline, 24px) 24px; }
+/* Mobile page: the shell's page header is the only header. */
+.is-mobile-page .non-album-modal-header { display: none; }
 .non-album-modal-table {
 display: grid;
 gap: 8px;

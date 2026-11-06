@@ -118,6 +118,11 @@ def _project_missing_album_actions_for_request(
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if not allowed_actions.as_payload().get("library.paths.read"):
                     value["duplicate_sources"] = []
+            if not allowed_actions.as_payload().get("library.paths.read"):
+                for key in ("non_album_tracks", "library_non_album_tracks"):
+                    for track in value.get(key) or ():
+                        if isinstance(track, dict):
+                            track.pop("display_path", None)
             if "suggested_edits" in value or (
                 "album_id" in value and value.get("key") and "album_artist" in value
             ):

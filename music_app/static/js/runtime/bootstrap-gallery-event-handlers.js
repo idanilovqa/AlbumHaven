@@ -38,7 +38,10 @@ function handleGalleryBootstrapClick(event) {
   }
 
   const closeNonAlbumModalButton = event.target.closest('[data-close-non-album-modal="1"]');
-  if (closeNonAlbumModalButton || overlayClickStartedOnOverlay(document.getElementById('non-album-modal'), event)) {
+  const nonAlbumOverlay = document.getElementById('non-album-modal');
+  // The desktop Loose Tracks page has no backdrop; only the modal presentation closes on an outside click.
+  if (closeNonAlbumModalButton || (!nonAlbumOverlay?.classList?.contains('non-album-modal--page')
+      && overlayClickStartedOnOverlay(nonAlbumOverlay, event))) {
     event.preventDefault();
     closeNonAlbumModal();
     return;
@@ -654,7 +657,7 @@ function handleSidebarArtistSelectionClick(event) {
     || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
-    || previousGalleryMainState.showSplitAlbums === false
+    || previousGalleryMainState.splitAlbums === 'hide'
   ));
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();

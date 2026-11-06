@@ -203,10 +203,8 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /id="non-album-modal-edit-tags"/);
   assert.match(html, /data-open-non-album-tag-editor="1"/);
   assert.match(html, /album-details-header__action-icon--edit/);
-  assert.match(html, /id="non-album-modal-close"/);
-  assert.match(html, /data-close-non-album-modal="1"/);
-  assert.match(html, /album-details-header__action-icon--close/);
-  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
+  assert.doesNotMatch(html, /non-album-modal-close|data-close-non-album-modal|album-details-header__action-icon--close/, 'Loose Tracks is a page without a close button');
+  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 1);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
 });
 

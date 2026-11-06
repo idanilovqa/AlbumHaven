@@ -69,3 +69,6 @@ button.navigation-tree-item[data-navigation-tree-item="panel"] {
   .selection-accent-previews { grid-template-columns: minmax(0, 1fr); }
   .selection-accent-actions [role=status] { flex-basis: 100%; }
 }
+/* A fixed section above the artist list: Loose Tracks today, custom collections later. */
+.navigation-tree--section { flex: none; display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid color-mix(in srgb, var(--appearance-line, var(--border)) 70%, transparent); }
+.navigation-tree--section .navigation-tree-item[aria-disabled="true"] { color: var(--appearance-muted, var(--muted)); pointer-events: none; }

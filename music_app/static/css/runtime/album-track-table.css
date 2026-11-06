@@ -25,6 +25,26 @@
 .album-track-table__disc--collapsible > summary::before { content: '\203A'; display: inline-block; margin-right: 7px; transition: transform 120ms ease; }
 .album-track-table__disc--collapsible[open] > summary::before { transform: rotate(90deg); }
 .album-track-table:has(.album-track-table__disc--collapsible:not([open])) .album-track-table__total { display: none; }
+/* Section super-header: on the surface the table is rendered on, attached to its table; no side or top lines.
+   A collapsed section hides its length and keeps one hairline. */
+.album-track-table__disc--collapsible > summary.album-track-table__disc-heading { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 6px 4px 8px; color: var(--appearance-ink, var(--text)); font-size: .92rem; font-weight: 500; }
+.album-track-table__disc--collapsible > summary::before { align-self: center; color: var(--appearance-ink, var(--text)); }
+.album-track-table__disc-title { font-weight: 800; letter-spacing: .02em; text-transform: uppercase; }
+.album-track-table__disc-count { color: var(--appearance-muted, var(--muted)); font-size: .78rem; }
+.album-track-table__disc-length { margin-left: auto; color: var(--appearance-muted, var(--muted)); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.album-track-table__disc--collapsible:not([open]) > summary { border-bottom: 1px solid color-mix(in srgb, var(--appearance-line, var(--border)) 80%, transparent); }
+.album-track-table__disc--collapsible:not([open]) .album-track-table__disc-length { display: none; }
+.album-track-table__title[data-title-prefix]::before { content: attr(data-title-prefix); }
+/* Loading skeleton rows sized like real rows. */
+@keyframes album-track-table-skeleton { to { background-position: -200% 0; } }
+.album-track-table__skeleton { display: block; height: 10px; border-radius: 999px; background: linear-gradient(90deg, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 25%, color-mix(in srgb, var(--appearance-ink, var(--text)) 16%, transparent) 50%, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 75%); background-size: 200% 100%; animation: album-track-table-skeleton 1.2s ease-in-out infinite; }
+.album-track-table__skeleton--number { width: 14px; margin: 0 auto; }
+.album-track-table__skeleton--title { height: 11px; }
+.album-track-table__skeleton--secondary { height: 8px; margin-top: 6px; }
+.album-track-table__skeleton--path { height: 8px; }
+.album-track-table__skeleton--duration { width: 34px; margin-left: auto; }
+.album-track-table__skeleton--heading { width: 150px; height: 11px; }
+@media (prefers-reduced-motion: reduce) { .album-track-table__skeleton { animation: none; } }
 .album-track-table .compact-data-table,
 :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table {
   border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 72%, transparent);

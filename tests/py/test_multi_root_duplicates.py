@@ -630,6 +630,22 @@ def test_duplicate_source_paths_require_explicit_path_read_permission(monkeypatc
         assert payload["duplicate_source_count"] == 1
 
 
+@pytest.mark.parametrize("can_read_paths", [False, True])
+def test_loose_track_display_paths_require_path_read_permission(monkeypatch, can_read_paths):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    monkeypatch.setattr(routes, "allowed_actions_for_request", lambda *args: SimpleNamespace(as_payload=lambda: {"library.paths.read": can_read_paths}))
+    payload = {
+        "non_album_tracks": [{"path": "D:/Music/A/one.flac", "display_path": "A/one.flac", "title": "One"}],
+        "library_non_album_tracks": [{"path": "D:/Music/B/two.flac", "display_path": "B/two.flac", "title": "Two"}],
+    }
+    routes._project_missing_album_actions_for_request(SimpleNamespace(), payload)
+    for key in ("non_album_tracks", "library_non_album_tracks"):
+        track = payload[key][0]
+        assert ("display_path" in track) is can_read_paths
+        assert track["title"] and track["path"], "playback identity and title stay intact"
+
+
 def test_partial_duplicate_group_preserves_all_own_source_categories():
     tracks = [
         _track("main/one", library_root_category="main_library_roots"),

@@ -190,6 +190,21 @@ def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render
     assert not any("Open New Arrivals" in switch.text for switch in menu.find_all())
 
 
+def test_loose_tracks_live_in_the_left_navigation_collections_section(render):
+    shell = render().one(id="app-shell")
+    toolbar = render().one(**{"class": "toolbar-right"})
+    assert toolbar.find_all(**{"data-open-non-album-tracks": None}) == []
+    collections = shell.one(id="sidebar-collections")
+    assert collections.attrs["data-navigation-tree"] == "collections"
+    assert collections.attrs["aria-label"] == "Collections"
+    item = collections.one(**{"data-navigation-tree-key": "collection:loose-tracks"})
+    assert item.attrs["data-open-non-album-tracks"] == "1"
+    assert item.attrs["data-library-wide"] == "1"
+    compact = shell.one(id="shell-navigation-compact")
+    rail = compact.one(**{"data-open-non-album-tracks": "1"})
+    assert rail.attrs["data-library-wide"] == "1"
+
+
 def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     shell = render().one(id="app-shell")
     gallery_bar = shell.one(**{"data-gallery-bar-instance": "gallery"})
@@ -212,8 +227,10 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
     split_albums = album_types.one("button", **{"data-gallery-split-albums": "1"})
-    assert split_albums.attrs["aria-pressed"] == "true"
-    assert split_albums.text.strip().endswith("Show Split Albums")
+    assert "gallery-switch--tri" in split_albums.attrs["class"]
+    assert split_albums.attrs["role"] == "slider"
+    assert split_albums.attrs["aria-valuenow"] == "2"
+    assert split_albums.attrs["aria-valuetext"] == "Show Split Albums"
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
     customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
     assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"

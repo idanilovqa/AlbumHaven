@@ -205,7 +205,7 @@ function getVisibleNonAlbumTracks(options = {}) {
   const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))
-    || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
+    || String(track.display_path || track.path || '').split(/[\\/]/).slice(0, -1)
       .some((part) => artistFolders.has(folderKey(part)))
   ));
 }
@@ -316,12 +316,15 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+    const knownArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    const yearLabel = String(item.year_label || '').trim();
     return {
       path: trackPath,
+      // Loose Tracks rows read "Artist / Title" with the year underneath.
       title,
+      titlePrefix: knownArtist,
       playbackTitle: title,
       artist: String(item.artist || ''),
       albumArtist: String(item.album_artist || ''),
@@ -331,14 +334,60 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       duration,
       originalDuration: duration,
       trackNumber: rowIndex,
-      secondaryArtist,
-      displayPath: displayPath || trackPath,
+      secondaryArtist: yearLabel && yearLabel !== 'Unknown' ? yearLabel : '',
+      displayPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
-      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
+      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
     };
   });
+}
+
+function formatLooseTrackCount(count) {
+  return `${count} ${count === 1 ? 'track' : 'tracks'}`;
+}
+
+function canReadLibraryPaths() {
+  return window.AlbumHavenCapabilities?.allows?.('library.paths.read') === true;
+}
+
+function buildNonAlbumTrackLoadingMarkup() {
+  return buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: canReadLibraryPaths(),
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+    idPrefix: 'loose-track-loading',
+  });
+}
+
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+function closeNonAlbumPageOnTreeNavigation(event) {
+  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
+      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+}
+
+// Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
+function setNonAlbumPagePresentation(overlay, open) {
+  const main = document.getElementById('shell-main-surface');
+  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !overlay.classList.contains('is-mobile-page');
+  overlay.classList.toggle('non-album-modal--page', Boolean(page));
+  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  // Opening from the Album types menu must not leave that menu over the page.
+  if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
+  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  const dialog = overlay.querySelector('.non-album-modal-dialog');
+  if (dialog) {
+    if (page) { dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal'); }
+    else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
+  }
+  document.querySelectorAll('[data-open-non-album-tracks][data-library-wide="1"]').forEach((item) => {
+    if (item.matches('[data-navigation-tree-item]')) window.NavigationTree?.setItemSelected(item, Boolean(open && state.ui.nonAlbumLibraryWide));
+  });
+  return Boolean(page);
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
@@ -384,12 +433,20 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return { discLabel: section.title, sectionKey: section.key, tracks };
+    const sectionSeconds = sectionItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+    return {
+      discLabel: section.title,
+      sectionKey: section.key,
+      tracks,
+      countLabel: formatLooseTrackCount(sectionItems.length),
+      lengthDisplay: formatAlbumDuration(sectionSeconds),
+    };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
   return buildAlbumTrackTableHtml({
     groups,
-    showPath: true,
+    // The server sends display paths only to viewers allowed to read library paths.
+    showPath: items.some((item) => String(item?.display_path || '').trim()),
     forceGroupLabels: true,
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
@@ -487,9 +544,10 @@ function openNonAlbumModal(options = {}) {
   state.ui.nonAlbumLibraryWide = libraryWide;
   const hydrationPending = Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
-  const subtitle = !libraryWide && state.view.selected_artist
-    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the selected library sources.';
+  const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
+  const subtitle = hydrationPending
+    ? (libraryWide ? 'Loading loose tracks across the library…' : 'Loading loose tracks…')
+    : `${formatLooseTrackCount(looseTracks.length)}${scope}`;
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -500,9 +558,9 @@ function openNonAlbumModal(options = {}) {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
-  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
+  if (typeof presentMobilePage === 'function') presentMobilePage({ ...mobilePageDescriptor('non-album'), subtitle });
   els.table.innerHTML = hydrationPending
-    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
+    ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
@@ -514,7 +572,7 @@ function openNonAlbumModal(options = {}) {
     details.addEventListener?.('toggle', syncExpanded);
   });
   els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   attachSharedPlayer();
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide })
@@ -699,6 +757,7 @@ function closeNonAlbumModal() {
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  setNonAlbumPagePresentation(els.overlay, false);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -1529,7 +1588,6 @@ function getNonAlbumModalElements() {
     overlay: document.getElementById('non-album-modal'),
     header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
-    close: document.getElementById('non-album-modal-close'),
   };
 }
 

@@ -452,8 +452,18 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
-  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
-    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  const splitMode = mainState.splitAlbums;
+  // Shown only when the discography in view has a split album, or a non-default position needs undoing.
+  const hasSplitAlbums = splitMode !== 'show' || [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups]
+    .some((groups) => (Array.isArray(groups) ? groups : []).some((group) => (group?.albums || []).some((album) => isGallerySplitAlbum(album))));
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((control) => {
+    const position = GALLERY_SPLIT_ALBUM_MODES.indexOf(splitMode);
+    control.hidden = !hasSplitAlbums;
+    control.dataset.switchPosition = String(position);
+    control.setAttribute('aria-valuenow', String(position));
+    control.setAttribute('aria-valuetext', GALLERY_SPLIT_ALBUM_LABELS[splitMode]);
+    const label = control.querySelector?.('[data-gallery-split-albums-label]');
+    if (label) label.textContent = GALLERY_SPLIT_ALBUM_LABELS[splitMode];
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -714,6 +724,27 @@ function openGalleryArtistInfo(anchor) {
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
+function resolveSplitAlbumsSwitchMode(control, event) {
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const rect = control.querySelector?.('.gallery-switch__track')?.getBoundingClientRect?.();
+  if (rect?.width > 0 && event.detail !== 0 && event.clientX >= rect.left && event.clientX <= rect.right) {
+    return GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * 3)))];
+  }
+  return GALLERY_SPLIT_ALBUM_MODES[(current + 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+}
+
+function handleSplitAlbumsSwitchKeydown(event) {
+  if (!event.target?.closest?.('[data-gallery-split-albums]')) return false;
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: 2 }[event.key];
+  if (next === undefined) return false;
+  event.preventDefault();
+  const mode = GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, next))];
+  if (mode !== GALLERY_SPLIT_ALBUM_MODES[current]) transitionGalleryMain({ type: 'set-split-albums', mode });
+  return true;
+}
+
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const readMore = event.target.closest?.('[data-artist-info-read-more]');
@@ -734,7 +765,11 @@ function handleGalleryMainClick(event) {
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
-  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
+  if (splitAlbums) {
+    event.preventDefault();
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode(splitAlbums, event) });
+    return true;
+  }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -861,6 +896,7 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
+    if (handleSplitAlbumsSwitchKeydown(event)) return;
     if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
       closeGalleryMainSurface(true);

@@ -1260,13 +1260,23 @@ class VirtualArtistGrid {
           && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
         const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
         const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
+        // Separate: split albums leave the artist's own rows for one section per release type.
+        const splitAlbums = state?.gallery?.mainState?.splitAlbums === 'separate'
+          ? ownedAlbums.filter((album) => isGallerySplitAlbum(album)) : [];
+        const artistAlbums = splitAlbums.length ? ownedAlbums.filter((album) => !splitAlbums.includes(album)) : ownedAlbums;
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(ownedAlbums);
+        appendRows(artistAlbums);
+        GALLERY_RELEASE_TYPES.forEach((type) => {
+            const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+            if (!typedSplits.length) return;
+            blocks.push({ kind: 'subheading', title: `${GALLERY_RELEASE_TYPE_LABELS[type]} Split`, count: typedSplits.length });
+            appendRows(typedSplits);
+        });
         if (featuredAlbums.length) {
             blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
             appendRows(featuredAlbums);

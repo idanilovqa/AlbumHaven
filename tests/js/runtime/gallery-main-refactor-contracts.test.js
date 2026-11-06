@@ -640,7 +640,7 @@ test('client Gallery state defaults to all sources, Studio plus EP and Compilati
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   });
@@ -671,7 +671,7 @@ test('new primary artist navigation resets filters while preserving the display 
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: [],
   });
@@ -691,7 +691,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -750,7 +750,7 @@ test('relationship controls synchronize and dispatch without enabling release-ty
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   } }, view: {} };
@@ -769,7 +769,8 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   });
   context.updateGalleryMainControls();
   assert.equal(featuredAttributes.get('aria-pressed'), 'false');
-  assert.equal(splitAttributes.get('aria-pressed'), 'true');
+  assert.equal(splitAttributes.get('aria-valuenow'), '2');
+  assert.equal(splitAttributes.get('aria-valuetext'), 'Show Split Albums');
   assert.equal(featured.disabled, false);
   assert.equal(releaseType.disabled, true);
 
@@ -784,11 +785,13 @@ test('relationship controls synchronize and dispatch without enabling release-ty
 
   context.handleGalleryMainClick({
     preventDefault: () => prevented.push(true),
+    detail: 1,
+    clientX: 0,
     target: { closest: selector => selector === '[data-gallery-split-albums]' ? split : null },
   });
   assert.deepEqual(plain(actions), [
     { type: 'toggle-featured-on' },
-    { type: 'toggle-split-albums' },
+    { type: 'set-split-albums', mode: 'hide' },
   ]);
   assert.equal(prevented.length, 2);
 });
@@ -1173,11 +1176,11 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
   assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
-  assert.equal(createGalleryMainState().showSplitAlbums, true);
-  assert.equal(
-    reduceGalleryMainState(createGalleryMainState(), { type: 'toggle-split-albums' }).showSplitAlbums,
-    false,
-  );
+  assert.equal(createGalleryMainState().splitAlbums, 'show');
+  for (const mode of ['hide', 'separate', 'show']) {
+    assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode }).splitAlbums, mode);
+  }
+  assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode: 'bogus' }).splitAlbums, 'show');
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1218,9 +1221,16 @@ test('all unavailable release types remain inert while catalog-backed facts are 
         { key: 'studio', release_type: 'Album', source: 'main_library' },
       ],
     }],
-    filterState: { ...createGalleryMainState(), showSplitAlbums: false },
+    filterState: { ...createGalleryMainState(), splitAlbums: 'hide' },
   }));
   assert.deepEqual(withoutSplits.groups[0].albums.map((album) => album.key), ['studio']);
+  for (const splitAlbums of ['show', 'separate']) {
+    const withSplits = plain(filterGalleryModel({
+      groups: [{ artist: 'Jordsjø', albums: [{ key: 'split', release_type: 'Split', source: 'main_library' }] }],
+      filterState: { ...createGalleryMainState(), splitAlbums },
+    }));
+    assert.deepEqual(withSplits.groups[0].albums.map((album) => album.key), ['split'], splitAlbums);
+  }
 });
 
 test('art-only Gallery hover frame covers the complete card edge', () => {

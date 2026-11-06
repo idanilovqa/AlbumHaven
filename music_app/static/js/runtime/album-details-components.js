@@ -114,21 +114,13 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 }
 
 function buildLooseTracksHeaderActionsHtml() {
-  return [
-    ButtonComponent.renderActionButton({
-      ariaLabel: 'Edit tags',
-      title: 'Edit tags',
-      className: 'track-modal-edit-tags album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
-      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
-    }),
-    ButtonComponent.renderActionButton({
-      ariaLabel: 'Close loose tracks',
-      className: 'album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
-      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
-    }),
-  ].join('');
+  return ButtonComponent.renderActionButton({
+    ariaLabel: 'Edit tags',
+    title: 'Edit tags',
+    className: 'track-modal-edit-tags album-details-header__action',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+    attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+  });
 }
 
 function buildMissingAlbumDetailsHtml(config = {}) {

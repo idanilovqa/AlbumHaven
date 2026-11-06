@@ -3728,7 +3728,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     view: 'covers',
     familyArtists: [],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
   });
 });
 

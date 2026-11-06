@@ -13,9 +13,9 @@ const execFileAsync = promisify(execFile);
 
 const OWNER_PREFIX = 'E2E Compilation Owner ';
 
-// Three Various Artists compilations owned by one artist folder. The same two
-// track artists appear on every part and sort before the owner, so a title
-// search that auto-selected the alphabetical first group would hide the set.
+// Three compilations whose album artist is their owner. The same two track
+// artists appear on every part and sort before the owner, so a title search
+// that auto-selected the alphabetical first group would hide the set.
 const GENERATE_FIXTURE = String.raw`
 import json
 import shutil
@@ -51,7 +51,7 @@ for part in ("I", "II", "III"):
         tags.clear()
         for frame in (
             TPE1(encoding=3, text=[artist]),
-            TPE2(encoding=3, text=["Various Artists"]),
+            TPE2(encoding=3, text=[owner_name]),
             TALB(encoding=3, text=[album]),
             TIT2(encoding=3, text=[f"{artist} {part}"]),
             TRCK(encoding=3, text=[f"{track_number}/{len(track_artists)}"]),

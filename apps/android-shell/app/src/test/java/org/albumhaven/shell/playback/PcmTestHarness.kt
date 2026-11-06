@@ -1,6 +1,8 @@
 package org.albumhaven.shell.playback
 
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -177,49 +179,38 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
     }
 }
 
-/** Records every written sample and every transport operation of the one audible output. */
-class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int = Int.MAX_VALUE) : PcmSink {
-    private var trace = FloatArray(1 shl 20)
-    var writtenFrames = 0
+/** Frames of the synthetic signal: left is the source frame and right the track tag, both times the frame's gain. */
+class PcmTrace {
+    private var samples = FloatArray(1 shl 20)
+    var frames = 0
         private set
-    val operations = mutableListOf<String>()
 
-    /** Written frames the fake output has not played yet. */
-    var pending = 0
-
-    override fun pendingFrames() = minOf(pending, writtenFrames)
-
-    override fun heardFrames() = (writtenFrames - pendingFrames()).toLong()
-
-    /** Fails like an [android.media.AudioTrack] whose audio server died: every write answers `ERROR_DEAD_OBJECT`. */
-    var dead = false
-
-    override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
-        if (dead) return ERROR_DEAD_OBJECT
-        val accepted = minOf(frames, acceptFrames)
-        while ((writtenFrames + accepted) * 2 > trace.size) trace = trace.copyOf(trace.size * 2)
-        System.arraycopy(samples, offsetSamples, trace, writtenFrames * 2, accepted * 2)
-        writtenFrames += accepted
-        if (operations.lastOrNull() != "write") operations += "write"
-        return accepted
+    fun append(source: FloatArray, offsetSamples: Int, count: Int, gain: Float = 1f) {
+        while ((frames + count) * 2 > samples.size) samples = samples.copyOf(samples.size * 2)
+        for (sample in 0 until count * 2) samples[frames * 2 + sample] = source[offsetSamples + sample] * gain
+        frames += count
     }
 
-    override fun play() { operations += "play" }
-    override fun pause() { operations += "pause" }
-    override fun flush() { operations += "flush" }
-    override fun release() { operations += "release" }
+    /** Appends frame [frame] of [source] scaled by [gain]. */
+    fun appendFrame(source: PcmTrace, frame: Int, gain: Float) = append(source.samples, frame * 2, 1, gain)
 
-    private companion object {
-        /** `AudioTrack.ERROR_DEAD_OBJECT`. */
-        const val ERROR_DEAD_OBJECT = -6
-    }
-
-    /** Contiguous runs of (tag, first source frame, length); any gap, repeat or insertion splits a run. */
-    fun runs(): List<Run> {
+    /**
+     * Contiguous runs of (tag, first source frame, length); any gap, repeat or insertion splits a run.
+     * [envelopeTag] names the one track in the trace, so a frame scaled by a gain in (0, 1] is read
+     * back as the frame it scales and a fade shows as one run; [gain] tells the envelope.
+     */
+    fun runs(envelopeTag: Int? = null): List<Run> {
         val runs = mutableListOf<Run>()
-        for (frame in 0 until writtenFrames) {
-            val index = trace[frame * 2].toLong()
-            val tag = trace[frame * 2 + 1].toInt()
+        for (frame in 0 until frames) {
+            var index = samples[frame * 2].toLong()
+            var tag = samples[frame * 2 + 1].toInt()
+            if (envelopeTag != null) {
+                val gain = gain(frame, envelopeTag)
+                if (gain > 0.0 && gain <= 1.0) {
+                    index = kotlin.math.round(samples[frame * 2] / gain).toLong()
+                    tag = envelopeTag
+                }
+            }
             val last = runs.lastOrNull()
             if (last != null && last.tag == tag && last.start + last.length == index) {
                 runs[runs.lastIndex] = last.copy(length = last.length + 1)
@@ -229,6 +220,158 @@ class RecordingSink(override val sampleRate: Int = RATE, var acceptFrames: Int =
         }
         return runs
     }
+
+    /** The gain frame [frame] carries, read off the tag channel of a track tagged [tag]. */
+    fun gain(frame: Int, tag: Int): Double = samples[frame * 2 + 1].toDouble() / tag
+
+    /**
+     * Asserts the trace holds frames [firstFrame] onward of the track tagged [tag], every one exactly
+     * once and in order, at full gain except for fades: no frame is silent and none changes gain by
+     * more than one step of a [fadeFrames] fade. [fadesIn] says the trace starts from silence.
+     * Returns the frames at the lowest gain, where each fade down ended and the next fade up began.
+     */
+    fun assertFadedStream(tag: Int, firstFrame: Long, fadeFrames: Int, fadesIn: Boolean = false): List<Int> {
+        assertEquals(listOf(Run(tag, firstFrame, frames.toLong())), runs(envelopeTag = tag))
+        val step = 1.0 / fadeFrames
+        val floor = 0.5 * step
+        var previous = if (fadesIn) 0.0 else 1.0
+        val quietest = mutableListOf<Int>()
+        for (frame in 0 until frames) {
+            val gain = gain(frame, tag)
+            assertTrue("frame $frame gain $gain is silent or above full scale", gain >= floor - 1e-6 && gain <= 1.0)
+            assertTrue("frame $frame gain steps from $previous to $gain", kotlin.math.abs(gain - previous) <= step + 1e-6)
+            if (kotlin.math.abs(gain - floor) < 1e-6) quietest += frame
+            previous = gain
+        }
+        return quietest
+    }
+}
+
+/**
+ * Records every written sample and every transport operation of the one audible output. With
+ * [capacityFrames] it also models an [android.media.AudioTrack]: written frames queue up to that
+ * capacity, and [advance] plays them through the fades into [heard], one frame per frame of time.
+ */
+class RecordingSink(
+    override val sampleRate: Int = RATE,
+    var acceptFrames: Int = Int.MAX_VALUE,
+    private val capacityFrames: Int? = null,
+) : PcmSink {
+    private val written = PcmTrace()
+    val writtenFrames: Int get() = written.frames
+    val operations = mutableListOf<String>()
+
+    /** What the modelled output played, with the gain its fades gave each frame. */
+    val heard = PcmTrace()
+
+    /** Written frames the fake output has not played yet; the output model counts its own. */
+    var pending = 0
+    private var played = 0
+    private var running = false
+
+    /** The fade in frames; the fade level runs from 0, silence, to this, full gain. */
+    val fadeFrames = (sampleRate * PcmSink.FADE_MS / 1000).toInt()
+    private var fadeLevel = fadeFrames
+    private var fadingDown = false
+    private var pauseAtSilence = false
+
+    /** Frames the model played at zero gain because the output had not paused yet: frames lost to the ear. */
+    var silentlyPlayed = 0
+        private set
+
+    override fun pendingFrames() = if (capacityFrames != null) writtenFrames - played else minOf(pending, writtenFrames)
+
+    override fun heardFrames() = (writtenFrames - pendingFrames()).toLong()
+
+    /** Fails like an [android.media.AudioTrack] whose audio server died: every write answers `ERROR_DEAD_OBJECT`. */
+    var dead = false
+
+    override fun write(samples: FloatArray, offsetSamples: Int, frames: Int): Int {
+        if (dead) return ERROR_DEAD_OBJECT
+        val room = capacityFrames?.let { it - pendingFrames() } ?: Int.MAX_VALUE
+        val accepted = minOf(frames, acceptFrames, room)
+        written.append(samples, offsetSamples, accepted)
+        if (operations.lastOrNull() != "write") operations += "write"
+        return accepted
+    }
+
+    /** Written frames the output had not played yet at each [pause]. */
+    val unplayedAtPause = mutableListOf<Int>()
+
+    override fun play() {
+        operations += "play"
+        running = true
+    }
+
+    override fun pause() {
+        operations += "pause"
+        unplayedAtPause += pendingFrames()
+        running = false
+        pauseAtSilence = false
+    }
+
+    override fun fadeOutAndPause() {
+        operations += "fade-out"
+        fadingDown = true
+        pauseAtSilence = true
+    }
+
+    /** Without the output model no time passes for the fade, so it is done at once. */
+    override fun fadeOutSettled(): Boolean {
+        if (!pauseAtSilence) return true
+        if (capacityFrames != null && fadeLevel > 0) return false
+        pause()
+        return true
+    }
+
+    override fun resumeWithFadeIn() {
+        operations += "fade-in"
+        // Output stopped at full gain fades up anew; a fade down turns back from where it is.
+        if (!fadingDown) fadeLevel = 0
+        fadingDown = false
+        pauseAtSilence = false
+        running = true
+    }
+
+    override fun flush() {
+        operations += "flush"
+        played = writtenFrames
+        fadeLevel = fadeFrames
+        fadingDown = false
+        pauseAtSilence = false
+    }
+
+    override fun release() {
+        operations += "release"
+    }
+
+    /** The modelled output plays [frames] frames of time: queued frames through the fade, nothing while paused or empty. */
+    fun advance(frames: Int) {
+        checkNotNull(capacityFrames) { "only the output model plays" }
+        repeat(frames) {
+            if (!running || played == writtenFrames) return
+            val gain = when {
+                fadingDown && fadeLevel == 0 -> {
+                    silentlyPlayed += 1
+                    0f
+                }
+                fadingDown -> (fadeLevel - 0.5f).also { fadeLevel -= 1 } / fadeFrames
+                fadeLevel < fadeFrames -> (fadeLevel + 0.5f).also { fadeLevel += 1 } / fadeFrames
+                else -> 1f
+            }
+            heard.appendFrame(written, played, gain)
+            played += 1
+        }
+    }
+
+    fun runs(envelopeTag: Int? = null) = written.runs(envelopeTag)
+
+    fun gain(frame: Int, tag: Int) = written.gain(frame, tag)
+
+    private companion object {
+        /** `AudioTrack.ERROR_DEAD_OBJECT`. */
+        const val ERROR_DEAD_OBJECT = -6
+    }
 }
 
 data class Run(val tag: Int, val start: Long, val length: Long)
@@ -237,9 +380,9 @@ class PcmHarness(
     vararg tracks: SyntheticTrack,
     config: PcmEngineConfig = PcmEngineConfig(RATE),
     chunkFrames: Int = 4_096,
+    val sink: RecordingSink = RecordingSink(),
 ) {
     val server = FakeAhpcServer(tracks.toList(), chunkFrames)
-    val sink = RecordingSink()
     val events = mutableListOf<PcmEngineEvent>()
     val engine = NativePcmEngine(config, sink, server) { events += it }
 

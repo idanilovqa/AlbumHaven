@@ -137,6 +137,13 @@ class NativePcmEngine(
     private var playing = false
     private var rebuffering = false
 
+    /** Whether this generation wrote PCM to the sink, so a pause has something to fade. */
+    private var sounded = false
+
+    /** A [pause] fades the sink down; [render] polls until it has paused, and writes nothing meanwhile. */
+    var pausing = false
+        private set
+
     // The worklet's retained short loop: the loop stream's first PCM, replayed instead of promoting it.
     private var retained = FloatArray(0)
     private var retainedStreamId: Long? = null
@@ -170,8 +177,11 @@ class NativePcmEngine(
     @VisibleForTesting
     internal fun inFlightFrames(role: PcmRole): Int = streamFor(role)?.inFlightFrames ?: 0
 
-    /** Replaces everything with a new generation; the server drops older streams on its open. */
-    fun start(track: PcmTrack, startFrame: Long = 0, playWhenReady: Boolean = true) {
+    /**
+     * Replaces everything with a new generation; the server drops older streams on its open. [fadeIn]
+     * fades the output up as a resume does, for a stream reopened where a paused one stopped.
+     */
+    fun start(track: PcmTrack, startFrame: Long = 0, playWhenReady: Boolean = true, fadeIn: Boolean = false) {
         require(startFrame >= 0) { "start frame must be nonnegative" }
         resetPlayback()
         sink.pause()
@@ -182,14 +192,20 @@ class NativePcmEngine(
         unconfirmedCloses.clear()
         timelineFrame = startFrame
         playing = playWhenReady
-        if (playing) sink.play()
+        when {
+            !playing -> Unit
+            fadeIn -> sink.resumeWithFadeIn()
+            else -> sink.play()
+        }
         open(PcmRole.CURRENT, track, StreamKind.START, startFrame)
     }
 
+    /** Plays on from the next frame the sink holds, fading up from wherever a [pause] left it. */
     fun play() {
         if (failed || playing || current == null) return
         playing = true
-        sink.play()
+        pausing = false
+        if (sounded) sink.resumeWithFadeIn() else sink.play()
         for (stream in listOfNotNull(current, continuity)) {
             val deferred = stream.deferredCreditFrames
             stream.deferredCreditFrames = 0
@@ -198,10 +214,16 @@ class NativePcmEngine(
         reconcileContinuity()
     }
 
-    fun pause() {
-        if (!playing) return
+    /**
+     * Stops writing and fades out what the sink is playing now, so the pause is heard within the
+     * fade; every frame the sink holds unplayed plays on the next [play]. [immediate] stops the sink
+     * at once instead, for output that must not be heard any more.
+     */
+    fun pause(immediate: Boolean = false) {
+        if (!playing && !pausing) return
         playing = false
-        sink.pause()
+        pausing = !immediate && sounded
+        if (pausing) sink.fadeOutAndPause() else sink.pause()
     }
 
     /** Cancels every held decoder role and discards unplayed PCM. */
@@ -417,6 +439,7 @@ class NativePcmEngine(
         if (failed || maxFrames <= 0) return 0
         commitPreparedSeek()
         val head = current ?: return 0
+        if (pausing) pausing = !sink.fadeOutSettled()
         if (!playing) return 0
         val startupFrames = minOf(
             config.frames(PcmEngineConfig.INITIAL_PLAYBACK_CUSHION_SECONDS),
@@ -447,6 +470,7 @@ class NativePcmEngine(
                 val frames = minOf(maxFrames - written, loopRange.frames - retainedReadFrame)
                 val accepted = sink.write(retained, retainedReadFrame * PcmRing.CHANNELS, frames)
                 check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
+                if (accepted > 0) sounded = true
                 retainedReadFrame = (retainedReadFrame + accepted) % loopRange.frames
                 timelineFrame += accepted
                 written += accepted
@@ -462,6 +486,7 @@ class NativePcmEngine(
             val accepted = sink.write(currentRing.samples, currentRing.readFrame * PcmRing.CHANNELS, frames)
             check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
             if (accepted == 0) break
+            sounded = true
             if (!stream.firstFrameRendered) {
                 stream.firstFrameRendered = true
                 events(PcmEngineEvent.FirstFrame(stream.streamId, timelineFrame))
@@ -787,6 +812,8 @@ class NativePcmEngine(
     private fun fail(code: String, message: String) {
         if (failed) return
         failed = true
+        // What the sink held unplayed is flushed, so the stopped timeline names the first frame not heard.
+        timelineFrame = maxOf(0L, timelineFrame - sink.pendingFrames())
         resetPlayback()
         sink.pause()
         sink.flush()
@@ -806,5 +833,7 @@ class NativePcmEngine(
         playing = false
         rebuffering = false
         expectContinuity = false
+        pausing = false
+        sounded = false
     }
 }

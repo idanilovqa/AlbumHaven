@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 6
+FILE_METADATA_SCHEMA_VERSION = 7
 # What each reader version changed in a file entry. A version that only adds
 # or re-derives the listed fields names them, and an unchanged file stored by an
 # older reader takes just those fields from its fresh read; "fields": None means
@@ -41,6 +41,13 @@ FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
     4: {"fields": None, "requires_file_read": True},
     5: {"fields": None, "requires_file_read": True},
     6: {"fields": None, "requires_file_read": True},
+    # Unreadable "??" credits fall back to the album artist; UTF-8 bytes in
+    # Latin-1 frames are decoded. Both derive from the stored text.
+    7: {
+        "fields": ("album_artist", "artist", "artists"),
+        "requires_file_read": False,
+        "derive": lambda entry: _derive_readable_artist_credits(entry),
+    },
 }
 _OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
 
@@ -262,6 +269,42 @@ def read_tags(path: Path) -> dict[str, object]:
         return data
     except Exception:
         return read_apev2_tags(path)
+
+_LOST_CHARACTER_ARTIST = re.compile(r"^[\s?/&,;.\-]*\?[\s?/&,;.\-]*$")
+
+
+def repair_artist_text(value: object) -> str | None:
+    """An artist credit as the user meant it, or None when it is unreadable.
+
+    Two tagging accidents are common. A tool that wrote non-Latin text into a
+    Latin-1 ID3 frame replaced every character with "?" ("天門" became "??");
+    nothing of the name survives, so the credit is unreadable and callers fall
+    back to the album artist. A tool that wrote UTF-8 bytes into a frame
+    declared Latin-1 left them intact ("Ã©" for "é"); re-reading those bytes as
+    UTF-8 recovers the name. Genuine Latin-1 text ("Björk") is not valid UTF-8
+    once encoded, so it is left as it is.
+    """
+    text = str(value or "").strip()
+    if not text or _LOST_CHARACTER_ARTIST.match(text):
+        return None
+    if all(ord(character) < 0x100 for character in text) and any(ord(character) >= 0x80 for character in text):
+        try:
+            return text.encode("latin-1").decode("utf-8").strip() or None
+        except UnicodeDecodeError:
+            return text
+    return text
+
+
+def _derive_readable_artist_credits(entry: dict[str, object]) -> dict[str, object]:
+    album_artist = repair_artist_text(entry.get("album_artist"))
+    stored = entry.get("artists")
+    credits = [repair_artist_text(artist) for artist in (stored if isinstance(stored, list) else [entry.get("artist")])]
+    credits = [artist for artist in credits if artist]
+    track_artist = " & ".join(credits) if credits else None
+    album_artist = album_artist or track_artist or "Unknown Artist"
+    track_artist = track_artist or album_artist
+    return {"album_artist": album_artist, "artist": track_artist, "artists": credits or [track_artist]}
+
 
 def first_tag(tags: dict[str, object], keys: list[str]) -> str | None:
     for key in keys:
@@ -735,11 +778,11 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
-    track_artists = artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
-    track_artist = " & ".join(track_artists) if track_artists else None
-    album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist or "Unknown Artist"
-    track_artist = track_artist or album_artist
-    track_artists = track_artists or [track_artist]
+    credits = _derive_readable_artist_credits({
+        "album_artist": first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]),
+        "artists": artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"]),
+    })
+    album_artist, track_artist, track_artists = credits["album_artist"], credits["artist"], credits["artists"]
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))

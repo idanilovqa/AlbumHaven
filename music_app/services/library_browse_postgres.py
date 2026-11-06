@@ -2370,7 +2370,9 @@ class PostgresLibraryBrowseRepository:
             perf_counter() - grouping_subphase_started_at
         ) * 1000
         grouping_subphase_started_at = perf_counter()
-        selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
+        selected_artist = "" if requested_all_artists else _top_search_selected_artist(
+            artist_groups, query=query, rows=rows, canonical_to_aliases=canonical_to_aliases,
+        )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
@@ -8165,14 +8167,46 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
     return artist_groups
 
 
-def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query: str) -> str:
+def _top_search_selected_artist(
+    artist_groups: list[dict[str, object]],
+    *,
+    query: str,
+    rows: Iterable[object] = (),
+    canonical_to_aliases: Mapping[str, object] | None = None,
+) -> str:
+    """The artist a search auto-selects.
+
+    A query naming an artist keeps the ranked best match. A title-only query
+    ("Divine Comedy") names nobody, so every group ties and the alphabetical
+    first, often one track artist of a compilation, would hide the rest:
+    select the artist owning the most matching albums instead, counting each
+    album once for its owner (a compilation's album owner, not its credits).
+    """
     if not str(query or "").strip():
         return ""
-    for group in artist_groups:
-        artist = str(group.get("artist") or "").strip()
-        if artist:
-            return artist
-    return ""
+    artists = [str(group.get("artist") or "").strip() for group in artist_groups]
+    artists = [artist for artist in artists if artist]
+    if not artists:
+        return ""
+    aliases_by_artist = canonical_to_aliases or {}
+
+    def aliases(artist: str) -> list[object]:
+        value = aliases_by_artist.get(artist)
+        return list(value) if isinstance(value, (list, tuple, set)) else []
+
+    if any(_artist_name_matches_search_query(query, artist, aliases(artist)) for artist in artists):
+        return artists[0]
+    owned_albums: dict[str, set[object]] = {}
+    for row in rows:
+        payload = _row_mapping(row)
+        owner = str(payload.get("artist_name") or "").strip()
+        album_id = payload.get("album_id")
+        if owner and album_id is not None:
+            owned_albums.setdefault(_artist_display_dedupe_key(owner), set()).add(album_id)
+    counts = [len(owned_albums.get(_artist_display_dedupe_key(artist), ())) for artist in artists]
+    best = max(counts)
+    # Ties, and rows without owners, keep the existing group order.
+    return artists[counts.index(best)] if best else artists[0]
 
 
 def _artists_sidebar_from_groups(

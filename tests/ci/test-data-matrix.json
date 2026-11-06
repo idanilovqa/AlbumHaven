@@ -2617,6 +2617,33 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/compilationTitleSearch.spec.js",
+    "case": "FTC-SEARCH-NAV-036 a title-only search selects the artist owning every matching compilation",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "search:title-only-compilation-owner"
+    ],
+    "filesystemScenarios": [
+      "media-copy:compilation-title-search"
+    ],
+    "expectedContracts": [
+      "title-only-search-selects-album-owner",
+      "q-only-url-matches-visible-search"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:compilation-title-search",
+      "filesystemCopy": "media/cases/compilation-title-search"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/searchDuringScan.spec.js",
     "case": "FTC-SEARCH-NAV-035 a pasted search URL without an artist loads its results while a full rescan runs",
     "profile": "functional-core",

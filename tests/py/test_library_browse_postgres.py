@@ -18458,3 +18458,26 @@ def test_relation_alias_query_materializes_one_normalized_snapshot():
     assert sql.count("library.local_relation_views(") == 1
     assert sql.count("relation_snapshot.relation_views ->") == 9
     assert "from relation_snapshot limit 1" in sql
+
+
+def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
+    # Owner choice (2026-11-05): "Divine Comedy" names no artist; its three
+    # compilations belong to Colossus Project, while track artists appear on
+    # all three too and sort first alphabetically.
+    from music_app.services import library_browse_postgres as browse
+
+    groups = [{"artist": name, "albums": [{}]} for name in ("Armalite", "CAP", "Colossus Project", "Nemo")]
+    rows = [
+        {"artist_name": "Colossus Project", "album_id": album_id, "album_featured_artists": []}
+        for album_id in (11, 12, 13)
+    ] + [{"artist_name": "Nemo", "album_id": 99}]
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy", rows=rows) == "Colossus Project"
+    # A query naming an artist, or one of its aliases, keeps the ranked best match.
+    assert browse._top_search_selected_artist(groups, query="Armalite", rows=rows) == "Armalite"
+    assert browse._top_search_selected_artist(
+        groups, query="Armored Lite", rows=rows, canonical_to_aliases={"Armalite": ["Armored Lite"]},
+    ) == "Armalite"
+    # Equal ownership, or no owners at all, keeps the existing order.
+    tied = [{"artist_name": "Nemo", "album_id": 1}, {"artist_name": "CAP", "album_id": 2}]
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy", rows=tied) == "CAP"
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Armalite"

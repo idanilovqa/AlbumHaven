@@ -35,6 +35,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
+  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
+  const refreshesCompleteList = state.utility.loaded === true
+    && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
@@ -127,7 +130,8 @@ async function loadProblematicFiles(force = false, options = {}) {
           state.utility.loadPromise = null;
         }
         if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
+            && ((shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
+              || shouldRenderInitialPage())) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }

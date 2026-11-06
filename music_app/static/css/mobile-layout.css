@@ -799,12 +799,14 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     :root[data-library-source-icons="false"] .album-card .gallery-card-info .album-length { grid-column: 1 / -1; }
   }
 
-  /* Keep gutter width stable; only its initial paint is hidden. */
-  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"]) {
-    scrollbar-color: transparent transparent;
-  }
-  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"])::-webkit-scrollbar-thumb {
-    background: transparent;
+  /* Keep gutter width stable; only its initial paint is hidden. Touch devices use overlay scrollbars. */
+  @media (hover: hover) and (pointer: fine) {
+    #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"]) {
+      scrollbar-color: transparent transparent;
+    }
+    #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"])::-webkit-scrollbar-thumb {
+      background: transparent;
+    }
   }
 }
 @media (max-width: 900px) and (forced-colors: active) {

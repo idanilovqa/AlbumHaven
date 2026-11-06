@@ -2373,7 +2373,7 @@ class PostgresLibraryBrowseRepository:
         ) * 1000
         grouping_subphase_started_at = perf_counter()
         selected_artist = "" if requested_all_artists else _top_search_selected_artist(
-            artist_groups, query=query, rows=rows, canonical_to_aliases=canonical_to_aliases,
+            artist_groups, query=query, canonical_to_aliases=canonical_to_aliases,
         )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
@@ -8182,7 +8182,6 @@ def _top_search_selected_artist(
     artist_groups: list[dict[str, object]],
     *,
     query: str,
-    rows: Iterable[object] = (),
     canonical_to_aliases: Mapping[str, object] | None = None,
 ) -> str:
     """The artist a search auto-selects.
@@ -8207,16 +8206,19 @@ def _top_search_selected_artist(
 
     if any(_artist_name_matches_search_query(query, artist, aliases(artist)) for artist in artists):
         return artists[0]
-    owned_albums: dict[str, set[object]] = {}
-    for row in rows:
-        payload = _row_mapping(row)
-        owner = str(payload.get("artist_name") or "").strip()
-        album_id = payload.get("album_id")
-        if owner and album_id is not None:
-            owned_albums.setdefault(_artist_display_dedupe_key(owner), set()).add(album_id)
-    counts = [len(owned_albums.get(_artist_display_dedupe_key(artist), ())) for artist in artists]
+    def owned_album_count(group: Mapping[str, object]) -> int:
+        # A group lists every matching album its artist appears on; it owns
+        # those whose album artist is that artist (or one of its aliases).
+        artist = str(group.get("artist") or "").strip()
+        names = {_artist_display_dedupe_key(name) for name in [artist, *aliases(artist)] if str(name or "").strip()}
+        return sum(
+            1 for album in group.get("albums") or []
+            if isinstance(album, Mapping) and _artist_display_dedupe_key(str(album.get("album_artist") or "")) in names
+        )
+
+    counts = [owned_album_count(group) for group in artist_groups if str(group.get("artist") or "").strip()]
     best = max(counts)
-    # Ties, and rows without owners, keep the existing group order.
+    # Ties, and groups owning nothing, keep the existing group order.
     return artists[counts.index(best)] if best else artists[0]
 
 

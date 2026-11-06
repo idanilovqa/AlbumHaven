@@ -18466,21 +18466,26 @@ def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
     # all three too and sort first alphabetically.
     from music_app.services import library_browse_postgres as browse
 
-    groups = [{"artist": name, "albums": [{}]} for name in ("Armalite", "CAP", "Colossus Project", "Nemo")]
-    rows = [
-        {"artist_name": "Colossus Project", "album_id": album_id, "album_featured_artists": []}
-        for album_id in (11, 12, 13)
-    ] + [{"artist_name": "Nemo", "album_id": 99}]
-    assert browse._top_search_selected_artist(groups, query="Divine Comedy", rows=rows) == "Colossus Project"
-    # A query naming an artist, or one of its aliases, keeps the ranked best match.
-    assert browse._top_search_selected_artist(groups, query="Armalite", rows=rows) == "Armalite"
+    # Search lists the same three compilations under every credited artist.
+    compilations = [{"name": f"Divine Comedy, Part {part}", "album_artist": "Colossus Project"} for part in ("I", "II", "III")]
+    groups = [{"artist": name, "albums": compilations} for name in ("Armalite", "CAP", "Colossus Project")]
+    groups.append({"artist": "Nemo", "albums": [{"name": "Divine Comedy Live", "album_artist": "Nemo"}]})
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Colossus Project"
+    # An owner known by an alias still owns its albums.
+    aliased = [{**album, "album_artist": "The Colossus Project"} for album in compilations]
     assert browse._top_search_selected_artist(
-        groups, query="Armored Lite", rows=rows, canonical_to_aliases={"Armalite": ["Armored Lite"]},
+        [*groups[:2], {"artist": "Colossus Project", "albums": aliased}], query="Divine Comedy",
+        canonical_to_aliases={"Colossus Project": ["The Colossus Project"]},
+    ) == "Colossus Project"
+    # A query naming an artist, or one of its aliases, keeps the ranked best match.
+    assert browse._top_search_selected_artist(groups, query="Armalite") == "Armalite"
+    assert browse._top_search_selected_artist(
+        groups, query="Armored Lite", canonical_to_aliases={"Armalite": ["Armored Lite"]},
     ) == "Armalite"
-    # Equal ownership, or no owners at all, keeps the existing order.
-    tied = [{"artist_name": "Nemo", "album_id": 1}, {"artist_name": "CAP", "album_id": 2}]
-    assert browse._top_search_selected_artist(groups, query="Divine Comedy", rows=tied) == "CAP"
-    assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Armalite"
+    # Equal ownership, or groups owning nothing, keep the existing order.
+    tied = [{"artist": "CAP", "albums": [{"album_artist": "CAP"}]}, {"artist": "Nemo", "albums": [{"album_artist": "Nemo"}]}]
+    assert browse._top_search_selected_artist(tied, query="Divine Comedy") == "CAP"
+    assert browse._top_search_selected_artist(groups[:2], query="Divine Comedy") == "Armalite"
 
 def test_a_display_correction_is_a_problematic_file_until_written():
     from music_app.services.library_browse_postgres import _physical_file_problem_reasons

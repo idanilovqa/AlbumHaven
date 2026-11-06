@@ -4408,11 +4408,20 @@ function buildOnPageAlertHtml(config = {}) {
   return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}${buildAlertProgressHtml(config.progress)}</div></section>`;
 }
 
+// StatusBadge: short, non-interactive state text. Consumers choose only its label and variant;
+// anything actionable is a Button or FilterPill instead. This file also loads standalone beside
+// the bundle, so it declares functions only.
+function buildStatusBadgeHtml(config = {}) {
+  const variant = config.variant || 'neutral';
+  if (!['neutral', 'info', 'warning'].includes(variant)) throw new TypeError('Unknown StatusBadge variant.');
+  return `<span class="ui-status-badge ui-status-badge--${variant}">${escapeAlertHtml(config.label)}</span>`;
+}
+
 if (typeof window !== 'undefined') {
-  window.AlertComponent = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+  window.AlertComponent = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml, buildStatusBadgeHtml };
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+  module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml, buildStatusBadgeHtml };
 }
 
 // END js/runtime/alert-components.js
@@ -26213,7 +26222,7 @@ function buildAndroidSettingsHtml(info) {
   return `<div class="android-settings">
     <div class="android-settings__heading">
       <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
-      <span class="android-settings__channel${sandbox ? ' is-sandbox' : ''}">${sandbox ? 'S · Sandbox' : 'Stable'}</span>
+      ${buildStatusBadgeHtml(sandbox ? { label: 'S · Sandbox', variant: 'warning' } : { label: 'Stable', variant: 'neutral' })}
     </div>
     <div data-android-update>${buildAndroidUpdateHtml(info)}</div>
     ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}

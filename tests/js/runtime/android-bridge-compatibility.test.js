@@ -115,6 +115,7 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
     document: { addEventListener: () => {}, querySelector: () => null },
     escapeHtml: value => String(value),
     buildOnPageAlertHtml: ({ severity, title, message, actionsHtml = '' }) => `<alert ${severity}>${title}|${message}${actionsHtml}</alert>`,
+    buildStatusBadgeHtml: ({ label, variant }) => `<badge ${variant}>${label}</badge>`,
     state: {
       utility: { activeTab: 'appearance' },
       player: {

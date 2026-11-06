@@ -2106,7 +2106,5 @@
 .android-settings__sandbox h3 { margin: 0; }
 .android-settings__heading p,
 .android-settings__sandbox p { margin: 4px 0 0; color: var(--muted); }
-.android-settings .android-settings__channel { flex: none; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); }
-.android-settings .android-settings__channel.is-sandbox { border-color: var(--appearance-warning, #e0aa50); color: var(--appearance-warning, #e0aa50); }
 .android-settings__sandbox { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
 .android-settings__sandbox > .ui-button { justify-self: start; }

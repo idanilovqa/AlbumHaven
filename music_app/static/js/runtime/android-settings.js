@@ -172,7 +172,7 @@ function buildAndroidSettingsHtml(info) {
   return `<div class="android-settings">
     <div class="android-settings__heading">
       <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
-      <span class="android-settings__channel${sandbox ? ' is-sandbox' : ''}">${sandbox ? 'S · Sandbox' : 'Stable'}</span>
+      ${buildStatusBadgeHtml(sandbox ? { label: 'S · Sandbox', variant: 'warning' } : { label: 'Stable', variant: 'neutral' })}
     </div>
     <div data-android-update>${buildAndroidUpdateHtml(info)}</div>
     ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}

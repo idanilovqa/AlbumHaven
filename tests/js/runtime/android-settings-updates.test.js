@@ -210,6 +210,16 @@ test('an unknown failure code reads as a failed check', async () => {
   }
 });
 
+test('the channel is the shared StatusBadge: warning for sandbox, neutral for stable', async () => {
+  const { api, window } = await connected(update());
+  const { buildStatusBadgeHtml } = window.AlertComponent;
+  const sandbox = api.buildAndroidSettingsHtml(api.androidBridge.info);
+  assert.ok(sandbox.includes(buildStatusBadgeHtml({ label: 'S · Sandbox', variant: 'warning' })));
+  const stable = api.buildAndroidSettingsHtml({ ...api.androidBridge.info, variant: 'stable' });
+  assert.ok(stable.includes(buildStatusBadgeHtml({ label: 'Stable', variant: 'neutral' })));
+  assert.doesNotMatch(sandbox + stable, /android-settings__channel|is-sandbox/);
+});
+
 test('without updates.manual.v1 the card shows only the version', async () => {
   const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['playback.native.v1'] }));
   const { api } = loadRuntime({ bridge });

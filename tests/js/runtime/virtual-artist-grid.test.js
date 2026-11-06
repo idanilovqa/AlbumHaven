@@ -5762,7 +5762,8 @@ test('virtual and fallback headers keep pending distinct and matched artists ale
   );
   for (const markup of [virtualPending, fallbackPending]) {
     assert.match(markup, /artist-musicbrainz-pending/);
-    assert.match(markup, /MusicBrainz: Metadata pending/);
+    assert.match(markup, /aria-label="Metadata pending">Metadata pending</);
+    assert.doesNotMatch(markup, /MusicBrainz: Metadata pending/);
     assert.equal((markup.match(/data-pending-dot/g) || []).length, 3);
     assert.doesNotMatch(markup, /small-alert--(?:warning|error)|ui-metadata-pill/);
   }

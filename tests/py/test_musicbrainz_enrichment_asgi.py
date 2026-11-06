@@ -571,3 +571,23 @@ def test_service_failure_returns_safe_error_and_does_not_log_private_exception_t
     serialized = json.dumps(payload) + repr(logger.messages)
     for forbidden in ("password", "private-host", "C:/private", "postgresql://"):
         assert forbidden not in serialized
+
+
+def test_gallery_status_says_metadata_pending_while_problematic_files_keeps_the_mbid_prefix():
+    class AttentionService(Service):
+        def list_artist_attention(self):
+            return [
+                {"local_artist_id": 41, "local_artist_name": "Pending Artist", "match_state": None, "problem_occurrence_id": 7,
+                 "problem_reason_code": reason, "unresolved_reason": "MBID: Metadata pending"}
+                for reason in ("musicbrainz_matched_entity_unavailable", "musicbrainz_mirror_replication_pending")
+            ] + [
+                {"local_artist_id": 42, "local_artist_name": "Unknown Artist", "match_state": None, "problem_occurrence_id": 8,
+                 "problem_reason_code": "musicbrainz_artist_not_found", "unresolved_reason": "MBID: Not found"},
+            ]
+
+    app = app_for(actor_with("library.problems.read"), AttentionService())
+    status, payload = request(app, "GET", "/api/musicbrainz/artists/status")
+
+    assert status == 200
+    assert [artist["unresolved_reason"] for artist in payload["artists"]] == ["Metadata pending", "Metadata pending", "MBID: Not found"]
+    assert all("problem_reason_code" not in artist for artist in payload["artists"])

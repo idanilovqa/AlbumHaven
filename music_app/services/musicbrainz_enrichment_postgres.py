@@ -679,27 +679,29 @@ def _row_mapping(row: object) -> dict[str, object]:
     return {}
 
 
-# Approved Delivery 1 issue copy. ``MBID:`` is reserved for identity results;
-# ``MusicBrainz:`` names provider or processing state.
+# Approved Delivery 1 issue copy for Problematic Files. ``MBID:`` names identity
+# results, including metadata still pending for a matched artist; ``MusicBrainz:``
+# names the provider.
+_PENDING_REASONS = (
+    "musicbrainz_mirror_replication_pending",
+    # A matched entity that stops resolving is mirror catch-up; the prior match is kept.
+    "musicbrainz_matched_entity_unavailable",
+)
 PROBLEM_LABELS = {
     "musicbrainz_artist_not_found": "MBID: Not found",
     "musicbrainz_artist_ambiguous": "MBID: Multiple matches",
     "musicbrainz_artist_metadata_conflict": "MBID: Metadata conflict",
-    "musicbrainz_mirror_replication_pending": "MusicBrainz: Metadata pending",
-    "musicbrainz_provider_retry_exhausted": "MusicBrainz: Provider unavailable",
-}
-# Provisional: the owner has not approved labels for these reasons yet.
-PROVISIONAL_PROBLEM_LABELS = {
     # One artist has the name but no album confirms it.
     "musicbrainz_manual_review_required": "MBID: Unconfirmed match",
-    # A matched entity that stops resolving is mirror catch-up; the prior match is kept.
-    "musicbrainz_matched_entity_unavailable": "MusicBrainz: Metadata pending",
+    **{reason: "MBID: Metadata pending" for reason in _PENDING_REASONS},
+    "musicbrainz_provider_retry_exhausted": "MusicBrainz: Provider unavailable",
 }
+# Every other app surface, such as the Gallery, says only "Metadata pending".
+APP_PROBLEM_LABELS = {**PROBLEM_LABELS, **{reason: "Metadata pending" for reason in _PENDING_REASONS}}
 
 
 def _problem_label_sql() -> str:
-    labels = {**PROBLEM_LABELS, **PROVISIONAL_PROBLEM_LABELS}
-    cases = " ".join(f"when '{reason}' then '{label}'" for reason, label in labels.items())
+    cases = " ".join(f"when '{reason}' then '{label}'" for reason, label in PROBLEM_LABELS.items())
     return f"case problem.reason_code {cases} else null end"
 
 

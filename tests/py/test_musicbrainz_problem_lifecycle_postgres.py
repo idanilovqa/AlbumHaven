@@ -258,7 +258,7 @@ def test_provider_problem_opens_only_without_an_identity_outcome(monkeypatch: py
         assert _active(connection, artist_id) == ["musicbrainz_mirror_replication_pending"]
 
     pending = repository.get_artist_problem(local_artist_id=artist_id)
-    assert pending["unresolved_reason"] == "MusicBrainz: Metadata pending"
+    assert pending["unresolved_reason"] == "MBID: Metadata pending"
     assert pending["next_attempt_at"] is not None
 
     job = repository.claim_due_job(worker_id="worker-b", now=NOW + timedelta(minutes=2),

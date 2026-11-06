@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.musicbrainz_enrichment_postgres import APP_PROBLEM_LABELS
 
 
 router = APIRouter(prefix="/api/musicbrainz/artists")
@@ -77,7 +78,11 @@ async def list_artist_status(request: Request):
     if not isinstance(rows, (list, tuple)):
         raise _unavailable()
     return {"artists": [
-        {field: row.get(field) for field in _STATUS_FIELDS}
+        {
+            **{field: row.get(field) for field in _STATUS_FIELDS},
+            # The Gallery uses app wording, which differs from Problematic Files for pending metadata.
+            "unresolved_reason": APP_PROBLEM_LABELS.get(row.get("problem_reason_code"), row.get("unresolved_reason")),
+        }
         for row in rows if isinstance(row, Mapping)
     ]}
 

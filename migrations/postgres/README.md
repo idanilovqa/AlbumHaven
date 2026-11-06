@@ -312,5 +312,5 @@ and duplicate album identity), plus a partial index on the projected membership
 problem. No user-owned value is read or changed. Adding stored columns rewrites
 the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
-expressions on databases without these columns. Rollback stops the readers, then
-drops the index and the columns.
+expressions on databases without these columns, so rollback only drops the index
+and the columns; a running server retries with the inline form once it finds them gone.

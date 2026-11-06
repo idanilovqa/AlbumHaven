@@ -267,10 +267,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private fun applySystemBarInsets(root: View) {
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            // The keyboard covers the page, as in Chrome; it never pushes the app's own UI, such as the
+            // bottom player, upward.
             val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or
-                    WindowInsetsCompat.Type.displayCutout() or
-                    WindowInsetsCompat.Type.ime(),
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             WindowInsetsCompat.CONSUMED

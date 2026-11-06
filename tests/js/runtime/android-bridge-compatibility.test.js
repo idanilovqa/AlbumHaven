@@ -89,6 +89,15 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
       }));
     },
   };
+  // The cogwheel menu's Update row, hidden until Settings shows it.
+  const updateRow = {
+    hidden: true, attributes: {}, label: { textContent: '' }, detail: {},
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    querySelector(selector) { return selector === '[data-android-update-label]' ? this.label : this.detail; },
+    closest() { return this; },
+  };
   // Browser audio must never start next to a negotiated native player.
   const forbidden = name => class { constructor() { throw new Error(`${name} must not start inside a native shell`); } };
   const window = {
@@ -113,7 +122,7 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
     performance: { now: () => 0 },
     AudioContext: window.AudioContext,
     WebSocket: window.WebSocket,
-    document: { addEventListener: () => {}, querySelector: () => null },
+    document: { addEventListener: () => {}, querySelector: selector => (selector === '[data-android-update-menu-item]' ? updateRow : null) },
     escapeHtml: value => String(value),
     buildOnPageAlertHtml: ({ severity, title, message, actionsHtml = '' }) => `<alert ${severity}>${title}|${message}${actionsHtml}</alert>`,
     buildStatusBadgeHtml: ({ label, variant }) => `<badge ${variant}>${label}</badge>`,
@@ -153,11 +162,11 @@ function loadSite({ respond, source = file => fs.readFileSync(path.join(runtimeD
   for (const file of RUNTIME_FILES) vm.runInContext(source(file), context, { filename: file });
   vm.runInContext(`globalThis.api = { androidBridge, connectAndroidBridge, androidNativePlaybackRoute,
     isAndroidPlaybackUnavailable, isAndroidUpdateRequired, isAndroidNativePlayback, buildAndroidSettingsHtml,
-    initAndroidSettings, protocolRange: [ANDROID_BRIDGE_PROTOCOL_MIN, ANDROID_BRIDGE_PROTOCOL_MAX],
+    initAndroidSettings, handleAndroidSettingsClick, protocolRange: [ANDROID_BRIDGE_PROTOCOL_MIN, ANDROID_BRIDGE_PROTOCOL_MAX],
     capabilityUse: ANDROID_BRIDGE_CAPABILITY_USE, start: startStreamingTrack, pause: pauseStreamingPlayback,
     resume: resumeStreamingPlayback, seek: seekStreamingPlayback, continuity: scheduleStreamingContinuity,
     setLoop: setStreamingLoop, stop: stopStreamingPlayback };`, context);
-  return { api: context.api, bridge, context };
+  return { api: context.api, bridge, context, updateRow };
 }
 
 const answering = handshake => message => (message.name === 'bridge.handshake' ? handshake : null);
@@ -165,7 +174,7 @@ const commands = (bridge, name) => bridge.sent.filter(message => message.name ==
 
 /** Everything a page does with a shell that can run it: connect, Settings, and playback. */
 async function exerciseSite(handshake) {
-  const { api, bridge, context } = loadSite({ respond: answering(handshake) });
+  const { api, bridge, context, updateRow } = loadSite({ respond: answering(handshake) });
   const has = name => handshake.capabilities.includes(name);
   api.initAndroidSettings();
   const info = await api.connectAndroidBridge();
@@ -174,7 +183,17 @@ async function exerciseSite(handshake) {
 
   const settings = api.buildAndroidSettingsHtml(info);
   assert.match(settings, /Stable · 0\.9\.50 \(1\)/);
-  assert.equal(/Check for updates/.test(settings), handshake.capabilities.includes('updates.manual.v1'));
+  assert.doesNotMatch(settings, /Check for update/);
+  // Updates run from the cogwheel menu's row, shown only to a shell that offers them.
+  assert.equal(updateRow.hidden, !has('updates.manual.v1'));
+  if (!updateRow.hidden) {
+    assert.equal(updateRow.label.textContent, 'Check for update');
+    api.handleAndroidSettingsClick({ target: updateRow, preventDefault() {} });
+    await new Promise(setImmediate);
+    assert.equal(commands(bridge, 'updates.check').length, 1);
+    // A reply that names no update state still releases the pressed row.
+    assert.equal(updateRow.getAttribute('aria-disabled'), null);
+  }
 
   const native = handshake.capabilities.includes('playback.native.v1');
   const audible = AUDIO_CAPABILITIES.some(name => handshake.capabilities.includes(name));

@@ -66,10 +66,15 @@ class BridgeControllerTest {
     private val updates = FakeUpdates()
     private val playback = ControllerHarness()
     private val attachments = mutableListOf<Boolean>()
+    private val savedFiles = mutableListOf<String>()
+    private val files = FileSaves({ name, _, _ -> savedFiles.add(name) }, { it.run() }, Runnable::run) {}
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
-    private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates) =
-        BridgeController(ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachment = attachments::add), updates)
+    private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates, files: FileSaves? = this.files) =
+        BridgeController(
+            ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachment = attachments::add),
+            updates, files,
+        )
 
     private fun send(
         controller: BridgeController,
@@ -482,4 +487,103 @@ class BridgeControllerTest {
 
     private fun errorCode(reply: JSONObject?): String =
         reply!!.getJSONObject("payload").getJSONObject("error").getString("code")
+
+    private val link = fixture.getJSONObject("downloadLinkResponse").getJSONObject("payload").getString("url")
+
+    /** A negotiated sandbox document, recording everything the shell posts to it. */
+    private fun negotiated(): MutableList<JSONObject> {
+        val sent = mutableListOf<JSONObject>()
+        sandbox.handle(handshake(), ORIGIN, true) { sent += JSONObject(it) }
+        sent.clear()
+        return sent
+    }
+
+    private fun answer(id: String, payload: String, protocol: Int = 1) =
+        """{"protocol":$protocol,"id":"$id","type":"response","name":"downloads.link","payload":$payload}"""
+
+    @Test
+    fun aDownloadLinkIsAskedOfTheNegotiatedDocumentAndItsAnswerIsTheLink() {
+        val sent = negotiated()
+        val links = mutableListOf<String?>()
+        val path = "/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"
+        val id = sandbox.requestDownloadLink(path) { links += it }!!
+        val expected = fixture.getJSONObject("downloadLinkRequest").put("id", id)
+        assertSameJson(expected, sent.single())
+
+        val response = fixture.getJSONObject("downloadLinkResponse").put("id", id)
+        assertNull(send(sandbox, response.toString()))
+        assertEquals(listOf<String?>(link), links)
+        // Answered once; a repeat is ignored.
+        send(sandbox, answer(id, """{"ok":true,"url":"$link"}"""))
+        assertEquals(listOf<String?>(link), links)
+    }
+
+    @Test
+    fun aRefusedOrMalformedAnswerIsNoLink() {
+        negotiated()
+        val answers = listOf(
+            """{"ok":false,"error":{"code":"download_unavailable","message":"Download unavailable."}}""",
+            """{"ok":true}""",
+            """{"ok":true,"url":"https://evil.example$link"}""",
+            """{"ok":true,"url":"/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"}""",
+            """{"ok":"true","url":"$link"}""",
+        )
+        for (payload in answers) {
+            val links = mutableListOf<String?>()
+            val id = sandbox.requestDownloadLink("/a") { links += it }!!
+            send(sandbox, answer(id, payload))
+            assertEquals(payload, listOf<String?>(null), links)
+        }
+    }
+
+    @Test
+    fun anAnswerForAnotherRequestOrProtocolIsIgnored() {
+        negotiated()
+        val links = mutableListOf<String?>()
+        val id = sandbox.requestDownloadLink("/a") { links += it }!!
+        send(sandbox, answer(ID, """{"ok":true,"url":"$link"}"""))
+        send(sandbox, answer(id, """{"ok":true,"url":"$link"}""", protocol = 2))
+        send(sandbox, answer(id, """{"ok":true,"url":"$link"}"""), origin = "https://sandbox3.albumhaven.org")
+        assertEquals(emptyList<String?>(), links)
+    }
+
+    @Test
+    fun withoutANegotiatedDocumentOrOnceItGoesThereIsNoLink() {
+        val links = mutableListOf<String?>()
+        assertNull(sandbox.requestDownloadLink("/a") { links += it })
+        assertEquals(listOf<String?>(null), links)
+
+        negotiated()
+        val id = sandbox.requestDownloadLink("/a") { links += it }!!
+        sandbox.reset()
+        assertEquals(listOf<String?>(null, null), links)
+        send(sandbox, answer(id, """{"ok":true,"url":"$link"}"""))
+        assertEquals(listOf<String?>(null, null), links)
+    }
+
+    @Test
+    fun anAbandonedRequestIsNoLinkAndItsLateAnswerIsIgnored() {
+        negotiated()
+        val links = mutableListOf<String?>()
+        val id = sandbox.requestDownloadLink("/a") { links += it }!!
+        sandbox.abandonDownloadLink(id)
+        send(sandbox, answer(id, """{"ok":true,"url":"$link"}"""))
+        sandbox.abandonDownloadLink(id)
+        assertEquals(listOf<String?>(null), links)
+    }
+
+    @Test
+    fun filesAreSavedOnlyByABuildThatCanStoreThem() {
+        val request = fixture.getJSONObject("fileSaveRequest")
+        val file = request.getJSONObject("payload").toString()
+        send(sandbox, handshake())
+        assertTrue(ok(send(sandbox, request.toString())))
+        assertEquals(listOf(request.getJSONObject("payload").getString("name")), savedFiles)
+
+        val plain = controller(ShellChannel.STABLE, "org.albumhaven.app", files = null)
+        val names = send(plain, handshake())!!.getJSONObject("payload").getJSONArray("capabilities").let { array -> (0 until array.length()).map(array::getString) }
+        assertFalse(names.contains("files.save.v1"))
+        assertTrue(names.contains("downloads.link.v1"))
+        assertEquals("unsupported_command", errorCode(send(plain, command("files.save", file))))
+    }
 }

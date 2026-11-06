@@ -28,7 +28,7 @@ _PENDING_ALBUMS_SQL = """
       where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
       limit 1
     )
-    select library.local_albums.album_key, library.local_track_files.id as track_file_id,
+    select library.local_albums.album_key, library.local_tracks.library_id, library.local_track_files.id as track_file_id,
       library.local_track_files.private_path, corrections.text_corrections, corrections.updated_at
     from library.local_track_file_text_corrections corrections
     join library.local_track_files on library.local_track_files.id = corrections.track_file_id
@@ -133,13 +133,12 @@ class LibraryDataCorrectionsWriter:
         """Write every pending album's corrections; the number of albums written."""
         from music_app.routes.api_wave_a_asgi_routes import run_edit_tags_payload
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-        from music_app.services.log_history import resolve_media_host_history_scope
+        from music_app.services.log_history import HistoryScope
 
         config = self._app.state.config
         if self._scan_in_progress() or not await run_in_threadpool(library_writes_tags, config):
             return 0
         written = 0
-        history_scope = await run_in_threadpool(resolve_media_host_history_scope, config)
         request = Request({"type": "http", "app": self._app, "method": "POST", "path": "/utilities/edit-tags",
                            "headers": [], "query_string": b""})
         for album_key, files in (await run_in_threadpool(pending_correction_albums, config)).items():
@@ -156,6 +155,8 @@ class LibraryDataCorrectionsWriter:
             written_files = [row for row in files if str(row["private_path"]) in payload["updates"]]
             # Recorded first: a completed write clears the file's corrections.
             await run_in_threadpool(record_writes, config, written_files)
+            # History belongs to the library whose files were corrected.
+            history_scope = HistoryScope(library_id=files[0]["library_id"], origin_kind="background")
             result = await run_edit_tags_payload(request, payload, history_scope=history_scope)
             response = result[0] if isinstance(result, tuple) else result
             if response.get("ok"):

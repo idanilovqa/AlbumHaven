@@ -221,11 +221,11 @@ test('the channel is the shared StatusBadge: warning for sandbox, neutral for st
   assert.doesNotMatch(sandbox + stable, /android-settings__channel|is-sandbox/);
 });
 
-test('Update required is an info alert at the top of the Android card', () => {
+test('Update required is a warning alert at the top of the Android card', () => {
   const { api } = loadRuntime();
   api.androidBridge.updateRequired = true;
   const html = api.buildAndroidSettingsHtml(null);
-  assert.match(html, /^<div class="android-settings">\s*<div class="android-settings__heading">\s*<div><h2>Android app<\/h2><p>Manage this app on your device\.<\/p><\/div>\s*<\/div>\s*<section class="on-page-alert on-page-alert--info"/);
+  assert.match(html, /^<div class="android-settings">\s*<div class="android-settings__heading">\s*<div><h2>Android app<\/h2><p>Manage this app on your device\.<\/p><\/div>\s*<\/div>\s*<section class="on-page-alert on-page-alert--warning"/);
   assert.equal(text(alertOf(html)[0]), 'Update required This version of Album Haven can’t open the current site. Install the latest app to continue.');
   // A shell that refused the handshake names no channel, and this page cannot ask it to update.
   assert.doesNotMatch(html, /ui-status-badge|<button/);

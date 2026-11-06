@@ -1,37 +1,83 @@
 package org.albumhaven.shell
 
+import android.view.KeyEvent
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 
-/** The exceptional native screen shown only while the web app is loading, unavailable or incompatible. */
+/**
+ * The exceptional native screen shown only while the web app is loading, unavailable or
+ * incompatible, or while a sandbox build waits for its sandbox to be chosen. A null
+ * `onSwitchSandbox` leaves Switch sandbox out, as on a stable build.
+ */
 class RecoveryPanel(private val root: View) {
     private val loading: View = root.findViewById(R.id.recovery_loading)
     private val loadingDetail: TextView = root.findViewById(R.id.recovery_loading_detail)
+    private val loadingSwitch: Button = root.findViewById(R.id.recovery_loading_switch)
+    private val choice: View = root.findViewById(R.id.sandbox_choice)
+    private val choiceSlots: ViewGroup = root.findViewById(R.id.sandbox_choice_slots)
+    private val otherSlot: EditText = root.findViewById(R.id.sandbox_choice_other)
+    private val connect: Button = root.findViewById(R.id.sandbox_choice_connect)
     private val alert: View = root.findViewById(R.id.recovery_alert)
     private val alertIcon: ImageView = root.findViewById(R.id.recovery_alert_icon)
     private val alertTitle: TextView = root.findViewById(R.id.recovery_alert_title)
     private val alertMessage: TextView = root.findViewById(R.id.recovery_alert_message)
     private val action: Button = root.findViewById(R.id.recovery_action)
+    private val alertSwitch: Button = root.findViewById(R.id.recovery_switch)
     private val progressLabel: TextView = root.findViewById(R.id.recovery_progress_label)
     private val progress: ProgressBar = root.findViewById(R.id.recovery_progress)
+    private var onChooseSandbox: ((Int) -> Unit)? = null
 
-    fun showLoading(originHost: String) {
-        root.isVisible = true
-        loading.isVisible = true
-        alert.isVisible = false
-        loadingDetail.text = root.context.getString(R.string.recovery_loading_detail, originHost)
+    init {
+        val context = root.context
+        SandboxChoice.LISTED_SLOTS.forEach { slot ->
+            val button = LayoutInflater.from(context).inflate(R.layout.sandbox_choice_slot, choiceSlots, false) as Button
+            button.text = context.getString(R.string.sandbox_choice_slot, slot)
+            button.setOnClickListener { onChooseSandbox?.invoke(slot) }
+            choiceSlots.addView(button)
+        }
+        otherSlot.doAfterTextChanged { connect.isEnabled = typedSlot() != null }
+        connect.setOnClickListener { typedSlot()?.let { onChooseSandbox?.invoke(it) } }
+        otherSlot.setOnEditorActionListener { _, actionId, event ->
+            val go = actionId == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER
+            if (go) typedSlot()?.let { onChooseSandbox?.invoke(it) }
+            go
+        }
     }
 
-    fun showError(onRetry: () -> Unit) {
+    private fun typedSlot(): Int? = SandboxChoice.parseSlot(otherSlot.text.toString())
+
+    /** Whether the sandbox chooser is up, which a loading page must not replace. */
+    val choosingSandbox: Boolean get() = root.isVisible && choice.isVisible
+
+    fun showLoading(originHost: String, onSwitchSandbox: (() -> Unit)?) {
+        show(loading)
+        loadingDetail.text = root.context.getString(R.string.recovery_loading_detail, originHost)
+        showSwitch(loadingSwitch, onSwitchSandbox)
+    }
+
+    fun showError(onRetry: () -> Unit, onSwitchSandbox: (() -> Unit)?) {
         showAlert(AlertSeverity.ERROR, root.context.getString(R.string.recovery_error_title), root.context.getString(R.string.recovery_error_message))
         showAction(R.string.recovery_retry, onRetry)
+        showSwitch(alertSwitch, onSwitchSandbox)
         showProgress(null)
+    }
+
+    /** Buttons for [SandboxChoice.LISTED_SLOTS], and any other slot in 1..99 typed in. */
+    fun showSandboxChoice(onChoose: (slot: Int) -> Unit) {
+        show(choice)
+        onChooseSandbox = onChoose
+        otherSlot.text = null
     }
 
     /** [onAction] is null when updating this app cannot help, so the screen offers no action. */
@@ -48,6 +94,7 @@ class RecoveryPanel(private val root: View) {
         } else {
             showAction(step.action, onAction.takeIf { step.actionable })
         }
+        alertSwitch.isVisible = false
         showProgress(view.progress.takeIf { downloading })
     }
 
@@ -57,14 +104,25 @@ class RecoveryPanel(private val root: View) {
 
     /** A null [message] leaves the title alone in the alert. */
     private fun showAlert(severity: AlertSeverity, title: String, message: String?) {
-        root.isVisible = true
-        loading.isVisible = false
-        alert.isVisible = true
+        show(alert)
         alert.setBackgroundResource(severity.background)
         alertIcon.setImageResource(severity.icon)
         alertTitle.text = title
         alertMessage.isVisible = message != null
         alertMessage.text = message
+    }
+
+    /** Shows one of the screen's three sections: loading, an alert, or the sandbox chooser. */
+    private fun show(section: View) {
+        root.isVisible = true
+        loading.isVisible = section === loading
+        alert.isVisible = section === alert
+        choice.isVisible = section === choice
+    }
+
+    private fun showSwitch(button: Button, onClick: (() -> Unit)?) {
+        button.isVisible = onClick != null
+        button.setOnClickListener(onClick?.let { click -> View.OnClickListener { click() } })
     }
 
     /** A null [onClick] shows the step's busy label on a disabled button. */

@@ -1,10 +1,13 @@
 package org.albumhaven.shell
 
+import android.os.Bundle
+import android.os.Parcel
 import android.view.View
 import android.widget.Button
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 import org.junit.After
@@ -181,6 +184,29 @@ class ShellSmokeTest {
             scenario.recreate()
             waitUntil("recreated page") { webTitle(scenario) == "replied" && !recoveryVisible(scenario) }
             assertTrue(onActivity(scenario) { it.findViewById<WebView>(R.id.shell_web_view).url }.orEmpty().startsWith(BuildConfig.DEV_ORIGIN))
+        }
+    }
+
+    @Test
+    fun savedStateStaysSmallAfterALongHistory() {
+        requireBridgeSupport()
+        serve()
+        ActivityScenario.launch(ShellActivity::class.java).use { scenario ->
+            waitUntil("page") { webTitle(scenario) == "replied" }
+            // About 600 KB of history state, as the session that crashed the app at stop held.
+            evaluate(scenario, "for (let i = 0; i < 150; i++) history.pushState({ f: 'x'.repeat(4000) }, '', '/?artist=' + i); 'ok'")
+            val bytes = onActivity(scenario) { activity ->
+                val state = Bundle()
+                InstrumentationRegistry.getInstrumentation().callActivityOnSaveInstanceState(activity, state)
+                val parcel = Parcel.obtain()
+                try {
+                    parcel.writeBundle(state)
+                    parcel.dataSize()
+                } finally {
+                    parcel.recycle()
+                }
+            }
+            assertTrue("Saved state is $bytes bytes", bytes < 16 * 1024)
         }
     }
 

@@ -36,7 +36,8 @@ object Updates {
     fun policy(context: Context) = UpdatePolicy(
         channel = OriginPolicy.forBuild.channel,
         applicationId = context.packageName,
-        artifactOrigin = ShellPreferences(context).selectedOrigin,
+        // Empty only before a sandbox is chosen, when no page can ask for an update.
+        artifactOrigin = ShellPreferences(context).selectedOrigin.orEmpty(),
         expectedCertificateSha256 = BuildConfig.UPDATE_CERTIFICATE_SHA256,
         installedVersionCode = BuildConfig.VERSION_CODE.toLong(),
         deviceApi = Build.VERSION.SDK_INT,
@@ -86,7 +87,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     // The WebView session is read per request and never stored here.
     private val http = ArtifactHttp(
         app.client,
-        ShellSession({ ShellPreferences(context).selectedOrigin }, app::cookies),
+        ShellSession({ ShellPreferences(context).selectedOrigin.orEmpty() }, app::cookies),
         policy.channel,
         KeystoreDeviceKeys(context),
         PreferencesDeviceKeyIds(context),

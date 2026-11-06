@@ -31,6 +31,7 @@ class BridgeControllerTest {
 
     private class FakeHost : BridgeHost {
         var connected: Int? = null
+        var bridgeConnections = 0
         val incompatible = mutableListOf<IntRange>()
         var selectedSlot: Int? = null
         var nextSelectResult = true
@@ -44,6 +45,9 @@ class BridgeControllerTest {
         }
         override fun onIncompatibleWeb(webProtocols: IntRange) {
             incompatible += webProtocols
+        }
+        override fun onBridgeConnected() {
+            bridgeConnections++
         }
     }
 
@@ -109,8 +113,11 @@ class BridgeControllerTest {
         assertEquals("incompatible_bridge", errorCode(send(sandbox, handshake(min = 2, max = 3))))
         assertEquals(emptyList<Boolean>(), attachments)
 
+        assertEquals(0, host.bridgeConnections)
         send(sandbox, handshake())
         assertEquals(listOf(true), attachments)
+        // The shell stops waiting for the handshake that tells it the sandbox supports the app.
+        assertEquals(1, host.bridgeConnections)
         // A page start, a reload, an error panel and a gone Activity all reset the bridge.
         sandbox.reset()
         assertEquals(listOf(true, false), attachments)

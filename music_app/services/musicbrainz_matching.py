@@ -110,9 +110,11 @@ def _evidence(local: JsonDict, candidate: JsonDict) -> tuple[int, list[str]]:
 
 
 def _trusted_mbid(local: JsonDict) -> tuple[str, str]:
-    embedded = str(local.get("embedded_mbid") or "").strip().lower()
-    if artist_url(embedded):
-        return embedded, "embedded"
+    """A high-confidence asserted MBID that may pick among album-confirmed candidates.
+
+    No source, file tags included, can assign an MBID on its own: the asserted
+    candidate must still agree with the local albums.
+    """
     assertion = local.get("existing_assertion")
     assertion = assertion if isinstance(assertion, dict) else {}
     asserted = str(
@@ -164,8 +166,7 @@ def match_artist(local_evidence: object, candidates: object) -> JsonDict:
             (item for item in assessed if str(item[0].get("mbid") or "").lower() == trusted_mbid),
             None,
         )
-        requires_release_match = trusted_path == "assertion"
-        if trusted is None or trusted[2] or (requires_release_match and trusted[1] == 0):
+        if trusted is None or trusted[2] or trusted[1] == 0:
             return {"classification": "permanent_mismatch", "candidates": ordered}
         selected = trusted[0]
     else:

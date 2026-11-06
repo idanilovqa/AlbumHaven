@@ -91,22 +91,28 @@ def test_missing_native_script_evidence_does_not_invent_or_block_identity():
     assert result["preferred_native_name"] is None
 
 
-def test_embedded_mbid_still_rejects_contradictory_entity_and_release_evidence():
+MBID = "00000000-0000-4000-8000-000000000001"
+
+
+@pytest.mark.parametrize("evidence", [
+    {},
+    {"embedded_mbid": MBID},
+    {"existing_assertion_mbid": MBID, "existing_assertion_confidence": "high_confidence"},
+    {"asserted_mbid": MBID, "assertion_confidence": "trusted"},
+    {"existing_assertion": {"mbid": MBID, "confidence": "high"}},
+], ids=["search", "file-tag", "stored-assertion", "asserted", "assertion-object"])
+@pytest.mark.parametrize("release_titles", [[], ["Unrelated Solo Record"]], ids=["no-albums", "other-albums"])
+def test_no_evidence_source_assigns_an_mbid_without_album_agreement(evidence, release_titles):
+    """The single named candidate carries the asserted MBID; without album
+    agreement no source, file tags included, may match it."""
     result = _match_artist(
         {
             "name": "Blind Guardian",
-            "artist_type": "Group",
-            "embedded_mbid": "00000000-0000-4000-8000-000000000001",
             "release_credits": [{"title": "Nightfall in Middle-Earth", "credited_artist": "Blind Guardian"}],
+            **evidence,
         },
-        [{
-            "mbid": "00000000-0000-4000-8000-000000000001",
-            "canonical_name": "Blind Guardian",
-            "artist_type": "Person",
-            "release_titles": ["Unrelated Solo Record"],
-        }],
+        [{"mbid": MBID, "canonical_name": "Blind Guardian", "release_titles": release_titles}],
     )
 
-    assert result["classification"] == "permanent_mismatch"
+    assert result["classification"] != "matched"
     assert result.get("selected_mbid") is None
-    assert result["candidates"][0]["rejection_reasons"] == ["artist_type_conflict", "release_evidence_conflict"]

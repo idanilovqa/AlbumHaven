@@ -36,6 +36,6 @@ screen without an action and never load the site.
 A site the app cannot run (no shared bridge protocol, or a capability it names in
 the handshake's `requiredCapabilities` that this build lacks) is refused and
 covered by the Update required screen. Its Check for update checks for an APK
-whose bridge range includes the site's, downloads a newer one at once, and
-Update hands it to Android as Settings does. Release ordering is in
+whose bridge range includes the site's; Download update downloads the one it
+finds, and Update hands it to Android as Settings does. Release ordering is in
 `docs/android-release-signing.md`.

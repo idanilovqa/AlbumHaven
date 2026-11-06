@@ -52,7 +52,7 @@ class UpdateRequiredTest {
         val cases = mapOf(
             UpdateState.Idle(null) to UpdateRequiredView(UpdateStep.REQUIRED),
             UpdateState.UpToDate(1) to UpdateRequiredView(UpdateStep.NO_UPDATE),
-            UpdateState.Available(manifest) to UpdateRequiredView(UpdateStep.REQUIRED),
+            UpdateState.Available(manifest) to UpdateRequiredView(UpdateStep.AVAILABLE, versionName = manifest.versionName),
             UpdateState.Checking(null) to UpdateRequiredView(UpdateStep.CHECKING),
             UpdateState.Downloading(manifest, 1721) to UpdateRequiredView(UpdateStep.DOWNLOADING, 42, manifest.versionName),
             UpdateState.Verifying(manifest) to UpdateRequiredView(UpdateStep.VERIFYING, versionName = manifest.versionName),
@@ -90,21 +90,34 @@ class UpdateRequiredTest {
     fun onlyStepsWaitingForTheUserOfferAnAction() {
         val actionable = UpdateStep.entries.filter { it.actionable }
         assertEquals(
-            listOf(UpdateStep.REQUIRED, UpdateStep.NO_UPDATE, UpdateStep.READY, UpdateStep.INSTALLING, UpdateStep.AUTHORIZATION, UpdateStep.FAILED),
+            listOf(
+                UpdateStep.REQUIRED, UpdateStep.NO_UPDATE, UpdateStep.AVAILABLE, UpdateStep.READY, UpdateStep.INSTALLING,
+                UpdateStep.AUTHORIZATION, UpdateStep.FAILED,
+            ),
             actionable,
         )
     }
 
     @Test
-    fun checkForUpdateChecksForTheSiteRangeAndDownloadsWhatItFinds() {
+    fun checkForUpdateOnlyChecksForTheSiteRangeAndTheUpdateItFindsWaitsForDownload() {
         val (flow, updates) = flow()
         updates.next = UpdateState.Downloading(manifest, 0)
         flow.act()
         assertEquals(1..2, updates.checkedWith)
         assertEquals(UpdateStep.CHECKING, flow.view.step)
         updates.state = UpdateState.Available(manifest)
+        assertEquals(listOf("check"), updates.calls)
+        assertEquals(UpdateRequiredView(UpdateStep.AVAILABLE, versionName = manifest.versionName), flow.view)
+        flow.act()
         assertEquals(listOf("check", "download"), updates.calls)
         assertEquals(UpdateStep.DOWNLOADING, flow.view.step)
+    }
+
+    @Test
+    fun theAvailableStepNamesTheVersionAndOffersDownloadUpdate() {
+        assertEquals(R.string.recovery_update_available_title, UpdateStep.AVAILABLE.title)
+        assertEquals(R.string.recovery_update_downloading_message, UpdateStep.AVAILABLE.message)
+        assertEquals(R.string.recovery_update_download, UpdateStep.AVAILABLE.action)
     }
 
     @Test
@@ -143,6 +156,7 @@ class UpdateRequiredTest {
         flow.act()
         updates.next = UpdateState.Downloading(manifest, manifest.apkSize)
         updates.state = UpdateState.Available(manifest)
+        flow.act()
         assertEquals(UpdateRequiredView(UpdateStep.DOWNLOADING, 100, manifest.versionName), flow.view)
         updates.state = UpdateState.Verifying(manifest)
         assertEquals(UpdateRequiredView(UpdateStep.VERIFYING, versionName = manifest.versionName), flow.view)

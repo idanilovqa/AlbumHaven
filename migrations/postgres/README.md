@@ -302,3 +302,15 @@ positive-vote genre; negative-vote and non-genre tags remain retained but are no
 displayed. Rollback first disables scheduling, workers, and enrichment readers.
 The additive tables remain as retained identity and audit evidence until a
 separately authorized contraction.
+
+Migration `0112_add_problematic_file_path_projection.sql` also uses a reserved
+number: it comes from the Problematic Files performance work and is already in
+the production ledger. It adds stored generated columns to
+`library.local_track_files` that project the existing path and file-album tags
+(path-key presence, physical parent, source directory, physical album container,
+and duplicate album identity), plus a partial index on the projected membership
+problem. No user-owned value is read or changed. Adding stored columns rewrites
+the table under an exclusive lock, so apply it in a controlled migration window
+before starting application writers. Problematic Files falls back to the inline
+expressions on databases without these columns. Rollback stops the readers, then
+drops the index and the columns.

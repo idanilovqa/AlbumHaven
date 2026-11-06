@@ -97,7 +97,8 @@ def test_delivery_1_migration_is_next_and_lexically_ordered():
 
     assert MIGRATION_NAME in names
     assert names[-3:] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME, RECHECK_MIGRATION_NAME]
-    assert names[names.index(MIGRATION_NAME) - 1].startswith("0098_")
+    # 0112 is the ported Problematic Files path projection, also a reserved number.
+    assert names[names.index(MIGRATION_NAME) - 1].startswith("0112_")
 
 
 def test_migration_creates_only_the_required_artist_foundation_and_display_projection():

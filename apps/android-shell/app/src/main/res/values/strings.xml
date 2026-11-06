@@ -31,7 +31,7 @@
     <string name="recovery_update_authorization_action">Open install settings</string>
     <string name="recovery_update_failed_title">Update failed. Try again</string>
     <string name="sandbox_choice_title">Choose a sandbox</string>
-    <string name="sandbox_choice_message">Album Haven Sandbox connects to the sandbox you select. You sign in once it loads.</string>
+    <string name="sandbox_choice_message">Album Haven Sandbox connects to the sandbox%1$d. You sign in once it loads.</string>
     <string name="sandbox_choice_slot">sandbox%1$d</string>
     <string name="sandbox_choice_other">Another sandbox (1–99)</string>
     <string name="sandbox_choice_connect">Connect</string>

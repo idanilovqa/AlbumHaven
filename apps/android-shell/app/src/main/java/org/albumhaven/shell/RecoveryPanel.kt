@@ -28,6 +28,7 @@ class RecoveryPanel(private val root: View) {
     private val choiceSlots: ViewGroup = root.findViewById(R.id.sandbox_choice_slots)
     private val otherSlot: EditText = root.findViewById(R.id.sandbox_choice_other)
     private val connect: Button = root.findViewById(R.id.sandbox_choice_connect)
+    private val choiceMessage: TextView = root.findViewById(R.id.sandbox_choice_message)
     private val alert: View = root.findViewById(R.id.recovery_alert)
     private val alertIcon: ImageView = root.findViewById(R.id.recovery_alert_icon)
     private val alertTitle: TextView = root.findViewById(R.id.recovery_alert_title)
@@ -46,7 +47,12 @@ class RecoveryPanel(private val root: View) {
             button.setOnClickListener { onChooseSandbox?.invoke(slot) }
             choiceSlots.addView(button)
         }
-        otherSlot.doAfterTextChanged { connect.isEnabled = typedSlot() != null }
+        otherSlot.doAfterTextChanged {
+            val slot = typedSlot()
+            connect.isEnabled = slot != null
+            // Names the sandbox Connect opens; the last valid number stays shown while typing.
+            if (slot != null) choiceMessage.text = root.context.getString(R.string.sandbox_choice_message, slot)
+        }
         connect.setOnClickListener { typedSlot()?.let { onChooseSandbox?.invoke(it) } }
         otherSlot.setOnEditorActionListener { _, actionId, event ->
             val go = actionId == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER
@@ -73,11 +79,12 @@ class RecoveryPanel(private val root: View) {
         showProgress(null)
     }
 
-    /** Buttons for [SandboxChoice.LISTED_SLOTS], and any other slot in 1..99 typed in. */
-    fun showSandboxChoice(onChoose: (slot: Int) -> Unit) {
+    /** Buttons for [SandboxChoice.LISTED_SLOTS], and any other slot in 1..99 typed in, prefilled with [initialSlot]. */
+    fun showSandboxChoice(initialSlot: Int, onChoose: (slot: Int) -> Unit) {
         show(choice)
         onChooseSandbox = onChoose
-        otherSlot.text = null
+        choiceMessage.text = root.context.getString(R.string.sandbox_choice_message, initialSlot)
+        otherSlot.setText(initialSlot.toString())
     }
 
     /** [onAction] is null when updating this app cannot help, so the screen offers no action. */

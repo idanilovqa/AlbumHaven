@@ -31,6 +31,9 @@ class SandboxChoice(private val policy: OriginPolicy, private val slots: Sandbox
         /** The slots the chooser offers as buttons; any other is typed. */
         val LISTED_SLOTS = 1..5
 
+        /** Prefilled when no sandbox was chosen before: the sandbox that hosts Android work. */
+        const val SUGGESTED_SLOT = 5
+
         /** The typed slot, or null for anything but a whole number in 1..99. */
         fun parseSlot(text: String): Int? =
             text.trim().takeIf { it.all(Char::isDigit) }?.toIntOrNull()?.takeIf { it in OriginPolicy.SANDBOX_SLOTS }

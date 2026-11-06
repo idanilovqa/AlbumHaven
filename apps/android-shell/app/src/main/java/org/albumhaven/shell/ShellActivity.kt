@@ -280,7 +280,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     /** Covers everything until a sandbox is chosen; the chosen one connects at once, and the user signs in there. */
     private fun showSandboxChoice() {
         sandboxWarning.isVisible = false
-        recovery.showSandboxChoice { slot -> sandboxes.choose(slot)?.let(::switchTo) }
+        val initialSlot = preferences.selectedSandboxSlot ?: SandboxChoice.SUGGESTED_SLOT
+        recovery.showSandboxChoice(initialSlot) { slot -> sandboxes.choose(slot)?.let(::switchTo) }
     }
 
     private fun switchTo(origin: String) {

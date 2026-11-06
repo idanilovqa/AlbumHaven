@@ -136,9 +136,9 @@
                     android:text="@string/sandbox_choice_title" />
 
                 <TextView
+                    android:id="@+id/sandbox_choice_message"
                     style="@style/RecoveryMessage"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/sandbox_choice_message" />
+                    android:layout_marginTop="8dp" />
 
                 <LinearLayout
                     android:id="@+id/sandbox_choice_slots"

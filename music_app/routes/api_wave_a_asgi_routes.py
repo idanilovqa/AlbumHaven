@@ -1808,6 +1808,9 @@ async def run_edit_tags_payload(request: Request, payload, *, history_scope, sta
     media write, save task, History. The route and Library Data Corrections
     (with a request bound only to the app) both run it."""
     request_started = perf_counter() if started is None else started
+    if history_scope is not None:
+        # Save-task finalizers record History from the request's scope.
+        request.state.history_scope = history_scope
     if payload is None or not payload.get("confirmed"):
         return {"ok": False, "error": "Tag edit was not confirmed"}, 400
 

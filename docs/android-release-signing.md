@@ -9,6 +9,12 @@ the outbound-only synchronizer in the private deployments repository verifies
 and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
 `docs/android-update-artifacts.md`).
 
+This tooling reaches `main` before the Android app: the shell sources, the
+`PR Gates` Android jobs, `docs/android-update-artifacts.md`,
+`scripts/ci/android-release-compatibility.cjs` and
+`tests/fixtures/android-bridge/stable-shells.json` arrive with the Android app
+merge, and stable cannot be promoted before it.
+
 ## What a promotion does
 
 1. **Verify** (no secrets). The workflow must run from `main`. The commit must
@@ -16,9 +22,8 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
    **Sandbox** needs no pipeline, so a build can be tested before the full suite
    passes (owner decision, November 5, 2026): a branch of this repository must
    contain the commit, which refuses fork pull request heads and unknown SHAs.
-   Its `promotion.json` records `ciGate: "not-required"` and the `pipelineRunId`
-   of a complete pipeline (below) when one already existed, otherwise `null`.
-   **Stable** records `ciGate: "complete-pipeline"` and must have a
+   Its `promotion.json` records `ciGate: "not-required"` and no pipeline run.
+   **Stable** records `ciGate: "complete-pipeline"` and the `pipelineRunId` of a
    successful `PR Gates` pull-request run for exactly that head whose
    `Cloud Verification Gate` job succeeded. That gate fails for focused,
    `skip_tests`, draft and fork runs, so it is the complete-pipeline proof.
@@ -41,18 +46,27 @@ and publishes into `ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR` (see
    at a time, and tag creation fails if the code already exists, so codes never
    repeat or decrease. Stable `versionName` is the Album Haven semver; sandbox is
    `<semver>-sandbox.<first 7 hex of the commit>`.
-3. **Build** (no secrets, no Gradle cache). Checks out exactly that commit and
+3. **Build** (no secrets, no Actions cache). Fetches exactly that commit with
+   plain git (no `actions/checkout` post-job step runs git in it later) and
    runs `assemble<Channel>Release` with the allocated version and the channel's
-   certificate digest compiled in as the update trust. The unsigned APK is
+   certificate digest compiled in as the update trust. The promoted source is
+   untrusted, so Gradle runs only in a container (`ghcr.io/cirruslabs/android-sdk:36`
+   pinned by digest: OpenJDK 21, platform 36, build-tools 36.0.0) as an
+   unprivileged user without capabilities, which sees only the checkout: no
+   runner token or environment, no sudo, no Docker socket and no Actions cache
+   or artifact access. The runner then reads the APK only as a regular file
+   inside the checkout. The unsigned APK is
    encrypted to the signing environment's X25519 key
    (`ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY`) and only that ciphertext is uploaded,
    as `android-unsigned-<channel>-<code>` (1-day retention).
 4. **Sign** in the protected environment `android-<channel>`, which waits for
-   approval. The job has read-only repository access, never runs the promoted
-   source and installs nothing: it decrypts the unsigned APK with the
+   approval when the environment has a required reviewer. The job has read-only
+   repository access, never runs the promoted source and installs nothing: it
+   decrypts the unsigned APK with the
    environment secret `ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY`, aligns it, signs it
    with the runner image's preinstalled build-tools 36.0.0 `apksigner` using the
-   channel keystore from the environment secrets, confirms the single signer,
+   channel keystore from the environment secrets (decoded to disk only while
+   `apksigner sign` runs), confirms the single signer,
    package, version and minimum SDK, and writes the Update Manifest v1 and the
    APK encrypted to the synchronizer's key (`android-signed-<channel>-<code>`,
    1-day retention).
@@ -119,8 +133,10 @@ every other field is published unchanged.
      installed anywhere from earlier manual test builds.
 6. **Environments** `android-stable` and `android-sandbox` (Settings >
    Environments): deployment branches `main` only for both, required reviewer
-   the owner for `android-stable`; `android-sandbox` has no required reviewer,
-   so test builds never wait. Both take these environment secrets, set without
+   the owner for `android-stable`. For `android-sandbox` a required reviewer is
+   the owner's choice: with one, each sandbox signing, test builds included,
+   waits for approval while holding the sandbox lock; without one, sandbox
+   builds sign without waiting. Both take these environment secrets, set without
    printing them:
 
    ```powershell
@@ -146,16 +162,17 @@ every other field is published unchanged.
 gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-hex sha> -f channel=sandbox
 ```
 
-Approve the `android-stable` deployment when the sign job waits. Promote and
-accept sandbox before stable.
+Approve the `android-<channel>` deployment when the sign job waits for its
+reviewer. Promote and accept sandbox before stable.
 
 ### Sandbox test builds from a pull request
 
-Add the `test_build` label to a same-repository pull request to promote its
-head to sandbox without waiting for `PR Gates`. `android-test-build.yml` then
-dispatches `android-promote.yml` on `main` for the head commit on every later
-push and reopen, until the label is removed. It runs the pull request's own
-workflow definition with an `actions: write` token, no secret and no checkout;
+When the repository owner adds the `test_build` label to a same-repository pull
+request, its head is promoted to sandbox without waiting for `PR Gates`.
+`android-test-build.yml` then dispatches `android-promote.yml` on `main` for the
+head commit on every later push and reopen by the owner, until the label is
+removed; labels and pushes by anyone else request nothing. It runs the pull
+request's own workflow definition with an `actions: write` token, no secret and no checkout;
 everything else is main's sandbox promotion above, under the main-only
 `android-sandbox` environment. Forks never qualify. `PR Gates` ignores the
 label, although adding or removing any label restarts its run, so add it with

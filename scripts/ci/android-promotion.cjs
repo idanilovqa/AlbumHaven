@@ -6,8 +6,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Stable needs the commit's complete pipeline; sandbox test builds may precede it (owner decision,
-// November 5, 2026) and record a complete pipeline only when one already existed.
+// Stable needs the commit's complete pipeline; sandbox test builds may precede it and record no
+// pipeline (owner decision, November 5, 2026).
 const CHANNELS = Object.freeze({
   stable: Object.freeze({ applicationId: 'org.albumhaven.app', flavor: 'Stable', ciGate: 'complete-pipeline' }),
   sandbox: Object.freeze({ applicationId: 'org.albumhaven.app.sandbox', flavor: 'Sandbox', ciGate: 'not-required' }),
@@ -163,13 +163,12 @@ async function findCompletePipelineRun({ listRuns, listJobs, repository, commit 
   return null;
 }
 
-/** The provenance of the channel's CI gate; stable fails without its complete pipeline. */
+/** The provenance of the channel's CI gate: a complete pipeline's run for stable, nothing for sandbox. */
 function ciGateFor(channel, pipeline) {
   const { ciGate } = CHANNELS[requireChannel(channel)];
-  if (ciGate === 'complete-pipeline' && !pipeline) {
-    fail('Commit has no successful complete PR Gates pipeline that ran the Android jobs');
-  }
-  return { ciGate, pipelineRunId: pipeline ? pipeline.runId : null };
+  if (ciGate === 'not-required') return { ciGate };
+  if (!pipeline) fail('Commit has no successful complete PR Gates pipeline that ran the Android jobs');
+  return { ciGate, pipelineRunId: pipeline.runId };
 }
 
 /** `aapt2 dump badging` facts the manifest and the version allocation must agree with. */
@@ -324,10 +323,11 @@ function finalizePromotion({ plan, apkBytes, badging, signerDigest, recipientPub
   const errors = [];
   if (!SHA256_HEX.test(String(plan.certificate))) errors.push('Expected signing certificate is not configured');
   if (signerDigest !== plan.certificate) errors.push('APK is not signed by the channel certificate');
-  const pipelineRecorded = Number.isSafeInteger(plan.pipelineRunId) && plan.pipelineRunId >= 1;
-  if (plan.ciGate !== CHANNELS[channel].ciGate || !(pipelineRecorded || (channel === 'sandbox' && plan.pipelineRunId === null))) {
-    errors.push('CI gate does not match the channel');
-  }
+  const { ciGate } = CHANNELS[channel];
+  const pipelineMatches = ciGate === 'complete-pipeline'
+    ? Number.isSafeInteger(plan.pipelineRunId) && plan.pipelineRunId >= 1
+    : !Object.hasOwn(plan, 'pipelineRunId');
+  if (plan.ciGate !== ciGate || !pipelineMatches) errors.push('CI gate does not match the channel');
   if (badging.packageName !== CHANNELS[channel].applicationId) errors.push('APK package does not match the channel');
   if (badging.versionCode !== plan.versionCode || badging.versionName !== plan.versionName) {
     errors.push('APK version does not match the allocated version');
@@ -362,8 +362,8 @@ function finalizePromotion({ plan, apkBytes, badging, signerDigest, recipientPub
     workflow: PROMOTE_WORKFLOW,
     runId: plan.runId,
     runAttempt: plan.runAttempt,
-    ciGate: plan.ciGate,
-    pipelineRunId: plan.pipelineRunId,
+    ciGate,
+    ...(ciGate === 'complete-pipeline' && { pipelineRunId: plan.pipelineRunId }),
     versionTag: versionTag(channel, plan.versionCode),
     encryptedApk: `${name}.enc`,
     manifest,

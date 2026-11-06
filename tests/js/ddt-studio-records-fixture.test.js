@@ -313,6 +313,12 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     'Expected orphan album cleanup to preserve every album that still owns a track.',
   );
   assert.match(sql, /library\.local_albums\.title = 'Telepathic Minds'/);
+  // A failed split run leaves tracks in suffixed albums; reset reclaims them and removes the albums.
+  assert.match(sql, /current_album\.title ~ '\^Студийные записи\[2-5\]\$'/);
+  assert.match(
+    sql,
+    /deleted_orphan_albums as\s*\([\s\S]*?library\.local_albums\.title ~ '\^Студийные записи\[2-5\]\$'/,
+  );
   assert.match(sql, /fixture_rows\.album = 'Telepathic Minds'/);
   assert.match(sql, /library\.local_artists\.name in \('Ovderhead', 'Overhead'\)/);
   assert.match(sql, /deleted_orphan_artists as/);

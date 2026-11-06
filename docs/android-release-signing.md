@@ -59,8 +59,8 @@ merge, and stable cannot be promoted before it.
    encrypted to the signing environment's X25519 key
    (`ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY`) and only that ciphertext is uploaded,
    as `android-unsigned-<channel>-<code>` (1-day retention).
-4. **Sign** in the protected environment `android-<channel>`, which waits for
-   approval when the environment has a required reviewer. The job has read-only
+4. **Sign** in the protected environment `android-<channel>`; stable waits for
+   the owner's approval, sandbox does not. The job has read-only
    repository access, never runs the promoted source and installs nothing: it
    decrypts the unsigned APK with the
    environment secret `ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY`, aligns it, signs it
@@ -132,12 +132,13 @@ every other field is published unchanged.
    - optional `ANDROID_VERSION_CODE_FLOOR`, the highest version code already
      installed anywhere from earlier manual test builds.
 6. **Environments** `android-stable` and `android-sandbox` (Settings >
-   Environments): deployment branches `main` only for both, required reviewer
-   the owner for `android-stable`. For `android-sandbox` a required reviewer is
-   the owner's choice: with one, each sandbox signing, test builds included,
-   waits for approval while holding the sandbox lock; without one, sandbox
-   builds sign without waiting. Both take these environment secrets, set without
-   printing them:
+   Environments): deployment branches `main` only for both. `android-stable`
+   has the owner as required reviewer; `android-sandbox` has no required
+   reviewer (owner decision, November 5, 2026), so sandbox builds sign without
+   waiting. Without that approval, sandbox signing relies on two safeguards:
+   only the repository owner's own `test_build` label or push requests a test
+   build, and the promoted source is built only in the isolated container
+   (step 3). Both take these environment secrets, set without printing them:
 
    ```powershell
    [Convert]::ToBase64String([IO.File]::ReadAllBytes('D:\album-haven-signing\album-haven-stable.p12')) |
@@ -162,8 +163,8 @@ every other field is published unchanged.
 gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-hex sha> -f channel=sandbox
 ```
 
-Approve the `android-<channel>` deployment when the sign job waits for its
-reviewer. Promote and accept sandbox before stable.
+Approve the `android-stable` deployment when the sign job waits; sandbox signs
+without approval. Promote and accept sandbox before stable.
 
 ### Sandbox test builds from a pull request
 

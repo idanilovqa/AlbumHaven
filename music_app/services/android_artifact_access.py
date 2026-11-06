@@ -18,11 +18,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -42,6 +40,7 @@ from music_app.services.android_key_attestation import (
     verify_attestation_chain,
 )
 from music_app.services.postgres_connections import pooled_connection
+from music_app.services.signed_links import LinkSigner, b64url as _b64url, unb64url as _unb64url
 
 CHANNELS = frozenset({"stable", "sandbox"})
 PACKAGES = {"stable": "org.albumhaven.app", "sandbox": "org.albumhaven.app.sandbox"}
@@ -60,7 +59,6 @@ _MAX_OPEN_CHALLENGES = 16
 _MAX_DEVICE_KEYS = 20
 _CHALLENGE_LOCK = 0x4148_4146  # pg_advisory_xact_lock class for this account's challenge issuers
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
-_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,512}\.[A-Za-z0-9_-]{43}")
 
 
 class ArtifactAccessError(Exception):
@@ -70,16 +68,6 @@ class ArtifactAccessError(Exception):
         super().__init__(code)
         self.status = status
         self.code = code
-
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _unb64url(text: str) -> bytes:
-    if not isinstance(text, str) or not re.fullmatch(r"[A-Za-z0-9_-]*", text):
-        raise ValueError()
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
 def signing_certificates(channel: str, environ=None) -> frozenset[str]:
@@ -126,20 +114,11 @@ class DownloadGrant:
 class AndroidArtifactAccess:
     def __init__(self, config, auth_policy_config, *, clock=None, connect=None, roots=None, environ=None):
         self._database_url = config.get("ALBUM_HAVEN_APP_DATABASE_URL")
-        self._secret = self._download_secret(auth_policy_config)
+        self._signer = LinkSigner(auth_policy_config, _DOWNLOAD_TOKEN_CONTEXT)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._connect = connect or pooled_connection
         self._roots = roots
         self._environ = environ
-
-    @staticmethod
-    def _download_secret(auth_policy_config) -> bytes | None:
-        hmac_config = auth_policy_config.get("hmac") if isinstance(auth_policy_config, Mapping) else None
-        secret = hmac_config.get("secret") if isinstance(hmac_config, Mapping) else None
-        if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
-            return None
-        # Domain-separated from every other use of the policy key.
-        return hmac.new(secret.encode("utf-8"), _DOWNLOAD_TOKEN_CONTEXT, hashlib.sha256).digest()
 
     @staticmethod
     def _identity(actor) -> tuple[int, int]:
@@ -310,29 +289,22 @@ class AndroidArtifactAccess:
 
     def issue_download_token(self, actor, device_key: UUID, channel: str, name: str) -> dict:
         account_id, _ = self._identity(actor)
-        if self._secret is None:
+        if not self._signer.available:
             raise ArtifactAccessError(503, "attestation_unavailable")
         expires = self._clock() + timedelta(seconds=DOWNLOAD_SECONDS)
-        payload = _b64url(json.dumps(
-            {"v": 1, "a": account_id, "k": str(device_key), "c": channel, "f": name, "e": int(expires.timestamp())},
-            separators=(",", ":"), sort_keys=True,
-        ).encode("utf-8"))
-        token = f"{payload}.{_b64url(hmac.new(self._secret, payload.encode('ascii'), hashlib.sha256).digest())}"
+        token = self._signer.sign(
+            {"v": 1, "a": account_id, "k": str(device_key), "c": channel, "f": name, "e": int(expires.timestamp())})
         return {"protocol": 1, "path": f"/artifacts/android/download/{token}", "expiresAt": expires.isoformat()}
 
     def resolve_download_token(self, token: str) -> DownloadGrant | None:
         """The file a token grants, or None when it is malformed, forged, expired or revoked."""
-        if self._secret is None or not isinstance(token, str) or not _TOKEN.fullmatch(token):
-            return None
-        payload, signature = token.split(".")
-        expected = _b64url(hmac.new(self._secret, payload.encode("ascii"), hashlib.sha256).digest())
-        if not hmac.compare_digest(signature, expected):
+        claims = self._signer.verify(token)
+        if claims is None:
             return None
         try:
-            claims = json.loads(_unb64url(payload))
             account_id, device_key = int(claims["a"]), UUID(str(claims["k"]))
             channel, name, expires = claims["c"], claims["f"], int(claims["e"])
-        except (ValueError, KeyError, TypeError, binascii.Error):
+        except (ValueError, KeyError, TypeError):
             return None
         if (claims.get("v") != 1 or channel not in CHANNELS or not isinstance(name, str)
                 or not APK_NAME.fullmatch(name) or expires <= self._clock().timestamp()):

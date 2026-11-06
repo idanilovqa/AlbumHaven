@@ -107,6 +107,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/artifacts/android/attest"): "account.self.android_updates",
     ("GET", "/artifacts/android/{channel}/manifest.json"): "account.self.android_updates",
     ("POST", "/artifacts/android/{channel}/{name}"): "account.self.android_updates",
+    # Self-service for any active account (no capability); the route also runs the linked
+    # download route's own authorization, then and whenever the link is fetched.
+    ("POST", "/downloads/links"): "account.self.downloads",
     ("POST", "/refresh-api"): "library.refresh",
     (
         "POST",
@@ -334,6 +337,11 @@ def _is_public(method: str, path: str) -> bool:
     # The route itself refuses any link that is not genuine, current and still backed by an
     # attested device of an active account.
     if path.startswith("/artifacts/android/download/"):
+        return normalized_method in _READ_METHODS
+    # A five-minute HMAC link for one allowlisted download, fetched by Android's DownloadManager
+    # without cookies. The route re-runs that download's own authorization for the account it
+    # names, which must still be active.
+    if path.startswith("/downloads/"):
         return normalized_method in _READ_METHODS
     return False
 

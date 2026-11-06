@@ -58,6 +58,16 @@ async def current_actor_from_request(request: Request, *, refresh: bool = False)
     return actor
 
 
+async def current_actor_for_account(request: Request, account_id: int) -> CurrentActor:
+    """Resolve and cache, for a request that carries no session, the account a signed link names."""
+
+    actor = await run_in_threadpool(_resolver(request).resolve_account, account_id)
+    if not isinstance(actor, CurrentActor):
+        raise RuntimeError("Current actor resolver returned invalid context.")
+    request.state.current_actor = actor
+    return actor
+
+
 def _resolver(request: Request):
     existing = getattr(request.app.state, "current_actor_resolver", None)
     if existing is not None:

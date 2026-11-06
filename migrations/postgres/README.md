@@ -282,6 +282,15 @@ artist's url-rels, or null when MusicBrainz lists none or several. Only the ID i
 stored; the public link is derived from it. Rollback drops the column after
 readers stop selecting it.
 
+Migration `0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql` repairs
+Delivery 1 data: it deletes only automatic, matched artist rows whose evidence is
+"MusicBrainz embedded evidence agreed.", because that evidence was a stored local
+artist MBID from Last.fm's name lookup rather than file tags, and was accepted
+without the album check. Manual choices and search-evidence matches are kept. The
+startup backfill and the owner's MusicBrainz sync then re-check those artists with
+the corrected matcher. It is idempotent; rollback is the next re-check, which
+re-creates any row the albums confirm.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

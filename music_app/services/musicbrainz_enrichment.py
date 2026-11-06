@@ -228,34 +228,35 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
     local["release_credits"] = [
         {"title": title, "credited_artist": local_name} for title in album_titles
     ]
-    embedded = list(context.get("embedded_artist_mbids") or [])
-    if embedded:
-        local["embedded_mbid"] = embedded[0]
-        lookup = client.lookup_artist(embedded[0])
+    named, failure = _name_matching_candidates(client, local_name)
+    if failure is not None:
+        return failure
+    hint = _hinted_artist_mbid(context, named)
+    if not named and not hint:
+        return {
+            "classification": "not_found",
+            "evidence_summary": "No MusicBrainz artist has this name.",
+        }
+    candidates = []
+    for candidate in [*named, *([{"mbid": hint, "score": 0}] if hint else [])]:
+        is_hint = candidate.get("mbid") == hint
+        lookup = client.lookup_artist(candidate.get("mbid"), discovered_by_search=not is_hint)
+        if is_hint and lookup.get("classification") == "not_found":
+            continue
         if lookup.get("classification") != "matched":
             return _provider_outcome(lookup)
-        candidates = [lookup["artist"]]
-    else:
-        named, failure = _name_matching_candidates(client, local_name)
-        if failure is not None:
-            return failure
-        if not named:
-            return {
-                "classification": "not_found",
-                "evidence_summary": "No MusicBrainz artist has this name.",
-            }
-        candidates = []
-        for candidate in named:
-            lookup = client.lookup_artist(candidate.get("mbid"), discovered_by_search=True)
-            if lookup.get("classification") != "matched":
-                return _provider_outcome(lookup)
-            artist = dict(lookup["artist"])
-            artist["score"] = candidate.get("score", 0)
-            browse = client.browse_release_group_titles(artist["mbid"], wanted_titles=album_titles)
-            if browse.get("classification") != "complete":
-                return _provider_outcome(browse)
-            artist["release_titles"] = browse.get("titles") or []
-            candidates.append(artist)
+        artist = dict(lookup["artist"])
+        artist["score"] = candidate.get("score", 0)
+        browse = client.browse_release_group_titles(artist["mbid"], wanted_titles=album_titles)
+        if browse.get("classification") != "complete":
+            return _provider_outcome(browse)
+        artist["release_titles"] = browse.get("titles") or []
+        candidates.append(artist)
+    if not candidates:
+        return {
+            "classification": "not_found",
+            "evidence_summary": "No MusicBrainz artist has this name.",
+        }
 
     match = match_artist(local, candidates)
     if match.get("classification") == "matched":
@@ -285,6 +286,18 @@ def resolve_artist(context: dict[str, object], *, client) -> dict[str, object]:
             else "MusicBrainz candidates require manual review."
         ),
     }
+
+
+def _hinted_artist_mbid(context: dict[str, object], named: list[dict[str, Any]]) -> str:
+    """The local artist's stored MBID (for example from Last.fm) as one more candidate.
+
+    It is only a hint: Last.fm picks it by name, so like any search result it is
+    accepted only when your albums agree. It is not file-tag evidence.
+    """
+    hints = [str(mbid or "").strip().lower() for mbid in context.get("hinted_artist_mbids") or []]
+    hint = next((mbid for mbid in hints if mbid), "")
+    named_mbids = {str(candidate.get("mbid") or "").strip().lower() for candidate in named}
+    return "" if hint in named_mbids else hint
 
 
 def _name_matching_candidates(

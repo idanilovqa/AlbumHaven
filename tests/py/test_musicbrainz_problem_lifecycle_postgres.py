@@ -537,3 +537,58 @@ def test_discogs_link_is_stored_with_the_match_and_refreshed_without_touching_it
     with isolatedPostgres._connect(setup_url) as connection:
         with pytest.raises(errors.CheckViolation):
             connection.execute("update integration.musicbrainz_artists set discogs_artist_id = 0 where mbid = %s", (GERMAN,))
+
+
+def test_stored_artist_mbid_recheck_removes_only_automatic_matches_from_that_path(monkeypatch: pytest.MonkeyPatch):
+    """0173: Aina-style matches accepted from a stored (Last.fm) artist MBID are re-checked; nothing else."""
+    from tests.py.test_musicbrainz_artist_migration_postgres import MIGRATIONS_ROOT
+
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    _apply_pre_delivery_migrations(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    recheck_sql = (MIGRATIONS_ROOT / "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql").read_text(encoding="utf-8")
+    with isolatedPostgres._connect(setup_url) as connection:
+        apply_delivery_migrations(connection)
+        library_id, owner_id = connection.execute(
+            """
+            select library.libraries.id, app.bootstrap_owners.account_id
+            from app.bootstrap_owners
+            join library.libraries on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            """
+        ).fetchone().values()
+        connection.execute(
+            "insert into integration.musicbrainz_artists (mbid, canonical_name, refreshed_at) values (%s, 'Aina', %s), (%s, 'Aina', %s)",
+            (GERMAN, NOW, TRANCE, NOW),
+        )
+        rows = {
+            "lastfm-path": ("automatic", "MusicBrainz embedded evidence agreed.", None),
+            "search-path": ("automatic", "MusicBrainz search evidence agreed.", None),
+            "manual": ("manual", "MusicBrainz embedded evidence agreed.", owner_id),
+        }
+        artist_ids = {}
+        for key, (source, evidence, decided_by) in rows.items():
+            artist_ids[key] = connection.execute(
+                "insert into library.local_artists (library_id, artist_key, name, metadata) values (%s, %s, %s, '{}'::jsonb) returning id",
+                (library_id, f"recheck-{key}", f"Recheck {key}"),
+            ).fetchone()["id"]
+            connection.execute(
+                """
+                insert into library.local_artist_musicbrainz_matches
+                  (library_id, local_artist_id, artist_mbid, state, decision_source, confidence, evidence_summary, decided_by_account_id)
+                values (%s, %s, %s, 'matched', %s, 1, %s, %s)
+                """,
+                (library_id, artist_ids[key], GERMAN, source, evidence, decided_by),
+            )
+
+        connection.execute(recheck_sql)
+        connection.execute(recheck_sql)  # Idempotent on re-run.
+        remaining = {
+            row["local_artist_id"]: (row["decision_source"], row["evidence_summary"])
+            for row in connection.execute("select local_artist_id, decision_source, evidence_summary from library.local_artist_musicbrainz_matches")
+        }
+
+    assert artist_ids["lastfm-path"] not in remaining, "the stored-MBID match is re-checked"
+    assert remaining[artist_ids["search-path"]] == ("automatic", "MusicBrainz search evidence agreed.")
+    assert remaining[artist_ids["manual"]][0] == "manual", "a manual choice is never touched"

@@ -241,8 +241,8 @@ class MusicBrainzEnrichmentPostgresRepository:
               artists.id as local_artist_id,
               artists.name as local_name,
               coalesce(albums.album_titles, array[]::text[]) as album_titles,
-              coalesce(identifiers.embedded_artist_mbids, array[]::text[])
-                as embedded_artist_mbids,
+              coalesce(identifiers.hinted_artist_mbids, array[]::text[])
+                as hinted_artist_mbids,
               assertion.artist_mbid as existing_assertion_mbid,
               assertion.confidence as existing_assertion_confidence,
               matches.artist_mbid::text as existing_artist_mbid,
@@ -273,7 +273,8 @@ class MusicBrainzEnrichmentPostgresRepository:
                 and albums.artist_id = artists.id
             ) albums on true
             left join lateral (
-              select array[artists.mbid::text] as embedded_artist_mbids
+              -- A stored local artist MBID (Last.fm) is a search hint, not embedded evidence.
+              select array[artists.mbid::text] as hinted_artist_mbids
               where artists.mbid is not null
             ) identifiers on true
             left join lateral (

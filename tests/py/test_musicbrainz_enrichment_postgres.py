@@ -179,7 +179,7 @@ def test_load_claimed_artist_context_is_safe_current_library_evidence_only():
         "local_artist_id": 41,
         "local_name": "Guardian",
         "album_titles": ["First Watch"],
-        "embedded_artist_mbids": [],
+        "hinted_artist_mbids": [],
         "existing_artist_mbid": ARTIST_MBID,
         "existing_match_state": "matched",
         "manual_decision": True,

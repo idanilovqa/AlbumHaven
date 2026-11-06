@@ -134,3 +134,73 @@ def test_edition_suffixes_and_punctuation_do_not_hide_album_agreement():
 
     assert outcome["classification"] == "found"
     assert outcome["artist"]["mbid"] == GERMAN
+
+
+AINA_INDIE = "3db93384-68e2-4d74-b26d-b36859704625"
+AINA_OPERA = "70794157-c217-4847-b33a-6accafbe953e"
+_AINA_ARTISTS = {
+    AINA_INDIE: {"id": AINA_INDIE, "name": "Aina", "type": "Group", "country": "ES", "disambiguation": "Spanish indie band"},
+    AINA_OPERA: {"id": AINA_OPERA, "name": "Aina", "type": "Group", "disambiguation": "metal opera"},
+}
+_AINA_RELEASE_GROUPS = {
+    AINA_INDIE: ["Sevens", "Aina", "Bipartite", "Peel Session EP", "Chrysanthemum"],
+    AINA_OPERA: ["Days of Rising Doom: The Metal Opera"],
+}
+
+
+def _aina_context(hint):
+    return {"local_artist_id": 26, "local_name": "Aina",
+            "album_titles": ["Days Of Rising Doom - The Metal Opera"], "hinted_artist_mbids": [hint]}
+
+
+def test_aina_stored_last_fm_mbid_never_beats_the_album_evidence():
+    """Owner review: Aina was matched to the Spanish indie band through its stored Last.fm MBID."""
+    client, _calls = _client(_AINA_RELEASE_GROUPS, artists=_AINA_ARTISTS, search=[
+        {"id": AINA_INDIE, "name": "Aina", "score": 100}, {"id": AINA_OPERA, "name": "Aina", "score": 100},
+    ])
+
+    outcome = resolve_artist(_aina_context(AINA_INDIE), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == AINA_OPERA
+    assert outcome["evidence_summary"] == "MusicBrainz search evidence agreed."
+
+
+def test_a_stored_mbid_without_album_agreement_is_never_accepted_on_its_own():
+    client, _calls = _client(_AINA_RELEASE_GROUPS, artists=_AINA_ARTISTS, search=[])
+
+    outcome = resolve_artist(_aina_context(AINA_INDIE), client=client)
+
+    assert outcome["classification"] == "unconfirmed"
+    assert [candidate["artist_mbid"] for candidate in outcome["candidates"]] == [AINA_INDIE]
+
+
+def test_a_stored_mbid_still_finds_an_artist_search_misses_when_the_albums_agree():
+    client, _calls = _client(_AINA_RELEASE_GROUPS, artists=_AINA_ARTISTS, search=[])
+
+    outcome = resolve_artist(_aina_context(AINA_OPERA), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == AINA_OPERA
+
+
+def test_a_stale_stored_mbid_is_ignored_rather_than_failing_the_lookup():
+    stale = "00000000-0000-4000-8000-0000000000ff"
+
+    def get_json(url, _user_agent, **_kwargs):
+        parsed = urlparse(url)
+        if parsed.path.endswith("/artist/"):
+            return {"count": 1, "artists": [{"id": AINA_OPERA, "name": "Aina", "score": 100}]}, OK
+        if parsed.path.endswith("/release-group"):
+            return {"release-group-count": 1, "release-groups": [{"title": "Days of Rising Doom: The Metal Opera"}]}, OK
+        mbid = parsed.path.rsplit("/", 1)[-1]
+        if mbid == stale:
+            return None, {"status": "network", "http_status": 404, "cache_hit": False}
+        return _AINA_ARTISTS[mbid], OK
+
+    client = MusicBrainzClient(base_url="https://mirror.test/ws/2/", user_agent="Test", get_json=get_json)
+
+    outcome = resolve_artist(_aina_context(stale), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == AINA_OPERA

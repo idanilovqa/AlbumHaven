@@ -1333,11 +1333,12 @@ class PostgresLibraryBrowseRepository:
             if use_summary_albums and not hydrate_query_primary_albums
             else _selected_artist_album_payloads(rows, artist_display)
         )
-        if use_preview_albums and not hydrate_query_primary_albums:
-            artist_musicbrainz = _artist_musicbrainz_projection_from_rows(rows)
-            if artist_musicbrainz is not None:
-                for album in albums:
-                    album["artist_musicbrainz"] = artist_musicbrainz
+        # Preview albums carry no per-album projection; the primary group takes the artist's own.
+        preview_artist_musicbrainz = (
+            _artist_musicbrainz_projection_from_rows(rows, artist=artist_display)
+            if use_preview_albums and not hydrate_query_primary_albums
+            else None
+        )
 
         selected_artist_keys = {
             _artist_display_dedupe_key(artist)
@@ -1454,6 +1455,7 @@ class PostgresLibraryBrowseRepository:
             artist_display,
             albums,
             use_preview_albums=use_preview_albums,
+            artist_musicbrainz=preview_artist_musicbrainz,
             alias_to_canonical=family_context["alias_to_canonical"],
             canonical_to_aliases=family_context["canonical_to_aliases"],
         )
@@ -7214,6 +7216,7 @@ def _selected_artist_primary_groups(
     use_preview_albums: bool,
     alias_to_canonical: dict[str, str],
     canonical_to_aliases: dict[str, list[str]],
+    artist_musicbrainz: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     if not selected_artist or not albums:
         return []
@@ -7223,8 +7226,8 @@ def _selected_artist_primary_groups(
         "albums": albums,
         "sections": [] if use_preview_albums else _selected_artist_sections(albums),
     }
-    artist_musicbrainz = _consistent_artist_musicbrainz_projection(
-        [album.get("artist_musicbrainz") for album in albums]
+    artist_musicbrainz = artist_musicbrainz or _artist_group_musicbrainz_projection(
+        [album.get("artist_musicbrainz") for album in albums], artist=selected_artist,
     )
     if artist_musicbrainz is not None:
         primary_artist_group["artist_musicbrainz"] = artist_musicbrainz
@@ -7298,6 +7301,7 @@ def _selected_artist_family_groups_from_preview_rows(
         normalized_family_artists,
         alias_to_canonical=alias_to_canonical,
     )
+    _attach_family_group_musicbrainz_projections(family_artist_groups, rows, alias_to_canonical)
     return _expose_selected_artist_family_group_filter_variations(
         _decorate_selected_artist_group_payloads(
             family_artist_groups,
@@ -7307,6 +7311,34 @@ def _selected_artist_family_groups_from_preview_rows(
         alias_to_canonical,
         normalized_family_artists,
     )
+
+
+def _attach_family_group_musicbrainz_projections(
+    family_artist_groups: list[dict[str, object]],
+    rows: list[object],
+    alias_to_canonical: Mapping[str, str],
+) -> None:
+    """Give each family member the same MusicBrainz projection a primary group gets."""
+    normalized_aliases = _normalized_artist_aliases(alias_to_canonical)
+
+    def canonical_key(name: object) -> str:
+        return local_inventory_identity_key(_canonical_artist_name(
+            str(name or "").strip(), alias_to_canonical, normalized_alias_to_canonical=normalized_aliases,
+        ))
+
+    projections_by_artist: dict[str, list[object]] = {}
+    for row in rows:
+        payload = _row_mapping(row)
+        projections_by_artist.setdefault(canonical_key(payload.get("artist_name")), []).append(
+            _artist_musicbrainz_projection(payload)
+        )
+    for group in family_artist_groups:
+        artist = str(group.get("artist") or "").strip()
+        artist_musicbrainz = _artist_group_musicbrainz_projection(
+            projections_by_artist.get(canonical_key(artist), []), artist=artist,
+        )
+        if artist_musicbrainz is not None:
+            group["artist_musicbrainz"] = artist_musicbrainz
 
 
 def _restore_selected_artist_family_group_labels(
@@ -8013,7 +8045,7 @@ def _root_album_browse_artist_groups(rows: list[object]) -> list[dict[str, objec
             # list twice during startup hydration.
             "sections": [],
         }
-        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows)
+        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows, artist=artist_display)
         if artist_musicbrainz is not None:
             artist_group["artist_musicbrainz"] = artist_musicbrainz
         artist_groups.append(artist_group)
@@ -8053,13 +8085,34 @@ def _artist_musicbrainz_projection(
 
 def _artist_musicbrainz_projection_from_rows(
     rows: list[object],
+    *,
+    artist: str = "",
 ) -> dict[str, object] | None:
-    return _consistent_artist_musicbrainz_projection(
-        [
-            _artist_musicbrainz_projection(_row_mapping(row))
-            for row in rows
-        ]
+    return _artist_group_musicbrainz_projection(
+        [_artist_musicbrainz_projection(_row_mapping(row)) for row in rows],
+        artist=artist,
     )
+
+
+def _artist_group_musicbrainz_projection(
+    projections: list[object],
+    *,
+    artist: str = "",
+) -> dict[str, object] | None:
+    """The Gallery artist's projection: the one its rows agree on, or, when an
+    alias-combined group mixes artists (Neal Morse with Neal Morse & The
+    Resonance), the one MusicBrainz names like the group itself."""
+    consistent = _consistent_artist_musicbrainz_projection(projections)
+    if consistent is not None or not artist:
+        return consistent
+    artist_key = local_inventory_identity_key(artist)
+    return _consistent_artist_musicbrainz_projection([
+        projection for projection in projections
+        if isinstance(projection, dict) and artist_key in {
+            local_inventory_identity_key(projection.get("canonical_name") or ""),
+            local_inventory_identity_key(projection.get("native_name") or ""),
+        }
+    ])
 
 
 def _consistent_artist_musicbrainz_projection(
@@ -8181,7 +8234,7 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
             # consume duplicate section payloads during the initial render.
             "sections": [],
         }
-        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows)
+        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows, artist=artist_display)
         if artist_musicbrainz is not None:
             artist_group["artist_musicbrainz"] = artist_musicbrainz
         artist_groups.append(artist_group)
@@ -9745,9 +9798,14 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_artist_musicbrainz_projection_columns_sql()}
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
         from matched_album_rows
+        {_artist_musicbrainz_projection_joins_sql(
+            library_id="matched_album_rows.library_id",
+            artist_id="matched_album_rows.artist_id",
+        )}
         left join track_rollups
           on track_rollups.album_id = matched_album_rows.album_id
         order by

@@ -176,7 +176,11 @@ test('search gallery retains artist information and dividers in artist section h
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
   );
-  assert.doesNotThrow(() => context.openGalleryArtistInfo(null));
+  // Search results open the same artist panel, with its MusicBrainz and Discogs links.
+  const opener = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
+  assert.doesNotMatch(opener.slice(0, opener.search(/\r?\n}\r?\n/)), /state\.view\.query/);
+  const chrome = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function updateGalleryMainChrome('));
+  assert.doesNotMatch(chrome.slice(0, chrome.search(/\r?\n}\r?\n/)), /closeGalleryMainSurface/, 'searching does not close an open artist panel');
 });
 
 function plain(value) {

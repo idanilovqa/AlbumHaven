@@ -569,9 +569,6 @@ function syncGalleryBarSearchVisibility() {
 
 function updateGalleryMainChrome() {
   const isSearch = Boolean(String(state.view.query || '').trim());
-  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
-    closeGalleryMainSurface(false);
-  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -710,7 +707,6 @@ function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
 }
 
 function openGalleryArtistInfo(anchor) {
-  if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');

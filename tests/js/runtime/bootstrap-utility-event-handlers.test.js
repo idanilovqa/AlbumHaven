@@ -510,7 +510,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
-test('applying a problem filter waits for the complete Problematic Files snapshot', async () => {
+test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {
   let releaseComplete;
   const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
   const { context, calls } = createContext({
@@ -532,8 +532,8 @@ test('applying a problem filter waits for the complete Problematic Files snapsho
 
   const click = context.handleUtilityBootstrapClick(event);
   await Promise.resolve();
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
-  assert.equal(calls.renders, 0);
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
+  assert.equal(calls.renders, 1);
 
   context.state.utility.problematicFiles = [
     { key: 'canonical', problem_reasons: ['Poor art quality'] },

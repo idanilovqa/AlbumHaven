@@ -2104,6 +2104,38 @@ def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
     assert startup_preview["mode"] == "full_view"
 
 
+def test_bootstrap_reports_the_inventory_revision_read_before_its_view(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    library_state = {"inventory_mutation_revision": 41}
+
+    def build_view_while_a_mutation_commits(**_kwargs):
+        library_state["inventory_mutation_revision"] = 42
+        return {"artist_groups": [], "album_count": 0, "artist_count": 0}, None, 1.0
+
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_root_startup_view",
+        build_view_while_a_mutation_commits,
+    )
+
+    payload, _, _ = web_asgi._build_bootstrap_payload(
+        query_args=QueryParams([("surface", "albums")]),
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state=library_state,
+        query_raw="",
+        selected_artist="",
+        refreshed=False,
+        request_started_epoch_ms=1,
+    )
+
+    # The first status poll then sees 42 as newer and refreshes the rendered view.
+    assert payload["bootstrap"]["inventoryMutationRevision"] == 41
+
+
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     from music_app.routes import web_asgi
     from starlette.datastructures import QueryParams

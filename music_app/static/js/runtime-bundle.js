@@ -28552,6 +28552,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
+  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
+  const refreshesCompleteList = state.utility.loaded === true
+    && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
@@ -28644,7 +28647,8 @@ async function loadProblematicFiles(force = false, options = {}) {
           state.utility.loadPromise = null;
         }
         if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage())) {
+            && ((shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
+              || shouldRenderInitialPage())) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -50773,7 +50777,11 @@ updateStatusIndicator({
   covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
-  last_scan_display: bootstrap.lastScanDisplay || ''
+  last_scan_display: bootstrap.lastScanDisplay || '',
+  // The first status poll compares against the revision this page was rendered at.
+  ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
+    ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);

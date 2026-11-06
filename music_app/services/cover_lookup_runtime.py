@@ -550,11 +550,12 @@ def _run_cover_lookup_task(
         candidate_publisher = None
         candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
-    def publish_candidate_snapshot(candidates: list[dict[str, object]]) -> None:
+    def publish_candidate_snapshot(candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Persist candidates and return them in the order the reopened snapshot shows them."""
         nonlocal candidate_publisher, candidate_snapshot_diagnostic
         nonlocal candidate_snapshot_published
         if candidate_publisher is None or not candidates:
-            return
+            return candidates
         try:
             candidate_snapshot_published = bool(
                 candidate_publisher.publish_candidates(candidates)
@@ -562,6 +563,8 @@ def _run_cover_lookup_task(
         except Exception:
             candidate_publisher = None
             candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
+            return candidates
+        return candidate_publisher.display_ordered(candidates)
 
     def candidate_snapshot_changes() -> dict[str, object]:
         if not candidate_snapshot_diagnostic:
@@ -673,7 +676,7 @@ def _run_cover_lookup_task(
                 progressive_candidate_signature = signature
                 if cancel_event.is_set() or candidate_publication_closed.is_set():
                     return
-                publish_candidate_snapshot(candidates)
+                candidates = publish_candidate_snapshot(candidates)
                 _update_candidate_lookup_task(
                     task_id,
                     config=config,
@@ -948,7 +951,7 @@ def _run_cover_lookup_task(
             phase_started,
             count=len(combined_candidates),
         )
-        publish_candidate_snapshot(combined_candidates)
+        combined_candidates = publish_candidate_snapshot(combined_candidates)
         _update_candidate_lookup_task(
             task_id,
             config=config,
@@ -1018,7 +1021,7 @@ def _run_cover_lookup_task(
                 phase_started,
                 count=len(combined_candidates),
             )
-            publish_candidate_snapshot(combined_candidates)
+            combined_candidates = publish_candidate_snapshot(combined_candidates)
             _update_candidate_lookup_task(
                 task_id,
                 config=config,

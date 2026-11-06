@@ -455,6 +455,8 @@ selected_rows as materialized (
    and current_album.library_id = target_album.library_id
    and (
      current_album.id = target_album.id
+     -- FTC-TAGS-020 splits single tracks into suffixed albums; a failed run leaves them there.
+     or current_album.title ~ '^Студийные записи[2-5]$'
      or (
        current_album.title = 'Telepathic Minds'
        and (
@@ -695,6 +697,7 @@ deleted_orphan_albums as (
         'Студийные записи',
         'Студийные записи merge candidate'
       )
+      or library.local_albums.title ~ '^Студийные записи[2-5]$'
       or (
         library.local_albums.title = 'Telepathic Minds'
         and not exists (

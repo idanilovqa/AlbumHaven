@@ -226,7 +226,11 @@ updateStatusIndicator({
   covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
-  last_scan_display: bootstrap.lastScanDisplay || ''
+  last_scan_display: bootstrap.lastScanDisplay || '',
+  // The first status poll compares against the revision this page was rendered at.
+  ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
+    ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);

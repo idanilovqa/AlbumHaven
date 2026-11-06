@@ -73,7 +73,11 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     },
     appBootstrap: {
       getBootstrap() {
-        return { scanInProgress: true, scanPhase: 'discovering' };
+        return {
+          scanInProgress: true,
+          scanPhase: 'discovering',
+          ...(unloadBeforeIdle ? {} : { inventoryMutationRevision: 7 }),
+        };
       },
       releasePayloadViewState() {},
     },
@@ -212,6 +216,12 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   );
   assert.ok(documentListeners.contextmenu);
   assert.equal(initialLoaderState.scan_phase, 'discovering');
+  // Without the rendered revision the first status poll cannot tell that the page is behind.
+  assert.equal(
+    Object.hasOwn(initialStatus, 'inventory_mutation_revision'),
+    !unloadBeforeIdle,
+  );
+  if (!unloadBeforeIdle) assert.equal(initialStatus.inventory_mutation_revision, 7);
   assert.equal(context.buildLoaderStatusLines(initialLoaderState)[0].title, 'Discovering music files');
 
   assert.ok(windowListeners.pageshow);

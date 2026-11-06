@@ -604,13 +604,15 @@ export class CoverLookup extends BasePage {
     return this.taskCardById(taskId).evaluate((element) => {
       const opener = element.querySelector('[data-open-cover-lookup-task]');
       const image = element.querySelector('img.cover-lookup-task-cover');
+      // currentSrc stays empty until a lazy image starts loading; resolve the attribute to the same absolute form.
+      const imageSrc = image instanceof HTMLImageElement
+        ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+        : '';
       return {
         taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),
         title: String(element.querySelector('.cover-lookup-task-title')?.textContent || '').trim(),
         byline: String(element.querySelector('.cover-lookup-task-byline')?.textContent || '').trim(),
-        imageSrc: image instanceof HTMLImageElement
-          ? String(image.currentSrc || image.getAttribute('src') || '').trim()
-          : '',
+        imageSrc: imageSrc ? new URL(imageSrc, document.baseURI).href : '',
       };
     });
   }

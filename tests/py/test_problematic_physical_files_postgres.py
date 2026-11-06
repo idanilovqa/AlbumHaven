@@ -281,6 +281,46 @@ def test_windows_case_variants_keep_global_and_targeted_folder_context_equal(phy
             assert all(row["file_mixed_album_folder"] is True for row in selected_rows), modes
 
 
+@pytest.mark.parametrize("path_columns", [False, True])
+def test_loose_tracks_beside_one_album_do_not_make_its_folder_mixed(physical_catalog, path_columns):
+    """Loose tracks have no album, so they are not a second album in the folder."""
+    connection, album, owned = physical_catalog
+    album_id = album("Folder Album", "Album With Loose Tracks")
+    album_track = connection.execute(
+        "select library_id, artist_id, track_key from library.local_tracks where album_id = %s", (album_id,),
+    ).fetchone()
+    file = connection.execute("""
+        select files.library_root_id, files.private_path from library.local_track_files files
+        join library.local_tracks tracks on tracks.id = files.track_id where tracks.album_id = %s
+    """, (album_id,)).fetchone()
+    loose_path = file["private_path"].rsplit("/", 1)[0] + "/Loose Track.flac"
+    loose_track = connection.execute("""
+        insert into library.local_tracks (library_id, album_id, artist_id, track_key, title)
+        values (%s, null, %s, %s, 'Loose Track') returning id
+    """, (album_track["library_id"], album_track["artist_id"], album_track["track_key"] + "-loose")).fetchone()["id"]
+    connection.execute("""
+        insert into library.local_track_files (track_id, library_root_id, private_path, file_size_bytes, metadata)
+        values (%s, %s, %s, 1024, %s::jsonb)
+    """, (loose_track, file["library_root_id"], loose_path, json.dumps({"scan_cache": {"stale": False, "file_entry": {
+        "path": loose_path, "album": "Unreleased", "title": "Loose Track", "size": 1024,
+    }}})))
+    _, key = owned["Folder Album"]
+
+    def query(**modes):
+        params = {"album_key": key, "album_ids": [album_id], "album_keys": [key], "file_paths": [],
+                  "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                  "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS}
+        sql = browse._problematic_files_sql(**modes, path_columns=path_columns)
+        return connection.execute(sql, params).fetchall()
+
+    assert album_id not in {row["album_id"] for row in query(candidate_summary=True, candidate_ids_only=True)}
+    for modes in ({}, {"candidate_summary": True, "selected_album_ids": True},
+                  {"targeted_problem_owners": True}, {"duplicate_candidates": True}):
+        selected_rows = [row for row in query(**modes) if row["album_id"] == album_id]
+        assert selected_rows, modes
+        assert all(row["file_mixed_album_folder"] is False for row in selected_rows), modes
+
+
 @pytest.mark.parametrize("physical_catalog", ["explain"], indirect=True)
 def test_physical_parent_migration_rejects_wrong_existing_index(physical_catalog):
     connection, _, _ = physical_catalog

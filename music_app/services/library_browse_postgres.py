@@ -11115,6 +11115,8 @@ def _problematic_files_sql(
           from (
             select distinct library_id, library_root_id, physical_parent, album_id
             from active_problem_rows
+            -- Loose tracks have no album, so they never make a folder mixed.
+            where album_id is not null
           ) folder_albums
           group by library_id, library_root_id, physical_parent
           having count(*) > 1

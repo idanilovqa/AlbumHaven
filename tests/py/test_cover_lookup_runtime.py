@@ -1129,6 +1129,9 @@ def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapsh
             published_candidate_ids.append([str(item.get("id") or "") for item in candidates])
             return True
 
+        def display_ordered(self, candidates):
+            return candidates
+
         def complete(self):
             terminal_calls.append("completed")
             return True
@@ -1196,6 +1199,81 @@ def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapsh
     assert terminal_calls == ["completed"]
 
 
+def test_manual_lookup_task_lists_candidates_in_the_persisted_snapshot_order(
+    config,
+    logger,
+    library_state,
+    monkeypatch,
+    tmp_path: Path,
+):
+    track_path = tmp_path / "song.mp3"
+    album = {**_album_payload(track_path), "id": 41}
+    updates: list[dict[str, object]] = []
+
+    def match(source):
+        return {"id": source, "source": source, "url": f"https://images.example/{source}.jpg"}
+
+    class SnapshotOrderPublisher:
+        """Cover Art Archive was persisted before Discogs, as when it answers first."""
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def publish_candidates(self, _candidates, **_kwargs):
+            return True
+
+        def display_ordered(self, candidates):
+            order = ["apple", "bandcamp", "caa", "discogs", "artist-site"]
+            return sorted(candidates, key=lambda candidate: order.index(candidate["id"]))
+
+        def complete(self):
+            return True
+
+    monkeypatch.setattr(
+        cover_lookup_runtime, "AlbumCoverCandidateSnapshotRepository", lambda _config: object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime, "AlbumCoverCandidatePublisher", SnapshotOrderPublisher, raising=False,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "COVER_LOOKUP_PROVIDER_REGISTRY",
+        _FakeCoverLookupProviderRegistry(
+            service_matches=[match("apple")],
+            manual_matches=[],
+            bandcamp_matches=[match("bandcamp")],
+            discogs_archive_matches=([match("discogs")], [match("caa")]),
+            artist_website_matches=[match("artist-site")],
+        ),
+    )
+    monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cover_lookup_runtime, "discard_cover_lookup_future", lambda *_args: None)
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "update_cover_lookup_task",
+        lambda task_id, **kwargs: _capture_task_update(
+            updates, task_id, expected_config=config, **kwargs,
+        ),
+    )
+
+    cover_lookup_runtime._run_cover_lookup_task(
+        "manual-generation-order",
+        config,
+        logger,
+        config["MUSICBRAINZ_USER_AGENT"],
+        album,
+        {str(track_path)},
+        Event(),
+    )
+
+    # A reopened modal reads the snapshot, so the live task must list the same order.
+    assert updates[-1]["status"] == "completed"
+    assert [candidate["id"] for candidate in updates[-1]["possible_matches"]] == [
+        "apple", "bandcamp", "caa", "discogs", "artist-site",
+    ]
+
+
 def test_manual_lookup_resolves_snapshot_album_id_when_client_payload_omits_it(
     config,
     logger,
@@ -1222,6 +1300,9 @@ def test_manual_lookup_resolves_snapshot_album_id_when_client_payload_omits_it(
 
         def publish_candidates(self, _candidates, **_kwargs):
             return True
+
+        def display_ordered(self, candidates):
+            return candidates
 
         def complete(self):
             return True
@@ -1369,6 +1450,9 @@ def test_run_cover_lookup_task_keeps_later_provider_failures_loud_for_acceptable
 
         def publish_candidates(self, _candidates, **_kwargs):
             return True
+
+        def display_ordered(self, candidates):
+            return candidates
 
         def complete(self):
             terminal_calls.append("completed")
@@ -2313,6 +2397,9 @@ def test_run_cover_lookup_task_discards_unpublished_results_when_parallel_bandca
             assert [candidate["id"] for candidate in candidates] == ["accepted-service-result"]
             terminal_events.append("candidate-accepted")
             return True
+
+        def display_ordered(self, candidates):
+            return candidates
 
         def fail(self):
             terminal_events.append("snapshot-failed")
@@ -4132,6 +4219,9 @@ def test_progressive_provider_cannot_publish_after_terminal_task(
                 "publish:" + ",".join(str(candidate["id"]) for candidate in candidates)
             )
             return True
+
+        def display_ordered(self, candidates):
+            return candidates
 
         def complete(self):
             publisher_events.append("complete")

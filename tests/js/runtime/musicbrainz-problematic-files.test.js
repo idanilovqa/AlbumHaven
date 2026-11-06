@@ -285,3 +285,33 @@ test('alias-combined gallery groups receive status by canonical identity, proble
   assert.equal(context.getGalleryArtistMusicBrainzStatus({ artist: 'Kipelov' }).problem, null,
     'the local alias name is not a Gallery group');
 });
+
+test('server-shaped owner status payloads put the warning on the Gallery artist separator', async () => {
+  // Same shapes the server returns: /status allowed_actions (as_payload) and /api/musicbrainz/artists/status.
+  const shellStatus = { allowed_actions: { 'library.loops.create': true, 'catalogue.enrichment.request': true } };
+  const { context } = loadGalleryStatus({ artists: [
+    { local_artist_id: 158170, local_artist_name: '3 Crows', gallery_artist: '3 Crows', match_state: null,
+      problem_occurrence_id: 424, unresolved_reason: 'MBID: Not found' },
+  ] });
+  context.state.status = shellStatus;
+  context.escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  vm.runInContext(read('music_app/static/js/runtime/alert-components.js'), context);
+
+  assert.equal(await context.refreshGalleryArtistMusicBrainzStatus({ force: true }), true);
+  const group = { artist: '3 Crows', albums: [{}] };
+  const status = context.getGalleryArtistMusicBrainzStatus(group);
+  const separator = context.buildFamilyArtistHeaderHtml({
+    artist: '3 Crows', albumCount: 1, artistMusicBrainzProblem: status.problem, artistMusicBrainzState: status.state,
+  });
+
+  assert.match(separator, /data-open-musicbrainz-artist-problem="424"/);
+  assert.match(separator, /MBID: Not found/);
+  assert.match(separator, /aria-label="Open MBID: Not found for 3 Crows"/);
+});
+
+test('without the server enrichment action the Gallery shows no artist warnings', async () => {
+  const { context, requests } = loadGalleryStatus({ owner: false });
+  context.state.status = { allowed_actions: { 'library.loops.create': true } };
+  assert.equal(await context.refreshGalleryArtistMusicBrainzStatus({ force: true }), false);
+  assert.deepEqual(requests, []);
+});

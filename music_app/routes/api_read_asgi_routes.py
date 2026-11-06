@@ -473,7 +473,10 @@ async def status(request: Request) -> JSONResponse:
     ):
         # Deferred startup has no runtime inventory; reuse the scoped durable count.
         payload["album_total"] = identity.get("catalog_album_count", payload["album_total"])
-    payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
+    # The shell reads these to show loop creation, MusicBrainz sync and artist repair status.
+    payload["allowed_actions"] = allowed_actions_for_request(
+        request, ("library.loops.create", "catalogue.enrichment.request"),
+    ).as_payload()
     return JSONResponse(payload)
 
 

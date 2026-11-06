@@ -73,6 +73,27 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
+@pytest.mark.parametrize("owner", [True, False])
+def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, owner):
+    from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
+
+    asgi_app = _make_asgi_app()
+    if not owner:
+        listener = CurrentActor(
+            state=ActorState.ACTIVE, account_id=8, session_id=12, username_display="listener",
+            current_library_id=1, library_relationships=(LibraryRelationship(1, "member", False),),
+            capability_grants=(CapabilityGrant("capability.view", "library", 1), CapabilityGrant("capability.play", "library", 1)),
+        )
+        asgi_app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: listener)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    allowed = _decode_json(body)["allowed_actions"]
+    # Denied actions are omitted; the shell shows MusicBrainz sync only for an explicit true.
+    assert (allowed.get("catalogue.enrichment.request") is True) is owner
+
+
 def test_status_payload_keeps_post_scan_cover_handoff_busy():
     from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
 

@@ -591,3 +591,30 @@ def test_gallery_status_says_metadata_pending_while_problematic_files_keeps_the_
     assert status == 200
     assert [artist["unresolved_reason"] for artist in payload["artists"]] == ["Metadata pending", "Metadata pending", "MBID: Not found"]
     assert all("problem_reason_code" not in artist for artist in payload["artists"])
+
+
+@pytest.mark.parametrize("owner", [True, False])
+def test_owner_shell_status_and_artist_status_together_enable_gallery_warnings(owner):
+    """The Gallery shows artist warnings only when /status grants the action and the artist status lists the problem."""
+
+    class AttentionService(Service):
+        def list_artist_attention(self):
+            return [{"local_artist_id": 158170, "local_artist_name": "3 Crows", "gallery_artist": "3 Crows", "match_state": None,
+                     "problem_occurrence_id": 424, "problem_reason_code": "musicbrainz_artist_not_found",
+                     "unresolved_reason": "MBID: Not found"}]
+
+    actor = (actor_with("app.status.read", "library.problems.read", "catalogue.enrichment.request", owner=True) if owner
+             else actor_with("app.status.read", "capability.view", owner=False))
+    app = app_for(actor, AttentionService())
+
+    shell_status, shell = request(app, "GET", "/status")
+    artist_status, artists = request(app, "GET", "/api/musicbrainz/artists/status")
+
+    assert shell_status == 200
+    assert (shell["allowed_actions"].get("catalogue.enrichment.request") is True) is owner
+    if owner:
+        assert artist_status == 200
+        assert artists["artists"] == [{"local_artist_id": 158170, "local_artist_name": "3 Crows", "gallery_artist": "3 Crows",
+                                       "match_state": None, "problem_occurrence_id": 424, "unresolved_reason": "MBID: Not found"}]
+    else:
+        assert artist_status == 403

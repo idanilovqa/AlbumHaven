@@ -859,6 +859,7 @@ def test_lost_character_track_artist_uses_the_album_artist(tmp_path):
     assert entry["album_artist"] == "\u5929\u9580"
     assert entry["artist"] == "\u5929\u9580"
     assert entry["artists"] == ["\u5929\u9580"]
+    assert entry["text_corrections"] == {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}}
 
 
 def test_stored_v6_lost_character_credits_upgrade_without_reading_the_file():
@@ -871,4 +872,43 @@ def test_stored_v6_lost_character_credits_upgrade_without_reading_the_file():
     assert upgraded == {
         **stored, "artist": "\u5929\u9580", "artists": ["\u5929\u9580"],
         "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION,
+        "text_corrections": {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}},
     }
+    assert metadata.entry_with_original_tag_text(upgraded)["artist"] == "??"
+
+
+@pytest.mark.parametrize(
+    ("credits", "expected"),
+    [
+        pytest.param({"album_artist": "Air", "artists": ["Air"]}, None, id="readable"),
+        pytest.param(
+            {"album_artist": "\u00c3\u00a9milie Simon", "artists": ["\u00c3\u00a9milie Simon"]},
+            {
+                "artist": {"original": "\u00c3\u00a9milie Simon", "corrected": "\u00e9milie Simon", "kind": "decoded"},
+                "album_artist": {"original": "\u00c3\u00a9milie Simon", "corrected": "\u00e9milie Simon", "kind": "decoded"},
+            },
+            id="decoded",
+        ),
+        # Both credits lost: the display is a placeholder, never written to tags.
+        pytest.param({"album_artist": "??", "artists": ["??"]}, None, id="placeholder-is-not-a-correction"),
+    ],
+)
+def test_display_corrections_record_what_the_tags_say(credits, expected):
+    assert metadata.derive_readable_artist_credits(credits).get("text_corrections") == expected
+
+
+def test_a_read_records_the_lost_track_artist_but_never_adds_an_album_artist_tag(tmp_path):
+    from mutagen.id3 import ID3, TALB, TIT2, TPE1
+
+    path = tmp_path / "01 - Theme.mp3"
+    path.write_bytes((b"\xff\xfb\x90\x64" + bytes(413)) * 400)
+    tags = ID3()
+    tags.add(TPE1(encoding=0, text=["\u00c3\u00a9milie Simon"]))
+    tags.add(TALB(encoding=0, text=["Mue"]))
+    tags.add(TIT2(encoding=0, text=["Theme"]))
+    tags.save(path)
+
+    entry = metadata.read_metadata_for_file(path)
+
+    assert entry["album_artist"] == "\u00e9milie Simon"
+    assert set(entry["text_corrections"]) == {"artist"}

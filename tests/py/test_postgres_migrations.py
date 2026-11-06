@@ -541,6 +541,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0113_create_local_album_additional_artworks.sql",
         "0114_album_details_art_quality_alert.sql",
         "0115_aggregate_gallery_membership_per_artist.sql",
+        "0116_add_problematic_text_corrections.sql",
     ]
 
 

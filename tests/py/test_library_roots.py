@@ -513,3 +513,12 @@ def test_absolute_media_path_rejects_resolution_runtime_errors(tmp_path, monkeyp
         str(candidate),
         configured_root_paths=(root,),
     ) is None
+
+
+def test_library_data_corrections_default_to_display_only_and_reject_unknown_modes():
+    payload = {"main_library_roots": [{"id": "main-1", "path": "/music/main"}]}
+    assert library_roots.normalize_persisted_library_root_settings(payload)["metadata_corrections"] == "display_only"
+    assert library_roots.normalize_persisted_library_root_settings(
+        {**payload, "metadata_corrections": "write_tags"})["metadata_corrections"] == "write_tags"
+    with pytest.raises(ValueError, match="Library Data Corrections"):
+        library_roots.normalize_persisted_library_root_settings({**payload, "metadata_corrections": "always"})

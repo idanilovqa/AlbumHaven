@@ -44,9 +44,9 @@ FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
     # Unreadable "??" credits fall back to the album artist; UTF-8 bytes in
     # Latin-1 frames are decoded. Both derive from the stored text.
     7: {
-        "fields": ("album_artist", "artist", "artists"),
+        "fields": ("album_artist", "artist", "artists", "text_corrections"),
         "requires_file_read": False,
-        "derive": lambda entry: _derive_readable_artist_credits(entry),
+        "derive": lambda entry: derive_readable_artist_credits(entry),
     },
 }
 _OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
@@ -295,15 +295,58 @@ def repair_artist_text(value: object) -> str | None:
     return text
 
 
-def _derive_readable_artist_credits(entry: dict[str, object]) -> dict[str, object]:
-    album_artist = repair_artist_text(entry.get("album_artist"))
+TEXT_CORRECTION_LOST_CHARACTERS = "lost_characters"
+TEXT_CORRECTION_DECODED = "decoded"
+TRACK_ARTIST_UNREADABLE_REASON = "Track artist unreadable — using album artist"
+
+
+def text_correction_reason(field: str, kind: object) -> str:
+    """The Problematic Files reason for one display correction."""
+    if kind != TEXT_CORRECTION_LOST_CHARACTERS:
+        return "Encoding problem"
+    return TRACK_ARTIST_UNREADABLE_REASON if field == "artist" else "Undecoded characters"
+
+
+def derive_readable_artist_credits(entry: dict[str, object]) -> dict[str, object]:
+    raw_album_artist = str(entry.get("album_artist") or "").strip()
     stored = entry.get("artists")
-    credits = [repair_artist_text(artist) for artist in (stored if isinstance(stored, list) else [entry.get("artist")])]
-    credits = [artist for artist in credits if artist]
+    raw_credits = [str(artist or "").strip() for artist in (stored if isinstance(stored, list) else [entry.get("artist")])]
+    raw_credits = [artist for artist in raw_credits if artist]
+    repaired_credits = [repair_artist_text(artist) for artist in raw_credits]
+    credits = [artist for artist in repaired_credits if artist]
     track_artist = " & ".join(credits) if credits else None
-    album_artist = album_artist or track_artist or "Unknown Artist"
+    album_artist = repair_artist_text(raw_album_artist) or track_artist or "Unknown Artist"
     track_artist = track_artist or album_artist
-    return {"album_artist": album_artist, "artist": track_artist, "artists": credits or [track_artist]}
+    derived = {"album_artist": album_artist, "artist": track_artist, "artists": credits or [track_artist]}
+    # What the tags say versus what the app shows, kept so the correction can
+    # be listed in Problematic Files and, when the library asks, written back.
+    # A placeholder is absence, never a correction to write into tags.
+    corrections = {}
+    raw_track_artist = " & ".join(raw_credits)
+    if raw_track_artist and raw_track_artist != track_artist != "Unknown Artist":
+        corrections["artist"] = {
+            "original": raw_track_artist, "corrected": track_artist,
+            "kind": TEXT_CORRECTION_LOST_CHARACTERS if None in repaired_credits else TEXT_CORRECTION_DECODED,
+        }
+    if raw_album_artist and raw_album_artist != album_artist != "Unknown Artist":
+        corrections["album_artist"] = {
+            "original": raw_album_artist, "corrected": album_artist,
+            "kind": TEXT_CORRECTION_LOST_CHARACTERS if repair_artist_text(raw_album_artist) is None else TEXT_CORRECTION_DECODED,
+        }
+    # Always present: stored entries merge, so only an explicit null clears it.
+    derived["text_corrections"] = corrections or None
+    return derived
+
+
+def entry_with_original_tag_text(entry: dict[str, object]) -> dict[str, object]:
+    """The entry as its tags read before any display correction."""
+    corrections = entry.get("text_corrections")
+    if not isinstance(corrections, dict):
+        return entry
+    return {**entry, **{
+        field: correction["original"] for field, correction in corrections.items()
+        if isinstance(correction, dict) and correction.get("original")
+    }}
 
 
 def first_tag(tags: dict[str, object], keys: list[str]) -> str | None:
@@ -778,11 +821,16 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
-    credits = _derive_readable_artist_credits({
+    credits = derive_readable_artist_credits({
         "album_artist": first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]),
         "artists": artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"]),
     })
     album_artist, track_artist, track_artists = credits["album_artist"], credits["artist"], credits["artists"]
+    corrections = dict(credits.get("text_corrections") or {})
+    if not first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2"]):
+        # The album artist came from the track artist; a write would add a tag.
+        corrections.pop("album_artist", None)
+    text_corrections = corrections or None
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
@@ -815,4 +863,5 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
         "is_compilation": is_compilation,
         "compilation_tag": is_compilation,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        "text_corrections": text_corrections,
     }

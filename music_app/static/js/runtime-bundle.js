@@ -24010,6 +24010,7 @@ function normalizeLibrarySettingsPayload(raw) {
   const movePolicy = source.move_policy && typeof source.move_policy === 'object' ? source.move_policy : {};
   normalized.move_policy.preferred_main_write_root = String(movePolicy.preferred_main_write_root || '').trim();
   normalized.move_policy.move_new_arrivals_to = String(movePolicy.move_new_arrivals_to || '').trim();
+  normalized.metadata_corrections = source.metadata_corrections === 'write_tags' ? 'write_tags' : 'display_only';
   return normalized;
 }
 
@@ -24154,7 +24155,13 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
-  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings]')) { event.preventDefault(); return true; }
+  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings], [data-library-metadata-corrections]')) { event.preventDefault(); return true; }
+  const correctionMode = event.target.closest('[data-library-metadata-corrections]');
+  if (correctionMode) {
+    if (correctionMode.disabled || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) { event.preventDefault(); return true; }
+    getLibrarySettingsDraft().metadata_corrections = correctionMode.getAttribute('data-library-metadata-corrections');
+    return true;
+  }
   const toggle = event.target.closest('[id^="library-auto-move-"]');
   if (toggle) {
     event.preventDefault();
@@ -24381,6 +24388,7 @@ async function saveUtilityLibrarySettings() {
       scheduleStatusPoll(250);
     }
     if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
+    if (librarySettingsState.settings.metadata_corrections === 'write_tags') void writeLibraryDataCorrections();
     return true;
   } catch (error) {
     settleLibraryStatusAction(statusAction);
@@ -24392,6 +24400,61 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.saveBusy = false;
     renderCurrent();
   }
+}
+
+// "Write in tags": every album Problematic Files lists with a display
+// correction gets that correction written through the Edit Tags path, so each
+// write has its History entry and undo, and needs the edit-tags permission.
+const LIBRARY_DATA_CORRECTION_REASONS = new Set(['Track artist unreadable — using album artist', 'Undecoded characters', 'Encoding problem']);
+
+async function writeLibraryDataCorrections() {
+  const owner = ensureLibrarySettingsState();
+  if (owner.correctionsBusy || owner.allowedActions?.['library.files.edit_tags'] !== true) return null;
+  owner.correctionsBusy = true;
+  const readJson = async url => {
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || 'Problematic Files are unavailable.');
+    return data;
+  };
+  let written = 0, failed = 0;
+  try {
+    const summary = await readJson('/utilities/problematic-files');
+    const albumKeys = (summary.items || [])
+      .filter(item => (item.problem_reasons || []).some(reason => LIBRARY_DATA_CORRECTION_REASONS.has(reason)))
+      .map(item => String(item.key || ''));
+    for (const albumKey of albumKeys) {
+      try {
+        const album = await readJson(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(albumKey)}`);
+        const proposals = (album.suggested_edits || []).filter(proposal => proposal.display_correction === true);
+        if (!proposals.length || album.allowed_actions?.['library.files.edit_tags'] !== true) continue;
+        const updates = {};
+        proposals.forEach(proposal => Object.assign(updates[proposal.path] ||= {}, proposal.updates));
+        const response = await fetch('/utilities/edit-tags', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: true, album, proposal_ids: proposals.map(proposal => proposal.id), updates, problematic_files_origin: true }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Corrections were not written.');
+        written += proposals.length;
+      } catch (error) {
+        failed += 1;
+        console.error('[AlbumHaven][LibrarySettings] Could not write corrections for an album.', error);
+      }
+    }
+  } catch (error) {
+    console.error('[AlbumHaven][LibrarySettings] Could not list library data corrections.', error);
+    showToast(error.message || 'Library data corrections could not be written.', 'error', 3600);
+    return null;
+  } finally {
+    owner.correctionsBusy = false;
+  }
+  if (written || failed) {
+    const count = `${written} correction${written === 1 ? '' : 's'} written to tags`;
+    showToast(failed ? `${count}; ${failed} album${failed === 1 ? '' : 's'} could not be corrected.` : `${count}.`,
+      failed ? 'error' : 'success', 3600);
+  }
+  return { written, failed };
 }
 
 function buildLibrarySettingsRootOptions(roots, placeholder) {
@@ -24450,6 +24513,28 @@ function buildLibrarySettingsRootSection(category, title, description) {
   `;
 }
 
+const LIBRARY_DATA_CORRECTION_MODES = [
+  { value: 'display_only', label: 'Display only' },
+  { value: 'write_tags', label: 'Write in tags' },
+];
+
+function buildLibraryDataCorrectionsSection(draft) {
+  const disabled = librarySettingsReadOnlyClient() || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true;
+  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option">
+      <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
+        ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${mode.label}</span>
+    </label>`).join('');
+  return `<section class="library-settings-section" aria-labelledby="library-data-corrections-heading">
+    <div class="library-settings-section-heading">
+      <div>
+        <h4 id="library-data-corrections-heading">Library Data Corrections</h4>
+        <p>Corrects text metadata across your whole library.</p>
+      </div>
+    </div>
+    <div class="library-settings-policy-grid" role="radiogroup" aria-labelledby="library-data-corrections-heading">${options}</div>
+  </section>`;
+}
+
 function buildUtilityLibrarySettingsDetail() {
   const librarySettingsState = ensureLibrarySettingsState();
   if (!librarySettingsState.loaded && !librarySettingsState.error) {
@@ -24487,6 +24572,7 @@ function buildUtilityLibrarySettingsDetail() {
           ${buildLibraryMovePolicyRow('move_new_arrivals_to', draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Move New Arrivals to Hoard', 'Move to Hoard', 'hoard')}
         </div>
       </section>
+      ${buildLibraryDataCorrectionsSection(draft)}
       <section class="library-settings-section">
         <div class="library-settings-section-heading">
           <div>

@@ -557,7 +557,7 @@ async def library_settings_read(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ok": True,
-            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read")).as_payload(),
+            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read", "library.files.edit_tags")).as_payload(),
             "settings": await run_in_threadpool(load_library_root_settings, _app_config(request), **scope),
         }
     )
@@ -1889,7 +1889,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     }
     if "proposal_ids" in payload:
         from pathlib import Path
-        from music_app.services.metadata import read_editable_tag_values
+        from music_app.services.metadata import entry_with_original_tag_text, read_editable_tag_values
         from music_app.services.problem_suggestions import validate_problem_suggestions, _FIELDS
 
         def validate_proposals(st, submitted_updates):
@@ -1934,8 +1934,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             if needs_postgres_edit_state:
                 st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
+            # The edit writes what differs from the tags, not from the display
+            # correction, so a written correction is never skipped as unchanged.
             st["file_cache"] = {**previous_entries, **{
-                path: {**(previous_entries.get(path) or {}), **entry}
+                path: {**(previous_entries.get(path) or {}), **entry_with_original_tag_text(entry)}
                 for path, entry in entries.items()
             }}
             return verified

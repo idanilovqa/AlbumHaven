@@ -84,6 +84,9 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         serialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if "text_corrections" in entry:
+        # Kept even when null, so a merge into the stored entry clears it.
+        serialized["text_corrections"] = entry.get("text_corrections") or None
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -121,6 +124,8 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if entry.get("text_corrections"):
+        deserialized["text_corrections"] = entry["text_corrections"]
     return deserialized
 
 

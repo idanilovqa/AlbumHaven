@@ -771,3 +771,60 @@ test('mobile Library path actions remain read-only despite server manage permiss
   context.isMobileClient = () => false;
   assert.equal(context.librarySettingsReadOnlyClient(), false);
 });
+
+test('Library Data Corrections sits above Album ratings, defaults to Display only, and saves the chosen mode', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  const markup = context.buildUtilityLibrarySettingsDetail();
+  const corrections = markup.indexOf('Library Data Corrections');
+  assert.ok(corrections > 0 && corrections < markup.indexOf('Album ratings'));
+  assert.ok(markup.indexOf('Album ratings') < markup.indexOf('data-save-library-settings'));
+  assert.match(markup, /<p>Corrects text metadata across your whole library\.<\/p>/);
+  assert.match(markup, /value="display_only" data-library-metadata-corrections="display_only"\s+checked[^>]*><span>Display only<\/span>/);
+  assert.match(markup, /value="write_tags" data-library-metadata-corrections="write_tags"\s+ ><span>Write in tags<\/span>/);
+  const radio = { disabled: false, getAttribute: () => 'write_tags', closest: selector => (selector.includes('data-library-metadata-corrections') ? radio : null) };
+  assert.equal(context.handleLibrarySettingsClick({ target: radio, preventDefault() {} }), true);
+  assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).metadata_corrections, 'write_tags');
+});
+
+test('Library Data Corrections is visibly disabled without the manage permission', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  context.state.utility.librarySettings.allowedActions = {};
+  const markup = context.buildLibraryDataCorrectionsSection(context.getLibrarySettingsDraft());
+  assert.equal((markup.match(/type="radio"[^>]*\sdisabled>/g) || []).length, 2);
+});
+
+test('Write in tags writes only display corrections through the Edit Tags path', async () => {
+  const detail = {
+    ok: true, key: 'album-1', allowed_actions: { 'library.files.edit_tags': true },
+    suggested_edits: [
+      { id: 'fix-1', path: '/m/a.mp3', updates: { artist: 'Album Artist' }, display_correction: true },
+      { id: 'canonical-1', path: '/m/a.mp3', updates: { album: 'Other' } },
+    ],
+  };
+  const { context, calls } = loadHelpers({
+    async fetch(url, options = {}) {
+      calls.fetches.push([url, options]);
+      const payload = url === '/utilities/problematic-files'
+        ? { ok: true, items: [{ key: 'album-1', problem_reasons: ['Track artist unreadable \u2014 using album artist'] }, { key: 'album-2', problem_reasons: ['Missing year'] }] }
+        : url.startsWith('/utilities/problematic-files/detail') ? detail : { ok: true, proposal_outcomes: [{ id: 'fix-1', status: 'committed' }] };
+      return { ok: true, async json() { return payload; } };
+    },
+  });
+  context.state.utility.librarySettings.allowedActions['library.files.edit_tags'] = true;
+  assert.deepEqual({ ...(await context.writeLibraryDataCorrections()) }, { written: 1, failed: 0 });
+  const [url, options] = calls.fetches.at(-1);
+  assert.equal(url, '/utilities/edit-tags');
+  const body = JSON.parse(options.body);
+  assert.deepEqual(body.proposal_ids, ['fix-1']);
+  assert.deepEqual(body.updates, { '/m/a.mp3': { artist: 'Album Artist' } });
+  assert.equal(calls.fetches.filter(([fetched]) => fetched.includes('album_key=album-2')).length, 0);
+  assert.deepEqual(calls.toasts.at(-1).slice(0, 2), ['1 correction written to tags.', 'success']);
+});
+
+test('Write in tags does nothing without the edit-tags permission', async () => {
+  const { context, calls } = loadHelpers();
+  assert.equal(await context.writeLibraryDataCorrections(), null);
+  assert.equal(calls.fetches.length, 0);
+});

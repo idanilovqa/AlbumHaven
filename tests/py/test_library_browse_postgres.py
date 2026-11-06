@@ -18481,3 +18481,12 @@ def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
     tied = [{"artist_name": "Nemo", "album_id": 1}, {"artist_name": "CAP", "album_id": 2}]
     assert browse._top_search_selected_artist(groups, query="Divine Comedy", rows=tied) == "CAP"
     assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Armalite"
+
+def test_a_display_correction_is_a_problematic_file_until_written():
+    from music_app.services.library_browse_postgres import _physical_file_problem_reasons
+
+    assert list(_physical_file_problem_reasons({"text_corrections": {
+        "artist": {"original": "??", "corrected": "A", "kind": "lost_characters"},
+        "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
+        "Track artist unreadable \u2014 using album artist", "Encoding problem"]
+    assert list(_physical_file_problem_reasons({})) == []

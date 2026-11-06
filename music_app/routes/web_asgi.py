@@ -740,6 +740,8 @@ def _build_bootstrap_payload(
     request_started_epoch_ms: int,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
+    # Read before the view so a mutation committed while it builds is still seen as newer.
+    inventory_mutation_revision = int(library_state.get("inventory_mutation_revision") or 0)
     library_browse_uses_postgres = library_browse_postgres_is_effective(config)
     requested_root_albums_surface = _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
     requested_home_root_surface = _request_targets_home_root_surface(query_args, query_raw, selected_artist)
@@ -871,6 +873,7 @@ def _build_bootstrap_payload(
             },
             "coversInProgress": is_cover_refresh_busy(library_state),
             "coversCancelable": bool(library_state.get("covers_in_progress")),
+            "inventoryMutationRevision": inventory_mutation_revision,
             "partialView": initial_view_partial,
             "startupPreview": {
                 "mode": preview_mode,

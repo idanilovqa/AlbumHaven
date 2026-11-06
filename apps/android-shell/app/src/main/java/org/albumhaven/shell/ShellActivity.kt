@@ -63,7 +63,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     // The bridge and the page exist only once the playback service is bound, so the bridge always has a player.
     private var playback: PlaybackServiceHandle? = null
     private var playbackBound = false
-    private var pendingWebState: Bundle? = null
+    private val page = ShellPage(originPolicy)
     private var updater: Updater? = null
     private val updateEvents: (UpdateState) -> Unit = { state ->
         // Settings and Update required show one failure message; the details are only logged.
@@ -105,6 +105,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private var incompatibleWeb = false
     private var sandboxProbePending = false
     private var clearHistoryOnNextPage = false
+    private var startUrl: String? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -136,9 +137,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         onBackPressedDispatcher.addCallback(this) {
             if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
         }
-        pendingWebState = savedInstanceState
-            ?.takeIf { it.getString(STATE_ORIGIN) == selectedOrigin }
-            ?.getBundle(STATE_WEB_VIEW)
+        startUrl = page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), selectedOrigin)
         recovery.showLoading(originHost())
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
@@ -148,15 +147,15 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     private fun loadSelectedOrigin() {
-        val state = pendingWebState
-        pendingWebState = null
-        if (state?.let { webView.restoreState(it) } == null) webView.loadUrl(selectedOrigin)
+        webView.loadUrl(startUrl ?: selectedOrigin)
+        startUrl = null
     }
 
+    /** Only the origin and the page's URL: never the WebView's state, which outgrows the transaction limit. */
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_ORIGIN, selectedOrigin)
-        outState.putBundle(STATE_WEB_VIEW, pendingWebState ?: Bundle().also { webView.saveState(it) })
+        outState.putString(STATE_URL, page.url)
     }
 
     override fun onResume() {
@@ -387,6 +386,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             if (!mainFrameFailed && !incompatibleWeb) recovery.hide()
         }
 
+        // Also follows the history the page pushes, which is where the web app keeps its view.
+        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+            page.visited(url, selectedOrigin)
+        }
+
         override fun onPageFinished(view: WebView, url: String) {
             // Back must never return to the previous sandbox origin, which bypasses URL checks.
             if (clearHistoryOnNextPage) view.clearHistory()
@@ -435,7 +439,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         const val TAG = "AlbumHavenShell"
         const val BRIDGE_OBJECT = "AlbumHavenBridge"
         const val STATE_ORIGIN = "shell_origin"
-        const val STATE_WEB_VIEW = "shell_web_view"
+        const val STATE_URL = "shell_url"
         const val PROBE_TIMEOUT_MS = 5_000
 
         /** As long as the page's own bridge commands wait for the shell. */

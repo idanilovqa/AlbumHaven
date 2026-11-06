@@ -1959,12 +1959,21 @@ test('artist information links MusicBrainz and Discogs only for an accepted matc
     'only the public MusicBrainz and Discogs artist pages are linked');
 });
 
-test('external service links have their own visible focus state, not the panel link override', () => {
-  assert.match(buttonComponentCssSource, /\.ui-external-link:focus-visible\s*\{[^}]*outline:\s*2px solid currentColor/);
+test('external service links are plain text with the real service icons and a visible focus state', () => {
+  const linkRule = buttonComponentCssSource.match(/\.ui-external-link\s*\{([^}]*)\}/)[1];
+  assert.match(linkRule, /color:\s*inherit/, 'link text uses the surrounding text colour, not the link accent');
+  assert.match(buttonComponentCssSource, /\.ui-external-link:hover\s*\{[^}]*text-decoration:\s*underline/);
+  assert.match(buttonComponentCssSource, /\.ui-external-link:focus-visible\s*\{[^}]*text-decoration:\s*underline[^}]*outline:\s*2px solid currentColor/);
   assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)/);
-  assert.match(buttonComponentCssSource, /\.ui-external-link__icon\s*\{[^}]*background:\s*currentColor[^}]*mask:\s*var\(--ui-external-link-icon\)/);
+  assert.doesNotMatch(buttonComponentCssSource, /\.ui-external-link[^{]*\{[^}]*mask/, 'icons keep their own colours');
+  assert.match(buttonComponentCssSource, /\.ui-external-link__icon\s*\{[^}]*background:\s*var\(--ui-external-link-icon\)/);
+  const icons = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'images', 'icons');
   for (const service of ['musicbrainz', 'discogs']) {
-    assert.match(buttonComponentCssSource, new RegExp(`\\.ui-external-link--${service}\\s*\\{[^}]*simple-icons-${service}\\.svg`));
-    assert.ok(fs.existsSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'images', 'icons', `simple-icons-${service}.svg`)));
+    assert.match(buttonComponentCssSource, new RegExp(`\\.ui-external-link--${service}\\s*\\{[^}]*/static/images/icons/${service}-favicon-32\\.png`));
+    assert.ok(fs.existsSync(path.join(icons, `${service}-favicon-32.png`)));
   }
+  assert.ok(fs.existsSync(path.join(icons, 'SERVICE-FAVICONS-NOTICE.txt')));
+  assert.match(buttonComponentCssSource, /:root:not\(\[data-appearance-mode='light'\]\) \.ui-external-link--discogs \.ui-external-link__icon\s*\{\s*filter:\s*invert\(1\)/,
+    'dark themes, including the default, show the Discogs record in white');
+  assert.doesNotMatch(buttonComponentCssSource, /\.ui-external-link--musicbrainz[^{]*\{[^}]*filter/, 'the MusicBrainz hexagon is never recoloured');
 });

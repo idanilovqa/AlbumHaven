@@ -10735,6 +10735,7 @@ function attachAccountMenu(component, options = {}) {
     position();
     const items = enabledItems();
     if (focusItem) (last ? items[items.length - 1] : items[0])?.focus({ preventScroll: true });
+    options?.onOpen?.(menu);
   };
   on(globalThis, 'resize', () => {
     if (!menu.hidden) position();
@@ -27390,7 +27391,11 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
+  // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
+  const renderRequested = () => (options.render === 'when-open'
+    ? isUtilityModalOpen()
+    : options.render !== false);
+  const shouldRender = () => renderRequested() && state.utility.activeTab === 'problematic-files';
   const shouldRenderInitialPage = () => (
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
@@ -28546,6 +28551,27 @@ async function runLocalPlaylistImportAnalysis() {
   }
 }
 
+// A prefetch this recent is as fresh as a forced reload; inventory changes
+// still refresh an open list through the status poll.
+const PROBLEMATIC_PREFETCH_FRESH_MS = 5000;
+
+function isUtilityModalOpen() {
+  const overlay = getUtilityModalElements().overlay;
+  return Boolean(overlay && !overlay.hidden);
+}
+
+// Opening the account menu signals Settings: when Settings would open on
+// Problematic Files, overlap its cold first page with the menu interaction.
+function prefetchProblematicFilesForSettingsIntent() {
+  if (isUtilityModalOpen() || state.utility.activeTab !== 'problematic-files') return;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allowsUtilityTab('problematic-files')) return;
+  if (state.utility.loading || state.utility.completeLoadPromise) return;
+  state.utility.problematicPrefetchedAt = Date.now();
+  void loadProblematicFiles(true, { render: 'when-open' });
+}
+
 function loadActiveUtilityTab(force = false) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
@@ -28568,7 +28594,9 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
-  return loadProblematicFiles(force);
+  const freshPrefetch = state.utility.loaded
+    && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
+  return loadProblematicFiles(force && !freshPrefetch);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {
@@ -49517,7 +49545,11 @@ const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
-document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
+document.querySelectorAll('[data-account-menu-component]').forEach((component) => attachAccountMenu(component, {
+  onOpen: (menu) => {
+    if (menu.querySelector('[data-open-utilities="1"]')) prefetchProblematicFilesForSettingsIntent();
+  },
+}));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
 if (typeof loadCoverLookupNotificationCounts === 'function') {

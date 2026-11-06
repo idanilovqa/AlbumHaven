@@ -245,6 +245,47 @@ function loadHelper(overrides = {}) {
   return { context, calls };
 }
 
+test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
+  const overlay = { hidden: true };
+  const requested = [];
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const { context, calls } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) {
+      requested.push(String(url));
+      return json({ complete: !String(url).endsWith('?limit=50'), items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    },
+  });
+
+  context.prefetchProblematicFilesForSettingsIntent();
+  await context.state.utility.completeLoadPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requested, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+  assert.equal(calls.renders, 0, 'a closed Settings modal is not painted');
+
+  overlay.hidden = false;
+  await context.loadActiveUtilityTab(true);
+  assert.equal(requested.length, 2, 'Settings opened right after the prefetch reuses it');
+  assert.equal(calls.renders, 1);
+});
+
+test('the Settings-intent prefetch skips other tabs and an already open modal', () => {
+  const overlay = { hidden: true };
+  const requested = [];
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) { requested.push(String(url)); return new Promise(() => {}); },
+  });
+
+  context.state.utility.activeTab = 'appearance';
+  context.prefetchProblematicFilesForSettingsIntent();
+  context.state.utility.activeTab = 'problematic-files';
+  overlay.hidden = false;
+  context.prefetchProblematicFilesForSettingsIntent();
+
+  assert.deepEqual(requested, []);
+});
+
 test('optimistic problematic-file mutations wait through a paint before rollback', async () => {
   const scheduledFrames = [];
   const { context } = loadHelper({

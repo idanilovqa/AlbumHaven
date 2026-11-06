@@ -288,6 +288,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             setSupportMultipleWindows(false)
             setGeolocationEnabled(false)
+            // Chrome scales page text by the system font size; a WebView does not unless told to.
+            textZoom = webTextZoom(resources.configuration.fontScale)
             mediaPlaybackRequiresUserGesture = true
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)

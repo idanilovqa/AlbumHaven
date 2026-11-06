@@ -35,7 +35,8 @@ test(
       // The empty-state loader stays mounted with its text; it must not be shown.
       await expect(page.getByText('Nothing found', { exact: true })).toBeHidden();
       expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(FAMILY_ARTIST);
-      const canonicalState = await searchToolbarActions.readCanonicalSearchState({ source: 'bootstrap' });
+      // A q-only URL starts from an empty shell; the hydrated view owns the result.
+      const canonicalState = await searchToolbarActions.readCanonicalSearchState();
       expect(canonicalState.query).toBe(QUERY);
       expect(canonicalState.selectedArtist).toBe(FAMILY_ARTIST);
     });

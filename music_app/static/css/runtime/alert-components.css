@@ -136,6 +136,8 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 }
 .ui-status-badge--info { --status-badge-ink: var(--appearance-player-accent, #55c7ff); --status-badge-line: var(--status-badge-ink); }
 .ui-status-badge--warning { --status-badge-ink: var(--appearance-warning, #e0aa50); --status-badge-line: var(--status-badge-ink); }
+/* The shared amber reads 2:1 on a light card; light themes darken it to at least 4.9:1 on each light palette's card. */
+:root[data-appearance-mode='light'] .ui-status-badge--warning { --status-badge-ink: #946200; }
 
 .small-alert__icon,
 .on-page-alert__icon {

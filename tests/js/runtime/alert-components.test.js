@@ -219,6 +219,20 @@ test('StatusBadge CSS owns its shape and variant colors, with no interactive sta
   assert.match(css, /\.ui-status-badge \{[^}]*--status-badge-ink: var\(--muted\);[^}]*--status-badge-line: var\(--border\);[^}]*padding: 6px 10px;[^}]*border-radius: 10px;/);
   assert.match(css, /\.ui-status-badge--info \{ --status-badge-ink: var\(--appearance-player-accent, #55c7ff\);/);
   assert.match(css, /\.ui-status-badge--warning \{ --status-badge-ink: var\(--appearance-warning, #e0aa50\);/);
+  // Light themes darken only the warning ink, to WCAG AA text contrast on every light palette's card.
+  const lightWarning = css.match(/:root\[data-appearance-mode='light'\] \.ui-status-badge--warning \{ --status-badge-ink: (#[0-9a-f]{6}); \}/u)?.[1];
+  assert.ok(lightWarning, 'light themes give the warning badge its own ink');
+  assert.equal((css.match(/ui-status-badge--warning/gu) || []).length, 2, 'dark themes keep the approved amber');
+  const { palettes } = require('../../../music_app/static/js/appearance-palettes.js');
+  const luminance = hex => [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16) / 255)
+    .map(value => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+    .reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const lightCards = palettes.filter(palette => palette.mode === 'light').map(palette => palette.tokens.card);
+  assert.ok(lightCards.length > 0);
+  for (const card of lightCards) {
+    const [lighter, darker] = [luminance(card), luminance(lightWarning)].sort((a, b) => b - a);
+    assert.ok((lighter + 0.05) / (darker + 0.05) >= 4.5, `warning badge contrast on ${card}`);
+  }
   assert.doesNotMatch(css, /\.ui-status-badge[^{]*:(?:hover|focus|active)|\.ui-status-badge[^{]*\.is-active/);
   // No page-local copy of the badge remains.
   const utilities = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/utilities.css'), 'utf8');

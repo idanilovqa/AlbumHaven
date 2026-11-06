@@ -78,6 +78,7 @@ def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, own
     from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 
     asgi_app = _make_asgi_app()
+    asgi_app.state.musicbrainz_enrichment_api_service = object()
     if not owner:
         listener = CurrentActor(
             state=ActorState.ACTIVE, account_id=8, session_id=12, username_display="listener",
@@ -92,6 +93,16 @@ def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, own
     allowed = _decode_json(body)["allowed_actions"]
     # Denied actions are omitted; the shell shows MusicBrainz sync only for an explicit true.
     assert (allowed.get("catalogue.enrichment.request") is True) is owner
+
+
+def test_asgi_status_offers_no_musicbrainz_sync_while_enrichment_is_off(app):
+    asgi_app = _make_asgi_app()
+    asgi_app.state.musicbrainz_enrichment_api_service = None
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert "catalogue.enrichment.request" not in _decode_json(body)["allowed_actions"]
 
 
 def test_status_payload_keeps_post_scan_cover_handoff_busy():

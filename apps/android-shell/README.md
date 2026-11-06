@@ -36,6 +36,14 @@ screen without an action and never load the site.
 A site the app cannot run (no shared bridge protocol, or a capability it names in
 the handshake's `requiredCapabilities` that this build lacks) is refused and
 covered by the Update required screen. Its Check for update checks for an APK
-whose bridge range includes the site's, downloads a newer one at once, and
-Update hands it to Android as Settings does. Release ordering is in
+whose bridge range includes the site's; Download update downloads the one it
+finds, and Update hands it to Android as Settings does. Release ordering is in
 `docs/android-release-signing.md`.
+
+Downloads never carry the WebView session, because Android's Download Manager
+keeps its requests in its own database. For a same-origin download the app asks
+the page for a five-minute link (`downloads.link.v1`), which the page requests
+from `POST /downloads/links` with its own session, and enqueues that link alone;
+a path the server refuses shows "Download unavailable". Files the page builds
+itself, such as Log History exports, reach the app as base64 chunks
+(`files.save.v1`, at most 10 MB) and are written to Downloads through MediaStore.

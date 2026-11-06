@@ -11719,7 +11719,9 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "sandbox.select.v1": "optional",
-    "updates.manual.v1": "optional"
+    "updates.manual.v1": "optional",
+    "downloads.link.v1": "optional",
+    "files.save.v1": "optional"
   }
 } /* end android-bridge-policy */;
 const ANDROID_BRIDGE_PROTOCOL_MIN = ANDROID_BRIDGE_POLICY.protocolMin;
@@ -11731,7 +11733,10 @@ const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
 
 // `updateRequired` is set when the shell cannot run this site: no shared protocol or a missing
 // required capability. Every bridge feature then stays off, as it does with no shell at all.
-const androidBridge = { info: null, pending: new Map(), connection: null, events: new Map(), updateRequired: false };
+// `commands` answers what the shell asks of this page, by command name.
+const androidBridge = {
+  info: null, pending: new Map(), connection: null, events: new Map(), commands: new Map(), updateRequired: false,
+};
 
 // The shell injects a plain script object with `postMessage`; capability-ui.js, which every page
 // loads before this bundle, owns that test.
@@ -11773,6 +11778,11 @@ function handleAndroidBridgeMessage(event) {
     if (handler && message.payload && typeof message.payload === 'object') handler(message.payload);
     return;
   }
+  if (message?.type === 'command') {
+    const answer = androidBridge.commands.get(message.name);
+    if (answer && message.payload && typeof message.payload === 'object') answerAndroidBridgeCommand(message, answer);
+    return;
+  }
   if (message?.type !== 'response') return;
   const pending = androidBridge.pending.get(message.id);
   if (!pending) return;
@@ -11784,6 +11794,17 @@ function handleAndroidBridgeMessage(event) {
     pending.reject(Object.assign(new Error(message.payload?.error?.message || 'Android bridge request failed.'),
       { code: message.payload?.error?.code || 'unknown' }));
   }
+}
+
+// Replies to the shell's command with `answer`'s result, or with its error's code and message.
+function answerAndroidBridgeCommand(message, answer) {
+  const reply = payload => window.AlbumHavenBridge.postMessage(JSON.stringify({
+    protocol: message.protocol, id: message.id, type: 'response', name: message.name, payload,
+  }));
+  Promise.resolve().then(() => answer(message.payload)).then(
+    result => reply({ ok: true, ...result }),
+    error => reply({ ok: false, error: { code: error?.code || 'failed', message: error?.message || 'Request failed.' } }),
+  );
 }
 
 function sendAndroidBridgeCommand(name, payload = {}) {
@@ -11823,6 +11844,7 @@ function connectAndroidBridge() {
       }
       androidBridge.info = info;
       if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
+      if (hasAndroidCapability(ANDROID_DOWNLOAD_LINKS_CAPABILITY)) androidBridge.commands.set('downloads.link', answerAndroidDownloadLink);
       // Settings (android-settings.js) takes the shell's update and sandbox state from every success.
       if (typeof adoptAndroidSettingsHandshake === 'function') adoptAndroidSettingsHandshake(info);
       return info;
@@ -11834,6 +11856,62 @@ function connectAndroidBridge() {
     });
   }
   return androidBridge.connection;
+}
+
+// ---- Cookie-less downloads (downloads.link.v1) ----
+// The shell never hands the session to Android's Download Manager, which keeps its requests in its
+// own database. For a same-origin download it asks this page for a link instead: the page requests
+// one with its own session, and the server links only an allowlisted download this account may
+// fetch, for five minutes. A refusal is the shell's "Download unavailable".
+const ANDROID_DOWNLOAD_LINKS_CAPABILITY = 'downloads.link.v1';
+
+async function answerAndroidDownloadLink({ path }) {
+  const response = await fetch('/downloads/links', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+  });
+  const link = response.ok ? await response.json() : null;
+  if (typeof link?.url !== 'string') throw Object.assign(new Error('Download unavailable.'), { code: 'download_unavailable' });
+  return { url: link.url };
+}
+
+// ---- Page-built files (files.save.v1) ----
+// The Download Manager cannot fetch a page's `blob:` URLs either, so a shell that saves files gets
+// the bytes in base64 chunks of one transfer, each inside the bridge's 64 KiB message limit, and
+// writes them to Downloads. Browsers, and shells without the capability, keep the download anchor.
+const ANDROID_FILES_CAPABILITY = 'files.save.v1';
+const ANDROID_FILE_LIMIT_BYTES = 10 * 1024 * 1024;
+const ANDROID_FILE_CHUNK_BYTES = 45 * 1024;
+
+function androidBase64(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return window.btoa(binary);
+}
+
+async function downloadPageFile(filename, mimeType, text) {
+  if (await connectAndroidBridge() && hasAndroidCapability(ANDROID_FILES_CAPABILITY)) {
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.length > ANDROID_FILE_LIMIT_BYTES) throw new Error('Files over 10 MB cannot be saved in the Android app.');
+    const transfer = createAndroidBridgeMessageId();
+    for (let offset = 0; offset < bytes.length; offset += ANDROID_FILE_CHUNK_BYTES) {
+      const data = androidBase64(bytes.subarray(offset, offset + ANDROID_FILE_CHUNK_BYTES));
+      await sendAndroidBridgeCommand('files.save', { transfer, name: filename, mimeType, size: bytes.length, offset, data });
+    }
+    return;
+  }
+  const objectUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 // ---- Native playback (playback.native.v1) ----
@@ -20185,28 +20263,16 @@ function readBrowserLogHistoryEntries() {
   return browserLogHistoryStore.read();
 }
 
+// Saved through the Android app where it can (android-bridge-client.js), else by a download anchor.
 async function exportBrowserLogHistory() {
   const result = await readBrowserLogHistoryEntries();
   const exportDocument = buildBrowserLogHistoryExportDocument(result.items);
-  const blob = new Blob([`${JSON.stringify(exportDocument, null, 2)}\n`], {
-    type: 'application/json;charset=utf-8',
-  });
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
   const filenameTimestamp = exportDocument.exported_at
     .replace(/[:.]/g, '-')
     .replace('T', '_')
     .replace('Z', '');
-  anchor.href = objectUrl;
-  anchor.download = `album-haven-log-history-${filenameTimestamp}.json`;
-  anchor.hidden = true;
-  document.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-    URL.revokeObjectURL(objectUrl);
-  }
+  await downloadPageFile(`album-haven-log-history-${filenameTimestamp}.json`, 'application/json',
+    `${JSON.stringify(exportDocument, null, 2)}\n`);
   return exportDocument;
 }
 
@@ -20562,19 +20628,11 @@ async function selectUtilityLogHistoryEvent(id) {
   await controller.selectEvent(id);
 }
 
+// Saved through the Android app where it can (android-bridge-client.js), else by a download anchor.
 async function downloadUtilityLogHistory() {
   const data = await getUtilityLogHistoryController().exportCurrent();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.hidden = true;
-  document.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-    URL.revokeObjectURL(url);
-  }
+  await downloadPageFile(`album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`, 'application/json',
+    JSON.stringify(data, null, 2));
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {

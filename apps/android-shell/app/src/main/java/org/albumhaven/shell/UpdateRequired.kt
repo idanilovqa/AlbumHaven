@@ -1,13 +1,14 @@
 package org.albumhaven.shell
 
+import org.albumhaven.shell.updates.UpdateManifest
 import org.albumhaven.shell.updates.UpdateState
 
 /** What the native Update required screen shows; [progress] belongs to the download, [versionName] to it and its verification. */
 data class UpdateRequiredView(val step: UpdateStep, val progress: Int? = null, val versionName: String? = null) {
     companion object {
         fun of(state: UpdateState): UpdateRequiredView = when (state) {
-            // An update found without asking waits for Check for update, which downloads it.
-            is UpdateState.Idle, is UpdateState.Available -> UpdateRequiredView(UpdateStep.REQUIRED)
+            is UpdateState.Idle -> UpdateRequiredView(UpdateStep.REQUIRED)
+            is UpdateState.Available -> UpdateRequiredView(UpdateStep.AVAILABLE, versionName = state.manifest.versionName)
             is UpdateState.UpToDate -> UpdateRequiredView(UpdateStep.NO_UPDATE)
             is UpdateState.Checking -> UpdateRequiredView(UpdateStep.CHECKING)
             is UpdateState.Downloading ->
@@ -24,19 +25,23 @@ data class UpdateRequiredView(val step: UpdateStep, val progress: Int? = null, v
 
 /**
  * Runs the updater from the native Update required screen for a site speaking [webProtocols], so
- * only an update that can open it is accepted. Check for update on this screen is the user's
- * explicit request for the app the site needs: a newer update it finds downloads at once.
- * Installation still waits for Update and Android's confirmation. Main-thread confined.
+ * only an update that can open it is accepted. Check for update only checks: the update it finds
+ * waits for Download update (owner decision, November 5, 2026), and installation for Update and
+ * Android's confirmation. Main-thread confined.
  */
 class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtocols: IntRange) {
     private var checkRequested = false
+
+    /** The update this screen's check found for the site; one found without it may not open the site. */
+    private var found: UpdateManifest? = null
 
     /** Until the user acts here, a result left by an earlier request from Settings is not this screen's answer. */
     private var acted = false
 
     val view: UpdateRequiredView
         get() = updates.state.let { state ->
-            if (!acted && (state is UpdateState.UpToDate || state is UpdateState.Failed)) {
+            val earlierResult = !acted && (state is UpdateState.UpToDate || state is UpdateState.Failed)
+            if (earlierResult || state is UpdateState.Available && state.manifest != found) {
                 UpdateRequiredView(UpdateStep.REQUIRED)
             } else {
                 UpdateRequiredView.of(state)
@@ -49,6 +54,7 @@ class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtoco
         acted = true
         when (step) {
             UpdateStep.REQUIRED, UpdateStep.NO_UPDATE -> check()
+            UpdateStep.AVAILABLE -> updates.download()
             // A failure that kept its update downloads it again; any other checks again.
             UpdateStep.FAILED -> if ((updates.state as UpdateState.Failed).manifest != null) updates.download() else check()
             // While installing, Update shows a confirmation the user left unanswered again.
@@ -65,8 +71,7 @@ class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtoco
     /** Call with every updater state. */
     fun onState(state: UpdateState) {
         if (state is UpdateState.Checking) return
-        val download = checkRequested && state is UpdateState.Available
+        if (checkRequested && state is UpdateState.Available) found = state.manifest
         checkRequested = false
-        if (download) updates.download()
     }
 }

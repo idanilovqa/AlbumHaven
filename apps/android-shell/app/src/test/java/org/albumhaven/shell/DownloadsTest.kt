@@ -1,9 +1,14 @@
 package org.albumhaven.shell
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.File
 import java.util.concurrent.Executor
+
+private const val ORIGIN = "https://sandbox2.albumhaven.org"
+private const val LINK = "/downloads/eyJ2IjoxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 class DownloadsTest {
     @Test
@@ -49,5 +54,39 @@ class DownloadsTest {
         enqueueDownload(io) { 7L.also { ran += "enqueued" } }
 
         assertEquals(listOf("io", "io", "enqueued"), ran)
+    }
+
+    @Test
+    fun theDownloadedPathIsTheSameOriginPathAndQuery() {
+        val asset = "/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"
+        assertEquals(asset, sameOriginPath("$ORIGIN$asset", ORIGIN))
+        assertEquals(asset, sameOriginPath("$ORIGIN:443$asset#part", ORIGIN))
+        for (other in listOf("https://albumhaven.org$asset", "http://sandbox2.albumhaven.org$asset", "https://user@sandbox2.albumhaven.org$asset",
+            "blob:$ORIGIN/6f0e2a5c", "data:text/plain,hi", "$ORIGIN", "not a url")) {
+            assertNull(other, sameOriginPath(other, ORIGIN))
+        }
+    }
+
+    @Test
+    fun aLinkDownloadNeverCarriesACookie() {
+        val download = LinkDownload.of(ORIGIN, LINK, "AlbumHaven/1", "text/plain", "preset.txt")!!
+        assertEquals("$ORIGIN$LINK", download.url)
+        assertEquals(mapOf("User-Agent" to "AlbumHaven/1"), download.headers)
+        assertFalse(download.headers.keys.any { it.equals("Cookie", ignoreCase = true) })
+        // The shell reads no cookie for any download, and sets none on a request.
+        for (file in listOf("ShellActivity.kt", "Downloads.kt")) {
+            val source = File("src/main/java/org/albumhaven/shell/$file").readText()
+            assertFalse(file, source.contains("getCookie("))
+            assertFalse(file, Regex("""addRequestHeader\(\s*["']Cookie""", RegexOption.IGNORE_CASE).containsMatchIn(source))
+        }
+    }
+
+    @Test
+    fun aRefusedOrMalformedLinkRequestsNothing() {
+        val answers = listOf(
+            null, "", "/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1",
+            "https://evil.example$LINK", "//evil.example$LINK", "$LINK/../../admin", "/downloads/links", "/artifacts/android/download/a.b",
+        )
+        for (answer in answers) assertNull(answer, LinkDownload.of(ORIGIN, answer, "AlbumHaven/1", null, "file"))
     }
 }

@@ -47,6 +47,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/favicon.ico",
                 "/static",
                 "/artifacts/android/download/{token}",
+                "/downloads/{token}",
             }:
                 continue
             action = private_action_for_route(method, path)
@@ -83,6 +84,7 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/artifacts/android/attest", "account.self.android_updates"),
         ("GET", "/artifacts/android/{channel}/manifest.json", "account.self.android_updates"),
         ("POST", "/artifacts/android/{channel}/{name}", "account.self.android_updates"),
+        ("POST", "/downloads/links", "account.self.downloads"),
         ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
         (
             "POST",

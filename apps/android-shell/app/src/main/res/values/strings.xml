@@ -11,6 +11,8 @@
     <string name="recovery_retry">Retry</string>
     <string name="recovery_update_check">Check for update</string>
     <string name="recovery_update_none_title">No updates available</string>
+    <string name="recovery_update_available_title">Update available</string>
+    <string name="recovery_update_download">Download update</string>
     <string name="recovery_update_checking_title">Checking for update…</string>
     <string name="recovery_update_checking_message">Keep this screen open.</string>
     <string name="recovery_update_checking_action">Checking…</string>
@@ -31,4 +33,6 @@
     <string name="playback_resume_sign_in">Sign in to Album Haven to keep listening</string>
     <string name="playback_resume_unavailable">Open Album Haven to keep listening</string>
     <string name="playback_resume_open_app">Open Album Haven</string>
+    <string name="download_unavailable">Download unavailable</string>
+    <string name="download_saved">Saved to Downloads</string>
 </resources>

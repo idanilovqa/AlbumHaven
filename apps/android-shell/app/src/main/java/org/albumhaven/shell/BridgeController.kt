@@ -41,6 +41,8 @@ class BridgeController(
     private val playback: NativePlaybackPort,
     /** Null when this build has no compiled update certificate, so it offers no updates. */
     private val updates: UpdatePort? = null,
+    /** Saves page-built files (`files.save.v1`); null where nothing can store them. */
+    private val files: FileSaves? = null,
 ) {
 
     private val playbackBridge = PlaybackBridge(playback)
@@ -52,11 +54,48 @@ class BridgeController(
     /** Posts to the document that negotiated the bridge; events go nowhere before a handshake. */
     private var eventSink: ((String) -> Unit)? = null
 
+    /** Unanswered `downloads.link` requests to that document, by message ID. */
+    private val downloadLinks = mutableMapOf<String, (String?) -> Unit>()
+
     fun reset() {
         negotiatedProtocol = null
         webProtocols = null
         eventSink = null
+        files?.reset()
+        val unanswered = downloadLinks.values.toList()
+        downloadLinks.clear()
+        unanswered.forEach { it(null) }
         playback.documentDetached()
+    }
+
+    /**
+     * Asks the negotiated document for a cookie-less link to its same-origin [path]
+     * (`downloads.link.v1`), which the page requests from the server with its own session. [done]
+     * gets the page's answer, or null once the page refuses, the document goes, or
+     * [abandonDownloadLink] gives up. Returns the request's ID, or null, after answering null,
+     * when no document negotiated. Call on the main thread.
+     */
+    fun requestDownloadLink(path: String, done: (String?) -> Unit): String? {
+        if (eventSink == null || negotiatedProtocol == null) {
+            done(null)
+            return null
+        }
+        val id = UUID.randomUUID().toString()
+        downloadLinks[id] = done
+        post("command", id, DOWNLOAD_LINK, JSONObject().put("path", path))
+        return id
+    }
+
+    /** Answers null for a request still unanswered; a later answer from the page is ignored. */
+    fun abandonDownloadLink(id: String) {
+        downloadLinks.remove(id)?.invoke(null)
+    }
+
+    private fun answerDownloadLink(message: BridgeMessage) {
+        if (message.name != DOWNLOAD_LINK || message.protocol != negotiatedProtocol) return
+        val done = downloadLinks.remove(message.id) ?: return
+        val payload = message.payload
+        done((payload.opt("url") as? String)?.takeIf { payload.opt("ok") == true })
     }
 
     /** Sends a native playback event to the negotiated document. Call on the main thread. */
@@ -71,14 +110,16 @@ class BridgeController(
         if (updates != null) emit(UPDATE_STATE_EVENT, update.toJson())
     }
 
-    private fun emit(name: String, payload: JSONObject) {
+    private fun emit(name: String, payload: JSONObject) = post("event", UUID.randomUUID().toString(), name, payload)
+
+    private fun post(type: String, id: String, name: String, payload: JSONObject) {
         val sink = eventSink ?: return
         val protocol = negotiatedProtocol ?: return
         sink(
             JSONObject()
                 .put("protocol", protocol)
-                .put("id", UUID.randomUUID().toString())
-                .put("type", "event")
+                .put("id", id)
+                .put("type", type)
                 .put("name", name)
                 .put("payload", payload)
                 .toString(),
@@ -90,6 +131,10 @@ class BridgeController(
         val message = try {
             BridgeCodec.parse(raw)
         } catch (_: BridgeFormatException) {
+            return
+        }
+        if (message.type == "response") {
+            answerDownloadLink(message)
             return
         }
         if (message.type != "command") return
@@ -107,6 +152,8 @@ class BridgeController(
                 selectSandbox(message, protocol, reply)
             message.name in UPDATE_COMMANDS && updates != null ->
                 update(message, protocol, updates, reply)
+            message.name == FILES_SAVE && files != null ->
+                files.handle(message.payload) { respond(message, protocol, it, reply) }
             else -> respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
         }
     }
@@ -183,6 +230,8 @@ class BridgeController(
         if (identity.channel == ShellChannel.SANDBOX) add(SANDBOX_CAPABILITY)
         addAll(PlaybackBridge.CAPABILITIES)
         if (updates != null) add(UPDATES_CAPABILITY)
+        add(DOWNLOAD_LINKS_CAPABILITY)
+        if (files != null) add(FILES_CAPABILITY)
     }
 
     /** Commands take no arguments; progress and results follow as `updates.state` events. */
@@ -227,6 +276,12 @@ class BridgeController(
         const val PROTOCOL_MAX = 1
         const val SANDBOX_CAPABILITY = "sandbox.select.v1"
         const val UPDATES_CAPABILITY = "updates.manual.v1"
+
+        /** Same-origin downloads go through a cookie-less link the shell asks the page for. */
+        const val DOWNLOAD_LINKS_CAPABILITY = "downloads.link.v1"
+        const val FILES_CAPABILITY = "files.save.v1"
+        private const val DOWNLOAD_LINK = "downloads.link"
+        private const val FILES_SAVE = "files.save"
         private const val UPDATE_CHECK = "updates.check"
         private const val UPDATE_DOWNLOAD = "updates.download"
         private const val UPDATE_INSTALL = "updates.install"

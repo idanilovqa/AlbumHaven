@@ -102,8 +102,9 @@ test('shell sources, shared contracts, protocol changes and capabilities the sta
 });
 
 test('the guard requires both supported stable shells to run the site', () => {
-  // The interim WebView player predates the stable shells; sandbox selection exists only in sandbox shells.
-  const legacy = ['playback.webview.v1', 'sandbox.select.v1']
+  // The interim WebView player predates the stable shells; sandbox selection exists only in sandbox shells;
+  // cookie-less downloads and page-built file saves wait for the next stable APK.
+  const legacy = ['playback.webview.v1', 'sandbox.select.v1', 'downloads.link.v1', 'files.save.v1']
     .map((name) => `The latest stable shell lacks ${name}; the site gates it at runtime`);
   assert.deepEqual(checkSupportedShells(policy, record), { errors: [], notes: legacy });
   const previousLacks = structuredClone(record);

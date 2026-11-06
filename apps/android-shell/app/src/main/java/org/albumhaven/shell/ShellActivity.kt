@@ -28,9 +28,11 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -85,6 +87,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 this@ShellActivity,
                 service.port,
                 updater?.let(::ShellUpdatePort),
+                FileSaves(MediaStoreDownloads(contentResolver), ioExecutor, mainHandler::post, ::onFileSaved),
             )
             service.setEventListener { event -> bridge.emit(event) }
             updater?.addListener(updateEvents)
@@ -291,7 +294,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         webView.webViewClient = ShellWebViewClient()
         webView.webChromeClient = ShellChromeClient()
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            enqueueSameOriginDownload(url, userAgent, contentDisposition, mimeType)
+            downloadThroughLink(url, userAgent, contentDisposition, mimeType)
         }
         WebViewCompat.addWebMessageListener(
             webView,
@@ -304,24 +307,40 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
     }
 
-    private fun enqueueSameOriginDownload(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
-        if (!originPolicy.isSameOrigin(url, selectedOrigin)) return
-        val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
-        // Without a working Download Manager the page simply stays where it is.
-        enqueueDownload(ioExecutor) {
-            val request = DownloadManager.Request(url.toUri())
-                .addRequestHeader("Cookie", cookie)
-                .addRequestHeader("User-Agent", userAgent)
-                .setMimeType(mimeType)
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalFilesDir(
-                    this,
-                    Environment.DIRECTORY_DOWNLOADS,
-                    URLUtil.guessFileName(url, contentDisposition, mimeType),
-                )
-            getSystemService(DownloadManager::class.java).enqueue(request)
+    /**
+     * The Download Manager keeps its requests in its own database, so it never gets the session:
+     * the page exchanges the same-origin path for a five-minute cookie-less link, which alone is
+     * enqueued. A path the page or server refuses only says "Download unavailable".
+     */
+    private fun downloadThroughLink(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
+        val origin = selectedOrigin
+        val path = sameOriginPath(url, origin) ?: return
+        val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+        val pending = bridge.requestDownloadLink(path) { link ->
+            if (isDestroyed) return@requestDownloadLink
+            val download = LinkDownload.of(origin, link, userAgent, mimeType, fileName)
+            if (download == null) {
+                toast(R.string.download_unavailable)
+                return@requestDownloadLink
+            }
+            // Without a working Download Manager the page simply stays where it is.
+            enqueueDownload(ioExecutor) {
+                val request = DownloadManager.Request(download.url.toUri())
+                    .setMimeType(download.mimeType)
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, download.fileName)
+                download.headers.forEach(request::addRequestHeader)
+                getSystemService(DownloadManager::class.java).enqueue(request)
+            }
         }
+        pending?.let { mainHandler.postDelayed({ bridge.abandonDownloadLink(it) }, DOWNLOAD_LINK_TIMEOUT_MS) }
     }
+
+    private fun onFileSaved(saved: Boolean) {
+        if (!isDestroyed) toast(if (saved) R.string.download_saved else R.string.download_unavailable)
+    }
+
+    private fun toast(@StringRes message: Int) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     private fun openExternally(url: String) {
         try {
@@ -416,5 +435,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         const val STATE_ORIGIN = "shell_origin"
         const val STATE_WEB_VIEW = "shell_web_view"
         const val PROBE_TIMEOUT_MS = 5_000
+
+        /** As long as the page's own bridge commands wait for the shell. */
+        const val DOWNLOAD_LINK_TIMEOUT_MS = 15_000L
     }
 }

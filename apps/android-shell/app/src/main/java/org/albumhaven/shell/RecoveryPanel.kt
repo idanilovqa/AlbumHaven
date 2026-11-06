@@ -93,8 +93,8 @@ enum class AlertSeverity(@DrawableRes val background: Int, @DrawableRes val icon
 
 /**
  * Approved Android native recovery v002, plus the approved Settings authorization and installing
- * copy and the owner's November 5, 2026 no-update, verifying and failure decisions. A null
- * [message] shows the title alone.
+ * copy, the owner's November 5, 2026 no-update, verifying and failure decisions, and the
+ * available step that waits for Download update. A null [message] shows the title alone.
  */
 enum class UpdateStep(
     val severity: AlertSeverity,
@@ -105,6 +105,7 @@ enum class UpdateStep(
 ) {
     REQUIRED(AlertSeverity.WARNING, R.string.recovery_update_title, R.string.recovery_update_message, R.string.recovery_update_check, true),
     NO_UPDATE(AlertSeverity.INFO, R.string.recovery_update_none_title, R.string.recovery_update_message, R.string.recovery_update_check, true),
+    AVAILABLE(AlertSeverity.WARNING, R.string.recovery_update_available_title, R.string.recovery_update_downloading_message, R.string.recovery_update_download, true),
     CHECKING(AlertSeverity.INFO, R.string.recovery_update_checking_title, R.string.recovery_update_checking_message, R.string.recovery_update_checking_action, false),
     DOWNLOADING(AlertSeverity.INFO, R.string.recovery_update_downloading_title, R.string.recovery_update_downloading_message, R.string.recovery_update_downloading_action, false),
     VERIFYING(AlertSeverity.INFO, R.string.recovery_update_verifying_title, R.string.recovery_update_downloading_message, R.string.recovery_update_verifying_action, false),

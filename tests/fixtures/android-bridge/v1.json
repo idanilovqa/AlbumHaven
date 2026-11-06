@@ -8,7 +8,9 @@
       "playback.loops.v1",
       "playback.media_session.v1",
       "playback.resumption.v1",
-      "updates.manual.v1"
+      "updates.manual.v1",
+      "downloads.link.v1",
+      "files.save.v1"
     ],
     "sandbox": [
       "sandbox.select.v1",
@@ -17,7 +19,9 @@
       "playback.loops.v1",
       "playback.media_session.v1",
       "playback.resumption.v1",
-      "updates.manual.v1"
+      "updates.manual.v1",
+      "downloads.link.v1",
+      "files.save.v1"
     ]
   },
   "handshakeRequest": {
@@ -52,7 +56,9 @@
         "playback.loops.v1",
         "playback.media_session.v1",
         "playback.resumption.v1",
-        "updates.manual.v1"
+        "updates.manual.v1",
+        "downloads.link.v1",
+        "files.save.v1"
       ],
       "origin": "https://sandbox2.albumhaven.org",
       "playback": {
@@ -156,6 +162,39 @@
       "checkedAt": null,
       "error": null,
       "reason": null
+    }
+  },
+  "downloadLinkRequest": {
+    "protocol": 1,
+    "id": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+    "type": "command",
+    "name": "downloads.link",
+    "payload": {
+      "path": "/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"
+    }
+  },
+  "downloadLinkResponse": {
+    "protocol": 1,
+    "id": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+    "type": "response",
+    "name": "downloads.link",
+    "payload": {
+      "ok": true,
+      "url": "/downloads/eyJ2IjoxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "fileSaveRequest": {
+    "protocol": 1,
+    "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "type": "command",
+    "name": "files.save",
+    "payload": {
+      "transfer": "3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a99",
+      "name": "album-haven-log-history-2026-11-05_10-00-00-000.json",
+      "mimeType": "application/json",
+      "size": 3,
+      "offset": 0,
+      "data": "e30K"
     }
   }
 }

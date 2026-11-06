@@ -47,6 +47,7 @@ function stableHandshake(shell, capabilities = shell.capabilities) {
 function capabilitiesFor({ name, payload }) {
   if (name === 'sandbox.select') return ['sandbox.select.v1'];
   if (name.startsWith('updates.')) return ['updates.manual.v1'];
+  if (name === 'files.save') return ['files.save.v1'];
   if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v1'];
   if (name === 'playback.loadQueue' && payload.keepCurrent) return ['playback.native.v1', 'playback.queue.v1'];
   if (name.startsWith('playback.')) return ['playback.native.v1'];

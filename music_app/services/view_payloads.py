@@ -146,17 +146,33 @@ def project_library_watch_health(
             root_id = str(problem.get("root_id") or "").strip()
             state = str(problem.get("state") or "").strip()
             detected_at = str(problem.get("detected_at") or "").strip()
-            event_id = str(problem.get("event_id") or "").strip()
+            incident_id = str(
+                problem.get("incident_id") or problem.get("event_id") or ""
+            ).strip()
+            durable = "incident_id" in problem or bool(
+                str(problem.get("warning_token") or "").strip()
+            )
+            acknowledged = bool(problem.get("acknowledged"))
         else:
             root_id = str(getattr(problem, "root_id", "") or "").strip()
             state = str(getattr(problem, "state", "") or "").strip()
             detected_at = str(
                 getattr(problem, "detected_at", "") or ""
             ).strip()
-            event_id = str(getattr(problem, "event_id", "") or "").strip()
+            incident_id = str(
+                getattr(problem, "incident_id", "")
+                or getattr(problem, "event_id", "")
+                or ""
+            ).strip()
+            durable = bool(
+                str(getattr(problem, "warning_token", "") or "").strip()
+            )
+            acknowledged = bool(getattr(problem, "acknowledged", False))
         if not root_id or state not in {
+            "cross_root_uncertain",
             "overflow",
             "reconciliation_failed",
+            "rollback_pending_work",
             "root_unavailable",
             "stable_write_unavailable",
         }:
@@ -168,15 +184,21 @@ def project_library_watch_health(
             "message": WATCH_HEALTH_MESSAGE,
             "allowed_actions": {},
         }
-        if event_id:
-            item["event_id"] = event_id
+        if durable:
+            item["incident_id"] = incident_id
+            item["acknowledged"] = acknowledged
+        elif incident_id:
+            item["event_id"] = incident_id
         if allowed_actions.allows("library.refresh"):
             item["allowed_actions"] = {"library.refresh": True}
         projected.append(item)
-    return {
+    payload: dict[str, object] = {
         "state": "warning" if projected else "healthy",
         "problems": projected,
     }
+    if any(problem.get("incident_id") for problem in projected):
+        payload["repair_required"] = True
+    return payload
 
 
 # Keep a small service-backed compatibility seam for focused tests that monkeypatch

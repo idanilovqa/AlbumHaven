@@ -312,6 +312,22 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n?/gu, '\n');
 }
 
+test('runtime failure attachments redact private media and view query strings', async () => {
+  const moduleUrl = pathToFileURL(path.join(
+    repoRoot,
+    'tests/e2e/support/baseFixtures.js',
+  )).href;
+  const { sanitizeRuntimeArtifactText } = await import(moduleUrl);
+  const secret = 'C%3A%5CUsers%5CRendref%5CMusic%5CPrivate%5C01.flac';
+
+  const sanitized = sanitizeRuntimeArtifactText(
+    `GET http://127.0.0.1:4173/cover?path=${secret}&size=480`,
+  );
+
+  assert.equal(sanitized, 'GET http://127.0.0.1:4173/cover');
+  assert.doesNotMatch(sanitized, /Rendref|Private|path=/u);
+});
+
 test('warning regression clears search before navigating to visible All artists root', () => {
   const source = read('tests/e2e/specs/galleryInteractionRegressions.spec.js');
   const clear = source.indexOf("await searchToolbarActions.clearSearch({ submitWithEnter: true });");
@@ -2075,12 +2091,12 @@ test('fresh browser sessions retain independent ownership and clean up every con
           },
           queueAttachment({ name }) { attachments.push(name); },
         },
-        authenticateFreshBrowserSession: false,
+        authenticateFreshBrowserSession: true,
         initialArtistTreeFolded: false,
         storageState: { cookies: [{ name: 'owner' }], origins: [] },
       }, async (factory) => {
-        const first = await factory.create();
-        const second = await factory.create();
+        const first = await factory.create({ authenticated: false });
+        const second = await factory.create({ authenticated: false });
         assert.notEqual(first.context, second.context);
         assert.notEqual(first.page, second.page);
         assert.equal(first.context.closed, undefined, 'first identity remains usable');
@@ -2153,7 +2169,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*initialArtistTreeFolded,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded,\s*\)[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*initialArtistTreeFolded,\s*\}, use, testInfo\)[\s\S]*create\(\{ userAgent, authenticated = authenticateFreshBrowserSession \} = \{\}\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticated \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded,\s*\)[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,
@@ -6549,6 +6565,65 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
   }
 });
 
+test('FTC-LIBROOTS-019 opens the status menu after acknowledging the watcher warning', () => {
+  const spec = read('tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js');
+  const caseStart = spec.indexOf("test('FTC-LIBROOTS-019");
+  const caseSource = spec.slice(caseStart);
+
+  assert.ok(caseStart >= 0, 'Expected the FTC-LIBROOTS-019 watcher recovery scenario.');
+  assert.match(
+    caseSource,
+    /scanPageActions\.acknowledgeUnavailableRoot\(\);[\s\S]*?appBarActions\.openStatusMenu\(\);[\s\S]*?scanPageActions\.openStatusPageFromMenu\(\);/,
+    'the owner must visibly open the status menu before selecting its Library Status action',
+  );
+});
+
+test('watcher recovery viewer opens Library Status through the visible app-bar menu', () => {
+  const support = read('tests/e2e/support/watcherRecoveryAccounts.js');
+
+  assert.match(support, /import \{ AppBarActions \} from '\.\.\/actions\/appBarActions\.js';/);
+  assert.match(support, /import \{ AppBar \} from '\.\.\/poms\/appBar\.js';/);
+  assert.match(
+    support,
+    /expect\(page\.locator\('#app-shell'\)\)\.toBeVisible\(\);[\s\S]*?new AppBar\(page, testInfo\)[\s\S]*?new AppBarActions\(appBar\)[\s\S]*?appBarActions\.openStatusMenu\(\);[\s\S]*?scanPageActions\.openStatusPageFromMenu\(\);/,
+    'the viewer must construct its app-bar POM and visibly open the status menu after login',
+  );
+});
+
+test('watcher recovery action opens Library Status through shared production actions', async () => {
+  const { LibraryFilesystemWatcherActions } = await import(
+    pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/libraryFilesystemWatcherActions.js')).href
+  );
+  const calls = [];
+  const actions = new LibraryFilesystemWatcherActions({}, {
+    appBarActions: {
+      async openStatusMenu() {
+        calls.push('open-status-menu');
+      },
+    },
+    scanPageActions: {
+      async openStatusPageFromMenu() {
+        calls.push('open-status-page-from-menu');
+      },
+    },
+  });
+  actions._openProductionGallery = async () => {
+    throw new Error('direct gallery navigation shortcut used');
+  };
+
+  await actions._openStatusPage();
+
+  assert.deepEqual(calls, ['open-status-menu', 'open-status-page-from-menu']);
+
+  const fixtures = read('tests/e2e/support/baseFixtures.js');
+  const fixtureStart = fixtures.indexOf('libraryFilesystemWatcherActions:');
+  const fixtureEnd = fixtures.indexOf('watcherRecoveryViewerActions:', fixtureStart);
+  const productionFixture = fixtures.slice(fixtureStart, fixtureEnd);
+  assert.ok(fixtureStart >= 0 && fixtureEnd > fixtureStart);
+  assert.match(productionFixture, /async\s*\(\{[^}]*\bappBarActions\b[^}]*\}/s);
+  assert.match(productionFixture, /async\s*\(\{[^}]*\bscanPageActions\b[^}]*\}/s);
+  assert.match(productionFixture, /\{[\s\S]*\bappBarActions\s*,[\s\S]*\bscanPageActions\s*,/);
+});
 test('Edit Tags duration gates use the shared timing-budget helper', () => {
   const functionalSpec = read('tests/e2e/specs/albumTagRename.spec.js');
   const performanceSpec = read('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js');

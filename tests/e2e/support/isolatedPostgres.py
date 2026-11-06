@@ -125,6 +125,95 @@ def provision_performance_auth_owner(runtime_database_url: str, *, seed_expanded
             )
 
 
+def provision_watcher_recovery_viewer(
+    runtime_database_url: str,
+    *,
+    library_id: int,
+) -> tuple[str, str]:
+    """Create the real-login viewer used by the watcher recovery acceptance."""
+    from music_app.services.auth_config import build_password_hash_config
+    from music_app.services.auth_passwords import hash_password
+    from music_app.services.capabilities import capability_keys_for_roles
+
+    if isinstance(library_id, bool) or not isinstance(library_id, int) or library_id < 1:
+        raise ValueError("Watcher recovery viewer requires a positive library id.")
+
+    nonce = uuid.uuid4().hex
+    username = f"watcher-recovery-viewer-{nonce[:12]}"
+    email = f"{username}@example.test"
+    password = f"Lantern Mesa Quartz {nonce} 2026!"
+    config = build_password_hash_config(os.environ)
+    credential = hash_password(
+        password,
+        username=username,
+        email=email,
+        breached_checker=lambda _password: False,
+        argon2=config["argon2"],
+        policy_version=config["argon2_policy_version"],
+        password_policy=config["password"],
+    )
+    capability_keys = tuple(
+        sorted({*capability_keys_for_roles(("viewer",)), "library.refresh.read"})
+    )
+    if "library.refresh" in capability_keys:
+        raise RuntimeError("Watcher recovery viewer unexpectedly gained repair authority.")
+
+    with _connect(runtime_database_url) as connection:
+        with connection.transaction():
+            account = connection.execute(
+                """
+                insert into app.accounts (
+                    display_name, account_kind,
+                    username_display, username_normalized,
+                    contact_email, contact_email_normalized,
+                    is_active, metadata
+                ) values (%s, 'managed_user', %s, %s, %s, %s, true, %s::jsonb)
+                returning id
+                """,
+                (
+                    "Watcher Recovery Viewer",
+                    username,
+                    username.casefold(),
+                    email,
+                    email.casefold(),
+                    json.dumps({"source": "watcher_recovery_e2e"}),
+                ),
+            ).fetchone()
+            if account is None:
+                raise RuntimeError("Watcher recovery viewer account was not created.")
+            account_id = int(account["id"])
+            connection.execute(
+                """
+                insert into library.library_memberships (
+                    library_id, account_id, membership_role
+                ) values (%s, %s, 'member')
+                """,
+                (library_id, account_id),
+            )
+            connection.execute(
+                """
+                insert into app.account_credentials (
+                    account_id, encoded_hash, hash_algorithm,
+                    hash_policy_version, credential_version,
+                    administrator_set, password_set_at, updated_at
+                ) values (%s, %s, 'argon2id', %s, 1, false, now(), now())
+                """,
+                (account_id, credential.encoded_hash, credential.policy_version),
+            )
+            connection.execute(
+                """
+                insert into app.capabilities (
+                    account_id, capability_key, scope_kind, scope_id
+                )
+                select %s, granted.capability_key, 'library', %s
+                from unnest(%s::text[]) granted(capability_key)
+                """,
+                (account_id, library_id, list(capability_keys)),
+            )
+
+    return username, password
+
+
 class _ProcessIdentityState(Enum):
     PRESENT = "present"
     ABSENT = "absent"
@@ -563,6 +652,48 @@ def _drop_mismatched_exact_nontransactional_index(connection: Any) -> str:
     return state
 
 
+def _pg_trgm_gin_operator_class(connection: Any) -> str:
+    row = connection.execute(
+        """
+        select pg_catalog.format(
+                 '%I.%I', operator_namespace.nspname, operator_class.opcname
+               ) as qualified_operator_class
+        from pg_catalog.pg_extension as extension
+        join pg_catalog.pg_namespace as extension_namespace
+          on extension_namespace.oid = extension.extnamespace
+        join pg_catalog.pg_depend as operator_dependency
+          on operator_dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+         and operator_dependency.refobjid = extension.oid
+         and operator_dependency.deptype = 'e'
+        join pg_catalog.pg_opclass as operator_class
+          on operator_dependency.classid = 'pg_catalog.pg_opclass'::regclass
+         and operator_dependency.objid = operator_class.oid
+        join pg_catalog.pg_namespace as operator_namespace
+          on operator_namespace.oid = operator_class.opcnamespace
+         and operator_namespace.oid = extension_namespace.oid
+        join pg_catalog.pg_am as access_method
+          on access_method.oid = operator_class.opcmethod
+        where extension.extname = 'pg_trgm'
+          and operator_class.opcname = 'gin_trgm_ops'
+          and access_method.amname = 'gin'
+        """
+    ).fetchone()
+    qualified = str(row["qualified_operator_class"] or "") if row else ""
+    if not qualified:
+        raise RuntimeError("The extension-owned pg_trgm GIN operator class is missing.")
+    return qualified
+
+
+def _schema_aware_0083_sql(connection: Any, migration_sql: str) -> str:
+    released_operator_class = "library.gin_trgm_ops"
+    if migration_sql.count(released_operator_class) != 1:
+        raise RuntimeError("Migration 0083 has an unexpected operator-class contract.")
+    return migration_sql.replace(
+        released_operator_class,
+        _pg_trgm_gin_operator_class(connection),
+    )
+
+
 def _apply_nontransactional_migration(
     connection: Any,
     migration_sql: str,
@@ -578,7 +709,7 @@ def _apply_nontransactional_migration(
         if migration_name == _EXACT_NONTRANSACTIONAL_MIGRATION:
             _drop_mismatched_exact_nontransactional_index(connection)
             try:
-                connection.execute(migration_sql)
+                connection.execute(_schema_aware_0083_sql(connection, migration_sql))
                 state = _exact_nontransactional_index_state(connection)
                 if state != "ready":
                     raise RuntimeError(
@@ -724,6 +855,24 @@ def grant_runtime_role_privileges(
               'grant %s on table %s to %I',
               privilege.privilege_type,
               privilege.object_name,
+              {runtime_role}
+            );
+          end loop;
+
+          for privilege in
+            select column_privilege.privilege_type,
+                   column_privilege.table_schema,
+                   column_privilege.table_name,
+                   column_privilege.column_name
+              from information_schema.column_privileges as column_privilege
+             where column_privilege.grantee = 'album_haven_app'
+          loop
+            execute format(
+              'grant %s (%I) on table %I.%I to %I',
+              privilege.privilege_type,
+              privilege.column_name,
+              privilege.table_schema,
+              privilege.table_name,
               {runtime_role}
             );
           end loop;
@@ -878,6 +1027,19 @@ def seed_bootstrap_owner_and_library(setup_database_url: str) -> None:
                 'local',
                 '{"source":"isolated_e2e_launcher"}'::jsonb
               from bootstrap_owner
+            """
+        )
+
+
+        connection.execute(
+            """
+            insert into library.watcher_runtime_state (
+              singleton, acceptance_enabled, disabled_at, updated_at
+            ) values (true, true, null, pg_catalog.now())
+            on conflict (singleton) do update
+            set acceptance_enabled = excluded.acceptance_enabled,
+                disabled_at = excluded.disabled_at,
+                updated_at = excluded.updated_at
             """
         )
 

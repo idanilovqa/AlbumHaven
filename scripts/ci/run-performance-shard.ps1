@@ -259,6 +259,7 @@ foreach ($target in $targetNames) { Write-CiJob $target 'initialized' }
 try {
     $provisionArguments = @{
         Mode = 'Provision'
+        AppPrivilegeMode = 'Inherited'
         ServiceName = $postgresServiceName
         ExpectedMajorVersion = $ExpectedPostgresMajor
         Port = $PostgresPort
@@ -357,6 +358,7 @@ try {
         try {
             & $bootstrap `
                 -Mode Teardown `
+                -AppPrivilegeMode Inherited `
                 -ServiceName $postgresServiceName `
                 -ExpectedMajorVersion $ExpectedPostgresMajor `
                 -Port $PostgresPort `

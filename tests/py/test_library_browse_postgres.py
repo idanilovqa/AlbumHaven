@@ -216,6 +216,31 @@ class _InventoryCursor:
         return list(self._rows)
 
 
+def test_relation_alias_snapshot_loads_inventory_revision_on_supplied_connection(
+    default_empty_relation_alias_projection,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    class Connection:
+        def __init__(self):
+            self.sql = []
+
+        def execute(self, sql):
+            self.sql.append(sql)
+            return _InventoryCursor(row={
+                "relation_views": {}, "relation_projection": {},
+                "inventory_mutation_revision": 41,
+            })
+
+    connection = Connection()
+    repository = PostgresLibraryBrowseRepository({})
+    result = default_empty_relation_alias_projection(repository, connection=connection)
+
+    assert result["inventory_mutation_revision"] == 41
+    assert len(connection.sql) == 1
+    assert "inventory_mutation_revision" in connection.sql[0]
+
+
 
 def _is_missing_album_query(sql):
     from music_app.services.library_browse_postgres import _missing_albums_sql
@@ -233,6 +258,8 @@ class _EmptyMissingAlbumConnection:
         return False
 
     def execute(self, sql, params=None):
+        if sql == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY":
+            return _InventoryCursor()
         if any(marker in str(sql) for marker in (
             "transaction_timestamp() as observed_at", "select distinct albums.id as album_id",
             "requested_identities as materialized",
@@ -773,7 +800,7 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
         database_url=database_url,
         kinds=("relation-alias-maps",),
     )
-    state = {"fingerprint": "10", "canonical": "Canonical"}
+    state = {"fingerprint": "10", "canonical": "Canonical", "inventory_revision": 7}
     calls = []
 
     class Cursor:
@@ -791,11 +818,13 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
                 return Cursor({
                     "library_id": 1,
                     "relation_alias_fingerprint": state["fingerprint"],
+                    "inventory_mutation_revision": state["inventory_revision"],
                 })
             calls.append("full")
             return Cursor({
                 "library_id": 1,
                 "relation_alias_fingerprint": state["fingerprint"],
+                "inventory_mutation_revision": state["inventory_revision"],
                 "alias_to_canonical": {"Alias": state["canonical"]},
                 "canonical_to_aliases": {state["canonical"]: ["Alias"]},
                 "relation_projection": {
@@ -821,6 +850,14 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
     assert second == first
     assert calls == ["identity", "full", "identity"]
 
+    state["inventory_revision"] = 8
+    refreshed_revision = default_empty_relation_alias_projection(
+        repository, connection=connection,
+    )
+    assert refreshed_revision == {**first, "inventory_mutation_revision": 8}
+    assert first["inventory_mutation_revision"] == 7
+    assert calls == ["identity", "full", "identity", "identity"]
+
     state.update(fingerprint="11", canonical="Updated canonical")
     third = default_empty_relation_alias_projection(
         repository,
@@ -828,7 +865,8 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
     )
 
     assert third["alias_to_canonical"] == {"Alias": "Updated canonical"}
-    assert calls == ["identity", "full", "identity", "identity", "full"]
+    assert third["inventory_mutation_revision"] == 8
+    assert calls == ["identity", "full", "identity", "identity", "identity", "full"]
     browse.invalidate_postgres_utility_projection_cache(
         database_url=database_url,
         kinds=("relation-alias-maps",),
@@ -844,6 +882,7 @@ def test_relation_alias_cache_identity_tracks_only_relation_projection_state():
 
     assert "library.libraries.xmin" not in sql
     assert "relation_alias_fingerprint" in sql
+    assert "as inventory_mutation_revision" in sql
     assert "{scan_cache,relation_projection}" in sql
     assert "md5(jsonb_build_array(" not in sql
     assert "md5(coalesce( library.libraries.metadata #> '{scan_cache,relation_projection}'" in sql
@@ -1506,7 +1545,7 @@ def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_e
         },
         connect=lambda _database_url: _EmptyMissingAlbumConnection(),
     )
-    monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda _state: [])
+    monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda _state, **_kwargs: [])
     monkeypatch.setattr(album_details, "_safe_scrobble_count_lookup", lambda _config, _refs: {})
     monkeypatch.setattr(
         album_details,
@@ -1559,17 +1598,17 @@ def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_e
 
     query_kinds = [kind for kind, _sql, _params in inventory["queries"]]
     assert query_kinds == ["support", "candidates", "candidates", "candidates"]
-    for kind, sql, params in inventory["queries"]:
+    for query_index, (kind, sql, params) in enumerate(inventory["queries"]):
         assert "musicbrainz" not in sql
         assert "lastfm" not in sql
         if kind == "candidates":
-            assert params == {
+            assert params == ({"limit": 5000} if query_index == 1 else {
                 "track_ids": [],
                 "track_id_count": 0,
                 "private_paths": [],
                 "private_path_count": 0,
                 "limit": 5000,
-            }
+            })
 
 
 def test_selected_family_alias_chips_keep_independent_variations_with_constant_inventory_queries(
@@ -2228,6 +2267,63 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
     }
 
 
+def test_root_album_category_browse_revision_and_memberships_share_snapshot(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    connections = []
+    reads = []
+
+    class Connection:
+        def __init__(self):
+            self.commands = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            self.commands.append(sql)
+            return _InventoryCursor()
+
+    def connect(_url):
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}, connect=connect,
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+
+    def aliases(*, connection=None):
+        reads.append(connection)
+        return {"alias_to_canonical": {}, "canonical_to_aliases": {}, "inventory_mutation_revision": 41}
+
+    def support(*, connection=None):
+        reads.append(connection)
+        return {"ignored_version_keys": [], "manual_version_links": {}}
+
+    def rows(*_args, connection=None, **_kwargs):
+        reads.append(connection)
+        return []
+
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", aliases)
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state", support)
+    monkeypatch.setattr(repository, "_load_root_album_browse_rows", rows)
+    monkeypatch.setattr(repository, "_load_missing_album_rows", rows)
+    monkeypatch.setattr(repository, "_load_non_album_entries", rows)
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+
+    payload = repository.build_root_album_browse_payload(query_params={"category": ["main_library"]})
+
+    assert len(connections) == 1
+    assert reads == [connections[0]] * 5
+    assert connections[0].commands == ["SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"]
+    assert payload["inventory_mutation_revision"] == 41
+
+
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
     monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):
@@ -2286,6 +2382,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     def relation_alias_maps(*, connection):
         read_connections.append(connection)
         return {
+            "inventory_mutation_revision": 41,
             "alias_to_canonical": {
                 "Canonical": "Canonical",
                 "Alias": "Canonical",
@@ -2320,6 +2417,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
 
     payload = repository.build_root_sidebar_payload()
 
+    assert payload["inventory_mutation_revision"] == 41
     assert len(connections) == 1
     connection = connections[0]
     assert read_connections == [connection, connection, connection, connection]
@@ -2568,11 +2666,12 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_
     assert "open_directory_paths" not in broadcast_album
     assert payload["artist_groups"][0]["sections"] == []
 
-    assert executed[1] == {
+    assert executed[0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    assert executed[3] == {
         "category_count": 2,
         "visible_categories": ["main_library", "new_arrivals"],
     }
-    sql = str(executed[0])
+    sql = str(executed[2])
     compact_sql = " ".join(sql.split())
     assert "library.local_artists" in sql
     assert "library.local_albums" in sql
@@ -2619,7 +2718,7 @@ def test_postgres_root_album_browse_payload_applies_category_filter_params():
     assert payload["artist_count"] == 0
     assert payload["artist_groups"] == []
     assert payload["artists_sidebar"] == []
-    assert captured_params == [{"category_count": 1, "visible_categories": ["hoard"]}]
+    assert captured_params == [{}, {"category_count": 1, "visible_categories": ["hoard"]}]
 
 
 def test_postgres_root_album_browse_groups_featured_artist_rows_by_identity_but_keeps_album_credit_text():
@@ -2688,7 +2787,7 @@ def test_postgres_root_album_browse_groups_featured_artist_rows_by_identity_but_
         "Various Artists",
         "Original Cast",
     ]
-    compact_sql = " ".join(str(executed[0]).split())
+    compact_sql = " ".join(str(executed[2]).split())
     assert "library.local_album_featured_artists.artist_id = library.local_artists.id" in compact_sql
 
 
@@ -2889,6 +2988,9 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
         ),
     )
 
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {}, "canonical_to_aliases": {}, "inventory_mutation_revision": 41,
+    })
     payload = repository.build_selected_artist_payload(
         query_params={
             "artist": "broadcast",
@@ -2900,6 +3002,7 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
         },
     )
 
+    assert payload["inventory_mutation_revision"] == 41
     assert payload["selected_artist"] == "Broadcast"
     assert payload["album_count"] == 2
     assert payload["artist_count"] == 1
@@ -3798,6 +3901,7 @@ def test_relation_alias_loader_reports_persisted_projection_authority(
         "alias_to_canonical": {"Alias": "Canonical"},
         "canonical_to_aliases": {"Canonical": ["Canonical", "Alias"]},
         "projection_stale_reason": expected_stale_reason,
+        "inventory_mutation_revision": 0,
         "projection_structure_complete": projection_case == "current",
         "projection_snapshot_missing": False,
     }
@@ -5049,7 +5153,7 @@ def test_postgres_root_full_alias_group_deduplicates_album_and_global_count(monk
     monkeypatch.setattr(
         repository,
         "_load_root_album_browse_rows",
-        lambda _state: [
+        lambda _state, **_kwargs: [
             {**base, "artist_id": 1, "artist_name": "Canonical", "album_id": 10, "album_key": "shared"},
             {**base, "artist_id": 2, "artist_name": "Alias", "album_id": 10, "album_key": "shared"},
             {**base, "artist_id": 1, "artist_name": "Canonical", "album_id": 20, "album_key": "other", "album_title": "Other"},
@@ -5134,7 +5238,7 @@ def test_postgres_root_browse_preserves_collaboration_owner_and_folds_ordinary_a
     monkeypatch.setattr(
         repository,
         "_load_root_album_browse_rows",
-        lambda _state: [
+        lambda _state, **_kwargs: [
             album_row(1, "Neal Morse", 10, "neal-solo"),
             album_row(2, "Neal Morse & The Resonance", 20, "resonance-collaboration"),
             album_row(3, "Signal", 30, "signal-canonical"),
@@ -5288,7 +5392,7 @@ def test_postgres_selected_artist_payload_applies_category_filter_params():
     }
 
 
-def test_postgres_library_browse_builds_direct_album_search_payload():
+def test_postgres_library_browse_builds_direct_album_search_payload(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[object] = []
@@ -5359,6 +5463,9 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
 
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {}, "canonical_to_aliases": {}, "inventory_mutation_revision": 41,
+    })
     payload = repository.build_search_payload(
         query_params={
             "surface": "albums",
@@ -5368,6 +5475,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         },
     )
 
+    assert payload["inventory_mutation_revision"] == 41
     assert payload["query"] == "tender"
     assert payload["selected_artist"] == "Tender Forever"
     assert payload["all_artists_active"] is False
@@ -16501,7 +16609,7 @@ def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypa
     monkeypatch.setattr(
         repository,
         "_load_root_album_browse_rows",
-        lambda _state: _rating_overlay_test_rows(),
+        lambda _state, **_kwargs: _rating_overlay_test_rows(),
     )
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
 
@@ -17929,4 +18037,3 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert payload == {"album_id": 14674, "key": "overhead::telepathic minds"}
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
-

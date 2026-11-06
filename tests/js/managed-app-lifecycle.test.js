@@ -286,6 +286,37 @@ test('concurrent watcher cleanups with different owners are serialized independe
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('watcher recovery cleanup emits only its fixed operation and waits for a ready replacement', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory),
+      createNonce: () => 'watcher-recovery-cleanup-1',
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      async sleep() {
+        assert.deepEqual(
+          JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
+          { nonce: 'watcher-recovery-cleanup-1', operation: 'watcher-recovery-cleanup' },
+        );
+        fs.writeFileSync(
+          path.join(controlDirectory, 'restart-ack.json'),
+          JSON.stringify({ nonce: 'watcher-recovery-cleanup-1', status: 'ready' }),
+        );
+      },
+    });
+
+    assert.equal(typeof lifecycle.cleanupWatcherRecoveryFixture, 'function');
+    assert.deepEqual(
+      await lifecycle.cleanupWatcherRecoveryFixture('/browser-supplied/manifest.json'),
+      { nonce: 'watcher-recovery-cleanup-1', status: 'ready' },
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('restart reports a clear timeout when no matching ready acknowledgment arrives', async () => {
   const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
   const { root, controlDirectory } = createOwnedDirectories();

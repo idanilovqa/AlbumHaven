@@ -237,3 +237,55 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
     else if (originalFailure) throw originalFailure;
   }
 });
+
+test('FTC-LIBROOTS-019 repairs a stable watcher incident through its completion watermark', { tag: '@area:album-details' }, async ({
+  appBarActions,
+  libraryFilesystemWatcherActions,
+  scanPageActions,
+  stepLogger,
+  watcherRecoveryViewerActions,
+}) => {
+  test.skip(process.platform !== 'win32', 'The stable watcher recovery acceptance uses the real Windows stop/rename/restart lifecycle.');
+  test.setTimeout(240000);
+  let firstIncident;
+
+  await stepLogger.step('Keep the unaffected root progressing while one root fails', async () => {
+    await libraryFilesystemWatcherActions.failOwnedRootAndAdvanceHealthyRoot();
+    firstIncident = await libraryFilesystemWatcherActions.waitForStableIncident();
+    await libraryFilesystemWatcherActions.expectInventoryPreservedAndPathFreeWarning();
+    await libraryFilesystemWatcherActions.expectDestructiveChangeBlocked();
+    await libraryFilesystemWatcherActions.expectHealthyRootRevisionAdvance();
+  });
+
+  await stepLogger.step('Acknowledge globally without removing Library Status repair', async () => {
+    await scanPageActions.acknowledgeUnavailableRoot();
+    await appBarActions.openStatusMenu();
+    await scanPageActions.openStatusPageFromMenu();
+    await scanPageActions.expectRepairAvailable();
+    const viewer = await watcherRecoveryViewerActions.loginAndOpenStatusPage();
+    await viewer.expectOperationalIncidentVisible();
+    await viewer.expectRepairUnavailable();
+    await viewer.close();
+  });
+
+  await stepLogger.step('Accept an event during repair and wait through final catch-up', async () => {
+    await scanPageActions.startRepair();
+    await libraryFilesystemWatcherActions.waitForScanActive();
+    const duringRepairFence = await libraryFilesystemWatcherActions.createDuringRepair();
+    await libraryFilesystemWatcherActions.repeatBeforeResolution(firstIncident);
+    await expect(scanPageActions.scanPage.healthWarningToast).toBeHidden();
+    await expect(scanPageActions.scanPage.healthWarning).toBeVisible();
+    await libraryFilesystemWatcherActions.waitForRepairWatermark(duringRepairFence);
+    await expect(scanPageActions.scanPage.healthWarning).toBeHidden();
+    await libraryFilesystemWatcherActions.waitForScanIdleAndHealthy();
+  });
+
+  await stepLogger.step('Show a later incident with a new identity and warning token', async () => {
+    await libraryFilesystemWatcherActions.failAfterResolution();
+    await libraryFilesystemWatcherActions.expectNewIncidentIdentity(
+      firstIncident.incidentId,
+      firstIncident.warningToken,
+    );
+    await expect(scanPageActions.scanPage.healthWarningToast).toBeVisible();
+  });
+});

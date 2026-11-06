@@ -35,6 +35,37 @@ def _scan_cache_adapter(config: dict[str, object]):
     return select_scan_cache_adapter(config)
 
 
+def _log_scan_history_failure(
+    config: dict[str, object],
+    logger: object,
+    *,
+    legacy_action: str,
+    reason_code: str,
+    scan_generation: int,
+    **legacy_fields: object,
+) -> None:
+    if config.get("DURABLE_WORKER_SAFE_LOGGING") is True:
+        log_app_event(
+            config,
+            logger,
+            "Durable library scan failed",
+            level="error",
+            history=True,
+            reason_code=reason_code,
+            scan_generation=scan_generation,
+        )
+        return
+    log_app_event(
+        config,
+        logger,
+        legacy_action,
+        level="error",
+        history=True,
+        scan_generation=scan_generation,
+        **legacy_fields,
+    )
+
+
 _ACTIVE_SCAN_PREVIEW_KEY = "active_scan_preview_state"
 _SCAN_PREVIEW_BROWSE_FIELDS = (
     "file_cache",
@@ -174,6 +205,116 @@ def finalize_post_scan_actions(
     start_background_cover_refresh()
 
 
+def run_post_scan_cover_refresh_for_state(
+    *,
+    library_id: int,
+    inventory_revision: int,
+    should_cancel: Callable[[], bool],
+    bridge: Callable[..., object] | None,
+) -> bool | None:
+    """Temporary durable handoff into the existing cover-domain owner.
+
+    The cover-job slice replaces this adapter with its shared claimed bulk-refresh
+    core. Until then, it requires an explicitly supplied existing-domain bridge
+    and never treats an absent or canceled bridge as completed work.
+    """
+
+    if not callable(bridge):
+        return None
+    if should_cancel():
+        return False
+    result = bridge(
+        library_id=library_id,
+        inventory_revision=inventory_revision,
+        should_cancel=should_cancel,
+    )
+    return result is True
+
+
+def project_durable_full_scan_status(
+    status: dict[str, object] | None,
+) -> dict[str, object]:
+    """Map the private durable scan projection onto the legacy status contract."""
+
+    source = status if isinstance(status, dict) else {}
+    state = str(source.get("state") or "idle")
+    current = max(0, int(source.get("progress_current") or 0))
+    total = max(0, int(source.get("progress_total") or 0))
+    phase = str(source.get("phase") or "idle")
+    return {
+        "scan_in_progress": state in {"accepted", "queued", "running", "retry_wait"},
+        "scan_processed": current,
+        "scan_total": total,
+        "scan_percent": min(100, int(current * 100 / total)) if total else 0,
+        "scan_current_path": str(source.get("current_path") or ""),
+        "scan_phase": phase,
+        "scan_mode": str(source.get("mode") or "idle"),
+        "scan_outcome": str(source.get("outcome_code") or state),
+        "album_total": max(0, int(source.get("album_total") or 0)),
+        "relations_in_progress": (
+            state in {"accepted", "queued", "running", "retry_wait"}
+            and phase in {"finalizing", "publishing"}
+        ),
+        "relations_processed": max(
+            0, int(source.get("relations_processed") or 0)
+        ),
+        "relations_total": max(0, int(source.get("relations_total") or 0)),
+        "relations_percent": (
+            min(
+                100,
+                int(
+                    max(0, int(source.get("relations_processed") or 0))
+                    * 100
+                    / max(0, int(source.get("relations_total") or 0))
+                ),
+            )
+            if max(0, int(source.get("relations_total") or 0))
+            else 0
+        ),
+        "relations_phase": str(source.get("relations_phase") or "Idle"),
+        "relations_source": str(source.get("relations_source") or "local"),
+        "scan_elapsed_seconds": max(0.0, float(source.get("elapsed_seconds") or 0.0)),
+        "scan_estimated_remaining_seconds": max(
+            0.0, float(source.get("estimated_remaining_seconds") or 0.0)
+        ),
+        "scan_files_per_second": max(0.0, float(source.get("files_per_second") or 0.0)),
+        "scan_album_folders_processed": max(
+            0, int(source.get("album_folders_processed") or 0)
+        ),
+        "scan_album_folders_total": max(0, int(source.get("album_folders_total") or 0)),
+    }
+
+
+def project_durable_full_scan_preview(
+    library_state: Mapping[str, object],
+    preview: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Build a request-local partial browse state from one private scan preview."""
+
+    projected = dict(library_state)
+    if not isinstance(preview, Mapping):
+        return projected
+    file_cache = preview.get("file_cache")
+    if not isinstance(file_cache, Mapping) or not file_cache:
+        return projected
+    separate_release_keys = {
+        str(value)
+        for value in (preview.get("separate_release_keys") or ())
+        if str(value)
+    }
+    projected.update(
+        {
+            "scan_in_progress": True,
+            "file_cache": dict(file_cache),
+            "separate_release_keys": separate_release_keys,
+            "albums": build_albums_from_file_cache(
+                dict(file_cache), separate_release_keys
+            ),
+        }
+    )
+    return projected
+
+
 def refresh_library_state(
     library_state: dict[str, object],
     *,
@@ -188,7 +329,8 @@ def refresh_library_state(
     queue_problematic_albums_prewarm: Callable[[], None] | None = None,
     queue_utility_rules_prewarm: Callable[[], None] | None = None,
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
-    recover_library_watch_health: Callable[..., int] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
 ) -> None:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
@@ -208,9 +350,6 @@ def refresh_library_state(
 
     scan_separate_release_keys = load_separate_release_keys(cfg)
     with cache_lock:
-        requested_scan_mode = str(
-            library_state.get("scan_mode") or "background"
-        )
         scan_started_at = time.time()
         reset_scan_stage_timings(library_state)
         library_state["scan_generation"] = int(library_state.get("scan_generation") or 0) + 1
@@ -279,11 +418,12 @@ def refresh_library_state(
         "load_inventory_mutation_revision",
         None,
     )
-    expected_inventory_mutation_revision = (
-        int(load_inventory_mutation_revision())
-        if callable(load_inventory_mutation_revision)
-        else None
-    )
+    if expected_inventory_mutation_revision is None:
+        expected_inventory_mutation_revision = (
+            int(load_inventory_mutation_revision())
+            if callable(load_inventory_mutation_revision)
+            else None
+        )
     relations_refreshed_from_disk = False
     file_cache, disk_last_scan, disk_relation_views, disk_relations_last_built, disk_error = scan_cache_adapter.load_snapshot(
         cache_path,
@@ -293,12 +433,11 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["last_error"] = disk_error
-        log_app_event(
+        _log_scan_history_failure(
             cfg,
             logger,
-            "Library scan cache load failed",
-            level="error",
-            history=True,
+            legacy_action="Library scan cache load failed",
+            reason_code="scan_cache_load_failed",
             error=disk_error,
             scan_generation=scan_generation,
          history_scope=history_scope)
@@ -452,14 +591,18 @@ def refresh_library_state(
             relation_refresh_options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
+        if before_commit is not None:
+            relation_refresh_options["before_commit"] = before_commit
         refresh_relation_views(**relation_refresh_options)
-        finish_scan_stage(library_state, "relations")
-        library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:
             generation_is_current = (
                 int(library_state.get("scan_generation") or 0) == scan_generation
             )
             if generation_is_current:
+                finish_scan_stage(library_state, "relations")
+                library_state["scan_elapsed_seconds"] = max(
+                    0.0, time.time() - scan_started_at
+                )
                 library_state.update(publication_state)
                 _clear_matching_scan_preview(
                     library_state,
@@ -496,12 +639,11 @@ def refresh_library_state(
     except Exception as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
-                log_app_event(
+                _log_scan_history_failure(
                     cfg,
                     logger,
-                    "Library indexing failed",
-                    level="error",
-                    history=True,
+                    legacy_action="Library indexing failed",
+                    reason_code="indexing_failed",
                     id=f"library-status-error:{scan_generation}",
                     error=str(exc),
                     scan_generation=scan_generation,
@@ -512,8 +654,6 @@ def refresh_library_state(
                 library_state["scan_outcome"] = "failed"
         raise
     finally:
-        for stage in ("discover", "metadata", "relations"):
-            finish_scan_stage(library_state, stage)
         with cache_lock:
             _clear_matching_scan_preview(
                 library_state,
@@ -521,6 +661,8 @@ def refresh_library_state(
                 publication_state=publication_state,
             )
             if int(library_state.get("scan_generation") or 0) == scan_generation:
+                for stage in ("discover", "metadata", "relations"):
+                    finish_scan_stage(library_state, stage)
                 library_state["scan_current_path"] = ""
                 library_state["post_scan_cover_refresh_pending"] = bool(
                     scan_completed_successfully
@@ -535,27 +677,6 @@ def refresh_library_state(
 
     try:
         if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
-            if (
-                requested_scan_mode == "manual_full_rescan"
-                and recover_library_watch_health is not None
-            ):
-                observed_root_ids = publication_state.get(
-                    "observed_library_root_ids"
-                )
-                try:
-                    recover_library_watch_health(
-                        scan_mode=requested_scan_mode,
-                        scan_started_at=scan_started_at,
-                        observed_root_ids=(
-                            observed_root_ids
-                            if isinstance(observed_root_ids, (set, list, tuple))
-                            else ()
-                        ),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Unable to clear recovered library watcher health."
-                    )
             finalize_post_scan_actions(
                 library_state,
                 config=cfg,

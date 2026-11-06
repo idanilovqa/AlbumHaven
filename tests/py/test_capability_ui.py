@@ -38,6 +38,20 @@ def test_viewer_has_appearance_but_no_audio_or_privileged_tabs():
     assert {"problematic-files", "rules", "loops"} <= set(value["denied_tabs"])
 
 
+def test_refresh_status_reader_keeps_indicator_and_status_navigation_without_rescan():
+    value = build_capability_ui(
+        {
+            "library.refresh": False,
+            "library.refresh.read": True,
+        },
+        "private_web",
+    )
+
+    assert "#scan-indicator" not in value["denied_selectors"]
+    assert '[data-status-action="go-to-scan-page"]' not in value["denied_selectors"]
+    assert '[data-status-action="full-rescan"]' in value["denied_selectors"]
+
+
 def test_listener_keeps_playback_without_loops_problems_or_rules():
     value = projection(["listener"])
     assert ".play-track-button" not in value["denied_selectors"]

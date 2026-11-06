@@ -14,13 +14,11 @@ from music_app.services.auth_audit_postgres import (
     SecurityAuditOutcome,
 )
 from music_app.services.auth_config import normalize_email_address
-from music_app.services.auth_tokens import (
-    IssuedOpaqueToken,
-    hash_opaque_token,
-    issue_opaque_token,
-    keyed_bucket_digest,
-    normalize_login_identifier,
+from music_app.services.auth_mail_jobs_postgres import (
+    AcceptedAuthMailJob,
+    PostgresAuthMailJobRepository,
 )
+from music_app.services.auth_tokens import keyed_bucket_digest, normalize_login_identifier
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -46,26 +44,12 @@ _THROTTLE_COLUMNS = (
 
 
 @dataclass(frozen=True, repr=False, slots=True)
-class PasswordResetDelivery:
-    outbox_id: int
-    account_id: int
-    recipient: str
-    raw_token: str
-
-    def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
-            f"account_id={self.account_id!r}, recipient=<redacted>, raw_token=<redacted>)"
-        )
-
-
-@dataclass(frozen=True, repr=False, slots=True)
 class PasswordResetRequestResult:
     accepted: bool = True
-    delivery: PasswordResetDelivery | None = None
+    accepted_job: AcceptedAuthMailJob | None = None
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}(accepted=True, delivery=<redacted>)"
+        return f"{type(self).__name__}(accepted=True, accepted_job={self.accepted_job!r})"
 
 
 class PostgresPasswordResetRequestService:
@@ -76,9 +60,9 @@ class PostgresPasswordResetRequestService:
         config: Mapping[str, object] | None,
         *,
         connect: Callable[[str], Any] | None = None,
-        token_issuer: Callable[[], object] = issue_opaque_token,
         clock: Callable[[], datetime] | None = None,
         audit_repository: Any,
+        job_repository: Any | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -113,14 +97,15 @@ class PostgresPasswordResetRequestService:
         )
         if self._token_seconds > 1800:
             raise ValueError("Password recovery configuration is invalid.")
-        if not callable(token_issuer):
-            raise TypeError("Password recovery token provider is invalid.")
         if not callable(getattr(audit_repository, "append_in_transaction", None)):
             raise TypeError("Password recovery audit repository is invalid.")
         self._connect = connect or _connect
-        self._token_issuer = token_issuer
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._audit = audit_repository
+        self._jobs = job_repository or PostgresAuthMailJobRepository(
+            database_url=self._database_url,
+            connect_to_database=self._connect,
+        )
 
     def request_reset(
         self,
@@ -129,6 +114,9 @@ class PostgresPasswordResetRequestService:
         source_key: object,
         request_ref: object,
         source_class: object = None,
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
     ) -> PasswordResetRequestResult:
         now = _aware_utc(self._clock())
         request_ref = _request_ref(request_ref)
@@ -158,7 +146,9 @@ class PostgresPasswordResetRequestService:
                             )
                         )
                     buckets.sort(key=lambda item: item[0])
-                    blocked, now = self._charge_buckets(connection, buckets, now)
+                    blocked, account_throttle_id, now = self._charge_buckets(
+                        connection, buckets, now
+                    )
                     if blocked:
                         self._append_audit(
                             connection,
@@ -192,52 +182,41 @@ class PostgresPasswordResetRequestService:
                         return PasswordResetRequestResult()
 
                     assert account is not None
-                    issued = _issued_token(self._token_issuer)
                     account_id = _positive_integer(account.get("id"), "account id")
                     credential_version = _positive_integer(
                         account.get("credential_version"), "credential version"
                     )
-                    recipient = _recipient(account.get("contact_email"))
-                    # Lock waits and token generation must not consume the link's lifetime.
-                    now = _aware_utc(self._clock())
-                    connection.execute(
-                        """
-                        update app.password_reset_tokens
-                        set revoked_at = %s
-                        where account_id = %s and purpose = 'password_reset'
-                          and consumed_at is null and revoked_at is null
-                        """,
-                        (now, account_id),
-                    )
-                    reset_rows = connection.execute(
-                        """
-                        insert into app.password_reset_tokens (
-                          account_id, token_hash, purpose, credential_version,
-                          created_at, expires_at, request_ref
-                        ) values (%s, %s, 'password_reset', %s, %s, %s, %s)
-                        returning id
-                        """,
-                        (
-                            account_id,
-                            issued.digest,
-                            credential_version,
-                            now,
-                            now + timedelta(seconds=self._token_seconds),
-                            request_ref,
-                        ),
-                    ).fetchall()
-                    reset_id = _returned_id(reset_rows, "reset token")
                     outbox_rows = connection.execute(
                         """
                         insert into app.mail_outbox (
-                          account_id, reset_token_id, message_category,
-                          delivery_status, attempt_count, created_at
-                        ) values (%s, %s, 'password_reset', 'pending', 0, %s)
+                          account_id, message_category, delivery_status,
+                          attempt_count, next_attempt_at, row_revision,
+                          accepted_attempt, authorization_mode,
+                          delivery_checkpoint, target_credential_version,
+                          lifecycle_expires_at, public_throttle_id,
+                          created_at, updated_at
+                        ) values (
+                          %s, 'password_reset', 'pending', 0, %s, 0, 1,
+                          'public_lifecycle', 'accepted', %s, %s, %s, %s, %s
+                        )
                         returning id
                         """,
-                        (account_id, reset_id, now),
+                        (
+                            account_id, now, credential_version,
+                            now + timedelta(seconds=self._token_seconds),
+                            account_throttle_id, now, now,
+                        ),
                     ).fetchall()
                     outbox_id = _returned_id(outbox_rows, "outbox")
+                    job = self._jobs.compose_existing_intent_in_transaction(
+                        connection, outbox_id=outbox_id,
+                        category="password_reset", account_id=account_id,
+                        actor_account_id=None, library_id=None,
+                        request_origin_ref=request_origin_ref,
+                        deployment_mode=deployment_mode,
+                        client_surface=client_surface,
+                        scheduled_at=now,
+                    )
                     self._append_audit(
                         connection,
                         outcome=SecurityAuditOutcome.SUCCESS,
@@ -247,14 +226,7 @@ class PostgresPasswordResetRequestService:
                         source_class=source_class,
                         now=now,
                     )
-            return PasswordResetRequestResult(
-                delivery=PasswordResetDelivery(
-                    outbox_id=outbox_id,
-                    account_id=account_id,
-                    recipient=recipient,
-                    raw_token=issued.raw,
-                )
-            )
+            return PasswordResetRequestResult(accepted_job=job)
         except (TypeError, ValueError):
             raise
         except Exception:
@@ -290,7 +262,7 @@ class PostgresPasswordResetRequestService:
         connection: Any,
         buckets: list[tuple[str, bytes]],
         now: datetime,
-    ) -> tuple[bool, datetime]:
+    ) -> tuple[bool, int | None, datetime]:
         # Retain each conflicting bucket against expiry cleanup without
         # replacing its current window, count or cooldown.
         for kind, digest in buckets:
@@ -318,7 +290,7 @@ class PostgresPasswordResetRequestService:
             params.extend((kind, digest))
         rows = connection.execute(
             f"""
-            select bucket_kind, window_started_at, failure_count,
+            select id, bucket_kind, window_started_at, failure_count,
                    window_expires_at, blocked_until
             from app.auth_throttles
             where key_version = %s and ({clauses})
@@ -333,11 +305,16 @@ class PostgresPasswordResetRequestService:
         now = _aware_utc(self._clock())
         by_kind = dict(buckets)
         blocked = False
+        account_throttle_id = None
         for raw in rows:
             row = _row(raw, _THROTTLE_COLUMNS)
             kind = str(row.get("bucket_kind") or "")
             if kind not in by_kind:
                 raise RuntimeError
+            if kind == "reset_account":
+                account_throttle_id = _positive_integer(
+                    raw.get("id"), "account throttle id"
+                )
             count = _nonnegative_integer(row.get("failure_count"), "failure count")
             expires = _timestamp(row.get("window_expires_at"))
             blocked_until_value = row.get("blocked_until")
@@ -378,7 +355,7 @@ class PostgresPasswordResetRequestService:
                     """,
                     (now, kind, self._hmac_key_version, digest),
                 )
-        return blocked, now
+        return blocked, account_throttle_id, now
 
     def _bucket(self, domain: str, value: str) -> bytes:
         return keyed_bucket_digest(
@@ -451,19 +428,6 @@ def _eligible(account: Mapping[str, object] | None) -> bool:
     )
 
 
-def _issued_token(provider: Callable[[], object]) -> IssuedOpaqueToken:
-    value = provider()
-    if not isinstance(value, IssuedOpaqueToken):
-        raise RuntimeError("Password recovery token issuance failed.")
-    try:
-        valid = hash_opaque_token(value.raw) == value.digest
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise RuntimeError("Password recovery token issuance failed.")
-    return value
-
-
 def _request_ref(value: object) -> str:
     if not isinstance(value, str) or _REQUEST_REFERENCE.fullmatch(value) is None:
         raise ValueError("Password recovery request reference is invalid.")
@@ -475,12 +439,6 @@ def _source_class(value: object) -> str | None:
         return None
     if not isinstance(value, str) or value not in _SOURCE_CLASSES:
         raise ValueError("Password recovery source class is invalid.")
-    return value
-
-
-def _recipient(value: object) -> str:
-    if not isinstance(value, str) or not value or "\r" in value or "\n" in value:
-        raise RuntimeError
     return value
 
 

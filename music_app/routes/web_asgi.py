@@ -8,7 +8,7 @@ import hashlib
 import logging
 import os
 import time
-from datetime import timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -42,13 +42,20 @@ from music_app.services.gallery_scope import normalize_gallery_scope, normalize_
 from music_app.services.library_browse_postgres import GalleryProjectionPending, PostgresLibraryBrowseRepository
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
+    get_library_roots,
     get_primary_music_root,
     resolve_album_open_directories,
     resolve_configured_media_path,
 )
 from music_app.services.loops import resolve_loop_media_path, resolve_loop_preview_path
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import (
+    allowed_actions_for_request,
+    evaluate_action_for_request,
+    require_action,
+    request_origin_ref_for_request,
+)
+from music_app.services.scan_state import project_durable_full_scan_status
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
 from music_app.services.shell_layout_seams import build_shell_layout_payload
@@ -84,6 +91,32 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _scan_job_repository(request: Request):
+    return getattr(request.app.state, "scan_job_repository", None)
+
+
+def _cover_job_repository(request: Request):
+    return getattr(request.app.state, "cover_job_repository", None)
+
+
+def _authorized_scan_request(
+    request: Request,
+) -> tuple[object, int, str, tuple[str, ...]]:
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    if not isinstance(library_id, int) or library_id < 1:
+        raise RuntimeError("Authorized library scope is unavailable.")
+    root_ids = tuple(
+        str(root.get("id") or "").strip()
+        for root in get_library_roots(_app_config(request))
+        if str(root.get("id") or "").strip()
+    )
+    if not root_ids:
+        raise RuntimeError("Configured library roots are unavailable.")
+    return evaluation, library_id, request_origin_ref_for_request(request), root_ids
 
 
 _COLD_SCAN_CLAIM_LEASE_SECONDS = 5.0
@@ -144,7 +177,7 @@ def _start_claimed_cold_scan(request: Request, token: int) -> None:
                 library_state,
                 _app_config(request),
                 _app_logger(request),
-                force=False,
+                force=bool(library_state.get("cold_scan_force")),
                 scan_mode="background",
             )
         except Exception as exc:
@@ -1015,6 +1048,45 @@ async def index(request: Request) -> Response:
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
+    bootstrap_library_state = dict(library_state)
+    scan_jobs = _scan_job_repository(request)
+    if scan_jobs is not None:
+        try:
+            status_evaluation = evaluate_action_for_request(
+                request, "app.status.read"
+            )
+            status_library_id = getattr(status_evaluation.audit, "library_id", None)
+            if status_evaluation.decision.allowed and isinstance(
+                status_library_id, int
+            ) and status_library_id > 0:
+                durable_status = await run_in_threadpool(
+                    scan_jobs.load_authorized_full_scan_status,
+                    policy_evaluation=status_evaluation,
+                    library_id=status_library_id,
+                )
+                bootstrap_library_state.update(
+                    project_durable_full_scan_status(durable_status)
+                )
+        except Exception:
+            pass
+    cover_jobs = _cover_job_repository(request)
+    if cover_jobs is not None:
+        try:
+            status_evaluation = evaluate_action_for_request(
+                request, "app.status.read"
+            )
+            status_library_id = getattr(status_evaluation.audit, "library_id", None)
+            if status_evaluation.decision.allowed and isinstance(
+                status_library_id, int
+            ) and status_library_id > 0:
+                cover_status = await run_in_threadpool(
+                    cover_jobs.load_cover_refresh_status,
+                    library_id=status_library_id,
+                )
+                if isinstance(cover_status, dict):
+                    bootstrap_library_state.update(cover_status)
+        except Exception:
+            pass
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
@@ -1023,7 +1095,7 @@ async def index(request: Request) -> Response:
         query_args=query_args,
         config=config,
         logger=route_logger,
-        library_state=library_state,
+        library_state=bootstrap_library_state,
         query_raw=query_raw,
         selected_artist=selected_artist,
         refreshed=refreshed,
@@ -1035,8 +1107,8 @@ async def index(request: Request) -> Response:
         _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
         and int(initial_view.get("album_count") or 0) == 0
         and not initial_view.get("gallery_projection_pending")
-        and not library_state.get("last_error")
-        and not library_state.get("scan_in_progress")
+        and not bootstrap_library_state.get("last_error")
+        and not bootstrap_library_state.get("scan_in_progress")
     ):
         with request.app.state.cold_scan_handoff_lock:
             if str(library_state.get("cold_scan_handoff_status") or "idle") == "idle":
@@ -1082,11 +1154,38 @@ async def index(request: Request) -> Response:
     response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
-        try:
-            response.background = BackgroundTask(_start_claimed_cold_scan, request, claim_token)
-        except Exception:
-            _requeue_cold_scan_claim(request, claim_token)
-            raise
+        scan_jobs = _scan_job_repository(request)
+        if scan_jobs is not None:
+            try:
+                evaluation = await require_action("library.refresh")(request)
+                _evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+                    _authorized_scan_request, request
+                )
+                await run_in_threadpool(
+                    scan_jobs.enqueue_authorized_full_scan,
+                    policy_evaluation=evaluation,
+                    library_id=library_id,
+                    request_origin_ref=origin_ref,
+                    root_ids=root_ids,
+                    mode="background",
+                    force=bool(library_state.get("cold_scan_force")),
+                    scheduled_at=datetime.now(timezone.utc),
+                    cold_start=bool(
+                        library_state.get("cold_scan_is_cold_start", True)
+                    ),
+                )
+                library_state["cold_scan_handoff_status"] = "started"
+            except Exception as exc:
+                _requeue_cold_scan_claim(request, claim_token, "Cold-start scan was not accepted.")
+                route_logger.warning("Cold-start durable scan was not accepted: %s", type(exc).__name__)
+        else:
+            try:
+                response.background = BackgroundTask(
+                    _start_claimed_cold_scan, request, claim_token
+                )
+            except Exception:
+                _requeue_cold_scan_claim(request, claim_token)
+                raise
         started_background_refresh = True
     total_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
     log_app_event(
@@ -1218,6 +1317,33 @@ async def refresh_api(request: Request) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     full_rescan = bool(payload.get("full_rescan"))
+    scan_jobs = _scan_job_repository(request)
+    if scan_jobs is not None:
+        evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+            _authorized_scan_request, request
+        )
+        accepted = await run_in_threadpool(
+            scan_jobs.enqueue_authorized_full_scan,
+            policy_evaluation=evaluation,
+            library_id=library_id,
+            request_origin_ref=origin_ref,
+            root_ids=root_ids,
+            mode="manual_full_rescan" if full_rescan else "background",
+            force=True,
+            scheduled_at=datetime.now(timezone.utc),
+        )
+        if not accepted.created:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "already_running": True,
+                    "error_code": "already_running",
+                    "error": "Library scan is already running.",
+                    "full_rescan": full_rescan,
+                },
+                status_code=409,
+            )
+        return JSONResponse({"ok": True, "full_rescan": full_rescan})
     accepted_state_updates: dict[str, object] = {}
     if full_rescan:
         accepted_state_updates = {
@@ -1262,6 +1388,20 @@ async def refresh_api(request: Request) -> JSONResponse:
 
 @router.post("/cancel-refresh-api")
 async def cancel_refresh_api(request: Request) -> JSONResponse:
+    scan_jobs = _scan_job_repository(request)
+    if scan_jobs is not None:
+        evaluation = getattr(request.state, "policy_evaluation", None)
+        audit = getattr(evaluation, "audit", None)
+        library_id = getattr(audit, "library_id", None)
+        if not isinstance(library_id, int) or library_id < 1:
+            raise RuntimeError("Authorized library scope is unavailable.")
+        result = await run_in_threadpool(
+            scan_jobs.cancel_authorized_full_scan,
+            policy_evaluation=evaluation,
+            library_id=library_id,
+            now=datetime.now(timezone.utc),
+        )
+        return JSONResponse({"ok": True, "cancelled": result is not None})
     cancelled = state_service.cancel_background_refresh_for_state(_library_state(request))
     return JSONResponse({"ok": True, "cancelled": bool(cancelled)})
 
@@ -1269,13 +1409,29 @@ async def cancel_refresh_api(request: Request) -> JSONResponse:
 @router.get("/refresh")
 async def refresh(request: Request) -> RedirectResponse:
     query_args = request.query_params
-    state_service.start_background_refresh_for_state(
-        _library_state(request),
-        _app_config(request),
-        _app_logger(request),
-        force=True,
-        scan_mode="background",
-    )
+    scan_jobs = _scan_job_repository(request)
+    if scan_jobs is not None:
+        evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+            _authorized_scan_request, request
+        )
+        await run_in_threadpool(
+            scan_jobs.enqueue_authorized_full_scan,
+            policy_evaluation=evaluation,
+            library_id=library_id,
+            request_origin_ref=origin_ref,
+            root_ids=root_ids,
+            mode="background",
+            force=True,
+            scheduled_at=datetime.now(timezone.utc),
+        )
+    else:
+        state_service.start_background_refresh_for_state(
+            _library_state(request),
+            _app_config(request),
+            _app_logger(request),
+            force=True,
+            scan_mode="background",
+        )
     location = "/?" + urlencode(
         [
             ("refreshed", "1"),

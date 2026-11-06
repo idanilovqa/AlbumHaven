@@ -155,6 +155,46 @@ def test_scrobble_update_changes_same_scoped_row_without_duplicate(ledger):
     assert rows(ledger)==before
 
 
+def test_newer_measurement_preserves_server_owned_durable_scrobble_state(ledger):
+    owner = ledger["own"]
+    first = measured(owner)
+    entry = append(ledger, first)
+    history.update_listen_history_entry(
+        ledger["config"],
+        entry["id"],
+        {
+            "scrobbled": False,
+            "scrobble_error": "provider busy",
+            "scrobble_retryable": True,
+            "scrobble_retry_count": 1,
+            "last_scrobble_attempt_at": "2026-09-23T12:00:00+00:00",
+            "scrobble_submission_state": "not_sent",
+            "scrobble_reauthentication_required": True,
+            "scrobble_durable_job_owned": True,
+        },
+        account_id=owner["account_id"],
+        library_id=owner["library_id"],
+    )
+
+    updated = append(
+        ledger,
+        {
+            **first,
+            "sequence": 2,
+            "measured_listened_seconds": 20,
+            "max_measured_contiguous_seconds": 15,
+        },
+    )
+
+    assert updated["scrobble_error"] == "provider busy"
+    assert updated["scrobble_retryable"] is True
+    assert updated["scrobble_retry_count"] == 1
+    assert updated["last_scrobble_attempt_at"] == "2026-09-23T12:00:00+00:00"
+    assert updated["scrobble_submission_state"] == "not_sent"
+    assert updated["scrobble_reauthentication_required"] is True
+    assert updated["scrobble_durable_job_owned"] is True
+
+
 def test_legacy_collection_save_preserves_measured_family(ledger, monkeypatch):
     from music_app.services import listen_history_postgres as repository
     owner = ledger['own']

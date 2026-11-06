@@ -306,7 +306,7 @@ test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutatio
   const staleRefresh = context.fetchAndRender('/view-data', false);
   const navigationRevision = context.state.ui.viewStateRevision;
   assert.equal(context.state.ui.pendingViewTransition, true);
-  context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
+  const claim = context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
     'owned-track.mp3': { album: 'Release' },
   });
   const optimisticView = { artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 16 }] }] };
@@ -320,6 +320,7 @@ test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutatio
   assert.equal(context.state.ui.activeViewRequestController, null);
   assert.equal(context.state.ui.activeViewRequestUrl, '');
   assert.equal(context.state.ui.viewStateRevision, navigationRevision);
+  context.settleTagEditViewMutation(claim);
   const canonicalRefresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
   pendingRequests[1].resolveWith(optimisticView);
   assert.equal(await canonicalRefresh, true);
@@ -331,18 +332,37 @@ test('opening a tag editor does not invalidate an in-flight gallery refresh', as
   vm.runInContext(tagMutationSource, context);
   const refresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
   context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] });
+  assert.equal(context.hasActiveTagEditViewMutation(), false);
   pendingRequests[0].resolveWith({ artist_groups: [] });
   assert.equal(await refresh, true);
   assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('settling or failing an edit leaves other active edits protected', () => {
+  const { context } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const album = { key: 'artist::release', tracks: [] };
+  context.claimTagEditViewMutation(album);
+  const first = context.claimTagEditViewMutation(album, ['one.mp3'], {
+    'one.mp3': { album: 'First' },
+  });
+  const second = context.claimTagEditViewMutation(album, ['two.mp3'], {
+    'two.mp3': { album: 'Second' },
+  });
+  context.settleTagEditViewMutation(first);
+  assert.equal(context.hasActiveTagEditViewMutation(), true);
+  context.releaseFailedTagEditViewMutation(second);
+  assert.equal(context.hasActiveTagEditViewMutation(), false);
 });
 
 test('a canonical same-URL refresh replaces a request from before an optimistic edit', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
   const staleRefresh = context.fetchAndRender('/view-data', false);
-  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+  const claim = context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
     'owned.mp3': { album: 'Release' },
   });
+  context.settleTagEditViewMutation(claim);
   const canonicalRefresh = context.fetchAndRender('/view-data', false);
   assert.equal(pendingRequests.length, 2);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
@@ -359,9 +379,10 @@ test('a noninterrupting canonical same-URL refresh queues behind an obsolete mut
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
   const staleRefresh = context.fetchAndRender('/view-data', false);
-  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+  const claim = context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
     'owned.mp3': { album: 'Release' },
   });
+  context.settleTagEditViewMutation(claim);
   assert.equal(await context.fetchAndRender('/view-data', false, { interruptCurrent: false }), false);
   assert.equal(pendingRequests[0].options.signal.aborted, false);
   assert.equal(context.state.ui.pendingViewRequest.url, '/view-data');
@@ -1322,6 +1343,38 @@ test('fetchAndRender cannot overwrite a newer locally filtered artist-family vie
     'a response from an obsolete revision must not rebuild current family controls during cleanup',
   );
   assert.equal(context.state.busy, false);
+});
+
+test('fetchAndRender rejects an unqualified background response while a tag edit owns visible resources', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const originalView = {
+    ...context.state.view,
+    selected_artist: 'Current Artist',
+    artist_groups: [{
+      artist: 'Current Artist',
+      albums: [{ key: 'current-album', name: 'Current Album', track_count_preview: 16 }],
+    }],
+  };
+  context.state.view = originalView;
+  context.hasActiveTagEditViewMutation = () => true;
+
+  const request = context.fetchAndRender(
+    '/view-data?surface=albums&artist=Current%20Artist',
+    false,
+    { preserveScroll: true },
+  );
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Current Artist',
+    artist_groups: [{
+      artist: 'Current Artist',
+      albums: [{ key: 'current-album', name: 'Current Album', track_count_preview: 13 }],
+    }],
+  });
+
+  assert.equal(await request, false);
+  assert.deepEqual(calls.applyViewPayload, []);
+  assert.deepEqual(context.state.view, originalView);
 });
 
 test('fetchAndRender does not apply a deferred response after shouldApplyResponse becomes false', async () => {
@@ -3674,6 +3727,107 @@ test('idle pollStatus cannot wait forever for stalled foreground cover work', as
     relations_in_progress: false,
   });
   await statusPromise;
+});
+
+test('opening Library Status supersedes an idle poll blocked on foreground cover work', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduled = [];
+  let releaseForegroundIdle;
+  const foregroundIdle = new Promise((resolve) => { releaseForegroundIdle = resolve; });
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+  };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() { return foregroundIdle; },
+  };
+  context.virtualGrid = {
+    suspendSelectedArtistCoverLoadsForUserAction() { return 41; },
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduled.push({ callback, delayMs });
+    return scheduled.length;
+  };
+
+  const stalePoll = context.pollStatus();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 0);
+
+  context.openScanPage();
+
+  assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 41);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delayMs, 0);
+
+  const visibleStatusPoll = scheduled[0].callback();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    scan_phase: 'library-status-visible',
+  });
+  await visibleStatusPoll;
+  const scheduledAfterVisibleResponse = scheduled.length;
+
+  releaseForegroundIdle();
+  await stalePoll;
+
+  assert.equal(calls.updateStatusIndicator.length, 1);
+  assert.equal(context.state.status.scan_phase, 'library-status-visible');
+  assert.equal(scheduled.length, scheduledAfterVisibleResponse);
+});
+
+test('Library Status pollStatus bypasses foreground cover deferral for acknowledged repair warnings', async () => {
+  const { context, pendingRequests } = createContext();
+  let foregroundIdleWaits = 0;
+  context.scheduleBrowserTimeout = () => {};
+  context.state.status = {};
+  context.state.ui.scanPageReturnContext = { view: {} };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() {
+      foregroundIdleWaits += 1;
+      return new Promise(() => {});
+    },
+  };
+
+  const statusPromise = context.pollStatus();
+  await flushMicrotasks();
+
+  assert.equal(foregroundIdleWaits, 0, 'Library Status must not wait for hidden gallery cover work');
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    allowed_actions: {},
+    watcher_health: {
+      state: 'warning',
+      repair_required: true,
+      dismissed: true,
+      problems: [{
+        root_key: 'root_1234567890abcdef',
+        state: 'root_unavailable',
+        detected_at: '2026-10-10T12:00:00Z',
+        incident_id: '11111111-1111-1111-1111-111111111111',
+        message: 'Some library changes may have been missed.',
+        acknowledged: true,
+        allowed_actions: {},
+      }],
+    },
+  });
+  await statusPromise;
+
+  assert.equal(context.state.status.watcher_health.repair_required, true);
+  assert.equal(context.state.status.watcher_health.dismissed, true);
+  assert.equal(context.state.status.watcher_health.problems[0].acknowledged, true);
+  assert.deepEqual(context.state.status.watcher_health.problems[0].allowed_actions, {});
 });
 
 test('busy pollStatus is never delayed by foreground cover activity', async () => {
@@ -7674,7 +7828,7 @@ for (const mode of ['normal navigation', 'search', 'selected artist']) {
   });
 }
 
-for (const change of ['navigation', 'mutation', 'guard']) {
+for (const change of ['navigation', 'mutation']) {
   test(`bounded root refresh discards incomplete coverage after ${change} supersession`, async () => {
     const f = boundedRootRefreshFixture();
     let ownsMutation = true;
@@ -7691,6 +7845,26 @@ for (const change of ['navigation', 'mutation', 'guard']) {
     assert.equal(f.pendingRequests.length, 2);
   });
 }
+
+test('bounded root refresh validates the assembled payload after collecting loaded coverage', async () => {
+  const f = boundedRootRefreshFixture();
+  const guardPayloadSizes = [];
+  const request = f.start({
+    shouldApplyResponse(payload) {
+      const albumCount = payload.artist_groups.flatMap(group => group.albums).length;
+      guardPayloadSizes.push(albumCount);
+      return albumCount >= 108;
+    },
+  });
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+  assert.equal(await request, true);
+  assert.deepEqual(guardPayloadSizes, [150]);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
 
 for (const failure of ['http', 'repeated cursor']) {
   test(`bounded root refresh retains the mounted window on ${failure}`, async () => {

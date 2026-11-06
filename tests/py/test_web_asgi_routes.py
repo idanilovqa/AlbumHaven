@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -16,6 +17,7 @@ from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
+from tests.py.asgi_testing import run_asgi_request_async as _run_asgi_request_async
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 
@@ -33,6 +35,49 @@ def _make_asgi_app(flask_app=None):
         asgi_app.state.library_state = flask_app.library_state
         asgi_app.state.logger = flask_app.logger
     return asgi_app
+
+
+def _assert_route_work_does_not_block_health(
+    asgi_app,
+    *,
+    method: str,
+    path: str,
+    started: threading.Event,
+    release: threading.Event,
+    json_body: dict[str, object] | None = None,
+) -> int:
+    async def exercise() -> tuple[float, int, int]:
+        release_timer = threading.Timer(0.75, release.set)
+        release_timer.start()
+        started_at = time.perf_counter()
+        route_task = asyncio.create_task(
+            _run_asgi_request_async(
+                asgi_app,
+                method,
+                path,
+                json_body=json_body,
+            )
+        )
+        try:
+            assert await asyncio.to_thread(started.wait, 1), "blocking route work did not start"
+            try:
+                health_status, _health_headers, _health_body = await asyncio.wait_for(
+                    _run_asgi_request_async(asgi_app, "GET", "/health"),
+                    timeout=0.25,
+                )
+            except TimeoutError as exc:
+                raise AssertionError("route work blocked the ASGI event loop") from exc
+            health_elapsed = time.perf_counter() - started_at
+        finally:
+            release.set()
+            release_timer.cancel()
+            route_status, _route_headers, _route_body = await route_task
+        return health_elapsed, health_status, route_status
+
+    health_elapsed, health_status, route_status = asyncio.run(exercise())
+    assert health_status == 200
+    assert health_elapsed < 0.5, "route work blocked the ASGI event loop"
+    return route_status
 
 
 def _configure_selected_postgres_library_roots(config, monkeypatch) -> None:
@@ -114,6 +159,44 @@ def _extract_bootstrap_payload_from_shell(body: bytes) -> dict[str, object]:
     payload = json.loads(text[start:end])
     assert isinstance(payload, dict)
     return payload
+
+
+def test_root_bootstrap_projects_authorized_durable_scan_status(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    asgi_app = _make_asgi_app(app)
+    calls = []
+    evaluation = SimpleNamespace(
+        decision=SimpleNamespace(allowed=True),
+        audit=SimpleNamespace(library_id=19),
+    )
+    monkeypatch.setattr(
+        web_asgi,
+        "evaluate_action_for_request",
+        lambda request, action: evaluation,
+    )
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app.state.scan_job_repository = SimpleNamespace(
+        load_authorized_full_scan_status=lambda **kwargs: calls.append(kwargs)
+        or {
+            "state": "running",
+            "progress_current": 3,
+            "progress_total": 8,
+            "phase": "finalizing",
+            "mode": "manual_full_rescan",
+        }
+    )
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/")
+
+    assert status == 200
+    payload = _extract_bootstrap_payload_from_shell(body)
+    assert payload["bootstrap"]["scanInProgress"] is True
+    assert payload["bootstrap"]["scanPhase"] == "finalizing"
+    assert payload["bootstrap"]["scanMode"] == "manual_full_rescan"
+    assert calls == [{"policy_evaluation": evaluation, "library_id": 19}]
+    assert not asgi_app.state.library_state.get("cold_scan_pending")
+    assert asgi_app.state.library_state.get("cold_scan_handoff_status", "idle") == "idle"
 
 
 def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> None:
@@ -763,6 +846,113 @@ def test_asgi_index_does_not_cold_scan_when_a_filter_hides_existing_inventory(
 
 
 @pytest.mark.parametrize(
+    ("method", "path", "json_body", "expected_status"),
+    (
+        ("GET", "/", None, 200),
+        ("POST", "/refresh-api", {"full_rescan": False}, 200),
+        ("GET", "/refresh", None, 302),
+    ),
+)
+def test_scan_scope_resolution_does_not_block_event_loop(
+    tmp_path,
+    monkeypatch,
+    method,
+    path,
+    json_body,
+    expected_status,
+):
+    from music_app.routes import web_asgi
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class ScanJobs:
+        def enqueue_authorized_full_scan(self, **_kwargs):
+            return SimpleNamespace(created=True)
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app = create_test_asgi_app(tmp_path, monkeypatch)
+    asgi_app.state.scan_job_repository = ScanJobs()
+    asgi_app.state.library_state.update(
+        {
+            "albums": [],
+            "file_cache": {},
+            "scan_in_progress": False,
+            "cold_scan_pending": True,
+            "cold_scan_handoff_status": "pending",
+        }
+    )
+
+    def blocking_library_roots(_config):
+        started.set()
+        assert release.wait(2), "test release timer did not unblock library root resolution"
+        return [{"id": "root-1"}]
+
+    monkeypatch.setattr(web_asgi, "get_library_roots", blocking_library_roots)
+
+    status = _assert_route_work_does_not_block_health(
+        asgi_app,
+        method=method,
+        path=path,
+        started=started,
+        release=release,
+        json_body=json_body,
+    )
+
+    assert status == expected_status
+
+
+def test_empty_full_rescan_durable_admission_does_not_block_event_loop(
+    tmp_path,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    started = threading.Event()
+    release = threading.Event()
+
+    calls = []
+
+    def blocking_admission(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        assert release.wait(2), "test release timer did not unblock durable admission"
+        return SimpleNamespace(created=True)
+
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "hydrate_library_state_for_config",
+        lambda *_args, **_kwargs: pytest.fail("full rescan must not hydrate inline"),
+    )
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *_args, **_kwargs: pytest.fail("durable admission must not start a legacy scan"),
+    )
+    monkeypatch.setattr(web_asgi, "get_library_roots", lambda _config: [{"id": "root-1"}])
+    asgi_app = create_test_asgi_app(tmp_path, monkeypatch)
+    asgi_app.state.scan_job_repository = SimpleNamespace(
+        enqueue_authorized_full_scan=blocking_admission,
+    )
+    asgi_app.state.library_state["albums"] = []
+
+    status = _assert_route_work_does_not_block_health(
+        asgi_app,
+        method="POST",
+        path="/refresh-api",
+        started=started,
+        release=release,
+        json_body={"full_rescan": True},
+    )
+
+    assert status == 200
+    assert len(calls) == 1
+    assert calls[0]["mode"] == "manual_full_rescan"
+    assert calls[0]["force"] is True
+    assert calls[0]["root_ids"] == ("root-1",)
+
+
+@pytest.mark.parametrize(
     ("full_rescan", "expected_force", "expected_scan_mode"),
     [
         (False, True, "background"),
@@ -909,6 +1099,34 @@ def test_asgi_refresh_api_rejects_duplicate_full_rescan_without_resetting_active
     assert library_state["scan_total"] == 5389
     assert library_state["scan_current_path"] == "Artist/Album"
     assert library_state["scan_progress_samples"] == [1, 2, 3]
+
+
+def test_refresh_and_cancel_routes_use_database_authoritative_full_scan_lifecycle():
+    import inspect
+
+    from music_app.routes import web_asgi
+
+    refresh_source = inspect.getsource(web_asgi.refresh_api)
+    cancel_source = inspect.getsource(web_asgi.cancel_refresh_api)
+
+    assert "enqueue_authorized_full_scan" in refresh_source
+    assert ".created" in refresh_source
+    assert "status_code=409" in refresh_source
+    assert '"ok": True, "full_rescan": full_rescan' in refresh_source
+    assert "cancel_authorized_full_scan" in cancel_source
+    assert '"ok": True' in cancel_source
+    assert '"cancelled"' in cancel_source
+
+
+def test_legacy_refresh_redirect_acknowledgement_remains_unchanged():
+    import inspect
+
+    from music_app.routes import web_asgi
+
+    source = inspect.getsource(web_asgi.refresh)
+
+    assert 'RedirectResponse(location, status_code=302)' in source
+    assert '"refreshed", "1"' in source
 
 
 def test_asgi_index_records_cold_scan_handoff_failure(app, monkeypatch):

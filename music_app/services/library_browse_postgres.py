@@ -721,6 +721,7 @@ class PostgresLibraryBrowseRepository:
         ]
         payload = {
             "surface": _build_view_surface_payload("albums"),
+            "inventory_mutation_revision": _coerce_int(relation_alias_maps.get("inventory_mutation_revision")),
             "shell_layout": _build_shell_layout_payload(
                 active_surface="albums",
                 selected_artist="",
@@ -1605,6 +1606,7 @@ class PostgresLibraryBrowseRepository:
         search_filters = _build_search_filter_state()
         payload = {
             "surface": _build_view_surface_payload("albums"),
+            "inventory_mutation_revision": _coerce_int(relation_alias_maps.get("inventory_mutation_revision")),
             "shell_layout": _build_shell_layout_payload(
                 active_surface="albums",
                 selected_artist=artist_display,
@@ -1895,22 +1897,30 @@ class PostgresLibraryBrowseRepository:
         self,
         *,
         query_params: Mapping[str, object] | None = None,
+        _connection: Any | None = None,
     ) -> dict[str, object]:
+        if _connection is None:
+            with self._connect_to_database() as connection:
+                connection.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                return self.build_root_album_browse_payload(
+                    query_params=query_params, _connection=connection,
+                )
         view_state = _root_sidebar_view_state(query_params)
         omit_sidebar = _request_flag((query_params or {}).get("omit_sidebar"))
-        relation_alias_maps = self._load_relation_alias_maps()
+        relation_alias_maps = self._load_relation_alias_maps(connection=_connection)
         root_alias_to_canonical = _root_browse_alias_to_canonical(
             relation_alias_maps["alias_to_canonical"]
         )
-        support_state = self._inventory_repository.load_support_state()
-        rows = self._load_root_album_browse_rows(view_state)
+        support_state = self._inventory_repository.load_support_state(connection=_connection)
         rows = _canonicalize_artist_rows(
-            rows,
+            self._load_root_album_browse_rows(view_state, connection=_connection),
             root_alias_to_canonical,
         )
         artist_groups = _root_album_browse_artist_groups(rows)
         missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(),
+            self._load_missing_album_rows(connection=_connection),
             view_state=view_state,
         )
         _merge_missing_albums_into_artist_groups(
@@ -1919,6 +1929,7 @@ class PostgresLibraryBrowseRepository:
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(artist_groups),
             source_rows=rows,
+            connection=_connection,
         )
         self._attach_duplicate_sources(
             _album_payloads_from_groups(artist_groups),
@@ -1929,6 +1940,7 @@ class PostgresLibraryBrowseRepository:
             view_state=view_state,
             alias_to_canonical=relation_alias_maps["alias_to_canonical"],
             canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+            connection=_connection,
         )
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
@@ -1936,6 +1948,7 @@ class PostgresLibraryBrowseRepository:
         )
         payload = {
             "surface": _build_view_surface_payload("albums"),
+            "inventory_mutation_revision": _coerce_int(relation_alias_maps.get("inventory_mutation_revision")),
             "shell_layout": _build_shell_layout_payload(
                 active_surface="albums",
                 selected_artist="",
@@ -2531,6 +2544,7 @@ class PostgresLibraryBrowseRepository:
         }
         payload = {
             "surface": _build_view_surface_payload("albums"),
+            "inventory_mutation_revision": _coerce_int(relation_alias_maps.get("inventory_mutation_revision")),
             "shell_layout": _build_shell_layout_payload(
                 active_surface="albums",
                 selected_artist=selected_artist,
@@ -3228,10 +3242,14 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as owned_connection:
             return load_rows(owned_connection)
 
-    def _load_root_album_browse_rows(self, view_state: Mapping[str, object]) -> list[object]:
-        with self._connect_to_database() as connection:
-            cursor = connection.execute(_root_album_browse_sql(), _root_sidebar_params(view_state))
-            return list(cursor.fetchall())
+    def _load_root_album_browse_rows(
+        self, view_state: Mapping[str, object], *, connection: Any | None = None,
+    ) -> list[object]:
+        if connection is None:
+            with self._connect_to_database() as owned_connection:
+                return self._load_root_album_browse_rows(view_state, connection=owned_connection)
+        cursor = connection.execute(_root_album_browse_sql(), _root_sidebar_params(view_state))
+        return list(cursor.fetchall())
 
     def _load_root_startup_rows(
         self,
@@ -3496,7 +3514,12 @@ class PostgresLibraryBrowseRepository:
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            return dict(cached.get("relation_views") or {})
+            return {
+                **dict(cached.get("relation_views") or {}),
+                "inventory_mutation_revision": _coerce_int(
+                    identity_payload.get("inventory_mutation_revision")
+                ),
+            }
 
         generation = 0
         if cacheable:
@@ -3534,6 +3557,7 @@ class PostgresLibraryBrowseRepository:
             "alias_to_canonical": _row_json_mapping(
                 relation_views.get("alias_to_canonical")
             ),
+            "inventory_mutation_revision": _coerce_int(payload.get("inventory_mutation_revision")),
             "canonical_to_aliases": _row_json_mapping(
                 relation_views.get("canonical_to_aliases")
             ),
@@ -10361,6 +10385,10 @@ def _relation_alias_maps_cache_identity_sql() -> str:
         /* relation_alias_cache_identity */
         select
           library.libraries.id as library_id,
+          coalesce(
+            nullif(library.libraries.metadata ->> 'inventory_mutation_revision', '')::bigint,
+            0
+          ) as inventory_mutation_revision,
           md5(coalesce(
             library.libraries.metadata #> '{scan_cache,relation_projection}',
             '{}'::jsonb
@@ -10422,9 +10450,13 @@ def _relation_alias_maps_sql() -> str:
         and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,folder_related}') = 'object'
         and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists}') = 'array'
         and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists_sidebar}') = 'array'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
-        false
-      ) as projection_structure_complete
+       and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
+       false
+      ) as projection_structure_complete,
+      coalesce(
+        nullif(library.libraries.metadata ->> 'inventory_mutation_revision', '')::bigint,
+        0
+      ) as inventory_mutation_revision
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         limit 1;

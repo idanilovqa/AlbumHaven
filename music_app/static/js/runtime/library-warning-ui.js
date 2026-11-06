@@ -13,7 +13,7 @@ function renderLibraryWarning(data = {}, options = {}) {
   const loader = document.getElementById('library-loader');
   const scanPageVisible = options.scanPageVisible
     ?? Boolean(loader?.classList?.contains('is-scan-page'));
-  const hidden = !model.warning || !model.dismissed || !scanPageVisible;
+  const hidden = !model.warning || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
   if (libraryHealth && libraryHealth.hidden !== hidden) libraryHealth.hidden = hidden;
   loader?.classList?.toggle?.('has-library-health', !hidden);
@@ -21,11 +21,17 @@ function renderLibraryWarning(data = {}, options = {}) {
   const problems = health.problems || [];
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
+  const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
+  const operationalItemsHtml = problems.length
+    ? `<ul>${problems.map(() => '<li data-operational-item>Library recovery is required.</li>').join('')}</ul>`
+    : '';
+  const actionHtml = canRefresh
+    ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
+    : '';
   const message = unavailable
-    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
-    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: canRefresh
-      ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
+    detailsHtml: operationalItemsHtml, actionsHtml: actionHtml});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }

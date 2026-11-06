@@ -2258,6 +2258,21 @@ def load_fixture_profile(
                     root_identity,
                 ),
             )
+            if replace_existing:
+                connection.execute(
+                    """
+                    insert into library.watcher_runtime_state (
+                      singleton,
+                      acceptance_enabled,
+                      disabled_at
+                    )
+                    values (true, true, null)
+                    on conflict (singleton) do update
+                    set acceptance_enabled = excluded.acceptance_enabled,
+                        disabled_at = excluded.disabled_at,
+                        updated_at = pg_catalog.now()
+                    """
+                )
             staged_counts = copy_seed_to_staging(
                 connection,
                 seed_path,

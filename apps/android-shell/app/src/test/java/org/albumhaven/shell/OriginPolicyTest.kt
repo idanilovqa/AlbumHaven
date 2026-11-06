@@ -23,6 +23,8 @@ class OriginPolicyTest {
         assertFalse("https://sandbox100.albumhaven.org" in sandbox.allowedOrigins)
         assertFalse("https://albumhaven.org" in sandbox.allowedOrigins)
         assertEquals("https://sandbox7.albumhaven.org", sandbox.initialOrigin(selectedSlot = 7))
+        // No sandbox is assumed before one is chosen.
+        assertEquals(null, sandbox.initialOrigin(selectedSlot = null))
     }
 
     @Test(expected = IllegalArgumentException::class)

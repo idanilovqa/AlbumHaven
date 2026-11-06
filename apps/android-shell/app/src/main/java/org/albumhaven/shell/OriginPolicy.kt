@@ -25,10 +25,11 @@ class OriginPolicy(val channel: ShellChannel, private val devOrigin: String = ""
         if (devOrigin.isNotEmpty()) add(devOrigin)
     }
 
-    fun initialOrigin(selectedSlot: Int): String = when {
+    /** Null on a sandbox build until a sandbox is chosen: no slot is assumed. */
+    fun initialOrigin(selectedSlot: Int?): String? = when {
         devOrigin.isNotEmpty() -> devOrigin
         channel == ShellChannel.STABLE -> STABLE_ORIGIN
-        else -> sandboxOrigin(selectedSlot)
+        else -> selectedSlot?.let(::sandboxOrigin)
     }
 
     fun classify(url: String, selectedOrigin: String): NavigationDecision {
@@ -50,7 +51,6 @@ class OriginPolicy(val channel: ShellChannel, private val devOrigin: String = ""
         val forBuild by lazy { OriginPolicy(ShellChannel.fromWireName(BuildConfig.CHANNEL), BuildConfig.DEV_ORIGIN) }
 
         const val STABLE_ORIGIN = "https://albumhaven.org"
-        const val DEFAULT_SANDBOX_SLOT = 2
         val SANDBOX_SLOTS = 1..99
         private val WEB_SCHEMES = setOf("http", "https")
 

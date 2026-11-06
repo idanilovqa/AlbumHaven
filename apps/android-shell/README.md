@@ -1,8 +1,10 @@
 # Album Haven Android shell
 
 A minimal Kotlin WebView client for the existing responsive site. Stable loads
-only `https://albumhaven.org`; Sandbox selects one `https://sandboxN.albumhaven.org`
-origin from inside Settings. Both can be installed side by side.
+only `https://albumhaven.org`; Sandbox connects to one `https://sandboxN.albumhaven.org`
+origin, chosen on its first launch and switched from Settings or from Switch sandbox
+on its native Connecting, error and unsupported-sandbox screens. Both can be
+installed side by side.
 
 Requires JDK 17 and Android SDK platform 36.
 

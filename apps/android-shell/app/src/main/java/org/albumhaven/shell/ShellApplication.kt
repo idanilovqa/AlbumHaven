@@ -13,7 +13,8 @@ class ShellApplication : Application(), PlaybackHost {
     /** One connection pool for playback and updates. */
     override val client: OkHttpClient by lazy { ShellSession.client() }
 
-    override fun initialOrigin(): String = ShellPreferences(this).selectedOrigin
+    // Empty until a sandbox build's first choice, when there is nothing to play or resume.
+    override fun initialOrigin(): String = ShellPreferences(this).selectedOrigin.orEmpty()
 
     override fun cookies(url: String): String? = CookieManager.getInstance().getCookie(url)
 

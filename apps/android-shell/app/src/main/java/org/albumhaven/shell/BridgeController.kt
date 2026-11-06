@@ -18,12 +18,16 @@ class ShellIdentity(
 /** Native operations the bridge may request. Implementations run on the main thread. */
 interface BridgeHost {
     fun selectedOrigin(): String
-    fun selectedSandboxSlot(): Int
+    /** Null when a development origin was opened without a chosen sandbox. */
+    fun selectedSandboxSlot(): Int?
     fun takeConnectedSandboxSlot(): Int?
     fun selectSandbox(slot: Int, onResult: (connected: Boolean) -> Unit)
 
     /** This app cannot run the site offering [webProtocols]: no shared protocol, or a required capability is missing. */
     fun onIncompatibleWeb(webProtocols: IntRange)
+
+    /** The document negotiated the bridge. */
+    fun onBridgeConnected()
 }
 
 /** The APK updater as the bridge sees it (`updates.manual.v1`). Each call returns false when it does not apply now. */
@@ -190,6 +194,7 @@ class BridgeController(
         eventSink = reply
         reply(BridgeCodec.success(message, selected, handshakePayload(selected)))
         playback.documentAttached()
+        host.onBridgeConnected()
     }
 
     /** The capabilities the site cannot run without; absent means none. Null when malformed. */
@@ -218,7 +223,7 @@ class BridgeController(
             payload.put(
                 "sandbox",
                 JSONObject()
-                    .put("slot", host.selectedSandboxSlot())
+                    .put("slot", host.selectedSandboxSlot() ?: JSONObject.NULL)
                     .put("connectedSlot", host.takeConnectedSandboxSlot() ?: JSONObject.NULL),
             )
         }

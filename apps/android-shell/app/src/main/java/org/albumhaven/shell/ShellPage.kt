@@ -7,7 +7,7 @@ package org.albumhaven.shell
  * the app in the background when it stopped (TransactionTooLargeException).
  */
 internal class ShellPage(private val policy: OriginPolicy) {
-    /** The page on [origin][visited] last shown, including history the page pushed; null for none or another origin. */
+    /** The same-origin page last shown, including history the page pushed; null for none, or an overlong or foreign URL. */
     var url: String? = null
         private set
 

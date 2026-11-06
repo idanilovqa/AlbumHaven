@@ -41,6 +41,7 @@ import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -62,7 +63,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var preferences: ShellPreferences
-    private lateinit var selectedOrigin: String
+    private lateinit var sandboxes: SandboxChoice
+
+    // Unset only while a sandbox build waits for its first sandbox; every page belongs to it.
+    private lateinit var siteOrigin: String
     private lateinit var bridge: BridgeController
 
     // The bridge exists only once the playback service is bound, so it always has a player. The page
@@ -87,7 +91,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val service = (binder as PlaybackServiceBinder).handle
             playback = service
-            service.selectOrigin(selectedOrigin)
+            if (::siteOrigin.isInitialized) service.selectOrigin(siteOrigin)
             bridge = BridgeController(
                 ShellIdentity(packageName, originPolicy.channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()),
                 this@ShellActivity,
@@ -107,6 +111,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
     private lateinit var webView: WebView
     private lateinit var recovery: RecoveryPanel
+    private lateinit var sandboxWarning: View
+    private val handshakes = HandshakeWatch(originPolicy.channel)
+    private val handshakeTimeout = Runnable {
+        if (!handshakes.timedOut() || recovery.choosingSandbox) return@Runnable
+        Log.w(TAG, "bridge_handshake_timeout")
+        sandboxWarning.isVisible = true
+    }
 
     private var mainFrameFailed = false
     private var incompatibleWeb = false
@@ -130,12 +141,17 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         applySystemBarInsets(findViewById(R.id.shell_root))
 
         preferences = ShellPreferences(this)
-        selectedOrigin = preferences.selectedOrigin
+        sandboxes = SandboxChoice(originPolicy, preferences)
+        val origin = sandboxes.origin
         updater = Updates.get(this)
         // Once per process: a cold launch checks when the last successful check is six hours old.
-        updater?.passiveCheckIfDue()
+        // Before a sandbox is chosen there is no origin to check.
+        if (origin != null) updater?.passiveCheckIfDue()
         recovery = RecoveryPanel(findViewById(R.id.recovery_root))
         webView = findViewById(R.id.shell_web_view)
+        sandboxWarning = findViewById(R.id.sandbox_warning)
+        findViewById<View>(R.id.sandbox_warning_switch).setOnClickListener { showSandboxChoice() }
+        findViewById<View>(R.id.sandbox_warning_dismiss).setOnClickListener { sandboxWarning.isVisible = false }
 
         // The system WebView is too old for the bridge; updating this app cannot fix that.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -144,13 +160,15 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
         configureWebView()
         onBackPressedDispatcher.addCallback(this) {
-            if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
+            // The page under the chooser stays where it is.
+            if (!recovery.choosingSandbox && webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
         }
-        val startUrl = page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), selectedOrigin)
-        Log.i(TAG, "create saved_state=${savedInstanceState != null} saved_page=${page.url != null}")
+        if (origin != null) siteOrigin = origin
+        val startUrl = origin?.let { page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), it) }
+        Log.i(TAG, "create saved_state=${savedInstanceState != null} saved_page=${page.url != null} has_origin=${origin != null}")
         logProcessExitReasons()
         // The page loads while the playback service binds; the bridge answers it once bound.
-        open(startUrl)
+        if (startUrl != null) open(startUrl) else showSandboxChoice()
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -173,13 +191,14 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     /** Only the origin and the page's URL: never the WebView's state, which outgrows the transaction limit. */
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putString(STATE_ORIGIN, selectedOrigin)
+        if (!::siteOrigin.isInitialized) return
+        outState.putString(STATE_ORIGIN, siteOrigin)
         outState.putString(STATE_URL, page.url)
     }
 
     override fun onStart() {
         super.onStart()
-        page.onStart(selectedOrigin)?.let(::open)
+        if (::siteOrigin.isInitialized) page.onStart(siteOrigin)?.let(::open)
     }
 
     override fun onResume() {
@@ -208,13 +227,19 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         super.onDestroy()
     }
 
-    override fun selectedOrigin(): String = selectedOrigin
+    override fun selectedOrigin(): String = siteOrigin
 
-    override fun selectedSandboxSlot(): Int = preferences.selectedSandboxSlot
+    override fun selectedSandboxSlot(): Int? = preferences.selectedSandboxSlot
 
     override fun takeConnectedSandboxSlot(): Int? = preferences.takeConnectedSandboxSlot()
 
+    override fun onBridgeConnected() {
+        handshakes.answered()
+        sandboxWarning.isVisible = false
+    }
+
     override fun onIncompatibleWeb(webProtocols: IntRange) {
+        handshakes.answered()
         incompatibleWeb = true
         updateRequired = updater?.let { UpdateRequiredFlow(ShellUpdatePort(it), webProtocols) }
         showUpdateRequired()
@@ -222,7 +247,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     /** A build without an update certificate offers no update, so its screen has no action. */
     private fun showUpdateRequired() {
-        if (!incompatibleWeb) return
+        if (!incompatibleWeb || recovery.choosingSandbox) return
         val flow = updateRequired
         recovery.showUpdate(flow?.view ?: UpdateRequiredView(UpdateStep.REQUIRED), flow?.let { { it.act() } })
     }
@@ -241,16 +266,30 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 sandboxProbePending = false
                 onResult(reachable)
                 if (reachable) {
-                    preferences.selectedSandboxSlot = slot
-                    selectedOrigin = origin
-                    // Playback, its claim and its queue stay with the origin that started them.
-                    playback?.selectOrigin(origin)
-                    clearHistoryOnNextPage = true
-                    page.switched()
-                    open(origin)
+                    preferences.switchSandbox(slot)
+                    switchTo(origin)
                 }
             }
         }
+    }
+
+    /** Switch sandbox, on a sandbox build's native screens; null leaves it out. */
+    private val switchSandbox: (() -> Unit)? get() = if (sandboxes.offered) ::showSandboxChoice else null
+
+    /** Covers everything until a sandbox is chosen; the chosen one connects at once, and the user signs in there. */
+    private fun showSandboxChoice() {
+        sandboxWarning.isVisible = false
+        recovery.showSandboxChoice { slot -> sandboxes.choose(slot)?.let(::switchTo) }
+    }
+
+    private fun switchTo(origin: String) {
+        siteOrigin = origin
+        // Playback, its claim and its queue stay with the origin that started them.
+        playback?.selectOrigin(origin)
+        // Back must never return to the previous sandbox origin.
+        clearHistoryOnNextPage = true
+        page.switched()
+        open(origin)
     }
 
     private inner class ShellUpdatePort(private val updater: Updater) : UpdatePort {
@@ -283,7 +322,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     /** Covers the page with the Connecting screen until [url] first draws. */
     private fun open(url: String) {
         mainFrameFailed = false
-        recovery.showLoading(originHost())
+        recovery.showLoading(originHost(), switchSandbox)
         webView.visibility = View.VISIBLE
         webView.loadUrl(url)
     }
@@ -306,9 +345,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         configureWebView()
         earlyBridgeMessages.clear()
         if (::bridge.isInitialized) bridge.reset()
+        handshakes.pageStarted()
+        mainHandler.removeCallbacks(handshakeTimeout)
     }
 
-    private fun originHost(): String = selectedOrigin.toUri().host.orEmpty()
+    private fun originHost(): String = siteOrigin.toUri().host.orEmpty()
 
     private fun applySystemBarInsets(root: View) {
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -363,7 +404,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
      * enqueued. A path the page or server refuses only says "Download unavailable".
      */
     private fun downloadThroughLink(url: String, userAgent: String, contentDisposition: String?, mimeType: String?) {
-        val origin = selectedOrigin
+        val origin = siteOrigin
         val path = sameOriginPath(url, origin) ?: return
         val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
         if (!::bridge.isInitialized) return toast(R.string.download_unavailable)
@@ -384,7 +425,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 getSystemService(DownloadManager::class.java).enqueue(request)
             }
         }
-        pending?.let { mainHandler.postDelayed({ bridge.abandonDownloadLink(it) }, DOWNLOAD_LINK_TIMEOUT_MS) }
+        pending?.let { mainHandler.postDelayed({ bridge.abandonDownloadLink(it) }, BRIDGE_TIMEOUT_MS) }
     }
 
     private fun onFileSaved(saved: Boolean) {
@@ -409,15 +450,16 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private fun showConnectionFailure(cause: String, url: String?) {
         Log.w(TAG, "main_frame_failed $cause")
         mainFrameFailed = true
-        page.failed(url, selectedOrigin)
+        page.failed(url, siteOrigin)
         webView.visibility = View.INVISIBLE
-        recovery.showError { open(page.retryUrl(selectedOrigin)) }
+        if (recovery.choosingSandbox) return
+        recovery.showError({ open(page.retryUrl(siteOrigin)) }, switchSandbox)
     }
 
     private inner class ShellWebViewClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val url = request.url.toString()
-            return when (originPolicy.classify(url, selectedOrigin)) {
+            return when (originPolicy.classify(url, siteOrigin)) {
                 NavigationDecision.LOAD -> false
                 NavigationDecision.OPEN_EXTERNALLY -> {
                     if (request.isForMainFrame && request.hasGesture()) openExternally(url)
@@ -433,21 +475,25 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             if (::bridge.isInitialized) bridge.reset()
             incompatibleWeb = false
             updateRequired = null
+            handshakes.pageStarted()
+            mainHandler.removeCallbacks(handshakeTimeout)
+            sandboxWarning.isVisible = false
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {
-            if (!mainFrameFailed && !incompatibleWeb) recovery.hide()
+            if (!mainFrameFailed && !incompatibleWeb && !recovery.choosingSandbox) recovery.hide()
         }
 
         // Also follows the history the page pushes, which is where the web app keeps its view.
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-            page.visited(url, selectedOrigin)
+            page.visited(url, siteOrigin)
         }
 
         override fun onPageFinished(view: WebView, url: String) {
             // Back must never return to the previous sandbox origin, which bypasses URL checks.
             if (clearHistoryOnNextPage) view.clearHistory()
             clearHistoryOnNextPage = false
+            if (!mainFrameFailed && handshakes.pageFinished(url)) mainHandler.postDelayed(handshakeTimeout, BRIDGE_TIMEOUT_MS)
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -461,7 +507,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         @SuppressLint("WebViewClientOnReceivedSslError")
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
             handler.cancel()
-            if (originPolicy.isSameOrigin(error.url, selectedOrigin)) showConnectionFailure("tls=${error.primaryError}", error.url)
+            if (originPolicy.isSameOrigin(error.url, siteOrigin)) showConnectionFailure("tls=${error.primaryError}", error.url)
         }
 
         // The renderer, the app's largest process, is often killed in the background. Its page then
@@ -470,7 +516,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             val started = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             Log.w(TAG, "renderer_gone crashed=${detail.didCrash()} priority=${detail.rendererPriorityAtExit()} started=$started")
             replaceWebView()
-            page.rendererGone(started, selectedOrigin)?.let(::open)
+            // A page lost under the chooser is not needed: the chosen sandbox loads its own.
+            if (!recovery.choosingSandbox) page.rendererGone(started, siteOrigin)?.let(::open)
             return true
         }
     }
@@ -504,7 +551,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         /** Exit reasons are logged once per process, not for every Activity it creates. */
         var exitReasonsLogged = false
 
-        /** As long as the page's own bridge commands wait for the shell. */
-        const val DOWNLOAD_LINK_TIMEOUT_MS = 15_000L
+        /** As long as the page's own bridge commands, its handshake among them, wait for the shell. */
+        const val BRIDGE_TIMEOUT_MS = 15_000L
     }
 }

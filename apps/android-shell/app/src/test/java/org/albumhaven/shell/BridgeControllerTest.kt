@@ -518,14 +518,14 @@ class BridgeControllerTest {
         assertEquals(listOf<String?>(link), links)
     }
 
+    /** A malformed link is refused when it would be enqueued (DownloadsTest). */
     @Test
     fun aRefusedOrMalformedAnswerIsNoLink() {
         negotiated()
         val answers = listOf(
             """{"ok":false,"error":{"code":"download_unavailable","message":"Download unavailable."}}""",
             """{"ok":true}""",
-            """{"ok":true,"url":"https://evil.example$link"}""",
-            """{"ok":true,"url":"/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"}""",
+            """{"ok":true,"url":7}""",
             """{"ok":"true","url":"$link"}""",
         )
         for (payload in answers) {

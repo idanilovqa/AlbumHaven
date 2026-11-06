@@ -38,9 +38,6 @@ fun sameOriginPath(url: String, origin: String): String? {
     return uri.rawPath + (uri.rawQuery?.let { "?$it" } ?: "")
 }
 
-/** Whether [path] is a link the server issued (`/downloads/<token>`), the only path a download may fetch. */
-fun isDownloadLink(path: String): Boolean = DOWNLOAD_LINK.matches(path)
-
 /**
  * One `DownloadManager` request for a cookie-less link (`downloads.link.v1`). The Download Manager
  * keeps its requests in its own database, so the WebView session never goes into one: the link
@@ -48,9 +45,12 @@ fun isDownloadLink(path: String): Boolean = DOWNLOAD_LINK.matches(path)
  */
 class LinkDownload(val url: String, val headers: Map<String, String>, val mimeType: String?, val fileName: String) {
     companion object {
-        /** Null unless [linkPath] is a link the server issued, so a refused or malformed answer requests nothing. */
+        /**
+         * Null unless [linkPath] has the form of a link the server issues (`/downloads/<token>`), the
+         * only path a download may fetch, so a refused or malformed answer requests nothing.
+         */
         fun of(origin: String, linkPath: String?, userAgent: String, mimeType: String?, fileName: String): LinkDownload? =
-            linkPath?.takeIf(::isDownloadLink)?.let { LinkDownload("$origin$it", mapOf("User-Agent" to userAgent), mimeType, fileName) }
+            linkPath?.takeIf(DOWNLOAD_LINK::matches)?.let { LinkDownload("$origin$it", mapOf("User-Agent" to userAgent), mimeType, fileName) }
     }
 }
 

@@ -71,7 +71,7 @@ class BridgeController(
     /**
      * Asks the negotiated document for a cookie-less link to its same-origin [path]
      * (`downloads.link.v1`), which the page requests from the server with its own session. [done]
-     * gets the link's path, or null once the page refuses, the document goes, or
+     * gets the page's answer, or null once the page refuses, the document goes, or
      * [abandonDownloadLink] gives up. Returns the request's ID, or null, after answering null,
      * when no document negotiated. Call on the main thread.
      */
@@ -95,7 +95,7 @@ class BridgeController(
         if (message.name != DOWNLOAD_LINK || message.protocol != negotiatedProtocol) return
         val done = downloadLinks.remove(message.id) ?: return
         val payload = message.payload
-        done((payload.opt("url") as? String)?.takeIf { payload.opt("ok") == true && isDownloadLink(it) })
+        done((payload.opt("url") as? String)?.takeIf { payload.opt("ok") == true })
     }
 
     /** Sends a native playback event to the negotiated document. Call on the main thread. */

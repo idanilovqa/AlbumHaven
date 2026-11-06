@@ -208,8 +208,10 @@ test('external service link CSS uses panel text, a non-colour cue and the real s
   assert.match(rule('.ui-external-link'), /color:\s*inherit;/, 'link text uses the surrounding text colour, not the link accent');
   assert.match(rule('.ui-external-link'), /text-decoration:\s*none;/);
   assert.match(rule('.ui-external-link:hover'), /text-decoration:\s*underline/);
-  assert.match(rule('.ui-external-link:focus-visible'), /text-decoration:\s*underline/);
-  assert.match(rule('.ui-external-link:focus-visible'), /outline:\s*2px solid currentColor/);
+  assert.match(rule('.ui-external-link:focus-visible'), /text-decoration:\s*underline;\s*text-decoration-thickness:\s*2px/,
+    'keyboard focus shows a thicker underline');
+  assert.match(rule('.ui-external-link'), /outline:\s*none/, 'no outline box in any state, including the browser focus ring');
+  assert.match(rule('.ui-external-link-list'), /flex-direction:\s*column;\s*align-items:\s*flex-start/, 'links stack one per line, left-aligned');
 
   const icon = rule('.ui-external-link__icon');
   assert.match(icon, /width:\s*16px;/);
@@ -219,6 +221,7 @@ test('external service link CSS uses panel text, a non-colour cue and the real s
   assert.ok(externalLinkRules.length >= 6);
   for (const [selector, body] of externalLinkRules) {
     assert.doesNotMatch(body, /mask/, `${selector}: icons keep their own colours instead of a single-colour mask`);
+    assert.doesNotMatch(body, /outline:(?!\s*none)|box-shadow|border:/, `${selector}: no outline box in any state`);
   }
 
   const icons = path.join(repoRoot, 'music_app', 'static', 'images', 'icons');

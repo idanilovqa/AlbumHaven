@@ -195,7 +195,8 @@ white-space: nowrap;
 }
 .ui-metadata-pill--genre { background: #11202a; border: 1px solid #4199c3; color: #8bd9ff; }
 
-/* External service link: a small service icon and plain text, like MusicBrainz's own links list. */
+/* External service links: a small service icon and plain text, listed one per line like MusicBrainz's own links list. */
+.ui-external-link-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .ui-external-link {
 display: inline-flex;
 align-items: center;
@@ -203,11 +204,11 @@ gap: 6px;
 color: inherit;
 text-decoration: none;
 text-underline-offset: .2em;
-border-radius: 3px;
+outline: none;
 }
-/* Plain text: the underline, not a colour, marks hover and focus. */
+/* Plain text with no box in any state: an underline marks hover, a thicker one keyboard focus. */
 .ui-external-link:hover { text-decoration: underline; }
-.ui-external-link:focus-visible { text-decoration: underline; outline: 2px solid currentColor; outline-offset: 2px; }
+.ui-external-link:focus-visible { text-decoration: underline; text-decoration-thickness: 2px; }
 /* Each service's own full-colour favicon, as MusicBrainz shows them (see images/icons/SERVICE-FAVICONS-NOTICE.txt). */
 .ui-external-link__icon { flex: 0 0 auto; width: 16px; height: 16px; background: var(--ui-external-link-icon) center / 16px 16px no-repeat; }
 .ui-external-link--musicbrainz { --ui-external-link-icon: url("/static/images/icons/musicbrainz-favicon-32.png"); }

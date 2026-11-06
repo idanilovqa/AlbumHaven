@@ -1952,6 +1952,8 @@ test('artist information links MusicBrainz and Discogs only for an accepted matc
   assert.match(links, /ui-external-link__icon[^>]*aria-hidden="true"[\s\S]*?<span class="ui-external-link__text">MusicBrainz<\/span>/);
   assert.match(links, /href="https:\/\/www\.discogs\.com\/artist\/218108"[^>]*aria-label="Open Neal Morse on Discogs"[\s\S]*?>Discogs</);
   assert.doesNotMatch(links, /ui-button/, 'links are plain icon and text, not buttons');
+  assert.match(links, /^<div class="ui-external-link-list"><a class="ui-external-link ui-external-link--musicbrainz"[\s\S]*<\/a><\/div>$/,
+    'service links share one vertical list');
 
   assert.equal(build(null, 'Angra'), '', 'unresolved artists carry no projection and show no links');
   assert.doesNotMatch(build({ musicbrainz_url: `https://musicbrainz.org/artist/${mbid}` }, 'Angra'), /Discogs/);
@@ -1962,4 +1964,8 @@ test('artist information links MusicBrainz and Discogs only for an accepted matc
 test('the artist panel leaves external service links to the shared component', () => {
   assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)/);
   assert.doesNotMatch(galleryMainCssSource, /\.ui-external-link[^,{]*\{/, 'no page-local external link styling');
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__actions\s*\{[^}]*margin-left:\s*auto/, 'panel actions sit on the right');
+  assert.match(galleryMainInteractionsSource,
+    /<p data-artist-info-summary>\$\{escapeHtml\(summary\)\}<\/p><div class="artist-info-overlay__links">\$\{buildGalleryArtistExternalLinksHtml\(group\.artist_musicbrainz, artist\)\}<div class="artist-info-overlay__actions">[^`]*data-artist-info-full-page aria-disabled="true" disabled[^`]*Full page<\/button><\/div><\/div>/,
+    'service links come directly under the summary, and the disabled Full page action sits in the right-hand actions');
 });

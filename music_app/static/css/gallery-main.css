@@ -187,7 +187,9 @@
 .artist-info-overlay__body { max-height: 300px; overflow: auto; padding: 0 16px 16px; line-height: 1.5; user-select: text; }
 .artist-info-overlay__body [data-artist-info-summary] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 5; }
 .artist-info-overlay__body [data-artist-info-summary].is-expanded { display: block; overflow: visible; }
-.artist-info-overlay__links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+/* Service links stack on the left under the text; the panel's own actions sit on the right. */
+.artist-info-overlay__links { display: flex; align-items: flex-start; gap: 14px; }
+.artist-info-overlay__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-left: auto; }
 .artist-info-overlay__links :is(a:not(.ui-external-link), button) { border: 0; background: transparent; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); padding: 0; }
 :root .artist-info-overlay__links :is(a:not(.ui-external-link), button):is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: transparent !important; box-shadow: none; }
 .artist-info-overlay__links :is(a:not(.ui-external-link), button):not(:disabled):not([aria-disabled="true"]) { cursor: pointer; text-underline-offset: .2em; }

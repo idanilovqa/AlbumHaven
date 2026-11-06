@@ -111,7 +111,7 @@ function buildGalleryArtistStatusHtml(config = {}) {
     });
   }
   if (String(config.artistMusicBrainzState || '').trim().toLowerCase() === 'pending') {
-    return '<span class="artist-musicbrainz-pending" role="status" aria-label="MusicBrainz: Metadata pending">MusicBrainz: Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
+    return '<span class="artist-musicbrainz-pending" role="status" aria-label="Metadata pending">Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
   }
   return '';
 }
@@ -216,13 +216,6 @@ function buildArtistFamilyPanelHtml(config = {}) {
 
 function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
-}
-
-function buildArtistInfoOverlayHtml(config = {}) {
-  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
-  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
-  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
-  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {

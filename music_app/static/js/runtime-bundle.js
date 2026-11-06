@@ -4546,7 +4546,7 @@ function buildGalleryArtistStatusHtml(config = {}) {
     });
   }
   if (String(config.artistMusicBrainzState || '').trim().toLowerCase() === 'pending') {
-    return '<span class="artist-musicbrainz-pending" role="status" aria-label="MusicBrainz: Metadata pending">MusicBrainz: Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
+    return '<span class="artist-musicbrainz-pending" role="status" aria-label="Metadata pending">Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
   }
   return '';
 }
@@ -4651,13 +4651,6 @@ function buildArtistFamilyPanelHtml(config = {}) {
 
 function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
-}
-
-function buildArtistInfoOverlayHtml(config = {}) {
-  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
-  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
-  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
-  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {
@@ -4877,7 +4870,7 @@ function resolveGalleryArtistInfo(group = {}, artist = '') {
     summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
     imageUrl,
     wikipediaUrl,
-    canReadMore: providedSummary.length > 280,
+    isLongBiography: providedSummary.length > 280,
   };
 }
 
@@ -7196,6 +7189,8 @@ function transitionGalleryMain(action) {
 }
 
 // Only an accepted MusicBrainz match carries a projection, so unresolved artists show no links.
+const GALLERY_ARTIST_FULL_PAGE_LABEL = 'Open full page';
+
 function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
   if (!artistMusicBrainz || typeof artistMusicBrainz !== 'object') return '';
   const links = ['musicbrainz', 'discogs'].map((service) => ButtonComponent.renderExternalServiceLink({
@@ -7212,16 +7207,13 @@ function openGalleryArtistInfo(anchor) {
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return;
-  const { summary, imageUrl, wikipediaUrl, canReadMore } = resolveGalleryArtistInfo(group, artist);
-  overlay.classList.remove('is-expanded');
+  const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
-  // One "Read more" ends the text: it expands a long biography, and stays a disabled placeholder until artist pages exist.
-  const readMore = canReadMore
-    ? '<button type="button" class="artist-info-overlay__read-more" data-artist-info-read-more aria-expanded="false">Read more</button>'
-    : '<button type="button" class="artist-info-overlay__read-more" aria-disabled="true" disabled title="Artist pages are not available yet">Read more</button>';
+  // The text always ends with the full-page control; it stays disabled until artist pages exist.
+  const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${canReadMore ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${readMore}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
   // A long biography that still fits in five lines needs no clamp or fade.
   const summaryElement = overlay.querySelector('[data-artist-info-long]');
@@ -7230,19 +7222,6 @@ function openGalleryArtistInfo(anchor) {
 
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
-  const readMore = event.target.closest?.('[data-artist-info-read-more]');
-  if (readMore) {
-    event.preventDefault();
-    const expanded = readMore.getAttribute('aria-expanded') === 'true';
-    readMore.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-    readMore.textContent = expanded ? 'Read more' : 'Read less';
-    const panel = readMore.closest('.artist-info-overlay');
-    panel?.classList.toggle('is-expanded', !expanded);
-    const active = galleryMainSurfaceController?.current?.();
-    if (active?.surface === panel) positionGalleryAnchoredSurface(panel, active.anchor, 'left');
-    panel?.querySelector('[data-artist-info-summary]')?.classList.toggle('is-expanded', !expanded);
-    return true;
-  }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');

@@ -182,7 +182,7 @@ function resolveGalleryArtistInfo(group = {}, artist = '') {
     summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
     imageUrl,
     wikipediaUrl,
-    canReadMore: providedSummary.length > 280,
+    isLongBiography: providedSummary.length > 280,
   };
 }
 

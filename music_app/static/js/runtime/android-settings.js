@@ -18,27 +18,6 @@ function formatAndroidCheckedAgo(checkedAt, now = Date.now()) {
   return `${count} ${unit}${count === 1 ? '' : 's'} ago`;
 }
 
-const ANDROID_UPDATE_FAILURES = {
-  check_failed: ['Update check failed.', 'Check your connection and try again.', 'Retry', 'check'],
-  manifest_rejected: ['Update check failed.', 'The published update doesn’t match this app. Try again later.', 'Retry', 'check'],
-  download_failed: ['Download failed.', 'Check your connection and try again.', 'Retry download', 'download'],
-  verification_failed: ['Update couldn’t be verified.',
-    'The downloaded app did not match Album Haven’s signed release. Download it again.', 'Retry download', 'download'],
-  install_failed: ['Update couldn’t be installed.', 'Android didn’t install the update. Download it again.', 'Retry download', 'download'],
-};
-
-// The server would not hand this install its artifacts; the failure keeps its title and retry.
-const ANDROID_UPDATE_ACCESS_MESSAGES = {
-  signed_out: 'Sign in to Album Haven again, then retry.',
-  attestation_refused: 'This server didn’t accept this app’s device check. Try again later.',
-  device_unsupported: 'This device can’t verify this app for updates.',
-};
-
-// Shell codes name only the tables' own entries, never inherited ones such as `constructor`.
-function ownAndroidEntry(table, code) {
-  return Object.hasOwn(table, code) ? table[code] : null;
-}
-
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
 }
@@ -51,7 +30,7 @@ function androidUpdateView(info, update) {
   const verifiedMessage = 'Signature and file verified. Android will ask you to confirm installation.';
   switch (update.state) {
     case 'checking': return ['info', 'Checking for updates…', 'Keep this screen open.', 'Checking…', null];
-    case 'upToDate': return ['success', 'Album Haven is up to date.', `${version} · Checked ${checked}`, 'Check again', 'check'];
+    case 'upToDate': return ['success', 'No updates available', `${version} · Checked ${checked}`, 'Check again', 'check'];
     case 'available': return ['warning', `Album Haven ${name} is available.`, 'Download starts only when you ask.', 'Download update', 'download'];
     case 'downloading': return ['info', `Downloading update · ${update.progress}%`,
       'Android will confirm installation after verification.', 'Downloading…', null, update.progress];
@@ -61,13 +40,9 @@ function androidUpdateView(info, update) {
     case 'installing': return ['success', `Album Haven ${name} is ready to install.`, verifiedMessage, 'Installing…', 'install'];
     case 'authorization': return ['warning', 'Allow Album Haven to install updates.',
       'Android blocks this install source. Return here after enabling the permission.', 'Open install settings', 'install'];
-    case 'failed': {
-      const failure = update.reason === 'unsupported_android'
-        ? ['Update check failed.', 'This update needs a newer version of Android.', 'Retry', 'check']
-        : ownAndroidEntry(ANDROID_UPDATE_FAILURES, update.error) || ANDROID_UPDATE_FAILURES.check_failed;
-      const [title, message, label, action] = failure;
-      return ['error', title, ownAndroidEntry(ANDROID_UPDATE_ACCESS_MESSAGES, update.reason) || message, label, action];
-    }
+    // Every failure reads the same; the shell logs its error and reason. A failure that kept its
+    // update downloads it again, as the shell's own retry does; any other checks again.
+    case 'failed': return ['error', 'Update failed. Try again', '', 'Retry', name ? 'download' : 'check'];
     default: return ['info', 'Android app', checked ? `${version} · Last checked ${checked}` : version, 'Check for updates', 'check'];
   }
 }
@@ -155,11 +130,24 @@ function buildAndroidSandboxHtml(info) {
   </section>`;
 }
 
+// The channel badge needs the handshake; a shell that refused it names no channel.
+function buildAndroidCardHtml(info, contentHtml) {
+  const badge = !info ? '' : buildStatusBadgeHtml(info.variant === 'sandbox'
+    ? { label: 'S · Sandbox', variant: 'warning' } : { label: 'Stable', variant: 'neutral' });
+  return `<div class="android-settings">
+    <div class="android-settings__heading">
+      <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
+      ${badge}
+    </div>
+    ${contentHtml}
+  </div>`;
+}
+
 function buildAndroidSettingsHtml(info) {
   // The shell's own Update required screen offers Check for update; this page has no bridge to ask.
   if (!info && isAndroidUpdateRequired()) {
-    return buildOnPageAlertHtml({ severity: 'warning', title: 'Update required',
-      message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' });
+    return buildAndroidCardHtml(null, buildOnPageAlertHtml({ severity: 'info', title: 'Update required',
+      message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' }));
   }
   if (!info && androidBridge.connection) {
     return buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: 'Connecting to the app…', role: 'status' });
@@ -168,15 +156,8 @@ function buildAndroidSettingsHtml(info) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
       message: 'This app could not connect to the current site.', role: 'status' });
   }
-  const sandbox = info.variant === 'sandbox';
-  return `<div class="android-settings">
-    <div class="android-settings__heading">
-      <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
-      <span class="android-settings__channel${sandbox ? ' is-sandbox' : ''}">${sandbox ? 'S · Sandbox' : 'Stable'}</span>
-    </div>
-    <div data-android-update>${buildAndroidUpdateHtml(info)}</div>
-    ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}
-  </div>`;
+  return buildAndroidCardHtml(info, `<div data-android-update>${buildAndroidUpdateHtml(info)}</div>
+    ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}`);
 }
 
 // Every successful handshake, whichever feature asked for it, names the shell's update state and

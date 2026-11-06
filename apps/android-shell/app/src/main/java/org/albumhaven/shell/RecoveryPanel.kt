@@ -38,10 +38,10 @@ class RecoveryPanel(private val root: View) {
     fun showUpdate(view: UpdateRequiredView, onAction: (() -> Unit)?) {
         val context = root.context
         val step = view.step
-        // Only the download names its progress and version.
+        // Only the download names its progress; it and its verification name the version.
         val downloading = step == UpdateStep.DOWNLOADING
         val title = if (downloading) context.getString(step.title, view.progress ?: 0) else context.getString(step.title)
-        val message = if (downloading) context.getString(step.message, view.versionName.orEmpty()) else context.getString(step.message)
+        val message = step.message?.let { context.getString(it, view.versionName.orEmpty()) }
         showAlert(step.severity, title, message)
         if (onAction == null) {
             action.isVisible = false
@@ -55,13 +55,15 @@ class RecoveryPanel(private val root: View) {
         root.isVisible = false
     }
 
-    private fun showAlert(severity: AlertSeverity, title: String, message: String) {
+    /** A null [message] leaves the title alone in the alert. */
+    private fun showAlert(severity: AlertSeverity, title: String, message: String?) {
         root.isVisible = true
         loading.isVisible = false
         alert.isVisible = true
         alert.setBackgroundResource(severity.background)
         alertIcon.setImageResource(severity.icon)
         alertTitle.text = title
+        alertMessage.isVisible = message != null
         alertMessage.text = message
     }
 
@@ -89,19 +91,25 @@ enum class AlertSeverity(@DrawableRes val background: Int, @DrawableRes val icon
     ERROR(R.drawable.alert_error, R.drawable.ic_alert),
 }
 
-/** Approved Android native recovery v002, plus the approved Settings authorization and installing copy. */
+/**
+ * Approved Android native recovery v002, plus the approved Settings authorization and installing
+ * copy and the owner's November 5, 2026 no-update, verifying and failure decisions. A null
+ * [message] shows the title alone.
+ */
 enum class UpdateStep(
     val severity: AlertSeverity,
     @StringRes val title: Int,
-    @StringRes val message: Int,
+    @StringRes val message: Int?,
     @StringRes val action: Int,
     val actionable: Boolean,
 ) {
     REQUIRED(AlertSeverity.WARNING, R.string.recovery_update_title, R.string.recovery_update_message, R.string.recovery_update_check, true),
+    NO_UPDATE(AlertSeverity.INFO, R.string.recovery_update_none_title, R.string.recovery_update_message, R.string.recovery_update_check, true),
     CHECKING(AlertSeverity.INFO, R.string.recovery_update_checking_title, R.string.recovery_update_checking_message, R.string.recovery_update_checking_action, false),
     DOWNLOADING(AlertSeverity.INFO, R.string.recovery_update_downloading_title, R.string.recovery_update_downloading_message, R.string.recovery_update_downloading_action, false),
+    VERIFYING(AlertSeverity.INFO, R.string.recovery_update_verifying_title, R.string.recovery_update_downloading_message, R.string.recovery_update_verifying_action, false),
     READY(AlertSeverity.SUCCESS, R.string.recovery_update_ready_title, R.string.recovery_update_ready_message, R.string.recovery_update_install, true),
     INSTALLING(AlertSeverity.SUCCESS, R.string.recovery_update_ready_title, R.string.recovery_update_ready_message, R.string.recovery_update_installing_action, true),
     AUTHORIZATION(AlertSeverity.WARNING, R.string.recovery_update_authorization_title, R.string.recovery_update_authorization_message, R.string.recovery_update_authorization_action, true),
-    INVALID(AlertSeverity.ERROR, R.string.recovery_update_invalid_title, R.string.recovery_update_invalid_message, R.string.recovery_update_retry_download, true),
+    FAILED(AlertSeverity.ERROR, R.string.recovery_update_failed_title, null, R.string.recovery_retry, true),
 }

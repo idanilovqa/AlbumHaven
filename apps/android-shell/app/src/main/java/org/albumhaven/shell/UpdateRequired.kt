@@ -1,30 +1,23 @@
 package org.albumhaven.shell
 
-import org.albumhaven.shell.updates.UpdateError
 import org.albumhaven.shell.updates.UpdateState
 
-/** What the native Update required screen shows; [progress] and [versionName] belong to the download. */
+/** What the native Update required screen shows; [progress] belongs to the download, [versionName] to it and its verification. */
 data class UpdateRequiredView(val step: UpdateStep, val progress: Int? = null, val versionName: String? = null) {
     companion object {
-        /**
-         * The approved screen has no copy for "no newer app yet" or for a failed check, download or
-         * install, so those return to Update required, whose Check for update starts again.
-         */
         fun of(state: UpdateState): UpdateRequiredView = when (state) {
-            is UpdateState.Idle, is UpdateState.UpToDate, is UpdateState.Available -> UpdateRequiredView(UpdateStep.REQUIRED)
+            // An update found without asking waits for Check for update, which downloads it.
+            is UpdateState.Idle, is UpdateState.Available -> UpdateRequiredView(UpdateStep.REQUIRED)
+            is UpdateState.UpToDate -> UpdateRequiredView(UpdateStep.NO_UPDATE)
             is UpdateState.Checking -> UpdateRequiredView(UpdateStep.CHECKING)
             is UpdateState.Downloading ->
                 UpdateRequiredView(UpdateStep.DOWNLOADING, state.percent, state.manifest.versionName)
-            is UpdateState.Verifying -> UpdateRequiredView(UpdateStep.DOWNLOADING, 100, state.manifest.versionName)
+            is UpdateState.Verifying -> UpdateRequiredView(UpdateStep.VERIFYING, versionName = state.manifest.versionName)
             is UpdateState.Ready -> UpdateRequiredView(UpdateStep.READY)
             is UpdateState.Installing -> UpdateRequiredView(UpdateStep.INSTALLING)
             is UpdateState.Authorization -> UpdateRequiredView(UpdateStep.AUTHORIZATION)
-            is UpdateState.Failed ->
-                if (state.error == UpdateError.VERIFICATION_FAILED && state.manifest != null) {
-                    UpdateRequiredView(UpdateStep.INVALID)
-                } else {
-                    UpdateRequiredView(UpdateStep.REQUIRED)
-                }
+            // Every failure reads the same; the shell logs its error and reason.
+            is UpdateState.Failed -> UpdateRequiredView(UpdateStep.FAILED)
         }
     }
 }
@@ -38,19 +31,35 @@ data class UpdateRequiredView(val step: UpdateStep, val progress: Int? = null, v
 class UpdateRequiredFlow(private val updates: UpdatePort, private val webProtocols: IntRange) {
     private var checkRequested = false
 
-    val view: UpdateRequiredView get() = UpdateRequiredView.of(updates.state)
+    /** Until the user acts here, a result left by an earlier request from Settings is not this screen's answer. */
+    private var acted = false
+
+    val view: UpdateRequiredView
+        get() = updates.state.let { state ->
+            if (!acted && (state is UpdateState.UpToDate || state is UpdateState.Failed)) {
+                UpdateRequiredView(UpdateStep.REQUIRED)
+            } else {
+                UpdateRequiredView.of(state)
+            }
+        }
 
     fun act() {
-        when (view.step) {
-            UpdateStep.REQUIRED -> {
-                checkRequested = true
-                if (!updates.check(webProtocols)) checkRequested = false
-            }
-            UpdateStep.INVALID -> updates.download()
+        val step = view.step
+        if (!step.actionable) return
+        acted = true
+        when (step) {
+            UpdateStep.REQUIRED, UpdateStep.NO_UPDATE -> check()
+            // A failure that kept its update downloads it again; any other checks again.
+            UpdateStep.FAILED -> if ((updates.state as UpdateState.Failed).manifest != null) updates.download() else check()
             // While installing, Update shows a confirmation the user left unanswered again.
             UpdateStep.READY, UpdateStep.INSTALLING, UpdateStep.AUTHORIZATION -> updates.install()
             else -> Unit
         }
+    }
+
+    private fun check() {
+        checkRequested = true
+        if (!updates.check(webProtocols)) checkRequested = false
     }
 
     /** Call with every updater state. */

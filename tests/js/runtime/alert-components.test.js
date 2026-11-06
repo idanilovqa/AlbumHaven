@@ -196,3 +196,31 @@ test('OnPageAlert renders optional determinate progress below its actions', () =
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
   assert.match(css, /\.on-page-alert__progress \{ display: grid;/);
 });
+
+test('StatusBadge renders a non-interactive label in its neutral, info or warning variant', () => {
+  const alerts = require('../../../music_app/static/js/runtime/alert-components.js');
+  assert.equal(alerts.buildStatusBadgeHtml({ label: 'Stable' }), '<span class="ui-status-badge ui-status-badge--neutral">Stable</span>');
+  for (const variant of ['neutral', 'info', 'warning']) {
+    assert.equal(alerts.buildStatusBadgeHtml({ label: 'S · Sandbox', variant }),
+      `<span class="ui-status-badge ui-status-badge--${variant}">S · Sandbox</span>`);
+  }
+  assert.match(alerts.buildStatusBadgeHtml({ label: '<b>"x"</b>' }), />&lt;b&gt;&quot;x&quot;&lt;\/b&gt;</);
+  for (const variant of ['error', 'success', 'constructor']) {
+    assert.throws(() => alerts.buildStatusBadgeHtml({ label: 'x', variant }), /Unknown StatusBadge variant/);
+  }
+  const context = { window: {} };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/alert-components.js'), 'utf8'), context);
+  assert.equal(context.window.AlertComponent.buildStatusBadgeHtml, context.buildStatusBadgeHtml);
+});
+
+test('StatusBadge CSS owns its shape and variant colors, with no interactive state', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/alert-components.css'), 'utf8');
+  assert.match(css, /\.ui-status-badge \{[^}]*--status-badge-ink: var\(--muted\);[^}]*--status-badge-line: var\(--border\);[^}]*padding: 6px 10px;[^}]*border-radius: 10px;/);
+  assert.match(css, /\.ui-status-badge--info \{ --status-badge-ink: var\(--appearance-player-accent, #55c7ff\);/);
+  assert.match(css, /\.ui-status-badge--warning \{ --status-badge-ink: var\(--appearance-warning, #e0aa50\);/);
+  assert.doesNotMatch(css, /\.ui-status-badge[^{]*:(?:hover|focus|active)|\.ui-status-badge[^{]*\.is-active/);
+  // No page-local copy of the badge remains.
+  const utilities = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.doesNotMatch(utilities, /android-settings__channel|ui-status-badge/);
+});

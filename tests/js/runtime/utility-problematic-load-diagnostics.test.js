@@ -235,6 +235,9 @@ function loadHelper(overrides = {}) {
       if (typeof callback === 'function') callback();
       return 1;
     },
+    // Debounced work (the server-side search) stays pending unless a test runs it.
+    scheduleBrowserTimeout() { return 0; },
+    clearBrowserTimeout() { return true; },
     showToast(message, variant, duration) {
       calls.toasts.push([message, variant, duration]);
     },
@@ -267,6 +270,79 @@ test('opening the account menu prefetches Problematic Files and Settings reuses 
   await context.loadActiveUtilityTab(true);
   assert.equal(requested.length, 2, 'Settings opened right after the prefetch reuses it');
   assert.equal(calls.renders, 1);
+});
+
+function loadSearchHelper(searchBody) {
+  const overlay = { hidden: false };
+  const timers = [];
+  const requested = [];
+  const loaded = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserTimeout(callback) { timers.push(callback); return timers.length; },
+    clearBrowserTimeout(id) { timers[id - 1] = null; },
+    async fetch(url) {
+      requested.push(String(url));
+      return { ok: true, status: 200, async json() { return searchBody; } };
+    },
+  });
+  Object.assign(loaded.context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: false,
+    problematicSummaryRequestToken: 3,
+    problematicFiles: [{ key: 'first-page', name: 'First Page Album' }],
+  });
+  const runTimers = async () => {
+    const pending = timers.splice(0).filter(Boolean);
+    pending.forEach((callback) => callback());
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  return { ...loaded, requested, runTimers };
+}
+
+test('a search before the complete list arrives adds the server matches beyond the first page', async () => {
+  const { context, calls, requested, runTimers } = loadSearchHelper({
+    complete: false,
+    items: [{ key: 'first-page', name: 'First Page Album' }, { key: 'album-097', name: 'Needle Album' }],
+  });
+
+  context.state.utility.searchQuery = 'needle';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = '  Needle album ';
+  context.scheduleProblematicServerSearch();
+  await runTimers();
+
+  assert.deepEqual(requested, ['/utilities/problematic-files?q=Needle%20album'], 'only the settled query is sent');
+  assert.deepEqual([...context.state.utility.problematicFiles].map((item) => item.key), ['first-page', 'album-097']);
+  assert.equal(calls.renders, 1);
+});
+
+test('the complete list, a newer query or a reload discards a server search answer', async () => {
+  for (const supersede of [
+    (utility) => { utility.problematicFilesComplete = true; },
+    (utility) => { utility.searchQuery = 'other'; },
+    (utility) => { utility.problematicSummaryRequestToken = 4; },
+  ]) {
+    const { context, calls } = loadSearchHelper({ items: [{ key: 'late', name: 'Late' }] });
+    context.state.utility.searchQuery = 'late';
+    const search = context.searchProblematicFilesOnServer('late');
+    supersede(context.state.utility);
+    await search;
+    assert.deepEqual([...context.state.utility.problematicFiles].map((item) => item.key), ['first-page']);
+    assert.equal(calls.renders, 0);
+  }
+});
+
+test('a complete list, an empty or a one-character query needs no server search', async () => {
+  const { context, requested, runTimers } = loadSearchHelper({ items: [] });
+  context.state.utility.searchQuery = '   ';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = ' x ';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = 'xy';
+  context.state.utility.problematicFilesComplete = true;
+  context.scheduleProblematicServerSearch();
+  await runTimers();
+  assert.deepEqual(requested, []);
 });
 
 test('the Settings-intent prefetch skips other tabs and an already open modal', () => {

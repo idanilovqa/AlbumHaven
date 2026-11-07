@@ -2777,6 +2777,58 @@ class PostgresLibraryBrowseRepository:
         payload["projection_cache_status"] = "bounded"
         return payload
 
+    def build_problematic_files_search(self, query: str) -> dict[str, object]:
+        """Every problematic album whose summary matches ``query``, without the full list.
+
+        The complete projection answers exactly once cached. Before that, SQL
+        narrows the search to albums whose title, artist, year or track titles
+        contain the text, and only those albums are evaluated, so a search
+        reaches albums far beyond the first page in well under the full build.
+        Matches only visible in computed text (problem reasons, repaired
+        spellings) arrive with the complete list (``complete: false``).
+        """
+        needle = str(query or "").strip().lower()
+        if not needle:
+            raise ValueError("Problematic Files search needs a query.")
+        cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is not None:
+            items = [
+                item for item in cached_payload.get("items") or []
+                if _problematic_summary_matches_query(item, needle)
+            ]
+            cached_payload.update(
+                items=items, count=len(items), initial_detail=None, complete=True,
+                query=query, search_truncated=False, projection_cache_status="hit",
+            )
+            return cached_payload
+        with self._browse_connection_context() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            connection.execute("SET LOCAL work_mem = '16MB'")
+            connection.execute("SET LOCAL jit = off")
+            album_ids = [
+                int(_row_mapping(row)["id"])
+                for row in connection.execute(
+                    _problematic_search_album_ids_sql(),
+                    {"needle": needle, "limit": PROBLEMATIC_SEARCH_ALBUM_LIMIT + 1},
+                ).fetchall()
+            ]
+            truncated = len(album_ids) > PROBLEMATIC_SEARCH_ALBUM_LIMIT
+            payload = self._build_problematic_files_payload_from_rows(
+                connection=connection,
+                rows=self._load_problematic_file_rows(
+                    connection=connection,
+                    album_ids=album_ids[:PROBLEMATIC_SEARCH_ALBUM_LIMIT],
+                ),
+                include_initial_detail=False,
+            )
+        items = [item for item in payload["items"] if _problematic_summary_matches_query(item, needle)]
+        payload.update(
+            items=items, count=len(items), complete=False,
+            total_candidate_count=None, query=query, search_truncated=truncated,
+            projection_cache_status="search",
+        )
+        return payload
+
     def _build_problematic_files_payload_from_rows(
         self,
         *,
@@ -2784,6 +2836,7 @@ class PostgresLibraryBrowseRepository:
         rows: list[object],
         missing_rows: list[object] | None = None,
         limit: int | None = None,
+        include_initial_detail: bool = True,
     ) -> dict[str, object]:
         albums = _problematic_album_projection_payloads(rows)
         duplicate_candidates = [
@@ -2821,7 +2874,7 @@ class PostgresLibraryBrowseRepository:
             projected_items = projected_items[:limit]
         items = [item for item, _album in projected_items]
         initial_detail = None
-        if projected_items:
+        if projected_items and include_initial_detail:
             first_album = projected_items[0][1]
             first_key = str(first_album.get("key") or "")
             first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
@@ -6398,6 +6451,58 @@ _PROBLEMATIC_OPTIONAL_SUMMARY_FIELDS = frozenset(
         "raw_album_artist",
     }
 )
+
+
+PROBLEMATIC_SEARCH_ALBUM_LIMIT = 2000
+
+
+def _problematic_summary_matches_query(album: Mapping[str, object], needle: str) -> bool:
+    """The Problematic Files list filter (getFilteredProblematicAlbums), server side."""
+    def texts(values: object) -> list[str]:
+        return [str(value or "") for value in values] if isinstance(values, list) else []
+
+    haystack = [
+        str(album.get(key) or "")
+        for key in ("name", "raw_name", "album_artist", "raw_album_artist", "year")
+    ]
+    haystack += texts(album.get("problem_reasons"))
+    haystack.append(str(album.get("search_text") or ""))
+    haystack += [str(track.get("title") or "") for track in album.get("tracks") or [] if isinstance(track, Mapping)]
+    for row in album.get("repair_preview_rows") or []:
+        if isinstance(row, Mapping):
+            haystack += [str(row.get(key) or "") for key in ("track_title", "original", "repaired")]
+    return needle in "\n".join(haystack).lower()
+
+
+def _problematic_search_album_ids_sql() -> str:
+    """Albums whose own title, artist, year or track titles contain the needle."""
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        select albums.id
+        from library.local_albums albums
+        join bootstrap_context on bootstrap_context.library_id = albums.library_id
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where strpos(lower(albums.title), %(needle)s) > 0
+           or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
+           or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
+           or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
+           or exists (
+             select 1 from library.local_tracks tracks
+             where tracks.album_id = albums.id
+               and strpos(lower(tracks.title), %(needle)s) > 0
+           )
+        order by albums.id
+        limit %(limit)s
+    """
 
 
 def _path_file_type(path: object) -> str:

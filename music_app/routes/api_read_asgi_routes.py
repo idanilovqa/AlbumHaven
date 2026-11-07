@@ -1311,14 +1311,16 @@ def _unsupported_postgres_non_album_modal_response(
 def utilities_problematic_files(
     request: Request,
     limit: int | None = Query(default=None, ge=1, le=200),
+    q: str = Query(default="", max_length=200),
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        payload = (
-            repository.build_problematic_files_page(limit=limit)
-            if limit is not None
-            else repository.build_problematic_files_payload()
-        )
+        if q.strip():
+            payload = repository.build_problematic_files_search(q)
+        elif limit is not None:
+            payload = repository.build_problematic_files_page(limit=limit)
+        else:
+            payload = repository.build_problematic_files_payload()
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)

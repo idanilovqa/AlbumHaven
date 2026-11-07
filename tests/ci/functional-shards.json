@@ -564,6 +564,13 @@
               "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+              "case": "FTC-MOBILE-HOME-001 mobile Home clears an active search and resets the Artists tree",
+              "area": "gallery-search"
             }
           ]
         }

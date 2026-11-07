@@ -9392,6 +9392,28 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+    "case": "FTC-MOBILE-HOME-001 mobile Home clears an active search and resets the Artists tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:mobile-home-reset"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "mobile-home-clears-search",
+      "mobile-home-clears-search-results-dot",
+      "mobile-home-resets-artist-tree"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",

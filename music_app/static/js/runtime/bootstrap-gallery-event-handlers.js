@@ -300,6 +300,7 @@ function handleGalleryBootstrapClick(event) {
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     if (isLibraryHome) {
       resetLibraryHomeNavigation();
+      clearMobileSearchResultsMarker();
       state.ui.gallerySearchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
       state.ui.preSearchView = null;
       state.ui.preSearchViewOrigin = null;
@@ -1588,6 +1589,13 @@ function revealArtistTreeForSearch() {
   }
 }
 
+// Ending a search (an empty submit or Home) removes the mobile Artists button's search-results dot.
+function clearMobileSearchResultsMarker() {
+  const button = document?.getElementById?.('mobile-library-button');
+  button?.removeAttribute('data-search-results');
+  button?.removeAttribute('aria-description');
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
@@ -1599,12 +1607,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   applyImmediateExactSearchArtistSelection(nextQuery);
-  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
-  else {
-    mobileArtistsButton?.removeAttribute('data-search-results');
-    mobileArtistsButton?.removeAttribute('aria-description');
-  }
+  else clearMobileSearchResultsMarker();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();

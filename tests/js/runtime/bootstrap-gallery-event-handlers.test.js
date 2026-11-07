@@ -1590,6 +1590,26 @@ test('library-home navigation opens Home on mobile instead of All artists', () =
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
 });
 
+test('mobile Home removes the Artists search-results dot left by an earlier search', () => {
+  const { context } = createContext({ searchInputValue: 'DDT', useProductionBuildApiUrl: true });
+  const button = {
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+  };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button' ? button : getElementById(id);
+  context.usesMobilePageLayout = () => true;
+  context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+  assert.equal(button.attributes['data-search-results'], 'true');
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(button.attributes['data-search-results'], undefined);
+  assert.equal(button.attributes['aria-description'], undefined);
+  assert.equal(context.document.getElementById('search-input').value, '');
+});
+
 test('mobile Home invalidates an earlier search response and its remembered query', () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true });
   context.usesMobilePageLayout = () => true;

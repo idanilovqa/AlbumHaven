@@ -194,6 +194,19 @@ line-height: 1.2;
 white-space: nowrap;
 }
 .ui-metadata-pill--genre { background: #11202a; border: 1px solid #4199c3; color: #8bd9ff; }
+/* Country: owner-approved violet (2026-11-07). Text contrast 9.7:1 dark, 8.5:1 light. */
+.ui-metadata-pill--country {
+--ui-metadata-pill-country-fill: #1c1730;
+--ui-metadata-pill-country-border: #8b6fd6;
+--ui-metadata-pill-country-ink: #cbb8ff;
+background: var(--ui-metadata-pill-country-fill);
+border: 1px solid var(--ui-metadata-pill-country-border);
+color: var(--ui-metadata-pill-country-ink);
+}
+:root[data-appearance-mode='light'] .ui-metadata-pill--country {
+--ui-metadata-pill-country-fill: #f1ecfd;
+--ui-metadata-pill-country-ink: #4a2e99;
+}
 
 /* External service links: a small service icon and plain text, in one left-aligned row. */
 .ui-external-link-list { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px 16px; }

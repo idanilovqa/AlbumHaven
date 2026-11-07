@@ -1,6 +1,8 @@
 """Authenticated, bounded playback references and ownership contracts."""
 
+from contextlib import asynccontextmanager
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -35,6 +37,8 @@ _SCROBBLING_ACTIONS = ("integration.lastfm.now_playing", "integration.lastfm.scr
 _SCROBBLE_ACTION = "integration.lastfm.scrobble"
 # The Android 13+ media card fills its width with the artwork; larger only costs bytes.
 _NOTIFICATION_ARTWORK_EDGE = 768
+# A claim heartbeat every ten seconds is logged only when it is this slow.
+_QUIET_STEP_LOG_MS = 1000
 ARTWORK_PREFIX = "/playback/artwork/"
 # A resume token never expires, and its payload names library files.
 redact_access_log_paths(ARTWORK_PREFIX)
@@ -67,22 +71,50 @@ async def playback_payload(request: Request) -> dict:
     return payload
 
 
+@asynccontextmanager
+async def timed_playback_step(step: str, *keys: str):
+    """Logs one path-free line with the step's answer status, elapsed milliseconds and ``keys``.
+
+    The caller sets each key to a count or flag, never a name or token, in the yielded dict; a key
+    left unset logs ``-``, so every line of a step has the same keys. Setting ``quiet`` skips a step
+    answered within ``_QUIET_STEP_LOG_MS``, as a claim heartbeat is. A refusal logs its HTTP
+    status, any other failure 500.
+    """
+    fields: dict[str, object] = dict.fromkeys(keys, "-")
+    started_at = time.perf_counter()
+    status = 500
+    try:
+        yield fields
+        status = 200
+    except HTTPException as error:
+        status = error.status_code
+        raise
+    finally:
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        if not (fields.pop("quiet", False) and elapsed_ms < _QUIET_STEP_LOG_MS):
+            extra = "".join(f" {key}={value}" for key, value in fields.items())
+            logger.info("Playback %s timing status=%s elapsed_ms=%s%s", step, status, elapsed_ms, extra)
+
+
 @router.post("/playback/refs")
 async def playback_refs(request: Request) -> JSONResponse:
-    payload = await playback_payload(request)
-    tracks = payload.get("tracks")
-    if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
-        raise HTTPException(400, "Invalid playback reference batch.")
-    result = await reference_call(request, lambda service: service.issue_batch(request.state.current_actor, tracks))
+    async with timed_playback_step("refs", "tracks") as timing:
+        payload = await playback_payload(request)
+        tracks = payload.get("tracks")
+        if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
+            raise HTTPException(400, "Invalid playback reference batch.")
+        timing["tracks"] = len(tracks)
+        result = await reference_call(request, lambda service: service.issue_batch(request.state.current_actor, tracks))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/playback/refs/resume")
 async def resume_playback_refs(request: Request) -> JSONResponse:
     """Fresh references for the resume tokens a native player persisted instead of references."""
-    payload = await playback_payload(request)
-    result = await reference_call(request, lambda service: service.exchange_resume_tokens(
-        request.state.current_actor, payload.get("tracks")))
+    async with timed_playback_step("refs resume"):
+        payload = await playback_payload(request)
+        result = await reference_call(request, lambda service: service.exchange_resume_tokens(
+            request.state.current_actor, payload.get("tracks")))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -106,14 +138,19 @@ async def playback_state(request: Request, client_id: str = ""):
 
 @router.put("/playback/state")
 async def acquire_playback(request: Request):
-    payload = await playback_payload(request)
-    if payload.get("state") != "playing":
-        raise HTTPException(400, "Invalid playback state.")
-    result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
-        request.state.current_actor, client_id=payload.get("clientId"),
-        client_surface=payload.get("clientSurface"), track=payload.get("track"),
-        claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
-    scrobbling = await _scrobbling_status(request)
+    # A first claim gates a start's first sound; a heartbeat renews one already held.
+    async with timed_playback_step("claim", "renew", "scrobbling_ms") as timing:
+        payload = await playback_payload(request)
+        if payload.get("state") != "playing":
+            raise HTTPException(400, "Invalid playback state.")
+        timing["renew"] = timing["quiet"] = payload.get("claimToken") is not None
+        result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
+            request.state.current_actor, client_id=payload.get("clientId"),
+            client_surface=payload.get("clientSurface"), track=payload.get("track"),
+            claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
+        claimed_at = time.perf_counter()
+        scrobbling = await _scrobbling_status(request)
+        timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
     return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
 
 

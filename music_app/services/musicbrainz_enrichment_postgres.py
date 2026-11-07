@@ -12,6 +12,9 @@ from music_app.services.postgres_connections import pooled_connection
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _JOB_KIND = "musicbrainz_artist_enrichment"
 _OWNER_SYNC_REASON = "library_menu_sync"
+# The album-evidence matcher. Automatic rows decided by an older version are
+# re-checked by the next backfill (migration 0174).
+MATCHER_VERSION = 2
 # Delivery 1 enriches album artists only: an artist that owns a local album with
 # tracks. Track-only artists (Various Artists or guest credits) get their
 # identity from release tracklists in the album-identity delivery.
@@ -91,6 +94,7 @@ class MusicBrainzEnrichmentPostgresRepository:
             # Background triggers re-try a recorded unresolved outcome only after
             # a cool-off; the owner's explicit sync re-tries it immediately.
             "retry_recent_unresolved": reason == _OWNER_SYNC_REASON,
+            "matcher_version": MATCHER_VERSION,
         }
         sql = _active_library_cte() + """
             , eligible_artists as (
@@ -104,6 +108,10 @@ class MusicBrainzEnrichmentPostgresRepository:
               where """ + _PRESENT_ALBUM_ARTIST_SQL + """
                 and (
                   matches.id is null
+                  or (
+                    matches.decision_source <> 'manual'
+                    and matches.matcher_version < %(matcher_version)s
+                  )
                   or (
                     not (matches.decision_source = 'manual')
                     and not (
@@ -241,6 +249,8 @@ class MusicBrainzEnrichmentPostgresRepository:
               artists.id as local_artist_id,
               artists.name as local_name,
               coalesce(albums.album_titles, array[]::text[]) as album_titles,
+              coalesce(album_evidence.albums, '[]'::json) as albums,
+              remote.canonical_name as existing_canonical_name,
               coalesce(identifiers.hinted_artist_mbids, array[]::text[])
                 as hinted_artist_mbids,
               assertion.artist_mbid as existing_assertion_mbid,
@@ -272,6 +282,26 @@ class MusicBrainzEnrichmentPostgresRepository:
               where albums.library_id = active_library.library_id
                 and albums.artist_id = artists.id
             ) albums on true
+            left join lateral (
+              -- Album evidence: year, and track titles and durations in order.
+              select json_agg(json_build_object(
+                       'title', album_rows.title, 'year', album_rows.release_year,
+                       'tracks', album_rows.tracks) order by album_rows.title) as albums
+              from (
+                select local_albums.title, local_albums.release_year,
+                       coalesce(json_agg(json_build_object(
+                         'title', tracks.title, 'duration_seconds', tracks.duration_seconds)
+                         order by coalesce(nullif(tracks.disc_number, 0), 1), tracks.track_number, tracks.title)
+                         filter (where tracks.id is not null), '[]'::json) as tracks
+                from library.local_albums local_albums
+                left join library.local_tracks tracks
+                  on tracks.library_id = local_albums.library_id
+                 and tracks.album_id = local_albums.id
+                where local_albums.library_id = active_library.library_id
+                  and local_albums.artist_id = artists.id
+                group by local_albums.id, local_albums.title, local_albums.release_year
+              ) album_rows
+            ) album_evidence on true
             left join lateral (
               -- A stored local artist MBID (Last.fm) is a search hint, not embedded evidence.
               select array[artists.mbid::text] as hinted_artist_mbids
@@ -428,6 +458,7 @@ class MusicBrainzEnrichmentPostgresRepository:
             "match_state": _candidate_match_state(match_state),
             "evidence_summary": _bounded_text(evidence_summary, 2048, required=True),
             "observed_at": observed_at,
+            "matcher_version": MATCHER_VERSION,
         })
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
@@ -436,6 +467,7 @@ class MusicBrainzEnrichmentPostgresRepository:
                 connection.execute(_upsert_candidate_artists_sql(), params)
                 connection.execute(_insert_candidates_sql(), params)
                 row = _row_mapping(connection.execute(_upsert_candidate_match_sql(), params).fetchone())
+                connection.execute(_mark_matcher_version_sql(), params)
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=local_artist_id, observed_at=observed_at,
                 ))
@@ -450,6 +482,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         confidence: float,
         evidence_summary: str,
         observed_at: datetime,
+        credit_name: str | None = None,
     ) -> dict[str, object]:
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
@@ -461,6 +494,8 @@ class MusicBrainzEnrichmentPostgresRepository:
             "confidence": _confidence(confidence),
             "evidence_summary": _bounded_text(evidence_summary, 2048, required=True),
             "observed_at": _aware_utc(observed_at),
+            "credit_name": _bounded_text(credit_name, 512) or None,
+            "matcher_version": MATCHER_VERSION,
             **_projection_params(projection),
             **_alias_array_params(aliases),
             **_tag_array_params(tags),
@@ -469,6 +504,7 @@ class MusicBrainzEnrichmentPostgresRepository:
             with _transaction(connection):
                 connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
                 row = _row_mapping(connection.execute(_automatic_outcome_sql(), params).fetchone())
+                connection.execute(_mark_matcher_version_sql(), params)
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=params["local_artist_id"], observed_at=params["observed_at"],
                 ))
@@ -1388,6 +1424,7 @@ def _upsert_candidate_match_sql() -> str:
             and not (
               library.local_artist_musicbrainz_matches.state = 'matched'
               and library.local_artist_musicbrainz_matches.artist_mbid is not null
+              and %(match_state)s <> 'conflict'
             )
           returning 1
         )
@@ -1395,6 +1432,20 @@ def _upsert_candidate_match_sql() -> str:
         from library.local_artist_musicbrainz_candidates candidates
         join active_library on active_library.library_id = candidates.library_id
         where candidates.local_artist_id = %(local_artist_id)s;
+    """
+
+
+def _mark_matcher_version_sql() -> str:
+    """Record that the current matcher decided (or confirmed) an automatic row,
+    including a protected match the new evidence left in place."""
+    return _active_library_cte() + """
+        update library.local_artist_musicbrainz_matches matches
+        set matcher_version = %(matcher_version)s
+        from active_library
+        where matches.library_id = active_library.library_id
+          and matches.local_artist_id = %(local_artist_id)s
+          and matches.decision_source <> 'manual'
+          and matches.matcher_version < %(matcher_version)s;
     """
 
 
@@ -1488,7 +1539,7 @@ def _automatic_outcome_sql() -> str:
             library_id, local_artist_id, artist_mbid, state, decision_source,
             confidence, evidence_summary, selected_at, last_verified_at,
             provider_classification, provider_observed_at, first_observed_at,
-            last_observed_at, created_at, updated_at
+            last_observed_at, created_at, updated_at, credit_name
           )
           select active_artist.library_id, active_artist.id,
                  (select mbid from upsert_artist), %(match_state)s, 'automatic',
@@ -1496,12 +1547,14 @@ def _automatic_outcome_sql() -> str:
                  case when %(match_state)s = 'matched' then %(observed_at)s else null end,
                  case when %(match_state)s = 'matched' then %(observed_at)s else null end,
                  %(provider_state)s, %(observed_at)s, %(observed_at)s,
-                 %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s,
+                 case when %(match_state)s = 'matched' then %(credit_name)s else null end
           from active_artist
           where active_artist.is_present or %(provider_state)s = 'not_present'
           on conflict (library_id, local_artist_id) do update
           set artist_mbid = excluded.artist_mbid,
               state = excluded.state,
+              credit_name = excluded.credit_name,
               confidence = excluded.confidence,
               evidence_summary = excluded.evidence_summary,
               selected_at = excluded.selected_at,

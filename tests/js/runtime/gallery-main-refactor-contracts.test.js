@@ -1978,6 +1978,9 @@ test('the artist panel ends its text with one disabled Open full page and lists 
     'disabled for every artist, with the same title Full page had');
   assert.match(builder, /<p data-artist-info-summary\$\{isLongBiography \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{fullPage\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,
     'the control is the last item of the text, and the service links follow below it');
+  // An artist matched through a release credit says so under its links.
+  assert.match(builder, /<\/div>` : ''\}\$\{credit\}/);
+  assert.match(builder, /data-artist-info-credit>On MusicBrainz as \$\{escapeHtml\(group\.artist_musicbrainz\.canonical_name \|\| ''\)\}, credited as \$\{escapeHtml\(creditedAs\)\}\.<\/p>/);
   assert.match(builder, /scrollHeight <= summaryElement\.clientHeight \+ 1\) summaryElement\.removeAttribute\('data-artist-info-long'\)/,
     'text that fits in five lines gets no clamp or fade');
 

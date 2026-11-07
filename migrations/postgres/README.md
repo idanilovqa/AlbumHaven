@@ -291,6 +291,15 @@ startup backfill and the owner's MusicBrainz sync then re-check those artists wi
 the corrected matcher. It is idempotent; rollback is the next re-check, which
 re-creates any row the albums confirm.
 
+Migration `0174_add_musicbrainz_matcher_version_and_credit_name.sql` adds two
+columns to `library.local_artist_musicbrainz_matches`. `matcher_version` (existing
+rows are 1) lets the startup backfill re-check every non-manual decision made by
+an older matcher; a re-check that finds another artist moves a match to conflict
+instead of replacing it. `credit_name` keeps the local name an artist was matched
+under through a release credit ("credited as 3 Crows"). Adding columns with a
+constant default does not rewrite the table. Rollback stops the readers and drops
+both columns; the next backfill then treats every row as version 1 again.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

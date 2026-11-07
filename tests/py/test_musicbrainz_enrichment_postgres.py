@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from music_app.services.musicbrainz_enrichment_postgres import (
+    MATCHER_VERSION,
     MusicBrainzEnrichmentPostgresRepository,
 )
 
@@ -33,6 +34,7 @@ class FakeConnection:
         self._cursors = list(cursors)
         self.calls = []
         self.problem_syncs = []
+        self.matcher_marks = []
         self.artist_locks = []
         self.transaction_count = 0
 
@@ -53,6 +55,9 @@ class FakeConnection:
             return FakeCursor()
         if "insert into library.metadata_enrichment_problems" in sql:
             self.problem_syncs.append(params)
+            return FakeCursor()
+        if "set matcher_version" in sql:
+            self.matcher_marks.append(params)
             return FakeCursor()
         self.calls.append((sql, params))
         if not self._cursors:
@@ -339,6 +344,9 @@ def test_automatic_outcomes_preserve_an_existing_accepted_automatic_match(provid
     assert "state = 'matched'" in sql
     assert "artist_mbid is not null" in sql
     assert "artist_mbid = null" not in sql
+    # The kept match is stamped as checked by the current matcher, so the
+    # re-check backfill does not queue it again.
+    assert [mark["matcher_version"] for mark in connection.matcher_marks] == [MATCHER_VERSION]
 
 
 def test_automatic_outcome_preserves_prior_projection_through_disappearance_and_reappearance():

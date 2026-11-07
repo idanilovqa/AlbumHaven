@@ -8091,6 +8091,10 @@ def _artist_musicbrainz_projection(
         "country": str(row.get("artist_country") or "").strip() or None,
         "genres": genres or ["Genre unavailable"],
     }
+    credit_name = str(row.get("artist_credit_name") or "").strip()
+    if credit_name:
+        # Matched through a release credit: "credited as 3 Crows".
+        projection["credited_as"] = credit_name
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
@@ -8516,6 +8520,7 @@ def _artist_musicbrainz_projection_columns_sql() -> str:
           musicbrainz_artist.canonical_name as artist_canonical_name,
           musicbrainz_artist.preferred_native_name as artist_native_name,
           musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
+          artist_match.credit_name as artist_credit_name,
           coalesce(artist_country.country_name, artist_country.country_code)
             as artist_country,
           coalesce(artist_genres.names, array[]::text[]) as artist_genres,
@@ -8667,6 +8672,7 @@ def _selected_artist_sql() -> str:
           musicbrainz_artist.canonical_name as artist_canonical_name,
           musicbrainz_artist.preferred_native_name as artist_native_name,
           musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
+          artist_match.credit_name as artist_credit_name,
           coalesce(artist_country.country_name, artist_country.country_code)
             as artist_country,
           coalesce(artist_genres.names, array[]::text[]) as artist_genres,
@@ -10192,6 +10198,7 @@ def _search_preview_sql(
                    'artist_canonical_name', musicbrainz_artist.canonical_name,
                    'artist_native_name', musicbrainz_artist.preferred_native_name,
                    'artist_discogs_artist_id', musicbrainz_artist.discogs_artist_id,
+                   'artist_credit_name', artist_match.credit_name,
                    'artist_country', coalesce(
                      artist_country.country_name,
                      artist_country.country_code
@@ -10366,6 +10373,7 @@ def _search_preview_sql(
                null::text as artist_canonical_name,
                null::text as artist_native_name,
                null::bigint as artist_discogs_artist_id,
+               null::text as artist_credit_name,
                null::text as artist_country,
                array[]::text[] as artist_genres,
                null::jsonb as album_featured_artists,

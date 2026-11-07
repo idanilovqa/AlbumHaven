@@ -67,3 +67,13 @@ def test_family_preview_rows_select_the_shared_projection_columns():
     assert browse._artist_musicbrainz_projection_columns_sql() in sql
     assert "left join library.local_artist_musicbrainz_matches artist_match" in sql
     assert "artist_match.local_artist_id = matched_album_rows.artist_id" in sql
+
+
+def test_a_release_credit_match_carries_the_credited_name():
+    row = {**_row("3 Crows", "3ef2dc4b-b3a9-4453-85db-3054d3ec0e5d", "Chris Buck"), "artist_credit_name": "3 Crows"}
+
+    projection = browse._artist_musicbrainz_projection(row)
+
+    assert projection["canonical_name"] == "Chris Buck"
+    assert projection["credited_as"] == "3 Crows"
+    assert "credited_as" not in browse._artist_musicbrainz_projection(_row("Angra", "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a"))

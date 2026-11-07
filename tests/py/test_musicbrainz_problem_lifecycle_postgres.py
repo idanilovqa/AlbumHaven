@@ -592,3 +592,68 @@ def test_stored_artist_mbid_recheck_removes_only_automatic_matches_from_that_pat
     assert artist_ids["lastfm-path"] not in remaining, "the stored-MBID match is re-checked"
     assert remaining[artist_ids["search-path"]] == ("automatic", "MusicBrainz search evidence agreed.")
     assert remaining[artist_ids["manual"]][0] == "manual", "a manual choice is never touched"
+
+
+def test_album_evidence_matcher_rechecks_older_rows_and_never_silently_replaces_a_match(monkeypatch: pytest.MonkeyPatch):
+    """0174: rows decided by an older matcher are re-queued; a different artist goes to conflict."""
+    from music_app.services.musicbrainz_enrichment_postgres import MATCHER_VERSION
+
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _library_id, artist_id = _seed_present_artist(setup_url, "matcher-version")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+
+    def match():
+        with isolatedPostgres._connect(setup_url) as connection:
+            return connection.execute(
+                "select state, artist_mbid::text as mbid, matcher_version, credit_name"
+                " from library.local_artist_musicbrainz_matches where local_artist_id = %s", (artist_id,),
+            ).fetchone()
+
+    def clear_jobs():
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute("delete from ops.metadata_enrichment_jobs where local_artist_id = %s", (artist_id,))
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz release credit evidence agreed.", credit_name="3 Crows",
+        artist={"mbid": GERMAN, "canonical_name": "Chris Buck", "artist_type": "Person"},
+    )
+    assert match() == {"state": "matched", "mbid": GERMAN, "matcher_version": MATCHER_VERSION, "credit_name": "3 Crows"}
+
+    # A freshly verified match by the current matcher is not re-queued...
+    assert repository.enqueue_eligible_artists(reason="periodic_scan", observed_at=NOW) == {"enqueued_count": 0}
+    # ...but one decided by an older matcher is, however recently it was verified.
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_artist_musicbrainz_matches set matcher_version = 1 where local_artist_id = %s",
+                           (artist_id,))
+    assert repository.enqueue_eligible_artists(reason="periodic_scan", observed_at=NOW) == {"enqueued_count": 1}
+
+    job = repository.claim_due_job(worker_id="worker-a", now=NOW, lease_duration=timedelta(minutes=5))
+    context = repository.load_artist_context(job_id=job["id"], worker_id="worker-a")
+    assert context["existing_canonical_name"] == "Chris Buck"
+    assert [album["title"] for album in context["albums"]] == ["Kingdom of the Night"]
+    assert [track["title"] for track in context["albums"][0]["tracks"]] == ["Track"]
+    clear_jobs()
+
+    # Weaker evidence keeps the match and stamps it as checked.
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="not_found", artist=None, confidence=0, observed_at=NOW,
+        evidence_summary="No MusicBrainz artist has this name or one of your albums.",
+    )
+    assert match()["state"] == "matched" and match()["matcher_version"] == MATCHER_VERSION
+
+    # Another artist's album evidence moves the match to conflict, keeping the stored MBID.
+    repository.replace_candidates(
+        local_artist_id=artist_id, match_state="conflict", observed_at=NOW,
+        evidence_summary="Album evidence now points to another MusicBrainz artist than the current match.",
+        candidates=[
+            {"artist_mbid": GERMAN, "canonical_name": "Chris Buck", "candidate_score": 1, "evidence_summary": "Current match"},
+            {"artist_mbid": TRANCE, "canonical_name": "Axxis", "candidate_score": 1, "evidence_summary": "Album evidence now agrees"},
+        ],
+    )
+    assert match()["state"] == "conflict" and match()["mbid"] == GERMAN
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _active(connection, artist_id) == ["musicbrainz_artist_metadata_conflict"]

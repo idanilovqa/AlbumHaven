@@ -522,3 +522,29 @@ def test_library_data_corrections_default_to_display_only_and_reject_unknown_mod
         {**payload, "metadata_corrections": "write_tags"})["metadata_corrections"] == "write_tags"
     with pytest.raises(ValueError, match="Library Data Corrections"):
         library_roots.normalize_persisted_library_root_settings({**payload, "metadata_corrections": "always"})
+
+@pytest.mark.parametrize("mode", ["display_only", "write_tags"])
+def test_library_data_corrections_mode_leaves_the_scan_cache_identity_unchanged(mode, tmp_path, monkeypatch):
+    # Stored snapshots carry this hash; switching the mode must not invalidate them.
+    roots = {"version": 1, "main_library_roots": [{"id": "main", "path": str(tmp_path), "layout_mode": "artist"}],
+             "hoarding_library_roots": [], "new_arrivals_roots": [], "move_policy": {}}
+    stored = {}
+
+    class FakePostgresStore:
+        def __init__(self, _config):
+            pass
+
+        def load_settings(self):
+            return stored["settings"]
+
+    monkeypatch.setattr("music_app.services.library_roots.PostgresLibraryRootSettingsStore", FakePostgresStore)
+    config = {
+        "MUSIC_DIR": tmp_path,
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
+    }
+    stored["settings"] = roots
+    without_setting = library_roots.library_root_cache_identity(config)
+    stored["settings"] = {**roots, "metadata_corrections": mode}
+
+    assert library_roots.library_root_cache_identity(config) == without_setting

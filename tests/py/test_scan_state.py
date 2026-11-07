@@ -1027,6 +1027,74 @@ def test_scan_music_incremental_uses_explicit_configured_library_roots_without_f
     assert captured_partial_publishers == [publish_partial_snapshot]
 
 
+@pytest.mark.parametrize("mode_change", [("display_only", "write_tags"), ("write_tags", "display_only")])
+def test_changing_library_data_corrections_keeps_reusing_unchanged_files(
+    mode_change,
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    # A forced scan right after startup (empty in-memory cache) must still
+    # reuse the stored entries: the corrections mode doesn't change what is read.
+    before, after = mode_change
+    root = runtime_config["MUSIC_DIR"]
+    track_path = root / "Artist" / "Album" / "song.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"generated-test-track")
+    stat = track_path.stat()
+    stored_entry = {
+        "path": str(track_path), "title": "Song", "album": "Album", "artist": "Artist",
+        "album_artist": "Artist", "album_rating": 0, "mtime": stat.st_mtime, "size": stat.st_size,
+        "cover_path": None, "release_date": None, "compilation_tag": None,
+        "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+    }
+    settings = {"main_library_roots": [{"id": "main", "path": str(root), "layout_mode": "artist"}]}
+    save_library_root_settings(runtime_config, {**settings, "metadata_corrections": before})
+    _install_scan_cache_adapter(
+        monkeypatch,
+        FakeScanCacheAdapter(
+            file_cache={str(track_path): stored_entry},
+            last_scan=5.0,
+            relation_views={"artists": ["Artist"]},
+            root_identity=library_root_cache_identity(runtime_config),
+        ),
+    )
+    save_library_root_settings(runtime_config, {**settings, "metadata_corrections": after})
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(library_indexing, "find_cover_for_track_folder", lambda *_args, **_kwargs: None)
+    opened = []
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: opened.append(path) or dict(stored_entry))
+
+    def scan_incrementally(**kwargs):
+        return library_indexing.scan_library_file_cache(
+            library_state,
+            roots=[root],
+            supported_extensions={".mp3"},
+            image_extensions={".jpg"},
+            exception_overrides={},
+            use_existing_cache=kwargs["use_existing_cache"],
+            expected_scan_generation=kwargs["expected_scan_generation"],
+            publication_state=kwargs["publication_state"],
+            publish_partial_snapshot=kwargs["publish_partial_snapshot"],
+        )
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan_incrementally,
+        refresh_relation_views=lambda **_kwargs: None,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert opened == []
+    assert library_state["file_cache"][str(track_path)]["album"] == "Album"
+
+
 def test_refresh_library_state_rescans_when_library_root_identity_changes(
     runtime_config,
     runtime_logger,

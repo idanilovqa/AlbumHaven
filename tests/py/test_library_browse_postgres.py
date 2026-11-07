@@ -11372,13 +11372,14 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "active_candidate_ids as" in summary_sql
     assert "duplicate_track_ids as" not in summary_sql
     assert "duplicate_candidate_ids as" not in summary_sql
-    assert "having count(distinct source_directory) > 1" in summary_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in summary_sql
+    assert "having count(*) > 1" in summary_sql
     assert "identity_candidates.file_year = candidate.file_year" in summary_sql
     assert "select duplicate_album_ids.album_id from duplicate_album_ids" in summary_sql
     assert "candidate_album_ids as" in summary_sql
     assert "active_file_refs as" not in summary_sql
     assert "active_file_entry_scalars as" not in summary_sql
-    assert "join candidate_album_ids on candidate_album_ids.album_id = library.local_albums.id" in summary_sql
+    assert "library.local_albums.id = any(array(select album_id from candidate_album_ids))" in summary_sql
     assert "octet_length(file_album) <> length(file_album)" in summary_sql
     assert summary_sql.count("translate(") >= 4
     assert summary_sql.count("~ %(mojibake_candidate_pattern)s::text") >= 2
@@ -11476,7 +11477,7 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "local_album_membership as materialized" in candidate_sql
     assert "local_membership_sources as materialized" not in candidate_sql
     assert "{scan_cache,file_entry,local_album_membership_problem}" in candidate_sql
-    assert "physical_file_context.local_album_membership_problem is not null" in candidate_sql
+    assert "join local_album_membership membership on membership.file_id = active_problem_rows.file_id" in candidate_sql
     order_rows_sql = candidate_sql.split(
         "active_problem_rows as materialized (",
         1,
@@ -11496,12 +11497,10 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
         "active_track_order_rollup as (",
         1,
     )[1].split("candidate_album_ids as (", 1)[0]
-    assert (
-        "group by active_problem_rows.album_id, "
-        "active_problem_rows.disc_number"
-    ) in order_rollup_sql
-    assert "min(active_problem_rows.effective_track_number) <> 1" in order_rollup_sql
-    assert "count(distinct active_problem_rows.effective_track_number)" in order_rollup_sql
+    assert "select distinct album_id, disc_number, effective_track_number" in order_rollup_sql
+    assert "group by track_numbers.album_id, track_numbers.disc_number" in order_rollup_sql
+    assert "min(track_numbers.effective_track_number) <> 1" in order_rollup_sql
+    assert "count(*) <> max(track_numbers.effective_track_number)" in order_rollup_sql
     assert "incomplete_track_order" in order_rollup_sql
     assert "active_track_order_rollup.incomplete_track_order is true" in candidate_sql
 
@@ -12593,7 +12592,7 @@ def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encod
     assert "position('??'" in candidate_sql
     assert "in ('', 'unknown', 'unknown artist', 'unknown album', 'none', 'null')" in candidate_sql
     assert "library.local_track_files.scan_file_entry_is_object is true" in summary_sql
-    assert "having count(distinct source_directory) > 1" in candidate_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in candidate_sql
     assert "identity_candidates.file_year = candidate.file_year" in candidate_sql
     assert "relational_file_candidate_ids" not in candidate_sql
     assert "duplicate_track_ids" not in candidate_sql
@@ -17930,3 +17929,128 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
 
+
+
+def test_gallery_cover_prewarm_leaves_previews_a_running_move_has_not_reached(monkeypatch, tmp_path):
+    """Gallery payloads during a reverse move must not regenerate a preview at the
+    destination while it still waits in the source root to be moved."""
+    from music_app.services import covers as covers_module
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    revision = "b" * 64
+    custom_root = tmp_path / "Generated Previews"
+    waiting = tmp_path / "Waiting" / "Album" / "cover.jpg"
+    fresh = tmp_path / "Fresh" / "Album" / "cover.jpg"
+    pending = build_cover_variant_base_path(
+        waiting, cache_root=custom_root / "v1", max_size=480, revision=revision
+    ).with_suffix(".jpg")
+    pending.parent.mkdir(parents=True)
+    pending.write_bytes(b"not yet moved")
+    queued = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, **kwargs: queued.append((Path(source_path), Path(kwargs["cache_root"]))),
+    )
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="custom", active_root=custom_root, requested_mode="album_folders", operation_state="running",
+        )
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {"_GENERATED_PREVIEW_STORAGE_POLICY": policy},
+        [{"albums": [
+            {"cover_path": str(waiting), "cover_revision": revision},
+            {"cover_path": str(fresh), "cover_revision": revision},
+        ]}],
+    )
+
+    assert queued == [(fresh, fresh.parent / ".album-haven")]
+
+
+def _cte_body(sql: str, name: str) -> str:
+    start = sql.index(f"{name} as")
+    depth = 0
+    for index in range(sql.index("(", start), len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return sql[start:index]
+    raise AssertionError(f"unterminated CTE {name}")
+
+
+@pytest.mark.parametrize("candidate_ids_page", [True, False])
+def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_ids_page):
+    """Cold Problematic Files took 30-40 s at 160k files: every request re-ran
+    path regular expressions per file and sorted every file for distinct counts."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, candidate_ids_page=candidate_ids_page, path_columns=True,
+    )
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "regexp_replace" not in active_rows
+    assert "local_path_key(" not in active_rows
+    assert "duplicate_identity_text(" not in active_rows
+    for column in (
+        "scan_physical_parent", "scan_source_directory", "scan_physical_album_container",
+        "scan_path_key_present", "scan_file_album_identity",
+    ):
+        assert f"library.local_track_files.{column}" in active_rows
+    duplicates = _cte_body(sql, "duplicate_album_ids")
+    assert "file_album_identity" in duplicates
+    # The broad non-ASCII year superset made all 14.6k albums of the owner's
+    # library candidates (and duplicate checks) for minutes per full load. It
+    # remains only as the duplicate fallback for servers without casefold();
+    # the reasons it used to hide are prefiltered explicitly below.
+    assert sql.count("octet_length(file_album) <> length(file_album)") == 1
+    assert "server_version_num')::integer < 180000" in duplicates
+    rollup = _cte_body(sql, "active_album_rollup")
+    assert "count(active_problem_rows.file_year) < count(*) as has_blank_year" in rollup
+    assert "active_album_rollup.has_blank_year" in sql
+    # parse_edition_title superset: bracketed edition, издание, or remaster.
+    assert "active_problem_rows.file_album ~ '[])]$'" in sql
+    assert "position('издание' in active_problem_rows.file_album) > 0" in sql
+    for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
+        assert "count(distinct" not in _cte_body(sql, cte)
+    # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
+    assert "join candidate_album_ids" not in sql
+    assert "any(array(select album_id from candidate_album_ids))" in sql
+
+
+def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migration():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(candidate_summary=True, candidate_ids_page=True)
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "scan_physical_parent" not in active_rows
+    assert "library.local_path_key(library.local_track_files.private_path) <> ''" in active_rows
+
+
+def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
+    """The first Problematic Files page loads rows for about 50 albums, yet on the
+    real 160k-file library it took 3.1 s: the planner sorted every track to join
+    the mis-estimated album CTE, hashed every track to scope folder files, and
+    rebuilt the folder-context hash once per selected file."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, selected_album_ids=True, path_columns=True,
+    )
+
+    assert "where library.local_tracks.album_id = any(array(select id from selected_albums))" in _cte_body(
+        sql, "selected_tracks"
+    )
+    scope = _cte_body(sql, "physical_scope_file_ids")
+    lateral = scope[scope.index("join lateral"):]
+    assert "join library.local_tracks scoped_tracks" in lateral
+    assert lateral.index("join library.local_tracks scoped_tracks") < lateral.index(") scoped_files on true")
+    assert "physical_file_context" not in _cte_body(sql, "selected_track_file_rows")
+    assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
+        sql, "selected_active_track_file_rows"
+    )

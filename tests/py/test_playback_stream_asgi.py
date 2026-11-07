@@ -1013,13 +1013,19 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
     from music_app.services.waveform_peaks import WaveformPeaksBusyError
 
     class BusyRegistryDouble:
+        def __init__(self, monitor_started: asyncio.Event):
+            self.monitor_started = monitor_started
+
         async def run(self, _path: Path, *, bins: int):
             assert bins == 280
+            # Raise only once the disconnect monitor is blocked in receive();
+            # otherwise the handler can cancel it before it ever starts.
+            await self.monitor_started.wait()
             raise WaveformPeaksBusyError("waveform peak job already active")
 
     async def scenario() -> None:
-        playback_app.state.waveform_peaks_registry = BusyRegistryDouble()
         monitor_started = asyncio.Event()
+        playback_app.state.waveform_peaks_registry = BusyRegistryDouble(monitor_started)
         monitor_cancelled = asyncio.Event()
         release_monitor = asyncio.Event()
         response_started = asyncio.Event()
@@ -1059,7 +1065,8 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         }
         request_task = asyncio.create_task(playback_app(scope, receive, send))
         try:
-            await asyncio.wait_for(monitor_started.wait(), timeout=1)
+            # Setup only; the behavior under test is the 0.1 s response bound below.
+            await asyncio.wait_for(monitor_started.wait(), timeout=10)
             response_wait = asyncio.create_task(response_started.wait())
             completed, _pending = await asyncio.wait({response_wait}, timeout=0.1)
             assert response_wait in completed, (

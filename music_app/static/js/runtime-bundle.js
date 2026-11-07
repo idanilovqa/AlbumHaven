@@ -3334,25 +3334,74 @@ function resolveStatusIndicatorTitleText(indicator, data = {}) {
   return nextTitle;
 }
 
+let musicBrainzArtistSyncPromise = null;
+
 function ensureStatusContextMenu() {
-  let menu = document.getElementById('status-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'status-context-menu';
-  menu.className = 'gallery-anchored-menu';
-  menu.hidden = true;
-  menu.setAttribute('role', 'group');
-  menu.setAttribute('aria-label', 'Library actions');
-  menu.innerHTML = [
+  const canRequestMusicBrainzSync = state.status?.allowed_actions?.['catalogue.enrichment.request'] === true;
+  const actions = [
     ['scan-action', 'full-rescan', 'Full Rescan'],
     ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
     ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
-  ].map(([role, action, label]) => ButtonComponent.renderButton({
-    label, className: 'gallery-menu-action',
-    attributes: { 'data-status-role': role, 'data-status-action': action },
-  })).join('');
-  document.body.appendChild(menu);
+  ];
+  if (canRequestMusicBrainzSync) {
+    actions.splice(2, 0, ['musicbrainz-sync', 'musicbrainz-sync', 'MusicBrainz sync']);
+  }
+  const actionSignature = actions.map(([, action]) => action).join('|');
+  let menu = document.getElementById('status-context-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'status-context-menu';
+    menu.className = 'gallery-anchored-menu';
+    menu.hidden = true;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'Library actions');
+    menu.dataset.statusActionSignature = '';
+    document.body.appendChild(menu);
+  }
+  // An existing unsigned menu already holds the base actions; only a
+  // capability change that adds or removes MusicBrainz sync re-renders it.
+  const renderedSignature = menu.dataset.statusActionSignature ?? 'full-rescan|fetch-covers|go-to-scan-page';
+  if (renderedSignature !== actionSignature) {
+    menu.innerHTML = actions.map(([role, action, label]) => ButtonComponent.renderButton({
+      label, className: 'gallery-menu-action',
+      attributes: { 'data-status-role': role, 'data-status-action': action },
+    })).join('') + (canRequestMusicBrainzSync
+      ? '<span data-status-role="musicbrainz-feedback" role="status" aria-live="polite"></span>'
+      : '');
+    menu.dataset.statusActionSignature = actionSignature;
+  }
   return menu;
+}
+
+function setMusicBrainzSyncFeedback(severity, message) {
+  const menu = ensureStatusContextMenu();
+  const feedback = menu.querySelector('[data-status-role="musicbrainz-feedback"]');
+  if (feedback) feedback.innerHTML = buildSmallAlertHtml({ severity, message });
+}
+
+function triggerMusicBrainzArtistSync() {
+  if (musicBrainzArtistSyncPromise) return musicBrainzArtistSyncPromise;
+  state.status.musicbrainz_sync_in_progress = true;
+  syncStatusContextMenu();
+  musicBrainzArtistSyncPromise = fetch('/api/musicbrainz/artists/sync', { method: 'POST' })
+    .then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail || `Request failed (${response.status})`);
+      const count = Math.max(0, Number(payload?.enqueued_count || 0));
+      setMusicBrainzSyncFeedback('info', `MusicBrainz sync queued ${count} ${count === 1 ? 'artist' : 'artists'}.`);
+      if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus({ force: true });
+      return payload;
+    })
+    .catch((error) => {
+      setMusicBrainzSyncFeedback('error', error?.message || 'MusicBrainz sync failed.');
+      return false;
+    })
+    .finally(() => {
+      state.status.musicbrainz_sync_in_progress = false;
+      musicBrainzArtistSyncPromise = null;
+      syncStatusContextMenu();
+    });
+  return musicBrainzArtistSyncPromise;
 }
 
 function resolvePrimaryStatusContextAction(status = {}, options = {}) {
@@ -3396,6 +3445,14 @@ function syncStatusContextMenu() {
   const menu = ensureStatusContextMenu();
   const primaryButton = menu.querySelector('[data-status-role="scan-action"]');
   const fetchOrCancelButton = menu.querySelector('[data-status-role="cover-action"]');
+  const musicBrainzSyncButton = menu.querySelector('[data-status-role="musicbrainz-sync"]');
+  if (musicBrainzSyncButton) {
+    syncStatusContextButtonPresentation(musicBrainzSyncButton, {
+      action: 'musicbrainz-sync',
+      label: 'MusicBrainz sync',
+      disabled: Boolean(state.status?.musicbrainz_sync_in_progress),
+    });
+  }
   if (primaryButton) {
     const scanPageVisible = Boolean(state.ui?.scanPageReturnContext);
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
@@ -3472,6 +3529,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
@@ -4230,12 +4288,28 @@ function buildAlertIconHtml(severity) {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
 }
 
+function buildSmallAlertAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:aria-label|data-open-musicbrainz-artist-problem)$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeAlertHtml(value)}"`;
+  }).join('');
+}
+
 function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
+  const interactive = config.interactive === true;
+  const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  const attributes = buildSmallAlertAttributes(config.attributes);
+  const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  if (interactive) {
+    return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
+  }
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {
@@ -4374,6 +4448,132 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+// MusicBrainz stores ISO 3166-1 codes; show the full English country name.
+const galleryCountryNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+function galleryCountryName(country) {
+  const value = String(country || '').trim();
+  if (!/^[A-Za-z]{2}$/.test(value) || !galleryCountryNames) return value;
+  try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
+}
+
+// Country and genre pills only; the album count follows the artist name.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
+    ? artistMusicBrainz
+    : {};
+  const country = galleryCountryName(projection.country);
+  const genres = (Array.isArray(projection.genres) ? projection.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const countryHtml = country
+    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
+    : '';
+  const genreHtml = genres.map((genre) => (
+    genre === 'Genre unavailable'
+      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+  )).join('');
+  return `${countryHtml}${genreHtml}`;
+}
+
+const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
+const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
+
+function galleryArtistMusicBrainzStatusKey(artist) {
+  return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+// Owner-only repair status from the stored review projection; the shared,
+// cached Gallery payload never carries it.
+function getGalleryArtistMusicBrainzStatus(group = {}) {
+  if (group?.artist_musicbrainz_problem || group?.artist_musicbrainz_state) {
+    return { problem: group.artist_musicbrainz_problem || null, state: group.artist_musicbrainz_state || '' };
+  }
+  return galleryArtistMusicBrainzStatus.byArtist.get(galleryArtistMusicBrainzStatusKey(group?.artist)) || { problem: null, state: '' };
+}
+
+function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
+  if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
+    galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.signature = '[]';
+    return Promise.resolve(false);
+  }
+  if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
+  // Poll quickly only while a first lookup is pending; otherwise back off.
+  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
+  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
+    return Promise.resolve(false);
+  }
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      if (!Array.isArray(payload?.artists)) return false;
+      const next = new Map();
+      for (const row of payload.artists) {
+        // Keyed by the canonical Gallery artist, so alias-combined groups match.
+        const key = galleryArtistMusicBrainzStatusKey(row?.gallery_artist || row?.local_artist_name);
+        if (!key || next.get(key)?.problem) continue;
+        if (row.unresolved_reason && row.problem_occurrence_id != null) {
+          next.set(key, { problem: { occurrence_id: String(row.problem_occurrence_id), label: row.unresolved_reason }, state: '' });
+        } else if (row.match_state === 'pending') {
+          next.set(key, { problem: null, state: 'pending' });
+        }
+      }
+      const signature = JSON.stringify([...next]);
+      if (signature === galleryArtistMusicBrainzStatus.signature) return false;
+      const previous = galleryArtistMusicBrainzStatus.byArtist;
+      const changed = galleryArtistMusicBrainzStatus.loadedAt > 0
+        ? new Set([...previous.keys(), ...next.keys()].filter((key) => (
+          JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
+        )))
+        : new Set();
+      galleryArtistMusicBrainzStatus.signature = signature;
+      galleryArtistMusicBrainzStatus.byArtist = next;
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      // A finished lookup, re-check or manual match changes the shared Gallery
+      // projection (links, pills). Reload the view when it shows such an artist,
+      // and only then: a library-wide sync changes many artists every poll.
+      const shown = typeof getGalleryMainGroups === 'function' ? getGalleryMainGroups() : [];
+      if (changed.size && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+          && shown.some((group) => changed.has(galleryArtistMusicBrainzStatusKey(group?.artist)))) {
+        void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
+      }
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      galleryArtistMusicBrainzStatus.loadedAt = Date.now();
+      galleryArtistMusicBrainzStatus.promise = null;
+    });
+  return galleryArtistMusicBrainzStatus.promise;
+}
+
+function buildGalleryArtistStatusHtml(config = {}) {
+  const problem = config.artistMusicBrainzProblem;
+  if (problem?.occurrence_id && problem?.label) {
+    return buildSmallAlertHtml({
+      severity: 'warning',
+      message: problem.label,
+      interactive: true,
+      attributes: {
+        'data-open-musicbrainz-artist-problem': problem.occurrence_id,
+        'aria-label': `Open ${problem.label} for ${config.artist || 'artist'}`,
+      },
+    });
+  }
+  if (String(config.artistMusicBrainzState || '').trim().toLowerCase() === 'pending') {
+    return '<span class="artist-musicbrainz-pending" role="status" aria-label="Metadata pending">Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
+  }
+  return '';
+}
+
 const LIBRARY_SOURCE_MARKERS = Object.freeze({
   hoard: Object.freeze({
     label: 'Hoard',
@@ -4445,7 +4645,6 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -4453,8 +4652,9 @@ function buildGalleryBarHtml(config = {}) {
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
-  const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
+  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -4475,20 +4675,14 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
-function buildArtistInfoOverlayHtml(config = {}) {
-  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
-  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
-  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
-  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
-}
-
 function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
+  const status = buildGalleryArtistStatusHtml(config);
   const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -4698,7 +4892,7 @@ function resolveGalleryArtistInfo(group = {}, artist = '') {
     summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
     imageUrl,
     wikipediaUrl,
-    canReadMore: providedSummary.length > 280,
+    isLongBiography: providedSummary.length > 280,
   };
 }
 
@@ -4711,7 +4905,7 @@ function reconcileGalleryMain(config = {}) {
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
     ? (config.hasFamily === false
-      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount, artist_musicbrainz: config.artist_musicbrainz }
       : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
   if (summaryContext.kind === 'single-artist') return summaryContext;
@@ -4721,7 +4915,7 @@ function resolveGalleryBarContext(config = {}) {
   const threshold = Number(config.scrollTop || 0);
   const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
-    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
+    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount, artist_musicbrainz: current.artist_musicbrainz }
     : summaryContext;
 }
 
@@ -6555,6 +6749,7 @@ function getGalleryMainContextSections() {
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+    artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
     labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
@@ -6887,10 +7082,6 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const isSearch = Boolean(String(state.view.query || '').trim());
-  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
-    closeGalleryMainSurface(false);
-  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -6908,15 +7099,21 @@ function updateGalleryMainChrome() {
     albumCount: summaryTotals.albumCount,
     groups: sections,
     hasFamily,
+    artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
+  const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
   if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
   summary.hidden = false;
+  if (metadata) {
+    metadata.hidden = true;
+    metadata.innerHTML = '';
+  }
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
     inlineTotal.hidden = true;
@@ -6931,10 +7128,19 @@ function updateGalleryMainChrome() {
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
+    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = context.artist;
-    summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (isSearch) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = false;
+      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
+    }
+    if (metadata) {
+      metadata.hidden = false;
+      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -7004,35 +7210,44 @@ function transitionGalleryMain(action) {
   }
 }
 
+// Only an accepted MusicBrainz match carries a projection, so unresolved artists show no links.
+const GALLERY_ARTIST_FULL_PAGE_LABEL = 'Open full page';
+
+function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
+  if (!artistMusicBrainz || typeof artistMusicBrainz !== 'object') return '';
+  const links = ['musicbrainz', 'discogs'].map((service) => ButtonComponent.renderExternalServiceLink({
+    service,
+    href: service === 'musicbrainz' ? artistMusicBrainz.musicbrainz_url : artistMusicBrainz.discogs_url,
+    subject: artist,
+  })).join('');
+  return links ? `<div class="ui-external-link-list">${links}</div>` : '';
+}
+
 function openGalleryArtistInfo(anchor) {
-  if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return;
-  const { summary, imageUrl, wikipediaUrl, canReadMore } = resolveGalleryArtistInfo(group, artist);
-  overlay.classList.remove('is-expanded');
+  const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
+  // The text always ends with the full-page control; it stays disabled until artist pages exist.
+  const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
+  const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
+  // Matched through a release credit ("3 Crows" on Chris Buck): say so beside the links.
+  const creditedAs = String(group.artist_musicbrainz?.credited_as || '').trim();
+  const credit = creditedAs
+    ? `<p class="artist-info-overlay__source" data-artist-info-credit>On MusicBrainz as ${escapeHtml(group.artist_musicbrainz.canonical_name || '')}, credited as ${escapeHtml(creditedAs)}.</p>`
+    : '';
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button></div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${credit}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
+  // A long biography that still fits in five lines needs no clamp or fade.
+  const summaryElement = overlay.querySelector('[data-artist-info-long]');
+  if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');
 }
 
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
-  const readMore = event.target.closest?.('[data-artist-info-read-more]');
-  if (readMore) {
-    event.preventDefault();
-    const expanded = readMore.getAttribute('aria-expanded') === 'true';
-    readMore.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-    readMore.textContent = expanded ? 'Read more' : 'Read less';
-    const panel = readMore.closest('.artist-info-overlay');
-    panel?.classList.toggle('is-expanded', !expanded);
-    const active = galleryMainSurfaceController?.current?.();
-    if (active?.surface === panel) positionGalleryAnchoredSurface(panel, active.anchor, 'left');
-    readMore.closest('.artist-info-overlay')?.querySelector('[data-artist-info-summary]')?.classList.toggle('is-expanded', !expanded);
-    return true;
-  }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
@@ -14828,6 +15043,17 @@ function parseLoopTime(value) {
 }
 
 function getProblematicAlbumNavigationOptions(album, selected) {
+  if (album?.entity_kind === 'artist') {
+    const artistName = String(album.name || '').trim() || 'Unknown Artist';
+    const artworkLabel = `Artist ${artistName}`;
+    return {
+      variant: 'wide', action: true, key: album.key, selected, label: artistName,
+      subtitle: `Artist · ${String(album.problem_reasons?.[0] || '')}`,
+      artworkHtml: buildAlbumArtboxHtml({ state: 'missing', label: artworkLabel }), artworkLabel,
+      count: null, countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+    };
+  }
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
@@ -21444,6 +21670,8 @@ function getAlbumProblemFilterSortIndex(album) {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
+const renderedProblemFilterOptions = new WeakMap();
+
 function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
@@ -21469,7 +21697,7 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    els.problemFilterMenu.innerHTML = reasonTypes.length
+    const optionsHtml = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
             <span class="utility-problem-filter-check">${selectedSet.has(reason) ? 'on' : ''}</span>
@@ -21477,6 +21705,12 @@ function renderProblemFilterControls(els) {
           </button>
         `).join('')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+    // List refreshes re-render the controls while the menu is open; rewriting
+    // unchanged options would reset its scroll position and keyboard focus.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+      els.problemFilterMenu.innerHTML = optionsHtml;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+    }
   }
 
   if (els.problemFilterChips) {
@@ -21733,6 +21967,394 @@ async function openUtilityModalForTrack(trackPath) {
       state.utility.problematicNavigationActiveToken = 0;
     }
   }
+}
+
+async function openMusicBrainzArtistProblem(occurrenceId) {
+  const normalizedOccurrenceId = String(occurrenceId || '').trim();
+  if (!normalizedOccurrenceId) return;
+  const hadLoadedProblems = Boolean(state.utility.loaded);
+  if (!state.utility.loaded) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+  }
+  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+    item?.occurrence_id,
+    item?.musicbrainz_occurrence_id,
+    item?.key,
+  ].some((value) => String(value || '').trim() === normalizedOccurrenceId));
+  let problem = findProblem();
+  if (!problem && hadLoadedProblems) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+    problem = findProblem();
+  }
+  if (!problem) {
+    showToast('This artist issue is not currently listed in Problematic Files.', 'error', 3200);
+    return;
+  }
+  state.utility.selectedProblematicKey = String(problem.key || normalizedOccurrenceId);
+  state.utility.deferProblematicAutoSelection = false;
+  state.utility.selectedProblemFilters = [];
+  state.utility.problemDropdownOpen = false;
+  setUtilityActiveTab('problematic-files');
+  if (isMusicBrainzArtistProblem(problem)) {
+    await loadMusicBrainzArtistProblemDetail(problem, { render: false });
+  } else if (!problem.detail_loaded) {
+    await loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true, { render: false });
+  }
+  openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+}
+
+const MUSICBRAINZ_ARTIST_MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS = 350;
+
+function isMusicBrainzArtistProblem(item) {
+  return item?.entity_kind === 'artist';
+}
+
+function readMusicBrainzArtistMbid(value) {
+  const trimmed = String(value || '').trim();
+  const urlMatch = trimmed.match(/^https:\/\/musicbrainz\.org\/artist\/([0-9a-f-]{36})\/?$/i);
+  const mbid = urlMatch ? urlMatch[1] : trimmed;
+  return MUSICBRAINZ_ARTIST_MBID_PATTERN.test(mbid) ? mbid.toLowerCase() : null;
+}
+
+function getMusicBrainzArtistProblemView(detail = {}) {
+  const reason = String(detail.problem_reason_code || '');
+  if (reason === 'musicbrainz_artist_not_found') return 'not-found';
+  // An unconfirmed single name match is a candidate to confirm, like several matches.
+  if (reason === 'musicbrainz_artist_ambiguous' || reason === 'musicbrainz_manual_review_required') return 'multiple';
+  if (reason === 'musicbrainz_artist_metadata_conflict') return 'conflict';
+  if (reason === 'musicbrainz_mirror_replication_pending' || reason === 'musicbrainz_matched_entity_unavailable') return 'pending';
+  return 'provider';
+}
+
+function getMusicBrainzArtistProblemIdentityRows(detail = {}) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const candidates = Array.isArray(detail.candidates) ? detail.candidates : [];
+  if (view !== 'conflict' || !detail.artist_mbid) return candidates.map((candidate) => ({ ...candidate, role: 'candidate' }));
+  const current = {
+    artist_mbid: detail.artist_mbid,
+    canonical_name: detail.canonical_name || detail.local_artist_name,
+    disambiguation: detail.disambiguation,
+    artist_kind: detail.artist_kind,
+    country: detail.country,
+    evidence_summary: detail.evidence_summary,
+    musicbrainz_url: detail.musicbrainz_url,
+    role: 'current',
+  };
+  return [current, ...candidates.filter((candidate) => candidate.artist_mbid !== detail.artist_mbid)
+    .map((candidate) => ({ ...candidate, role: 'suggested' }))];
+}
+
+function formatMusicBrainzAttemptTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatMusicBrainzNextRetry(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'With the next library scan';
+  const minutes = Math.round((date.getTime() - Date.now()) / 60000);
+  if (minutes <= 0) return 'Shortly';
+  if (minutes < 60) return `In ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return formatMusicBrainzAttemptTime(value);
+}
+
+function buildMusicBrainzExternalLinkHtml(url, label, { disabled = false, className = '' } = {}) {
+  return ButtonComponent.renderActionButton({
+    ariaLabel: label,
+    title: disabled ? 'Enter a valid artist URL or MBID first' : 'Open artist page',
+    icon: 'external',
+    presentation: 'bare',
+    className,
+    disabled,
+    attributes: { 'data-open-musicbrainz-url': disabled ? '' : url },
+  });
+}
+
+function buildMusicBrainzIdentityTableHtml(detail, ui) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const rows = getMusicBrainzArtistProblemIdentityRows(detail);
+  const tableRows = rows.map((row) => {
+    const selected = ui.selectedMbid === row.artist_mbid;
+    const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
+    const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
+    return {
+      key: row.artist_mbid,
+      ariaSelected: selected,
+      className: selected ? 'is-selected' : '',
+      cells: {
+        target: `<label class="musicbrainz-identity-choice"><input class="musicbrainz-identity-radio" type="radio" name="musicbrainz-artist-identity" value="${escapeHtml(row.artist_mbid)}" data-musicbrainz-select-identity="${escapeHtml(row.artist_mbid)}"${selected ? ' checked' : ''} aria-label="Select ${escapeHtml(name)}"><span class="musicbrainz-identity-copy"><span class="musicbrainz-identity-line"><strong>${escapeHtml(name)}</strong>${facts ? `<small>${escapeHtml(facts)}</small>` : ''}</span><span class="musicbrainz-identity-mbid">${escapeHtml(row.artist_mbid)}</span></span></label>`,
+        reason: `<span class="musicbrainz-identity-evidence">${escapeHtml(row.evidence_summary || 'Name only')}</span>`,
+        action: buildMusicBrainzExternalLinkHtml(row.musicbrainz_url, `Open ${row.canonical_name || 'artist'} on MusicBrainz`),
+      },
+    };
+  });
+  return buildUtilityCompactTable({
+    id: 'musicbrainz-artist-identities',
+    ariaLabel: view === 'conflict' ? 'MusicBrainz identity comparison' : 'MusicBrainz artist candidates',
+    columns: 'minmax(220px,1.4fr) minmax(160px,1fr) 44px',
+    actionTrackWidth: '44px',
+    columnsConfig: [
+      { key: 'target', label: view === 'conflict' ? 'Artist identity / MBID' : 'Candidate artist / MBID' },
+      { key: 'reason', label: 'Local evidence' },
+      { key: 'action', label: 'Actions', action: true, header: 'screen-reader' },
+    ],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline',
+    selection: 'single', rows: tableRows,
+    emptyHtml: '<p class="utility-detail-meta">No candidate artists are stored yet. Retry to search again.</p>',
+  });
+}
+
+function buildMusicBrainzManualResolutionHtml(detail, ui) {
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
+  const helper = ui.validating ? 'Verifying with MusicBrainz…'
+    : ui.validationError ? ui.validationError
+      : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+        : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+  return `<div class="musicbrainz-manual-resolution">
+      <strong>No MusicBrainz artist matched automatically.</strong>
+      <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
+      <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
+      <div class="musicbrainz-manual-field-row">
+        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1">
+        ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
+        ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
+      </div>
+      <div class="musicbrainz-manual-helper${ui.validationError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(helper)}</div>
+    </div>`;
+}
+
+function buildMusicBrainzProviderStatusHtml(detail, view) {
+  const lastAttempt = formatMusicBrainzAttemptTime(detail.last_attempt_at) || 'Not yet attempted';
+  const intro = view === 'pending'
+    ? 'The local MusicBrainz mirror is catching up. Local library data is unaffected.'
+    : 'Existing identity and metadata preserved. Album Haven will retry automatically.';
+  const guidance = view === 'pending'
+    ? 'Album Haven retries automatically while the mirror replicates. Use Retry now to check immediately.'
+    : 'Restore the configured local service, then use Retry now if you do not want to wait. Candidate selection stays unavailable until provider evidence can be verified.';
+  return `<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+    <h4 class="utility-detail-section-title">Retry status</h4>
+    <dl class="musicbrainz-retry-status">
+      <dt>Last attempt</dt><dd>${escapeHtml(lastAttempt)}</dd>
+      <dt>Next retry</dt><dd>${escapeHtml(formatMusicBrainzNextRetry(detail.next_attempt_at))}</dd>
+      <dt>Configured provider</dt><dd>Local metadata service</dd>
+      <dt>Local library</dt><dd>Unaffected</dd>
+    </dl>
+    <p class="utility-detail-meta">${escapeHtml(guidance)}</p>`;
+}
+
+function buildMusicBrainzArtistProblemDetail(item) {
+  const detail = item?.musicbrainz_detail;
+  if (item?.musicbrainz_detail_failed) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
+  }
+  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
+  const ui = item.musicbrainz_ui || {};
+  const view = getMusicBrainzArtistProblemView(detail);
+  const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
+  const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
+  const lastChecked = formatMusicBrainzAttemptTime(detail.last_checked_at);
+  const artwork = buildAlbumArtboxHtml({ state: 'missing', label: `Artist ${detail.local_artist_name || ''}` });
+  let body = '';
+  let actions = '';
+  if (view === 'not-found') {
+    body = buildMusicBrainzManualResolutionHtml(detail, ui);
+    actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
+  } else if (view === 'multiple' || view === 'conflict') {
+    body = `<h4 class="utility-detail-section-title">${view === 'conflict' ? 'Identity comparison' : 'Candidate artists'}</h4>
+      <div class="utility-detected-table">${buildMusicBrainzIdentityTableHtml(detail, ui)}</div>`;
+    const canAssign = Boolean(ui.selectedMbid) && ui.selectedMbid !== (view === 'conflict' ? detail.artist_mbid : null);
+    actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;
+  } else {
+    body = buildMusicBrainzProviderStatusHtml(detail, view);
+    actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
+  }
+  const pendingDots = view === 'pending'
+    ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
+    : '';
+  return `<div class="utility-detail-header musicbrainz-artist-problem" data-musicbrainz-artist-problem="${escapeHtml(item.local_artist_id)}">
+      <div class="utility-detail-cover">${artwork}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(detail.local_artist_name || item.name || 'Unknown Artist')}</h3>
+        <div class="utility-detail-meta">Artist</div>
+        <div class="utility-detail-meta">${escapeHtml(`${albumCount} local album${albumCount === 1 ? '' : 's'}`)}</div>
+        ${lastChecked ? `<div class="utility-detail-meta">Last checked: ${escapeHtml(lastChecked)}</div>` : ''}
+        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}</div>
+      </div>
+    </div>
+    ${body}
+    ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
+    <div class="utility-detected-actions">${actions}</div>`;
+}
+
+async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
+  if (!isMusicBrainzArtistProblem(item)) return null;
+  if (!force && (item.musicbrainz_detail || item.musicbrainz_detail_loading)) return item.musicbrainz_detail || null;
+  item.musicbrainz_detail_loading = true;
+  item.musicbrainz_detail_failed = false;
+  try {
+    const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}`, { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.artist) throw new Error(payload?.detail || 'Artist details unavailable.');
+    const detail = payload.artist;
+    const view = getMusicBrainzArtistProblemView(detail);
+    const identities = getMusicBrainzArtistProblemIdentityRows(detail);
+    item.musicbrainz_detail = detail;
+    item.musicbrainz_ui = {
+      selectedMbid: view === 'conflict'
+        ? (identities.find((row) => row.role === 'suggested')?.artist_mbid || detail.artist_mbid || null)
+        : (identities.length === 1 ? identities[0].artist_mbid : null),
+      manualValue: '',
+    };
+  } catch {
+    item.musicbrainz_detail_failed = true;
+  } finally {
+    item.musicbrainz_detail_loading = false;
+  }
+  if (render) renderProblematicFiles({ preserveProblematicTree: true });
+  return item.musicbrainz_detail || null;
+}
+
+function getSelectedMusicBrainzArtistProblem() {
+  const item = getSelectedProblematicAlbum();
+  return isMusicBrainzArtistProblem(item) ? item : null;
+}
+
+async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
+  const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(response.status === 404 ? 'No MusicBrainz artist has that MBID.' : (payload?.detail || 'MusicBrainz is unavailable. Try again shortly.'));
+  }
+  return payload;
+}
+
+async function runMusicBrainzArtistMutation(item, perform, successMessage) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (ui.busy) return;
+  ui.busy = true;
+  ui.error = '';
+  renderProblematicFiles({ preserveProblematicTree: true });
+  try {
+    await perform();
+    if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
+    await loadProblematicFiles(true);
+    void refreshGalleryArtistMusicBrainzStatus({ force: true });
+  } catch (error) {
+    ui.error = error?.message || 'MusicBrainz action failed.';
+  } finally {
+    ui.busy = false;
+    renderProblematicFiles({ preserveProblematicTree: true });
+  }
+}
+
+function scheduleMusicBrainzManualValidation(item) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  clearTimeout(ui.validationTimer);
+  ui.validated = null;
+  ui.validationError = '';
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  ui.validating = Boolean(mbid);
+  if (!mbid) return;
+  const requestedValue = ui.manualValue;
+  ui.validationTimer = setTimeout(async () => {
+    try {
+      const payload = await postMusicBrainzArtistAction(item, 'validate', { artist_reference: requestedValue });
+      if (ui.manualValue === requestedValue) ui.validated = payload.candidate || null;
+    } catch (error) {
+      if (ui.manualValue === requestedValue) ui.validationError = error?.message || 'Unable to verify that artist.';
+    } finally {
+      if (ui.manualValue === requestedValue) {
+        ui.validating = false;
+        syncMusicBrainzManualStatus(ui);
+      }
+    }
+  }, MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS);
+  syncMusicBrainzManualStatus(ui);
+}
+
+// Updates only the helper and Assign button so the field keeps focus and caret.
+function syncMusicBrainzManualStatus(ui) {
+  const helper = document.querySelector('.musicbrainz-manual-helper');
+  if (helper) {
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
+      : ui.validationError ? ui.validationError
+        : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+          : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+    helper.classList.toggle('is-error', Boolean(ui.validationError));
+  }
+  const assign = document.querySelector('[data-musicbrainz-assign]');
+  if (assign) ButtonComponent.setDisabled(assign, !ui.validated || Boolean(ui.busy));
+}
+
+function handleMusicBrainzArtistProblemEvent(event) {
+  const target = event.target;
+  const externalLink = target?.closest?.('[data-open-musicbrainz-url]');
+  if (event.type === 'click' && externalLink) {
+    event.preventDefault();
+    const url = externalLink.dataset.openMusicbrainzUrl;
+    if (url && /^https:\/\/musicbrainz\.org\//.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  const item = getSelectedMusicBrainzArtistProblem();
+  if (!item) return false;
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (event.type === 'input' && target?.matches?.('[data-musicbrainz-manual-artist]')) {
+    ui.manualValue = target.value;
+    scheduleMusicBrainzManualValidation(item);
+    const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+    const row = target.closest('.musicbrainz-manual-field-row');
+    const link = row?.querySelector('[data-open-musicbrainz-url]');
+    if (link) {
+      ButtonComponent.setDisabled(link, !mbid);
+      link.dataset.openMusicbrainzUrl = mbid ? `https://musicbrainz.org/artist/${mbid}` : '';
+      link.title = mbid ? 'Open artist page' : 'Enter a valid artist URL or MBID first';
+    }
+    return true;
+  }
+  if (event.type === 'change' && target?.matches?.('[data-musicbrainz-select-identity]')) {
+    ui.selectedMbid = target.value;
+    renderProblematicFiles({ preserveProblematicTree: true });
+    return true;
+  }
+  if (event.type !== 'click') return false;
+  const detail = item.musicbrainz_detail || {};
+  if (target?.closest?.('[data-musicbrainz-retry]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-keep-current]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: detail.artist_mbid,
+      evidence_summary: 'Owner kept the currently assigned MusicBrainz artist.',
+    }, 'PUT'), 'Current MBID kept.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-assign]')) {
+    event.preventDefault();
+    const mbid = getMusicBrainzArtistProblemView(detail) === 'not-found' ? ui.validated?.artist_mbid : ui.selectedMbid;
+    if (!mbid) return true;
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: mbid,
+      evidence_summary: getMusicBrainzArtistProblemView(detail) === 'not-found'
+        ? 'Owner assigned a verified MusicBrainz artist manually.'
+        : 'Owner selected this MusicBrainz artist in Problematic Files.',
+    }, 'PUT'), 'MBID assigned.');
+    return true;
+  }
+  return false;
 }
 
 function getIgnorableProblemRows(album) {
@@ -23783,6 +24405,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
+      void loadMusicBrainzArtistProblemDetail(selectedAlbum);
+    }
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
@@ -25901,7 +26530,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
-        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        // This forced refresh supersedes any clicked detail request, so it must
+        // paint whenever this load will not render its own final state.
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, {
+          render: options.render === false && !navigationOwnsRendering(),
+        });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -25985,6 +26618,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (!normalizedKey) return null;
   const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
+    return currentAlbum;
+  }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -38541,7 +39178,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -38587,7 +39224,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -40661,6 +41298,7 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -40814,8 +41452,6 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -40836,8 +41472,6 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;
@@ -41622,6 +42256,7 @@ function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
 }
 
 function handleUtilityBootstrapInput(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const localPlaylistFileInput = event.target.closest('[data-local-playlist-import-file]');
   if (localPlaylistFileInput) {
     const file = Array.isArray(localPlaylistFileInput.files)
@@ -41790,6 +42425,7 @@ function handleUtilityBootstrapDragEnd() {
 }
 
 function handleUtilityBootstrapChange(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
     addCoverLookupFiles(coverLookupFiles.files || [])
@@ -42460,6 +43096,20 @@ function handleGalleryBootstrapClick(event) {
     event.preventDefault();
     hideStatusContextMenu();
     cancelAlbumCoverScan();
+    return;
+  }
+
+  const musicBrainzSyncAction = event.target.closest('[data-status-action="musicbrainz-sync"]');
+  if (musicBrainzSyncAction) {
+    event.preventDefault();
+    triggerMusicBrainzArtistSync();
+    return;
+  }
+
+  const artistProblemAction = event.target.closest('[data-open-musicbrainz-artist-problem]');
+  if (artistProblemAction) {
+    event.preventDefault();
+    openMusicBrainzArtistProblem(artistProblemAction.dataset.openMusicbrainzArtistProblem);
     return;
   }
 

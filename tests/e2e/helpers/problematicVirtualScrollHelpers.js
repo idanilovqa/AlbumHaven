@@ -91,6 +91,11 @@ export function observeProblematicDetails(page) {
   const pending = new Set();
   const errors = [];
   let summary = null;
+  // Arrival order of summaries. Chrome may drop an older body before the capture
+  // reads it; that is tolerated only while a newer complete summary is captured.
+  let summarySequence = 0;
+  let capturedSummarySequence = 0;
+  let droppedSummarySequence = 0;
   const remember = (key, payload) => {
     assert.ok(key && payload && payload.key === key, 'Observed detail must match the independently requested key');
     details.set(key, JSON.stringify(payload));
@@ -98,14 +103,29 @@ export function observeProblematicDetails(page) {
   const responseListener = response => {
     const url = new URL(response.url());
     if (!['/utilities/problematic-files', '/utilities/problematic-files/detail'].includes(url.pathname)) return;
+    const isDetail = url.pathname.endsWith('/detail');
+    const sequence = isDetail ? 0 : ++summarySequence;
     const task = (async () => {
       assert.equal(response.ok(), true, 'Normal problematic data response must succeed');
-      const payload = await response.json();
-      if (url.pathname.endsWith('/detail')) {
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        // Superseded detail requests and older summaries can lose their bodies before this
+        // read. Callers poll for every detail they assert on; summary() requires the newest.
+        if (!/No resource with given identifier found/.test(String(error?.message))) throw error;
+        if (sequence) droppedSummarySequence = Math.max(droppedSummarySequence, sequence);
+        return;
+      }
+      if (isDetail) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
-        summary = JSON.stringify(payload.items);
+        // A bounded first page (complete: false) is never the complete summary.
+        if (payload.complete !== false && sequence > capturedSummarySequence) {
+          capturedSummarySequence = sequence;
+          summary = JSON.stringify(payload.items);
+        }
         assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
           'Any initial detail must belong to captured summary');
         if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
@@ -119,7 +139,12 @@ export function observeProblematicDetails(page) {
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary() { await settle(); assert.ok(summary, 'Capture must be installed before the normal summary request'); return JSON.parse(summary); },
+    async summary() {
+      await settle();
+      assert.ok(summary, 'Capture must be installed before the normal summary request');
+      assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
+      return JSON.parse(summary);
+    },
     async detail(key) { await settle(); return details.has(key) ? JSON.parse(details.get(key)) : null; },
     async dispose() { page.off('response', responseListener); await settle(); },
   };

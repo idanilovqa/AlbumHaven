@@ -460,7 +460,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-artist-dialog > header { padding-right: 48px; align-items: center; flex: 0 0 auto; }
   .is-mobile-artist-dialog .artist-info-overlay__image { width: 88px; height: 88px; flex-basis: 88px; }
   .is-mobile-artist-dialog .artist-info-overlay__body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
-  .is-mobile-artist-dialog .artist-info-overlay__body [data-artist-info-summary] { display: block; overflow: visible; -webkit-line-clamp: unset; }
 
   /* All account pages start with the same bar at the top of their main body. */
   .settings-host.settings-shell { grid-template-rows: var(--app-bar-height) minmax(0, 1fr); }

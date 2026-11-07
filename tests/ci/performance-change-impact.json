@@ -40,6 +40,7 @@
     "music_app/static/css/runtime/album-details-components.css",
     "music_app/static/css/mobile-layout.css",
     "music_app/services/problematic_albums.py",
+    "migrations/postgres/0112_add_problematic_file_path_projection.sql",
     "music_app/routes/api_problematic_albums.py",
     "music_app/services/scan_state.py",
     "music_app/services/edit_workflows.py",
@@ -179,6 +180,7 @@
       "paths": [
         "music_app/services/library_browse_postgres.py",
         "music_app/services/problematic_albums.py",
+        "migrations/postgres/0112_add_problematic_file_path_projection.sql",
         "music_app/routes/api_problematic_albums.py",
         "music_app/routes/api_read_asgi_routes.py",
         "music_app/services/scan_state.py",

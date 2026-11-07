@@ -189,3 +189,10 @@ def test_native_script_name_requires_matching_locale_evidence():
     assert native_name(local, candidate) == "Кипелов"
     assert native_name({**local, "locale": None}, candidate) is None
     assert native_name(local, {"canonical_name": "Kipelov", "aliases": []}) is None
+
+
+def test_only_trailing_edition_words_are_dropped_from_a_title():
+    assert "once" in title_keys("Once Deluxe Edition")
+    assert "abbey road" in title_keys("Abbey Road (Remastered 2009)")
+    assert "forces" not in title_keys("Special Forces"), "a title that starts with an edition word keeps it"
+    assert title_agreement("Special Forces", "Forces") is None

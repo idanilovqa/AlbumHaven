@@ -26,9 +26,10 @@ _FOLD = str.maketrans({
 })
 _ARTICLES = ("the", "a", "an", "die", "der", "das", "les", "le", "la", "el", "los", "las", "il")
 _SEPARATORS = re.compile(r"\s*(?:&|\+|\band\b|\bund\b|\bet\b)\s*")
-_EDITION = re.compile(
-    r"\b(?:\d+(?:th|st|nd|rd)? anniversary|remaster(?:ed)?|deluxe|expanded|edition|reissue|"
-    r"bonus tracks?|special|limited|collector'?s?|version)\b"
+# Trailing edition words only: "Once Deluxe Edition" is "Once", "Special Forces" stays.
+_EDITION_SUFFIX = re.compile(
+    r"(?:\s+(?:\d+(?:th|st|nd|rd)?\s+anniversary|remaster(?:ed)?|deluxe|expanded|edition|reissue|"
+    r"bonus\s+tracks?|special|limited|collector'?s?|version|\d{4}))+$"
 )
 _BRACKETS = re.compile(r"[\(\[\{]([^\)\]\}]*)[\)\]\}]")
 
@@ -105,7 +106,7 @@ def title_keys(title: object, artist_names: tuple[str, ...] = ()) -> set[str]:
     keys: set[str] = set()
     for form in forms:
         folded = fold(form)
-        for text in {folded, " ".join(_EDITION.sub(" ", folded).split())}:
+        for text in {folded, _EDITION_SUFFIX.sub("", folded)}:
             if not text:
                 continue
             keys.add(text)
@@ -118,17 +119,35 @@ def title_keys(title: object, artist_names: tuple[str, ...] = ()) -> set[str]:
     return keys
 
 
-def title_agreement(local_title: object, remote_title: object, artist_names: tuple[str, ...] = ()) -> str | None:
-    """"exact" when keys agree; "fuzzy" for a near spelling of a title of 8+ characters."""
-    local = title_keys(local_title, artist_names)
-    remote = title_keys(remote_title, artist_names)
+def _key_agreement(local: set[str], remote: set[str]) -> str | None:
     if local & remote:
         return "exact"
-    best = max(
-        (SequenceMatcher(None, a, b).ratio() for a in local for b in remote if min(len(a), len(b)) >= 8),
-        default=0.0,
-    )
-    return "fuzzy" if best >= 0.9 else None
+    for a in local:
+        for b in remote:
+            # A near spelling only for titles of 8+ characters of about the same length.
+            if min(len(a), len(b)) >= 8 and abs(len(a) - len(b)) <= max(len(a), len(b)) // 10 + 1:
+                if SequenceMatcher(None, a, b).ratio() >= 0.9:
+                    return "fuzzy"
+    return None
+
+
+def title_agreement(local_title: object, remote_title: object, artist_names: tuple[str, ...] = ()) -> str | None:
+    """"exact" when keys agree; "fuzzy" for a near spelling of a title of 8+ characters."""
+    return _key_agreement(title_keys(local_title, artist_names), title_keys(remote_title, artist_names))
+
+
+def best_title_match(local_title: object, groups: list[tuple[dict, set[str]]],
+                     artist_names: tuple[str, ...] = ()) -> tuple[dict | None, str | None]:
+    """The release group agreeing best with a local album, from groups whose title
+    keys were computed once: an exact title wins over a near spelling."""
+    local = title_keys(local_title, artist_names)
+    for group, keys in groups:
+        if local & keys:
+            return group, "exact"
+    for group, keys in groups:
+        if _key_agreement(local, keys):
+            return group, "fuzzy"
+    return None, None
 
 
 def _year(value: object) -> int | None:

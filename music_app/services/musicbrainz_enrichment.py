@@ -10,11 +10,13 @@ from typing import Any
 from music_app.services.musicbrainz_evidence import (
     album_level,
     album_signals,
+    best_title_match,
     candidate_name_keys,
     decide,
     fold,
     name_keys,
     title_agreement,
+    title_keys,
 )
 from music_app.services.musicbrainz_matching import native_name
 
@@ -451,14 +453,10 @@ def _gather_album_evidence(candidate, albums, local_name, mirror) -> None:
     if browse is None:
         return
     names = tuple(name for name in (local_name, candidate.get("canonical_name")) if name)
-    groups = list(browse.get("groups") or [])
+    groups = [(group, title_keys(group.get("title"), names)) for group in browse.get("groups") or []]
     candidate["albums"] = []
     for index, album in enumerate(albums):
-        best, best_title = None, None
-        for group in groups:
-            agreement = title_agreement(album["title"], group.get("title"), names)
-            if agreement and best_title != "exact":
-                best, best_title = group, agreement
+        best, best_title = best_title_match(album["title"], groups, names)
         # A release found by title counts only when it belongs to the matched group.
         release = candidate["releases"].get(index) or {}
         if not best or release.get("release_group_id") != best.get("id"):

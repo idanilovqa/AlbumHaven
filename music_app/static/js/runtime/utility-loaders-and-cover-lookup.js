@@ -228,6 +228,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
+    return currentAlbum;
+  }
   if (currentAlbum?.detail_load_failed === true && !force) {
     return null;
   }

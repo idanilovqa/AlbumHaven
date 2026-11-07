@@ -1,0 +1,11 @@
+{
+  "key": "musicbrainz-artist:7",
+  "entity_kind": "artist",
+  "local_artist_id": 7,
+  "musicbrainz_occurrence_id": "19",
+  "name": "Axxis",
+  "album_artist": "Axxis",
+  "problem_reasons": ["MBID: Multiple matches"],
+  "local_album_count": 12,
+  "detail_loaded": false
+}

@@ -253,6 +253,8 @@ def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:
         "album_artist": name,
         "problem_reasons": [str(row["unresolved_reason"])],
         "local_album_count": row.get("local_album_count"),
+        # A summary row like every other; its detail comes from the MusicBrainz API.
+        "detail_loaded": False,
     }
 
 

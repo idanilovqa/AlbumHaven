@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 from music_app.routes.musicbrainz_enrichment_asgi import (
@@ -52,17 +54,10 @@ def test_owner_sees_artist_rows_merged_by_name_without_reordering_album_rows():
     assert [item["key"] for item in payload["items"]] == [
         "musicbrainz-artist:7", "album-b", "album-k",
     ]
-    artist = payload["items"][0]
-    assert artist == {
-        "key": "musicbrainz-artist:7",
-        "entity_kind": "artist",
-        "local_artist_id": 7,
-        "musicbrainz_occurrence_id": "19",
-        "name": "Axxis",
-        "album_artist": "Axxis",
-        "problem_reasons": ["MBID: Multiple matches"],
-        "local_album_count": 12,
-    }
+    # The same row the client's summary validation accepts
+    # (tests/js/runtime/musicbrainz-problematic-files.test.js).
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz" / "problematic-artist-summary-item.json"
+    assert payload["items"][0] == json.loads(fixture.read_text(encoding="utf-8"))
     assert payload["count"] == 3
 
 

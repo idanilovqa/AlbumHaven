@@ -225,12 +225,12 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": 4, "release_date": "2004-07-16"}, False),
         ({"metadata_schema_version": 5, "release_date": None}, False),
         ({"metadata_schema_version": 5, "release_date": "2004-07-16"}, False),
-        ({"metadata_schema_version": 6, "release_date": None}, False),
-        ({"metadata_schema_version": 6, "release_date": "2004-07-16"}, False),
-        ({"metadata_schema_version": 6, "release_date": None, "is_compilation": False}, False),
-        ({"metadata_schema_version": 6, "release_date": None, "compilation_tag": None}, True),
-        ({"metadata_schema_version": 6, "release_date": None, "compilation_tag": False}, True),
-        ({"metadata_schema_version": 6, "release_date": "2004-07-16", "compilation_tag": True}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None}, False),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": "2004-07-16"}, False),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "is_compilation": False}, False),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "compilation_tag": None}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "compilation_tag": False}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": "2004-07-16", "compilation_tag": True}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -711,7 +711,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 6
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 7
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {
@@ -825,3 +825,90 @@ def test_unknown_reader_versions_are_replaced_by_a_fresh_read(version):
     fresh = {"title": "New", "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION}
     assert metadata.schema_upgrade_requires_file_read(stored) is True
     assert metadata.upgrade_stored_file_entry(stored, fresh) == fresh
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("??", None, id="lost-japanese"),
+        pytest.param("? ? / ?", None, id="lost-with-separators"),
+        pytest.param("? and the Mysterians", "? and the Mysterians", id="real-name-with-question-mark"),
+        pytest.param("Bj\u00f6rk", "Bj\u00f6rk", id="genuine-latin-1"),
+        pytest.param("\u00e5\u00a4\u00a9\u00e9\u2013\u20ac", "\u00e5\u00a4\u00a9\u00e9\u2013\u20ac", id="not-latin-1-bytes"),
+        pytest.param("\u00c3\u00a9milie Simon", "\u00e9milie Simon", id="utf-8-in-latin-1-frame"),
+        pytest.param("\u00e5\u00a4\u00a9\u00e9\u0096\u0080", "\u5929\u9580", id="japanese-utf-8-in-latin-1-frame"),
+    ],
+)
+def test_repair_artist_text_recovers_or_rejects_damaged_credits(raw, expected):
+    assert metadata.repair_artist_text(raw) == expected
+
+
+def test_lost_character_track_artist_uses_the_album_artist(tmp_path):
+    from mutagen.id3 import ID3, TALB, TIT2, TPE1, TPE2
+
+    path = tmp_path / "01 - Main Theme.mp3"
+    path.write_bytes((b"\xff\xfb\x90\x64" + bytes(413)) * 400)
+    tags = ID3()
+    tags.add(TPE1(encoding=0, text=["??"]))
+    tags.add(TPE2(encoding=3, text=["\u5929\u9580"]))
+    tags.add(TALB(encoding=0, text=["She and Her Cat"]))
+    tags.add(TIT2(encoding=0, text=["Main Theme"]))
+    tags.save(path)
+
+    entry = metadata.read_metadata_for_file(path)
+
+    assert entry["album_artist"] == "\u5929\u9580"
+    assert entry["artist"] == "\u5929\u9580"
+    assert entry["artists"] == ["\u5929\u9580"]
+    assert entry["text_corrections"] == {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}}
+
+
+def test_stored_v6_lost_character_credits_upgrade_without_reading_the_file():
+    stored = {
+        "album_artist": "\u5929\u9580", "artist": "??", "artists": ["??"], "title": "Main Theme",
+        "metadata_schema_version": 6, "release_date": None, "compilation_tag": None,
+    }
+    assert metadata.schema_upgrade_requires_file_read(stored) is False
+    upgraded = metadata.upgrade_stored_file_entry(stored)
+    assert upgraded == {
+        **stored, "artist": "\u5929\u9580", "artists": ["\u5929\u9580"],
+        "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION,
+        "text_corrections": {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}},
+    }
+    assert metadata.entry_with_original_tag_text(upgraded)["artist"] == "??"
+
+
+@pytest.mark.parametrize(
+    ("credits", "expected"),
+    [
+        pytest.param({"album_artist": "Air", "artists": ["Air"]}, None, id="readable"),
+        pytest.param(
+            {"album_artist": "\u00c3\u00a9milie Simon", "artists": ["\u00c3\u00a9milie Simon"]},
+            {
+                "artist": {"original": "\u00c3\u00a9milie Simon", "corrected": "\u00e9milie Simon", "kind": "decoded"},
+                "album_artist": {"original": "\u00c3\u00a9milie Simon", "corrected": "\u00e9milie Simon", "kind": "decoded"},
+            },
+            id="decoded",
+        ),
+        # Both credits lost: the display is a placeholder, never written to tags.
+        pytest.param({"album_artist": "??", "artists": ["??"]}, None, id="placeholder-is-not-a-correction"),
+    ],
+)
+def test_display_corrections_record_what_the_tags_say(credits, expected):
+    assert metadata.derive_readable_artist_credits(credits).get("text_corrections") == expected
+
+
+def test_a_read_records_the_lost_track_artist_but_never_adds_an_album_artist_tag(tmp_path):
+    from mutagen.id3 import ID3, TALB, TIT2, TPE1
+
+    path = tmp_path / "01 - Theme.mp3"
+    path.write_bytes((b"\xff\xfb\x90\x64" + bytes(413)) * 400)
+    tags = ID3()
+    tags.add(TPE1(encoding=0, text=["\u00c3\u00a9milie Simon"]))
+    tags.add(TALB(encoding=0, text=["Mue"]))
+    tags.add(TIT2(encoding=0, text=["Theme"]))
+    tags.save(path)
+
+    entry = metadata.read_metadata_for_file(path)
+
+    assert entry["album_artist"] == "\u00e9milie Simon"
+    assert set(entry["text_corrections"]) == {"artist"}

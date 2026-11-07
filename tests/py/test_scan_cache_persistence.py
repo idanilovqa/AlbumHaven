@@ -2930,6 +2930,45 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
     assert connection.execute_pipeline_states[relation_source_index] is False
 
 
+def test_cache_update_publishes_only_the_changed_files_albums(monkeypatch):
+    """A whole-library cache save stamped stale rows over a running scan's (sandbox2, 14:06)."""
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = FakeConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+
+    def entry(path, album):
+        return {"path": path, "mtime": 1.0, "size": 1, "album": album, "album_artist": "Can",
+                "artist": "Can", "title": Path(path).stem, "track_number": 1, "disc_number": 1,
+                "disc_number_raw": "1", "duration_seconds": 1, "year": 1971, "edition": "", "album_rating": 0,
+                "library_root_id": "main", "library_root_category": "main_library", "exception_type": None}
+
+    changed = "C:/Music/Can/Tago Mago/01 Paperhouse.flac"
+    file_cache = {
+        changed: entry(changed, "Tago Mago"),
+        "C:/Music/Can/Tago Mago/02 Mushroom.flac": entry("C:/Music/Can/Tago Mago/02 Mushroom.flac", "Tago Mago"),
+        "C:/Music/Can/Ege Bamyasi/01 Pinch.flac": entry("C:/Music/Can/Ege Bamyasi/01 Pinch.flac", "Ege Bamyasi"),
+    }
+
+    adapter.save_snapshot(Path("unused"), file_cache, "root-identity", 1.0, publish_paths={changed})
+
+    published_paths = sorted(
+        row["private_path"]
+        for sql, params in connection.executed if "insert into library.local_track_files" in sql
+        for row in params["rows"]
+    )
+    assert published_paths == sorted(path for path in file_cache if "Tago Mago" in path)
+    executed_sql = [sql for sql, _params in connection.executed]
+    assert scan_cache_persistence._synchronize_local_album_featured_artists_sql() not in executed_sql
+    assert scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql() in executed_sql
+    assert scan_cache_persistence._mark_stale_track_files_sql() not in executed_sql
+
+
 def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter

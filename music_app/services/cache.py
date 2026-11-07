@@ -84,6 +84,9 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         serialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if "text_corrections" in entry:
+        # Kept even when null, so a merge into the stored entry clears it.
+        serialized["text_corrections"] = entry.get("text_corrections") or None
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -121,6 +124,8 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if entry.get("text_corrections"):
+        deserialized["text_corrections"] = entry["text_corrections"]
     return deserialized
 
 
@@ -417,6 +422,9 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": relation_views,
             "relations_last_built": relations_last_built,
             "expected_cover_mutation_revision": expected_cover_mutation_revision,
+            # Only the changed files' albums: the rest of this snapshot is as
+            # old as its load and must never overwrite a newer publication.
+            "publish_paths": set(changed_entries),
         }
         if expected_inventory_mutation_revision is not None:
             snapshot_options["expected_inventory_mutation_revision"] = (
@@ -464,6 +472,7 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": latest_relation_views,
             "relations_last_built": latest_relations_last_built,
             "expected_cover_mutation_revision": retry_cover_mutation_revision,
+            "publish_paths": set(changed_entries),
         }
         if retry_inventory_mutation_revision is not None:
             retry_snapshot_options["expected_inventory_mutation_revision"] = (

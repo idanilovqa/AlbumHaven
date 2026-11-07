@@ -63,6 +63,8 @@ from music_app.services.opinion_read_seams import (
 )
 from music_app.services.metadata import (
     NON_ALBUM_EXCEPTION_VALUES,
+    TRACK_ARTIST_UNREADABLE_REASON,
+    text_correction_reason,
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
@@ -2373,7 +2375,9 @@ class PostgresLibraryBrowseRepository:
             perf_counter() - grouping_subphase_started_at
         ) * 1000
         grouping_subphase_started_at = perf_counter()
-        selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
+        selected_artist = "" if requested_all_artists else _top_search_selected_artist(
+            artist_groups, query=query, canonical_to_aliases=canonical_to_aliases,
+        )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
@@ -5583,6 +5587,7 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "album_rating": file_entry.get("album_rating"),
         "exception_type": _effective_row_exception_type(row_payload),
         "_text_mojibake_candidate": row_payload.get("file_text_mojibake_candidate"),
+        "text_corrections": _row_json_mapping(row_payload.get("file_text_corrections")) or file_entry.get("text_corrections"),
         "local_album_membership_problem": (
             row_payload["local_album_membership_problem"]
             if "local_album_membership_problem" in row_payload
@@ -5617,6 +5622,7 @@ def _album_file_year_mismatch(album: Mapping[str, object]) -> bool:
 
 
 _PROBLEM_REASON_IDENTITY_CODES = {
+    TRACK_ARTIST_UNREADABLE_REASON: "track-artist-unreadable",
     "Empty audio file": "empty-audio-file",
     "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
@@ -6143,6 +6149,13 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield str(entry["local_album_membership_problem"])
     if reviewable_edition_title(entry.get("album"), entry.get("edition")):
         yield "Edition descriptor in album name"
+    yield from _text_correction_problem_reasons(entry.get("text_corrections"))
+
+
+def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
+    """Problems the app corrects for display but the tags still carry."""
+    for field, correction in (corrections.items() if isinstance(corrections, Mapping) else ()):
+        yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
 def _iter_problematic_track_reasons(
@@ -8236,14 +8249,48 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
     return artist_groups
 
 
-def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query: str) -> str:
+def _top_search_selected_artist(
+    artist_groups: list[dict[str, object]],
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, object] | None = None,
+) -> str:
+    """The artist a search auto-selects.
+
+    A query naming an artist keeps the ranked best match. A title-only query
+    ("Divine Comedy") names nobody, so every group ties and the alphabetical
+    first, often one track artist of a compilation, would hide the rest:
+    select the artist owning the most matching albums instead, counting each
+    album once for its owner (a compilation's album owner, not its credits).
+    """
     if not str(query or "").strip():
         return ""
-    for group in artist_groups:
+    artists = [str(group.get("artist") or "").strip() for group in artist_groups]
+    artists = [artist for artist in artists if artist]
+    if not artists:
+        return ""
+    aliases_by_artist = canonical_to_aliases or {}
+
+    def aliases(artist: str) -> list[object]:
+        value = aliases_by_artist.get(artist)
+        return list(value) if isinstance(value, (list, tuple, set)) else []
+
+    if any(_artist_name_matches_search_query(query, artist, aliases(artist)) for artist in artists):
+        return artists[0]
+    def owned_album_count(group: Mapping[str, object]) -> int:
+        # A group lists every matching album its artist appears on; it owns
+        # those whose album artist is that artist (or one of its aliases).
         artist = str(group.get("artist") or "").strip()
-        if artist:
-            return artist
-    return ""
+        names = {_artist_display_dedupe_key(name) for name in [artist, *aliases(artist)] if str(name or "").strip()}
+        return sum(
+            1 for album in group.get("albums") or []
+            if isinstance(album, Mapping) and _artist_display_dedupe_key(str(album.get("album_artist") or "")) in names
+        )
+
+    counts = [owned_album_count(group) for group in artist_groups if str(group.get("artist") or "").strip()]
+    best = max(counts)
+    # Ties, and groups owning nothing, keep the existing group order.
+    return artists[counts.index(best)] if best else artists[0]
 
 
 def _artists_sidebar_from_groups(
@@ -11037,7 +11084,8 @@ def _problematic_files_sql(
               or library.local_tracks.track_number <= 0) as track_problem,
             (library.local_track_files.scan_file_entry_is_object is true
               and (library.local_track_files.scan_file_text_mojibake_candidate is true
-                or library.local_track_files.scan_file_metadata_problem_candidate is true)) as file_problem,
+                or library.local_track_files.scan_file_metadata_problem_candidate is true
+                or text_corrections.track_file_id is not null)) as file_problem,
             nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
             nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
             nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year,
@@ -11051,6 +11099,8 @@ def _problematic_files_sql(
             on roots.id = library.local_track_files.library_root_id
            and roots.library_id = library.local_tracks.library_id
            and roots.is_active is true
+          left join library.local_track_file_text_corrections text_corrections
+            on text_corrections.track_file_id = library.local_track_files.id
           where library.local_track_files.scan_cache_stale is false
             and __PATH_KEY_PRESENT__
         ),
@@ -11543,6 +11593,8 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_year as file_year,
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
+            (select text_corrections.text_corrections from library.local_track_file_text_corrections text_corrections
+              where text_corrections.track_file_id = library.local_track_files.id) as file_text_corrections,
             exception_override.override_payload ->> 'exception_type' as exception_type,
             exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
@@ -11581,6 +11633,7 @@ def _problematic_files_sql(
           active_track_files.file_year,
           active_track_files.file_track_number,
           active_track_files.file_text_mojibake_candidate,
+          active_track_files.file_text_corrections,
           active_track_files.exception_type,
           active_track_files.exception_override_present,
         """

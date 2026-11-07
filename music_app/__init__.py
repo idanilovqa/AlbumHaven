@@ -593,6 +593,7 @@ def create_asgi_app():
         )
         lastfm_started = False
         welcome_worker = None
+        corrections_writer = None
         targeted_executor = None
         targeted_reconciler = None
         runtime.library_event_coordinator = None
@@ -621,6 +622,10 @@ def create_asgi_app():
                 (
                     "welcome mail retry worker",
                     lambda: welcome_worker.stop() if welcome_worker is not None else None,
+                ),
+                (
+                    "library data corrections writer",
+                    lambda: corrections_writer.stop() if corrections_writer is not None else None,
                 ),
                 (
                     "library filesystem watcher",
@@ -661,6 +666,13 @@ def create_asgi_app():
         try:
             start_lastfm_retry_worker(runtime)
             welcome_worker = start_welcome_retry_worker(_app)
+            from music_app.services.library_roots_postgres import is_library_roots_postgres_available
+
+            if runtime.config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True and is_library_roots_postgres_available(runtime.config):
+                from music_app.routes.library_data_corrections_asgi import LibraryDataCorrectionsWriter
+
+                corrections_writer = LibraryDataCorrectionsWriter(_app)
+                corrections_writer.start()
             targeted_executor = _BoundedExecutorAdmission(
                 create_daemon_executor(
                     max_workers=1,

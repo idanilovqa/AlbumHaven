@@ -5,6 +5,7 @@ from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol
@@ -133,6 +134,7 @@ class ScanCacheAdapter(Protocol):
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
         ...
 
@@ -2127,7 +2129,13 @@ class PostgresScanCacheAdapter:
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
+        """Publish the snapshot; with publish_paths, only the albums those files belong to.
+
+        A cache update's snapshot is otherwise as old as its load: publishing all
+        of it stamped old values over rows a running scan had just written.
+        """
         publication_started_at = perf_counter()
         del cache_path
         file_cache = _without_nul_file_entries(file_cache)
@@ -2172,6 +2180,23 @@ class PostgresScanCacheAdapter:
                 _file_cache_with_inferred_blank_album_memberships(file_cache),
                 effective_separate_release_keys,
             )
+            if publish_paths is not None:
+                # Albums are built from the whole snapshot so folder inference
+                # holds; only those holding a changed file become rows.
+                changed_keys = {_published_path_key(path) for path in publish_paths}
+                albums = [
+                    album for album in albums
+                    if any(_published_path_key(getattr(track, "path", "")) in changed_keys
+                           for track in getattr(album, "tracks", None) or [])
+                ]
+                album_keys = {
+                    _published_path_key(getattr(track, "path", ""))
+                    for album in albums for track in getattr(album, "tracks", None) or []
+                }
+                file_cache = {
+                    path: entry for path, entry in file_cache.items()
+                    if _published_path_key(path) in changed_keys | album_keys
+                }
             artist_rows, album_rows, featured_artist_rows, track_rows, track_file_rows = _inventory_rows_from_albums(
                 file_cache,
                 albums,
@@ -2247,22 +2272,27 @@ class PostgresScanCacheAdapter:
                 _upsert_local_album_featured_artist_sql(),
                 featured_artist_rows,
             )
-            connection.execute(
-                _synchronize_local_album_featured_artists_sql(),
-                {
-                    "current_featured_rows": _jsonb(
-                        [
-                            {
-                                "album_key": row["album_key"],
-                                "artist_key": row["artist_key"],
-                                "featured_kind": row["featured_kind"],
-                            }
-                            for row in featured_artist_rows
-                        ]
-                    ),
-                    "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
-                },
-            )
+            featured_sync_params = {
+                "current_featured_rows": _jsonb(
+                    [
+                        {
+                            "album_key": row["album_key"],
+                            "artist_key": row["artist_key"],
+                            "featured_kind": row["featured_kind"],
+                        }
+                        for row in featured_artist_rows
+                    ]
+                ),
+                "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
+            }
+            if publish_paths is None:
+                connection.execute(_synchronize_local_album_featured_artists_sql(), featured_sync_params)
+            else:
+                # The library-wide sync would drop every other album's credits.
+                connection.execute(
+                    _synchronize_targeted_local_album_featured_artists_sql(),
+                    {**featured_sync_params, "affected_album_keys": sorted({row["album_key"] for row in album_rows})},
+                )
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_sql(),
@@ -2286,24 +2316,25 @@ class PostgresScanCacheAdapter:
                     ).fetchall()
                     if (payload := _row_mapping(row)).get("private_path")
                 }
-            connection.execute(
-                _mark_stale_track_files_sql(),
-                {
-                    "current_paths": current_private_paths,
-                    "current_path_count": len(current_private_paths),
-                    "source": _SOURCE,
-                    "observed_root_ids": sorted(observed_library_root_ids or set()),
-                    "stale_metadata": _jsonb(
-                        {
-                            "scan_cache": {
-                                "source": _SOURCE,
-                                "stale": True,
-                                "stale_marked_at": datetime.now(timezone.utc).isoformat(),
+            if publish_paths is None:  # a cache update never marks files stale
+                connection.execute(
+                    _mark_stale_track_files_sql(),
+                    {
+                        "current_paths": current_private_paths,
+                        "current_path_count": len(current_private_paths),
+                        "source": _SOURCE,
+                        "observed_root_ids": sorted(observed_library_root_ids or set()),
+                        "stale_metadata": _jsonb(
+                            {
+                                "scan_cache": {
+                                    "source": _SOURCE,
+                                    "stale": True,
+                                    "stale_marked_at": datetime.now(timezone.utc).isoformat(),
+                                }
                             }
-                        }
-                    ),
-                },
-            )
+                        ),
+                    },
+                )
             connection.execute(_retire_placeholder_albums_sql(), {"album_ids": None})
             relation_source_rows = list(
                 connection.execute(load_relation_source_rows_sql()).fetchall()
@@ -2458,6 +2489,10 @@ def _connect(database_url: str) -> Any:
     if psycopg is None:
         raise RuntimeError("psycopg is required for Postgres scan_cache persistence.")
     return psycopg.connect(database_url, row_factory=dict_row)
+
+
+def _published_path_key(path: object) -> str:
+    return os.path.normcase(os.path.normpath(str(path or "")))
 
 
 def _without_nul_file_entries(file_cache: dict) -> dict:

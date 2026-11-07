@@ -377,6 +377,7 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
             "library.settings.manage": True,
             "library.filesystem.browse": True,
             "library.paths.read": True,
+            "library.files.edit_tags": True,
         },
         "settings": {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],

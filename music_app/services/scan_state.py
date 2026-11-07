@@ -183,6 +183,24 @@ _SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS = 5
 _SUPERSEDED_SCAN_CLOCK_MARGIN_SECONDS = 60.0
 
 
+def _published_entry_is_newer(published: object, scanned: object) -> bool:
+    if not isinstance(scanned, dict):
+        return True
+    if not isinstance(published, dict):
+        return False
+
+    def version(entry: dict) -> int:
+        value = entry.get("metadata_schema_version")
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    if version(published) < version(scanned):
+        return False
+    try:
+        return float(published.get("mtime") or 0) > float(scanned.get("mtime") or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 def _merge_newer_published_inventory(
     adapter,
     publication_state: dict[str, object],
@@ -190,10 +208,13 @@ def _merge_newer_published_inventory(
     since: float,
     separate_release_keys,
 ) -> int | None:
-    """Adopt files other publications wrote after the scan started.
+    """Adopt files other publications genuinely changed after the scan read them.
 
-    Those publications read the files after this scan did, so their entries
-    and removals win; every other file keeps the scan's fresh read.
+    A publication's row counts as newer only for a file the scan did not see
+    or one whose mtime is later than the scan's read (a watcher or tag edit
+    rewrote it). A save that rewrote stored rows also refreshes last_seen, so
+    publication time alone proves nothing: adopting by it put stale v2 rows
+    over a repair scan's fresh reads (sandbox2 2026-11-05).
     """
     load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
     load_published = getattr(adapter, "load_inventory_published_since", None)
@@ -207,7 +228,10 @@ def _merge_newer_published_inventory(
         for path, entry in dict(publication_state.get("file_cache") or {}).items()
         if path not in removed
     }
-    file_cache.update(published)
+    file_cache.update({
+        path: entry for path, entry in published.items()
+        if _published_entry_is_newer(entry, file_cache.get(path))
+    })
     publication_state["file_cache"] = file_cache
     publication_state["albums"] = build_albums_from_file_cache(
         file_cache, set(separate_release_keys or set()),

@@ -882,6 +882,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
+    "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "tag-edit:library-data-corrections-write-in-tags"
+    ],
+    "filesystemScenarios": [
+      "media-copy:unreadable-track-artist"
+    ],
+    "expectedContracts": [
+      "unreadable-credit-shows-album-artist",
+      "unreadable-credit-is-problematic",
+      "write-in-tags-corrects-file-tags",
+      "correction-recorded-in-history"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:library-data-corrections",
+      "filesystemCopy": "media/cases/library-data-corrections"
+    },
+    "globalMutationReason": "Switches the library-wide Library Data Corrections setting to Write in tags, which writes tags for every pending correction, and restores Display only.",
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
     "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
     "profile": "functional-core",
@@ -2612,6 +2641,57 @@
     "expectedContracts": [
       "canonical-positive-card-counts"
     ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/compilationTitleSearch.spec.js",
+    "case": "FTC-SEARCH-NAV-036 a title-only search selects the artist owning every matching compilation",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "search:title-only-compilation-owner"
+    ],
+    "filesystemScenarios": [
+      "media-copy:compilation-title-search"
+    ],
+    "expectedContracts": [
+      "title-only-search-selects-album-owner",
+      "q-only-url-matches-visible-search"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:compilation-title-search",
+      "filesystemCopy": "media/cases/compilation-title-search"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/searchDuringScan.spec.js",
+    "case": "FTC-SEARCH-NAV-035 a pasted search URL without an artist loads its results while a full rescan runs",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "search:q-only-url-during-full-rescan"
+    ],
+    "filesystemScenarios": [
+      "media:full-rescan-of-shared-fixture"
+    ],
+    "expectedContracts": [
+      "startup-hydration-during-scan",
+      "q-only-url-matches-visible-search"
+    ],
+    "globalMutationReason": "Runs one Full Rescan of the functional fixture so a page loads while the scan is active; the rescan re-reads unchanged media and the case waits for the scan and cover refresh to go idle before finishing.",
     "ownerApproval": "approved"
   },
   {

@@ -18590,3 +18590,40 @@ def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypat
     assert executed == [{"path": track_path}]
     assert loaded_keys == ["art zoyd::musique pour l'odyssée"]
     assert repository.build_problematic_file_detail_payload_for_track_path("  ") is None
+
+
+def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
+    # Owner choice (2026-11-05): "Divine Comedy" names no artist; its three
+    # compilations belong to Colossus Project, while track artists appear on
+    # all three too and sort first alphabetically.
+    from music_app.services import library_browse_postgres as browse
+
+    # Search lists the same three compilations under every credited artist.
+    compilations = [{"name": f"Divine Comedy, Part {part}", "album_artist": "Colossus Project"} for part in ("I", "II", "III")]
+    groups = [{"artist": name, "albums": compilations} for name in ("Armalite", "CAP", "Colossus Project")]
+    groups.append({"artist": "Nemo", "albums": [{"name": "Divine Comedy Live", "album_artist": "Nemo"}]})
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Colossus Project"
+    # An owner known by an alias still owns its albums.
+    aliased = [{**album, "album_artist": "The Colossus Project"} for album in compilations]
+    assert browse._top_search_selected_artist(
+        [*groups[:2], {"artist": "Colossus Project", "albums": aliased}], query="Divine Comedy",
+        canonical_to_aliases={"Colossus Project": ["The Colossus Project"]},
+    ) == "Colossus Project"
+    # A query naming an artist, or one of its aliases, keeps the ranked best match.
+    assert browse._top_search_selected_artist(groups, query="Armalite") == "Armalite"
+    assert browse._top_search_selected_artist(
+        groups, query="Armored Lite", canonical_to_aliases={"Armalite": ["Armored Lite"]},
+    ) == "Armalite"
+    # Equal ownership, or groups owning nothing, keep the existing order.
+    tied = [{"artist": "CAP", "albums": [{"album_artist": "CAP"}]}, {"artist": "Nemo", "albums": [{"album_artist": "Nemo"}]}]
+    assert browse._top_search_selected_artist(tied, query="Divine Comedy") == "CAP"
+    assert browse._top_search_selected_artist(groups[:2], query="Divine Comedy") == "Armalite"
+
+def test_a_display_correction_is_a_problematic_file_until_written():
+    from music_app.services.library_browse_postgres import _physical_file_problem_reasons
+
+    assert list(_physical_file_problem_reasons({"text_corrections": {
+        "artist": {"original": "??", "corrected": "A", "kind": "lost_characters"},
+        "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
+        "Track artist unreadable \u2014 using album artist", "Encoding problem"]
+    assert list(_physical_file_problem_reasons({})) == []

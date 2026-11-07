@@ -107,7 +107,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
   await stepLogger.step('Search keeps artist information in an artist toolbar and in result headings; explicit navigation restores it',async()=>{
     // Owner review: an artist header always has its i icon, also during search;
     // a family or Gallery header names no single artist and has none.
-    const kind=await page.locator('[data-gallery-bar-instance="gallery"]').getAttribute('data-gallery-context-kind');
+    const kind=await ui.galleryBar.getAttribute('data-gallery-context-kind');
     if(['artist','single-artist'].includes(kind)) await expect(ui.toolbarInfo).toBeVisible();
     else await expect(ui.toolbarInfo).not.toBeVisible();
     await expect(ui.headingInfo).toBeVisible();

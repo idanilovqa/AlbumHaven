@@ -710,6 +710,36 @@ function resolveAlbumForPlayerTrack(track) {
   return null;
 }
 
+// The player's album opens on the first tap: from the albums this page already holds, else from
+// the server by the playing file. A miss says why instead of doing nothing.
+async function openPlayerTrackAlbum(track, modalOptions = {}) {
+  const local = resolveAlbumForPlayerTrack(track);
+  if (local) {
+    openTrackModal(local, modalOptions);
+    return true;
+  }
+  const path = String(track?.path || '');
+  if (!path) return false;
+  let message = "The playing album couldn't be opened. Try again.";
+  try {
+    const response = await fetch(`/album-details?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.ok && payload.album) {
+      // A track that changed meanwhile opens nothing rather than the previous album.
+      if (String(state.player.current?.path || '') !== path) return false;
+      openTrackModal(payload.album, modalOptions);
+      return true;
+    }
+    if (payload?.error) message = payload.error;
+  } catch (_error) {
+    // The fallback message covers a failed request.
+  }
+  showToast(message, 'error', 3600);
+  return false;
+}
+
 function getUpdatedAlbumForTrackPaths(updatedAlbums, trackPaths) {
   const candidates = Array.isArray(updatedAlbums) ? updatedAlbums : [];
   return findAlbumByTrackPaths(candidates, trackPaths);

@@ -76,6 +76,8 @@ _ALBUM_DETAIL_QUERY_PARAMS = frozenset(
         "client_surface",
         "client_surface_class",
         "resolve_lineage",
+        # The player knows only the file it plays; the album is found by that file.
+        "track_path",
     }
 )
 
@@ -1031,6 +1033,20 @@ async def album_details(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
     if album_id is not None and album_id <= 0:
         return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if not album_key and album_id is None and track_path:
+        try:
+            album_id = await run_in_threadpool(
+                AlbumCoverCandidateSnapshotRepository(_app_config(request)).resolve_album_id_for_track_paths,
+                track_paths={track_path},
+            )
+        except (RuntimeError, OSError):
+            album_id = None
+        if album_id is None:
+            return JSONResponse(
+                {"ok": False, "error": "The playing track's album isn't in the library."},
+                status_code=404,
+            )
     if not album_key and album_id is None:
         return JSONResponse(
             {"ok": False, "error": "Missing album_key"},
@@ -1171,7 +1187,8 @@ def _should_use_postgres_album_detail_path(
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
     album_id = str(request.query_params.get("album_id") or "").strip()
-    if (not album_key and not album_id) or album_key.startswith("non-album::"):
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if (not album_key and not album_id and not track_path) or album_key.startswith("non-album::"):
         return False
     resolved_state = (
         browse_state

@@ -1185,12 +1185,10 @@ function attachPlayerEvents() {
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.albumLink?.addEventListener('click', () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album);
+    void openPlayerTrackAlbum(state.player.current);
   });
   els.coverButton?.addEventListener('click', () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
+    void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
   });
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {

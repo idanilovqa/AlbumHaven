@@ -416,8 +416,7 @@ function initCompactPlayer() {
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
   const openCurrentAlbumDetails = () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
+    void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
   };
   els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {

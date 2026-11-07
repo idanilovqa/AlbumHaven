@@ -140,6 +140,33 @@ test('startup stages are accessible, monotonic and permanently complete after fi
   assert.equal(ui.root.hidden, true);
 });
 
+test('signed-in pages continue the bar from the 25% sign-in stage', () => {
+  const ui = loadStartupProgress();
+  assert.equal(ui.fill.style.width, '25.000%');
+  assert.equal(ui.percentLabel.textContent, '25%');
+
+  ui.frameCallbacks.shift()(100);
+  ui.frameCallbacks.shift()(450);
+  const midway = Number.parseFloat(ui.fill.style.width);
+  assert.ok(midway > 25 && midway < 50, `expected a glide from 25% to 50%, saw ${midway}%`);
+});
+
+test('startup bar colors resolve without login tokens or account player tokens', () => {
+  const css = fs.readFileSync(
+    path.join(path.dirname(sourcePath), '..', 'css', 'startup-progress.css'),
+    'utf8',
+  );
+  // The app page loads neither login.css nor player tokens for default accounts.
+  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /--login-/);
+  for (const [token, source] of [
+    ['ink', 'appearance-ink'],
+    ['track', 'appearance-player'],
+    ['fill', 'appearance-play'],
+  ]) {
+    assert.match(css, new RegExp(`--startup-progress-${token}: var\\(--${source}, (?:#|rgba\\()`));
+  }
+});
+
 test('startup overlay background stays stable while account appearance hydrates', () => {
   const css = fs.readFileSync(
     path.join(path.dirname(sourcePath), '..', 'css', 'startup-progress.css'),

@@ -5,7 +5,7 @@ const { applyFixtureAppearance } = require('./appearanceFixture');
 
 const root = path.resolve(__dirname, '../..');
 
-const loadProgress = async (page, initialPercent) => {
+const loadProgress = async (page, initialPercent, appearance = { palette_id: 'parchment-pine', panel_index: 0 }) => {
   const markup = fs.readFileSync(
     path.join(root, 'music_app/templates/components/startup-progress.html'),
     'utf8',
@@ -13,7 +13,7 @@ const loadProgress = async (page, initialPercent) => {
     .replace(/{{ startup_progress_initial \| default\(0\) }}/, String(initialPercent))
     .replace(/<script[\s\S]*?<\/script>/, '');
   await page.setContent(`<body>${markup}<main><button>Gallery action</button></main></body>`);
-  await applyFixtureAppearance(page, { palette_id: 'parchment-pine', panel_index: 0 });
+  await applyFixtureAppearance(page, appearance);
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/base-layout.css') });
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/startup-progress.css') });
   await page.addScriptTag({ path: path.join(root, 'music_app/static/js/startup-progress.js') });
@@ -101,6 +101,33 @@ for (const width of [390, 1280]) {
     await expect(overlay).toBeHidden();
   });
 }
+
+// Default accounts set no player tokens, and the app page does not load login.css.
+test('startup bar stays visible on the app page for a default-appearance account', async ({ page }) => {
+  await loadProgress(page, 50, { palette_id: null, panel_index: 0 });
+  await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
+
+  const bar = await page.evaluate(() => {
+    const track = document.querySelector('.progress-bar');
+    const fill = document.querySelector('.progress-fill');
+    const percent = document.querySelector('[data-startup-percent]');
+    return {
+      fillColor: getComputedStyle(fill).backgroundColor,
+      fillWidth: fill.getBoundingClientRect().width,
+      percentColor: getComputedStyle(percent).color,
+      trackBorder: getComputedStyle(track).borderTopStyle,
+      trackColor: getComputedStyle(track).backgroundColor,
+      trackHeight: track.getBoundingClientRect().height,
+      trackWidth: track.getBoundingClientRect().width,
+    };
+  });
+  expect(bar.fillColor).toBe('rgb(50, 188, 115)');
+  expect(bar.percentColor).toBe(bar.fillColor);
+  expect(bar.trackColor).not.toBe('rgba(0, 0, 0, 0)');
+  expect(bar.trackBorder).toBe('solid');
+  expect(bar.trackHeight).toBeGreaterThanOrEqual(12);
+  expect(bar.fillWidth).toBeGreaterThan(bar.trackWidth * 0.45);
+});
 
 test('startup progress honors reduced motion with an immediate stage update', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });

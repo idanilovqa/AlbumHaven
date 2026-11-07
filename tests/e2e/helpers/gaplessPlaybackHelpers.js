@@ -1,6 +1,11 @@
 import { expectTimingBudget, performanceTimingBudget } from './timingBudget.js';
 
 const PCM_SOCKET_PATH = '/playback/pcm';
+const PLAYBACK_DIAGNOSTIC_HTTP_PATHS = new Set([
+  '/playback/refs',
+  '/playback/state',
+  '/playback/state/handoff',
+]);
 export const LONG_WAVEFORM_TIMING_BUDGET = Object.freeze(
   performanceTimingBudget('gapless-playback.playbackBoundaryMs'),
 );
@@ -23,6 +28,16 @@ function parsePcmFrame(payload) {
   if (view.getUint8(0) !== 65 || view.getUint8(1) !== 72
       || view.getUint8(2) !== 80 || view.getUint8(3) !== 67) return null;
   const frameCount = view.getUint32(20, false);
+  if (view.getUint8(4) === 2) {
+    return {
+      type: 'encoded',
+      role: view.getUint8(5) === 0 ? 'current' : 'continuity',
+      generation: view.getUint32(8, false),
+      streamId: view.getUint32(12, false),
+      sequence: view.getUint32(16, false),
+      byteCount: frameCount,
+    };
+  }
   if (view.getUint8(4) !== 1 || frameCount <= 0
       || bytes.byteLength !== 24 + (frameCount * 8)) return null;
   const sampleCount = frameCount * 2;
@@ -49,6 +64,22 @@ function parsePcmFrame(payload) {
     peakSample,
     samples,
   };
+}
+
+export async function runWithPlaybackEventWindowAttachment({
+  attach,
+  events,
+  streamId,
+}, action) {
+  try {
+    return await action();
+  } finally {
+    const expectedStreamId = typeof streamId === 'function' ? streamId() : streamId;
+    await attach({
+      expectedStreamId: Number(expectedStreamId),
+      events: events().map(({ samples, ...event }) => event),
+    });
+  }
 }
 
 export function summarizeTrackPlaybackEvidence({ after, events, path, renderer }) {
@@ -158,6 +189,9 @@ export function observePlaybackPcmTraffic(page) {
   const events = [];
   const receivedFrameDiagnostics = [];
   const waiters = new Set();
+  const pendingPlaybackSessionRequests = new Set();
+  const pendingSettleWaiters = new Set();
+  let stopped = false;
   const matches = (control, criteria) => Object.entries(criteria)
     .every(([key, value]) => control[key] === value);
   const notifyWaiters = (control) => {
@@ -167,6 +201,58 @@ export function observePlaybackPcmTraffic(page) {
       clearTimeout(waiter.timeoutId);
       waiter.resolve({ ...control });
     }
+  };
+  const notifyPendingSettleChecks = () => {
+    for (const waiter of pendingSettleWaiters) waiter.check();
+  };
+  const diagnosticRequest = (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (!PLAYBACK_DIAGNOSTIC_HTTP_PATHS.has(pathname)
+        && !pathname.startsWith('/playback/session/')) return null;
+    return { method: request.method(), pathname };
+  };
+  const onRequest = (request) => {
+    const record = diagnosticRequest(request);
+    if (record) {
+      events.push({
+        direction: 'sent',
+        type: 'http-request',
+        ...record,
+        requestedAtEpochMs: Date.now(),
+      });
+    }
+    if (record?.pathname.startsWith('/playback/session/')) {
+      pendingPlaybackSessionRequests.add(request);
+    }
+  };
+  const onResponse = (response) => {
+    const record = diagnosticRequest(response.request());
+    if (!record) return;
+    events.push({
+      direction: 'received',
+      type: 'http-response',
+      ...record,
+      status: response.status(),
+      receivedAtEpochMs: Date.now(),
+    });
+  };
+  const onRequestSettled = (request) => {
+    if (!pendingPlaybackSessionRequests.delete(request)) return;
+    notifyPendingSettleChecks();
+  };
+  const onRequestFailed = (request) => {
+    onRequestSettled(request);
+    const record = diagnosticRequest(request);
+    if (!record) return;
+    const failureText = String(request.failure()?.errorText || '');
+    const failure = failureText.match(/\bnet::[A-Z0-9_]+\b/)?.[0] || 'request_failed';
+    events.push({
+      direction: 'received',
+      type: 'http-failure',
+      ...record,
+      failure,
+      receivedAtEpochMs: Date.now(),
+    });
   };
   const onSocket = (socket) => {
     if (!isPlaybackPcmSocket(socket.url())) return;
@@ -182,6 +268,11 @@ export function observePlaybackPcmTraffic(page) {
       }
     });
     socket.on('framereceived', ({ payload }) => {
+      const control = parseControlFrame(payload);
+      if (control) {
+        events.push({ direction: 'received', ...control, receivedAtEpochMs: Date.now() });
+        return;
+      }
       const pcm = parsePcmFrame(payload);
       if (pcm) {
         events.push({ direction: 'received', ...pcm, receivedAtEpochMs: Date.now() });
@@ -196,6 +287,10 @@ export function observePlaybackPcmTraffic(page) {
     socket.on('close', () => { record.closedAtEpochMs = Date.now(); });
   };
   page.on('websocket', onSocket);
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+  page.on('requestfinished', onRequestSettled);
+  page.on('requestfailed', onRequestFailed);
   return {
     mark() {
       return controls.length;
@@ -280,13 +375,47 @@ export function observePlaybackPcmTraffic(page) {
       );
     },
     async waitForBackgroundSettled(options = {}) {
+      if (stopped) return;
+      const timeout = Number(options.timeout || 5000);
+      const deadline = Date.now() + timeout;
       await page.waitForFunction(() => (
         typeof state === 'undefined'
         || Number(state.player?.decodedTrackPromises?.size || 0) === 0
-      ), undefined, { timeout: options.timeout || 5000 });
+      ), undefined, { timeout });
+      if (stopped || pendingPlaybackSessionRequests.size === 0) return;
+      await new Promise((resolve, reject) => {
+        const waiter = { timeoutId: null, check: null, cancel: null };
+        const settle = (error = null) => {
+          if (!pendingSettleWaiters.delete(waiter)) return;
+          if (waiter.timeoutId) clearTimeout(waiter.timeoutId);
+          if (error) reject(error);
+          else resolve();
+        };
+        waiter.check = () => {
+          if (pendingPlaybackSessionRequests.size !== 0) return;
+          settle();
+        };
+        waiter.cancel = () => settle();
+        pendingSettleWaiters.add(waiter);
+        waiter.timeoutId = setTimeout(() => {
+          settle(new Error(
+            `Playback background work did not settle within ${timeout} ms `
+            + `(${pendingPlaybackSessionRequests.size} session requests pending).`,
+          ));
+        }, Math.max(0, deadline - Date.now()));
+        waiter.check();
+      });
     },
     stop() {
+      stopped = true;
       page.off('websocket', onSocket);
+      page.off('request', onRequest);
+      page.off('response', onResponse);
+      page.off('requestfinished', onRequestSettled);
+      page.off('requestfailed', onRequestFailed);
+      for (const waiter of pendingSettleWaiters) waiter.cancel();
+      pendingSettleWaiters.clear();
+      pendingPlaybackSessionRequests.clear();
       for (const waiter of waiters) {
         clearTimeout(waiter.timeoutId);
         waiter.resolve(null);
@@ -367,7 +496,14 @@ export function observeWaveformTraffic(page) {
         const waiter = { afterMark, criteria: { ...criteria }, resolve, timeoutId: null };
         waiter.timeoutId = setTimeout(() => {
           waiters.delete(waiter);
-          reject(new Error(`Waveform response was not observed: ${JSON.stringify(criteria)}`));
+          const seen = requests.slice(afterMark).map((record) => ({
+            cachedOnly: record.cachedOnly,
+            status: record.response?.status ?? 'no response',
+          }));
+          reject(new Error(
+            `Waveform response was not observed: ${JSON.stringify(criteria)}; `
+              + `requests since mark: ${JSON.stringify(seen)}`,
+          ));
         }, options.timeout || 60000);
         waiters.add(waiter);
       });
@@ -553,13 +689,27 @@ export function assertActiveReplacementContract(expect, {
     0,
     ...pcmBeforePromotion.map((event) => Number(event.peakSample || 0)),
   );
-  expect(
-    receivedBeforePromotion,
-    'the selected replacement must receive one second of actual PCM before promotion',
-  ).toBeGreaterThanOrEqual(48000);
-  expect(finiteSamplesBeforePromotion).toBeGreaterThanOrEqual(receivedBeforePromotion * 2);
-  expect(nonZeroSamplesBeforePromotion).toBeGreaterThan(0);
-  expect(peakSampleBeforePromotion).toBeGreaterThan(0);
+  const encodedBeforePromotion = events.slice(0, promotionIndex).filter((event) => (
+    event.direction === 'received'
+      && event.type === 'encoded'
+      && event.generation === replacementOpen.generation
+      && event.streamId === replacementOpen.streamId
+  ));
+  if (encodedBeforePromotion.length) {
+    // Encoded streams have no PCM on the wire; the engine counts what it decoded.
+    expect(
+      afterDiagnostics.cutoverPreparedFrames,
+      'the selected replacement must decode one second of actual PCM before promotion',
+    ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
+  } else {
+    expect(
+      receivedBeforePromotion,
+      'the selected replacement must receive one second of actual PCM before promotion',
+    ).toBeGreaterThanOrEqual(replacementOpen.sampleRate);
+    expect(finiteSamplesBeforePromotion).toBeGreaterThanOrEqual(receivedBeforePromotion * 2);
+    expect(nonZeroSamplesBeforePromotion).toBeGreaterThan(0);
+    expect(peakSampleBeforePromotion).toBeGreaterThan(0);
+  }
   expect(afterDiagnostics.renderedPcmEvidence?.streamId).toBe(replacementOpen.streamId);
   expect(afterDiagnostics.renderedPcmEvidence?.nonZeroSamples).toBeGreaterThan(0);
   expect(afterDiagnostics.renderedPcmEvidence?.peakSample).toBeGreaterThan(0);
@@ -676,7 +826,9 @@ export function assertSustainedPlaybackContract(expect, measurement) {
   expect(after.buffering).toBe(false);
   expect(after.generation).toBe(before.generation);
   expect(after.currentStreamId).toBe(before.currentStreamId);
-  expect(after.currentTime - before.currentTime).toBeGreaterThanOrEqual(requiredSeconds);
+  // Time adds up from frame counts, so compare at frame precision rather than float noise.
+  expect(Math.round((after.currentTime - before.currentTime) * after.sampleRate))
+    .toBeGreaterThanOrEqual(Math.round(requiredSeconds * after.sampleRate));
   expect(
     timing.wallClockPassed,
     `Playback accumulated ${Math.round(timing.wallClockOverheadMs)} ms of wall-clock stall.`,
@@ -719,7 +871,16 @@ export async function readGaplessPlaybackDiagnostics(page) {
     const snapshot = getStreamingPlaybackSnapshot();
     const streaming = state.player?.streaming || {};
     const diagnostics = snapshot.diagnostics || {};
-    const sampleRate = Number(snapshot.sampleRate || 48000);
+    const sampleRate = Number(snapshot.sampleRate);
+    const roleDiagnostics = role => role ? {
+      streamId: Number(role.streamId || 0),
+      metadataAccepted: Boolean(role.metadataAccepted),
+      eosReceived: Boolean(role.eosReceived),
+      initialCreditDeferred: Boolean(role.initialCreditDeferred),
+      provisionalTotalFrames: Number(role.provisionalTotalFrames || 0),
+      timelineStartFrame: Number(role.timelineStartFrame || 0),
+      targetBufferFrames: Number(role.targetBufferFrames || 0),
+    } : null;
     return {
       mode: String(snapshot.mode || ''),
       generation: Number(snapshot.generation || 0),
@@ -734,6 +895,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
       currentCapacityFrames: Number(streaming.limits?.currentSeconds || 0) * sampleRate,
       continuityCapacityFrames: Number(streaming.limits?.continuitySeconds || 0) * sampleRate,
       underruns: Number(diagnostics.underruns || 0),
+      cutoverPreparedFrames: Number(diagnostics.cutoverPreparedFrames || 0),
       buffering: Boolean(diagnostics.buffering),
       lastError: diagnostics.lastError || null,
       seekReadinessException: diagnostics.seekReadinessException || null,
@@ -760,6 +922,10 @@ export async function readGaplessPlaybackDiagnostics(page) {
       boundaryCapture: diagnostics.boundaryCapture || null,
       currentStreamId: Number(streaming.roles?.current?.streamId || 0),
       continuityStreamId: Number(streaming.roles?.continuity?.streamId || 0),
+      roleDiagnostics: {
+        current: roleDiagnostics(streaming.roles?.current),
+        continuity: roleDiagnostics(streaming.roles?.continuity),
+      },
       pendingPromotionStreamId: Number(streaming.pendingPromotion?.streamId || 0),
       pendingPromotionPresent: Boolean(streaming.pendingPromotion),
       pcmEvidence: diagnostics.pcmEvidence ? { ...diagnostics.pcmEvidence } : null,
@@ -790,6 +956,8 @@ export function assertNearEndSeekContract(expect, {
   socketCount,
   successorPath,
   expectedSeekCapture,
+  preservedCurrentStreamId = 0,
+  preservedContinuityStreamId = 0,
 }) {
   expect(seekResult.seekRequestedAtMs, 'the engine must capture seek entry on performance.now').toBeGreaterThan(0);
   expect(diagnostics.seekRequestedAtMs).toBe(seekResult.seekRequestedAtMs);
@@ -842,6 +1010,9 @@ export function assertNearEndSeekContract(expect, {
   expect(activeSocketCount, 'the production playback WebSocket must remain connected').toBe(1);
   expect(socketCount, 'the near-end seek must not replace the production playback WebSocket').toBe(1);
   expect(diagnostics.generation).toBe(seekResult.generation);
+  expect(seekResult.currentPath).toBe(path);
+  expect(seekResult.currentStreamId).toBeGreaterThan(0);
+  expect(seekResult.currentStreamId).not.toBe(seekResult.continuityStreamIdBeforeSeek);
   expect(diagnostics.currentTime).toBeGreaterThanOrEqual(seekResult.targetSeconds - 0.25);
   expect(diagnostics.activeRoles).toContain('current');
   expect(diagnostics.activeRoles.length).toBeLessThanOrEqual(2);
@@ -857,6 +1028,18 @@ export function assertNearEndSeekContract(expect, {
   const seekClose = controls.find((control) => (
     control.type === 'close' && control.reason === 'seek-replaced'
   ));
+  if (preservedCurrentStreamId && preservedContinuityStreamId) {
+    expect(seekClose, 'an in-ring forward seek must not discard prepared queued-next PCM')
+      .toBeUndefined();
+    expect(controls.find((control) => (
+      control.type === 'open' && control.role === 'continuity' && control.path === path
+    )), 'an in-ring forward seek must not open a replacement decoder').toBeUndefined();
+    expect(controls.find((control) => control.type === 'promote'),
+      'an in-ring forward seek must not promote either decoder role').toBeUndefined();
+    expect(diagnostics.currentStreamId).toBe(preservedCurrentStreamId);
+    expect(diagnostics.continuityStreamId).toBe(preservedContinuityStreamId);
+    return;
+  }
   if (seekResult.continuityStreamIdBeforeSeek) {
     expect(seekClose, 'an existing continuity stream must be closed before the prepared seek').toBeTruthy();
   }

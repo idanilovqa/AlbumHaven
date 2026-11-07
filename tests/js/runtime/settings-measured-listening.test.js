@@ -5,19 +5,19 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const source = fs.readFileSync('music_app/static/js/runtime/player-listen-session-helpers.js', 'utf8');
 function setup(overrides = {}) {
-  const storage = new Map(), requests = [], beacons = [];
-  const context = { crypto, Blob, console, Date,
+  const storage = new Map(), requests = [], handoffs = [];
+  const context = { crypto, Blob, console, Date, AbortController, setTimeout, clearTimeout,
     state: { player: { current: {path: '/owned/a', title: 'A', artist: 'Artist'}, listenSession: null } },
     isoNow: () => '2026-09-09T12:00:00Z', unixNowSeconds: () => 1788955200,
     getPlayerPlaybackSnapshot: () => ({currentTime: 5, duration: 200}),
     getLocalStorageItem: key => storage.get(key), setLocalStorageItem: (key,value) => storage.set(key,value),
     fetch: async (url, options) => { requests.push({url, payload: JSON.parse(options.body)}); return {ok:true,json:async()=>({ok:true})}; },
-    navigator: {sendBeacon: (url,body) => {beacons.push({url,body});return true;}},
+    stagePlaybackOwnershipHandoff: completion => {handoffs.push(completion);return true;},
   };
   Object.assign(context, overrides);
   vm.createContext(context); vm.runInContext(source, context);
   context.startListenSession(context.state.player.current);
-  return {c:context, requests, beacons};
+  return {c:context, requests, handoffs};
 }
 const role = (kind='current',path='/owned/a') => ({role:kind,track:{path,title:path,artist:'Artist'},generation:1,streamId:kind==='current'?1:2,continuityOptions:kind==='continuity'?{kind:'queued-next'}:null});
 
@@ -72,7 +72,7 @@ test('retired stream binding cannot credit a later session, and unrendered prefe
 });
 
 test('completion and unload carry stable device/session identity and measured-only qualifying plays', async () => {
-  const {c,requests,beacons}=setup(), stream=role();
+  const {c,requests,handoffs}=setup(), stream=role();
   c.recordMeasuredStreamingFrames(stream,{frames:576000},48000);
   const session=c.state.player.listenSession;
   await c.finalizeListenSession('stopped');
@@ -87,14 +87,14 @@ test('completion and unload carry stable device/session identity and measured-on
   assert.equal(requests[1].payload.sequence,first.sequence);
   c.startListenSession(c.state.player.current);
   c.recordMeasuredStreamingFrames(role(),{frames:624000},48000);
-  assert.equal(c.flushListenSessionOnUnload(),true);
-  const unloaded=JSON.parse(await beacons[0].body.text());
+  assert.equal(c.flushListenSessionOnUnload('pagehide'),true);
+  const unloaded=handoffs[0];
   assert.equal(unloaded.device_id,first.device_id);
   assert.notEqual(unloaded.session_id,first.session_id);
   assert.equal(unloaded.measured_listened_seconds,13);
 });
 
-test('a long pause starts a new measurement even when the streaming role is reused', async () => {
+test('a long pause keeps the same play and measurement when the streaming role is reused', async () => {
   const {c}=setup(), stream=role();
   c.recordMeasuredStreamingFrames(stream,{frames:576000},48000);
   const previous=c.state.player.listenSession;
@@ -102,10 +102,10 @@ test('a long pause starts a new measurement even when the streaming role is reus
   previous.paused_at='2026-09-09T12:00:12Z';
   c.state.player.streaming={roles:{current:stream,continuity:null}};
   await c.resumeListenSessionPlayback(c.state.player.current,5);
-  assert.notEqual(c.state.player.listenSession,previous);
+  assert.equal(c.state.player.listenSession,previous);
+  assert.equal(previous.paused_at_unix_ms,0);
   c.recordMeasuredStreamingFrames(stream,{frames:48000},48000);
-  assert.equal(c.state.player.listenSession.measurement.total,1);
-  assert.equal(previous.measurement.total,12);
+  assert.equal(previous.measurement.total,13);
 });
 
 test('immediate scrobble and completion advance snapshots while retries retain the same final payload', async () => {
@@ -128,13 +128,14 @@ test('immediate scrobble and completion advance snapshots while retries retain t
 });
 
 test('measured unload delegates scrobble receipt handling to its one completion request', () => {
-  const {c,beacons}=setup(), session=c.state.player.listenSession;
+  const {c,handoffs}=setup(), session=c.state.player.listenSession;
   session.duration_seconds=200;
   session.segments=[{start_seconds:0,end_seconds:120}];
   c.recordMeasuredStreamingFrames(role(),{frames:5760000},48000);
-  c.flushListenSessionOnUnload();
-  assert.equal(beacons.length,1);
-  assert.equal(beacons[0].url,'/playback/session/complete');
+  c.flushListenSessionOnUnload('pagehide');
+  assert.equal(handoffs.length,1);
+  assert.equal(handoffs[0].finalized,true);
+  assert.equal(handoffs[0].scrobble_eligible,true);
 });
 
 test('web contexts without randomUUID use secure random bytes for measured identity', () => {
@@ -150,7 +151,7 @@ test('promoted queued roles bind the active session even without any pre-boundar
   assert.equal(c.state.player.listenSession.measurement.total,1);
 });
 
-test('long-pause resume rebinds a promoted current role with historical queued-next options', async () => {
+test('long-pause resume keeps measuring a promoted current role with historical queued-next options', async () => {
   const {c}=setup(), stream=role();
   c.recordMeasuredStreamingFrames(stream,{frames:576000},48000);
   stream.continuityOptions={kind:'queued-next'};
@@ -159,7 +160,7 @@ test('long-pause resume rebinds a promoted current role with historical queued-n
   previous.paused_at='2026-09-09T12:00:12Z';
   c.state.player.streaming={roles:{current:stream,continuity:null}};
   await c.resumeListenSessionPlayback(c.state.player.current,5);
+  assert.equal(c.state.player.listenSession,previous);
   c.recordMeasuredStreamingFrames(stream,{frames:48000},48000);
-  assert.equal(c.state.player.listenSession.measurement.total,1);
-  assert.equal(previous.measurement.total,12);
+  assert.equal(previous.measurement.total,13);
 });

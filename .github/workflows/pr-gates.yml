@@ -21,6 +21,147 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test_android:
+    name: Android Build, Lint and Unit Tests
+    needs:
+      - review_scope
+      - review_prerequisites
+      - pr_agent_review
+      - codex_review
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.run_android == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      # The head commit itself, not its merge with the base: android-promote builds exactly this
+      # commit, so the APK it signs is the one these jobs verified (docs/android-release-signing.md).
+      - name: Checkout the pull request head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        # The runner SDK no longer offers the legacy "tools" package the action installs by default.
+        with:
+          packages: platform-tools
+
+      - name: Install Android platform 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compile every variant
+        working-directory: apps/android-shell
+        run: ./gradlew --no-daemon --console=plain assembleStableDebug assembleSandboxDebug assembleStableRelease assembleSandboxRelease assembleStableDebugAndroidTest assembleSandboxDebugAndroidTest
+
+      - name: Lint
+        working-directory: apps/android-shell
+        run: ./gradlew --no-daemon --console=plain lintStableRelease lintSandboxRelease
+
+      - name: Kotlin unit and contract-fixture tests
+        working-directory: apps/android-shell
+        run: ./gradlew --no-daemon --console=plain testStableDebugUnitTest testSandboxDebugUnitTest
+
+      # The browser side of the shared contract fixtures runs in test_js (npm run test:js:all).
+      # The repository is public, so APKs are never uploaded (owner decision,
+      # November 4, 2026); only their checksums are kept as build evidence.
+      - name: Record unsigned evidence APK checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(apps/android-shell/app/build/outputs/apk/*/release/*-unsigned.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then echo "No unsigned release APKs were built." >&2; exit 1; fi
+          mkdir -p apps/android-shell/app/build/reports
+          sha256sum "${apks[@]}" | tee apps/android-shell/app/build/reports/unsigned-apk-sha256.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/android-shell/app/build/reports/
+            apps/android-shell/app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  test_android_instrumentation:
+    name: Android Instrumentation (API 29)
+    needs:
+      - review_scope
+      - review_prerequisites
+      - pr_agent_review
+      - codex_review
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.run_android == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      # The head commit android-promote builds, as in test_android.
+      - name: Checkout the pull request head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        # The runner SDK no longer offers the legacy "tools" package the action installs by default.
+        with:
+          packages: platform-tools
+
+      - name: Install Android platform 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: ShellSmokeTest on an API 29 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: apps/android-shell
+          script: ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
+
+      - name: Upload instrumentation reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/android-shell/app/build/reports/androidTests/
+            apps/android-shell/app/build/outputs/androidTest-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   test_js:
     name: JavaScript Tests (Portable)
     needs:
@@ -74,6 +215,15 @@ jobs:
         env:
           PLAYWRIGHT_PYTHON: ${{ env.pythonLocation }}/bin/python
         run: npm run test:js:all
+
+      # Records web-only, existing-bridge or native-impact for the whole pull request and fails a
+      # site the latest or previous stable APK cannot run (docs/android-release-signing.md).
+      - name: Classify Android release and enforce release order
+        if: ${{ !cancelled() }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/android-release-compatibility.cjs
 
       - name: Upload portable foundation version manifest
         if: ${{ always() }}
@@ -629,7 +779,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 7
+      max-parallel: 8
       matrix:
         shard: ${{ fromJSON(needs.review_scope.outputs.functional_shards_json) }}
     steps:
@@ -651,9 +801,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.27 `
+            -Release fixtures-v1.0.30 `
             -Profile functional-core `
-            -ManifestSha256 1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA
+            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -853,9 +1003,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & "${{ github.workspace }}\album-haven-trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.27 `
+            -Release fixtures-v1.0.30 `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA
+            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -959,8 +1109,8 @@ jobs:
             }
             $runnerArguments += @{
               GeneratorCheckout = $generatorCheckout
-              ExpectedFixtureRelease = "fixtures-v1.0.27"
-              BaseManifestSha256 = "1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA"
+              ExpectedFixtureRelease = "fixtures-v1.0.30"
+              BaseManifestSha256 = "0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752"
               GeneratorCommit = "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11"
               VariantCount = 512
               SourceMaxEdge = 960
@@ -1456,6 +1606,7 @@ jobs:
       run_performance: ${{ steps.classify.outputs.run_performance }}
       run_phase7_auth: ${{ steps.classify.outputs.run_phase7_auth }}
       run_phase7_admin: ${{ steps.classify.outputs.run_phase7_admin }}
+      run_android: ${{ steps.classify.outputs.run_android }}
       selected_families_json: ${{ steps.classify.outputs.selected_families_json }}
     steps:
       - name: Find last successfully reviewed head
@@ -2186,6 +2337,8 @@ jobs:
       - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
+      - test_android
+      - test_android_instrumentation
       - review_scope
       - review_prerequisites
       - pr_agent_review
@@ -2211,6 +2364,9 @@ jobs:
           PYTHON_RESULT: ${{ needs.test_python.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
+          ANDROID_RESULT: ${{ needs.test_android.result }}
+          ANDROID_INSTRUMENTATION_RESULT: ${{ needs.test_android_instrumentation.result }}
+          RUN_ANDROID: ${{ needs.review_scope.outputs.run_android }}
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
           REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
@@ -2225,6 +2381,9 @@ jobs:
           test "$REVIEW_SCOPE_RESULT" = success
           test "$REVIEW_PREREQUISITES_RESULT" = success
           case "$REVIEW_MODE" in none|incremental|full) ;; *) exit 1 ;; esac
+          if [ "$RUN_ANDROID" = true ]; then android_expected=success; else android_expected=skipped; fi
+          test "$ANDROID_RESULT" = "$android_expected"
+          test "$ANDROID_INSTRUMENTATION_RESULT" = "$android_expected"
           for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT"; do
             test "$result" = skipped
           done
@@ -2255,6 +2414,9 @@ jobs:
           PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
+          ANDROID_RESULT: ${{ needs.test_android.result }}
+          ANDROID_INSTRUMENTATION_RESULT: ${{ needs.test_android_instrumentation.result }}
+          RUN_ANDROID: ${{ needs.review_scope.outputs.run_android }}
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
           REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
@@ -2268,6 +2430,7 @@ jobs:
             isDraft = $env:IS_DRAFT | ConvertFrom-Json
             pipelineMode = $env:PIPELINE_MODE
             reviewMode = $env:REVIEW_MODE
+            runAndroid = $env:RUN_ANDROID -eq "true"
             jobResults = @{
               test_js = $env:TEST_JS_RESULT
               test_components = $env:TEST_COMPONENTS_RESULT
@@ -2278,6 +2441,8 @@ jobs:
               e2e_phase7_admin = $env:PHASE7_ADMIN_RESULT
               e2e_functional = $env:FUNCTIONAL_RESULT
               e2e_performance_ci = $env:PERFORMANCE_RESULT
+              test_android = $env:ANDROID_RESULT
+              test_android_instrumentation = $env:ANDROID_INSTRUMENTATION_RESULT
               review_scope = $env:REVIEW_SCOPE_RESULT
               review_prerequisites = $env:REVIEW_PREREQUISITES_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT

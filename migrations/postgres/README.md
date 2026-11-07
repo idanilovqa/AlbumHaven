@@ -151,6 +151,28 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0083_add_album_raw_artist_search_index.sql
 0084_create_local_artist_search_projection.sql
 0085_add_stale_track_file_candidate_index.sql
+0086_create_root_gallery_projection.sql
+0087_library_source_indicators.sql
+0088_add_active_physical_parent_index.sql
+0089_allow_gallery_projection_featured_kind.sql
+0090_patch_local_artist_search_projection.sql
+0091_add_gallery_projection_artist_lookup_indexes.sql
+0092_add_locale_independent_search_prefilter.sql
+0093_add_duplicate_identity_lookup_index.sql
+0094_stage_gallery_projection_publication.sql
+0095_add_root_preview_artist_order_index.sql
+0096_create_generated_preview_storage.sql
+0097_repair_generated_preview_inventory_path_constraint.sql
+0098_track_generated_preview_current_path.sql
+0099_reconcile_cover_lookup_notification_album_identities.sql
+0100_archive_invalid_featured_track_cover_notifications.sql
+0101_create_local_album_identity_transitions.sql
+0102_narrow_synthetic_unknown_album_identity_guard.sql
+0103_repair_synthetic_unknown_cover_task_identities.sql
+0104_create_playback_claims.sql
+0105_add_playback_claim_handoffs.sql
+0106_create_android_artifact_access.sql
+0107_add_android_device_key_signer.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -227,7 +249,8 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091` are unreleased branch migrations. Their presence in a
+`0099` through `0107` are unreleased branch migrations.
+Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
@@ -268,3 +291,49 @@ Set `PGPASSFILE` when passwordless local automation is required. Keep migration 
 Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
+
+Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
+
+Migration `0101_create_local_album_identity_transitions.sql` adds append-only album identity lineage for scan, watcher, and structural-edit moves. Migration `0102_narrow_synthetic_unknown_album_identity_guard.sql` keeps valid VA and known-artist loose-track successors while excluding the synthetic `Unknown Artist / Unknown Album` catch-all. Migration `0103_repair_synthetic_unknown_cover_task_identities.sql` repairs only legacy cover tasks with complete active paths and one exact artist/title/year target; ambiguous rows remain unchanged.
+
+Migration `0104_create_playback_claims.sql` adds the durable, account-and-library-
+scoped playback ownership lease used by web and mobile clients. PostgreSQL stores
+only the 32-byte digest of each renewable claim token; the raw credential is not
+persisted. The table is additive, and older application versions leave it unused.
+
+Migration `0105_add_playback_claim_handoffs.sql` extends each claim with four
+nullable fields: the one-time handoff ID, 32-byte handoff-token digest, 32-byte
+completion fingerprint, and handoff expiry. Its constraint requires all four
+fields to be null or present together and validates both digests. These fields
+hold short-lived ownership-transfer state only; they do not add credentials or
+metadata markers to listen history.
+
+Apply `0104` and then `0105`, with their checksums recorded, before starting an
+application version that reads or writes playback claims or reload handoffs.
+Existing application versions remain compatible with both additive migrations.
+For rollback, stop or roll back the claim-aware application before changing this
+schema. Prefer retaining the table and nullable columns: expired claim and
+handoff rows are harmless, while rewriting or removing an applied migration
+would invalidate ledger history. Dropping the table discards only transient
+ownership leases, not listen-history rows, but must not occur while any running
+application depends on durable ownership.
+
+Migration `0106_create_android_artifact_access.sql` adds two additive tables for
+attested Android update downloads. `app.android_artifact_challenges` holds only the
+SHA-256 of each single-use, two-minute attestation or request nonce, bound to the
+account, session, channel and purpose. `app.android_device_keys` holds the attested
+public key (SubjectPublicKeyInfo DER), its digest and security level per account and
+channel; no private key, token or certificate chain is stored. Older application
+versions leave both tables unused. For rollback, roll back the application first;
+retaining the tables is harmless, and dropping them only forces every device to
+attest again.
+
+Migration `0107_add_android_device_key_signer.sql` adds the nullable
+`signing_certificate_sha256` (32 bytes) to `app.android_device_keys`: the allowed
+signing certificate a key's attestation matched. The server rechecks it, and the
+key's security level, against the current configuration on every signed request
+and download. It is a separate migration rather than an edit of `0106`, whose
+checksum sandboxes may already have recorded. Existing rows keep null; nothing is
+inferred for them, so those devices are refused until the app attests again. The
+table's existing grants cover the column. For rollback, roll back the application
+first; the column can stay.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 from http.cookies import SimpleCookie
 from importlib import import_module, util
@@ -1486,6 +1487,103 @@ def test_success_persists_session_and_csrf_for_issued_absolute_lifetime(
         cookies["__Host-album_haven_csrf"].value,
         app.state.auth_policy_config,
     )
+
+
+JSON_ACCEPT = {"accept": "application/json"}
+
+
+@pytest.mark.parametrize("outcome", [LoginOutcome.INVALID, LoginOutcome.THROTTLED])
+def test_script_sign_in_failure_is_generic_json_with_fresh_csrf(auth_asgi, outcome):
+    app, preauth, login = _app(auth_asgi, outcome=outcome)
+    preauth.issued = [NEXT_CSRF]
+    status, headers, body = _request(
+        app, "POST", form=_valid_form(), headers=_valid_headers(**JSON_ACCEPT)
+    )
+    assert status == 401
+    assert dict(headers)["content-type"] == "application/json"
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert json.loads(body) == {"csrf_token": NEXT_CSRF}
+    assert preauth.consumed == [CSRF] and len(login.calls) == 1
+    assert any(value.startswith(CSRF_COOKIE + "=" + NEXT_CSRF) for value in _set_cookies(headers))
+    assert not any(value.startswith(SESSION_COOKIE + "=") for value in _set_cookies(headers))
+
+
+def test_script_sign_in_service_failure_matches_the_generic_json_failure(auth_asgi):
+    app, preauth, login = _app(auth_asgi)
+    preauth.issued = [NEXT_CSRF]
+    login.authenticate = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("provider detail"))
+    status, _, body = _request(
+        app, "POST", form=_valid_form(), headers=_valid_headers(**JSON_ACCEPT)
+    )
+    assert status == 503
+    assert json.loads(body) == {"csrf_token": NEXT_CSRF}
+
+
+@pytest.mark.parametrize(
+    "return_to,expected",
+    [("/albums?view=grid", "/albums?view=grid"), ("//evil.test/x", "/")],
+)
+def test_script_sign_in_success_returns_safe_target_with_the_same_cookies(
+    auth_asgi, return_to, expected
+):
+    app, preauth, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
+    status, headers, body = _request(
+        app,
+        "POST",
+        form=_valid_form(return_to=return_to),
+        headers=_valid_headers(**JSON_ACCEPT),
+    )
+    assert status == 200 and "location" not in dict(headers)
+    assert json.loads(body) == {"redirect": expected}
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert preauth.consumed == [CSRF] and len(login.calls) == 1
+    cookies = _set_cookies(headers)
+    session_cookie = next(value for value in cookies if value.startswith(SESSION_COOKIE + "=" + SESSION))
+    assert all(flag in session_cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
+    assert any(value.startswith("__Host-album_haven_csrf=") for value in cookies)
+    assert any(value.startswith(CSRF_COOKIE + "=") and "Max-Age=0" in value for value in cookies)
+    assert SESSION.encode() not in body
+
+
+@pytest.mark.parametrize(
+    "headers,form",
+    [
+        ({"cookie": f"{CSRF_COOKIE}={CSRF}", **JSON_ACCEPT}, _valid_form()),
+        (_valid_headers(origin="https://evil.test", **JSON_ACCEPT), _valid_form()),
+        (_valid_headers(**JSON_ACCEPT), _valid_form(csrf_token="wrong")),
+    ],
+)
+def test_script_sign_in_keeps_origin_and_csrf_checks_before_consume_or_login(
+    auth_asgi, headers, form
+):
+    app, preauth, login = _app(auth_asgi)
+    status, _, body = _request(app, "POST", form=form, headers=headers)
+    assert (status, body) == (400, b"Sign-in request was invalid.")
+    assert preauth.consumed == [] and login.calls == []
+
+
+def test_browser_form_post_keeps_html_failure_even_when_json_is_acceptable(auth_asgi):
+    app, preauth, _ = _app(auth_asgi)
+    preauth.issued = [NEXT_CSRF]
+    status, headers, body = _request(
+        app,
+        "POST",
+        form=_valid_form(),
+        headers=_valid_headers(accept="text/html,application/json;q=0.9"),
+    )
+    assert status == 401 and dict(headers)["content-type"].startswith("text/html")
+    assert b"Sign-in failed" in body
+
+
+def test_login_failure_alert_is_rendered_hidden_until_a_failure(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    alert = re.compile(rb'<section class="on-page-alert on-page-alert--error login-alert"[^>]*>')
+    _, _, fresh = _request(app, "GET")
+    assert b" hidden" in alert.search(fresh).group(0)
+
+    _, _, failed = _request(app, "POST", form=_valid_form(), headers=_valid_headers())
+    assert b" hidden" not in alert.search(failed).group(0)
+    assert b"Sign-in failed. Check your credentials and try again." in failed
 
 
 def test_logout_requires_session_bound_csrf_revokes_and_clears_cookies(auth_asgi):

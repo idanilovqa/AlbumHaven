@@ -32,6 +32,10 @@
   text-decoration: none;
   cursor: pointer;
 }
+.account-menu-item[hidden] { display: none; }
+/* A row that names its action below its label. */
+.account-menu-item__text { display: grid; gap: 2px; padding-block: 6px; }
+.account-menu-item__detail { font-size: 12px; opacity: .8; }
 .account-menu-icon { width: 22px; color: #a4b6ca; font-size: 20px; text-align: center; }
 .account-menu-item:not(:disabled):not([aria-disabled="true"]):hover,
 .account-menu-item:not(:disabled):not([aria-disabled="true"]):focus-visible {

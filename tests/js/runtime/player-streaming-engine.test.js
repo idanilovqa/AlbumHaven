@@ -50,7 +50,7 @@ function receivePcmAndAssertEnqueue(harness, messageOptions = {}, expectations =
   const samples = messageOptions.samples || [0.25, -0.5, 0.75, -1];
   const before = harness.portMessages('enqueue').length;
   const wirePcm = createPcmMessage({ ...messageOptions, samples });
-  harness.sockets[0].receive(wirePcm);
+  (expectations.socket || harness.sockets[0]).receive(wirePcm);
   const enqueues = harness.portMessages('enqueue');
   const expectedEnqueue = expectations.expectedEnqueue !== false;
   assert.equal(
@@ -73,6 +73,12 @@ function receivePcmAndAssertEnqueue(harness, messageOptions = {}, expectations =
   assert.ok(samples.every(Number.isFinite), 'PCM evidence must contain only finite samples');
   assert.ok(samples.some((sample) => sample !== 0), 'PCM evidence must contain a non-silent sample');
   return enqueue;
+}
+
+class KnownTrackSampleRates extends Map {
+  get() {
+    return 48_000;
+  }
 }
 
 function createEngineHarness(options = {}) {
@@ -99,6 +105,7 @@ function createEngineHarness(options = {}) {
 
     postMessage(message, transfer = []) {
       this.messages.push({ message, transfer });
+      this.processor?.port.onmessage({ data: message });
       if (message.type === 'stop' && options.stopPostMessage) {
         options.stopPostMessage(message);
       }
@@ -115,6 +122,30 @@ function createEngineHarness(options = {}) {
       this.name = name;
       this.options = nodeOptions;
       this.port = new FakeMessagePort();
+      if (options.realProcessor) {
+        const port = this.port;
+        const processorContext = {
+          AudioWorkletProcessor: class {
+            constructor() {
+              this.port = { postMessage: (message) => port.events.push(message) };
+            }
+          },
+          Float32Array, Math, Number, Object, currentTime: 12.5, sampleRate: 48_000,
+          registerProcessor: (_name, Processor) => { port.processor = new Processor(); },
+        };
+        port.events = [];
+        vm.createContext(processorContext);
+        vm.runInContext(fs.readFileSync(path.join(repoRoot,
+          'music_app/static/js/audio-worklets/gapless-playback-processor.js'), 'utf8'), processorContext);
+        this.render = () => {
+          const output = [new Float32Array(128), new Float32Array(128)];
+          port.processor.process([], [output]);
+          return output;
+        };
+        this.deliverEvents = () => {
+          for (const event of port.events.splice(0)) port.dispatch(event);
+        };
+      }
       this.connections = [];
       this.disconnectCalls = 0;
       this.onprocessorerror = null;
@@ -138,9 +169,10 @@ function createEngineHarness(options = {}) {
   }
 
   class FakeAudioContext {
-    constructor() {
+    constructor({ sampleRate, latencyHint }) {
       this.state = 'suspended';
-      this.sampleRate = 48_000;
+      this.sampleRate = sampleRate;
+      this.latencyHint = latencyHint;
       this.currentTime = options.contextTime ?? 12.5;
       this.destination = { kind: 'destination' };
       this.audioWorklet = {
@@ -179,6 +211,7 @@ function createEngineHarness(options = {}) {
       this.url = url;
       this.readyState = FakeWebSocket.OPEN;
       this.sent = [];
+      this.probes = [];
       this.binaryType = '';
       this.onopen = null;
       this.onmessage = null;
@@ -191,6 +224,17 @@ function createEngineHarness(options = {}) {
 
     send(message) {
       const parsedMessage = typeof message === 'string' ? JSON.parse(message) : message;
+      if (parsedMessage.type === 'probe') {
+        this.probes.push(parsedMessage);
+        if (!options.holdSampleRateProbes) {
+          queueMicrotask(() => this.receive({
+            type: 'probe-result',
+            requestId: parsedMessage.requestId,
+            sampleRate: options.trackSampleRate?.(parsedMessage.path) ?? 48_000,
+          }));
+        }
+        return;
+      }
       this.sent.push(parsedMessage);
       if (options.sendSocket) options.sendSocket(parsedMessage, this);
     }
@@ -259,6 +303,7 @@ function createEngineHarness(options = {}) {
           node: null,
           socket: null,
           roles: { current: null, continuity: null },
+          trackSampleRates: options.trackSampleRates || new KnownTrackSampleRates(),
           limits: { currentSeconds: 12, continuitySeconds: 5 },
           snapshot: {
             currentTime: 0,
@@ -281,6 +326,8 @@ function createEngineHarness(options = {}) {
       },
     },
     window,
+    createStreamingDecoder: options.createStreamingDecoder,
+    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
     handleStreamingPlaybackFirstFrame: options.handleStreamingPlaybackFirstFrame,
     handleStreamingPlaybackBoundary: options.handleStreamingPlaybackBoundary,
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
@@ -298,7 +345,7 @@ function createEngineHarness(options = {}) {
     vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/player-listen-session-helpers.js'), 'utf8'), context);
   }
   const api = vm.runInContext(`({
-    prepare: prepareStreamingPlaybackEngine,
+    prepare: (sampleRate = 48_000) => prepareStreamingPlaybackEngine(sampleRate),
     start: startStreamingTrack,
     pause: pauseStreamingPlayback,
     resume: resumeStreamingPlayback,
@@ -477,6 +524,7 @@ test('facade receives bounded position updates and one active terminal ended eve
     trackPath: track.path,
     timelineFrame: 72_000,
     currentTime: 1.5,
+    startNextTrackPath: '',
   }]);
   assert.equal(harness.api.snapshot().currentTime, 1.5);
   assert.equal(harness.api.snapshot().paused, true);
@@ -553,6 +601,7 @@ test('non-zero initial starts keep zero-relative worklet messages on the absolut
     trackPath: makeTrack().path,
     timelineFrame: startFrame + 48_000,
     currentTime: (startFrame + 48_000) / 48_000,
+    startNextTrackPath: '',
   }]);
   assert.equal(harness.api.snapshot().currentTime, (startFrame + 48_000) / 48_000);
   assert.equal(harness.api.snapshot().renderedFrame, 48_000, 'terminal rendered frames stay worklet-relative');
@@ -1408,6 +1457,67 @@ test('pause and explicit resume keep context, processor, and snapshot state alig
   assert.equal(harness.contexts[0].state, 'running');
   assert.equal(harness.portMessages('play').length, 2);
   assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().mode, 'starting');
+});
+
+test('resume restores playing mode when current already rendered its first frame', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  await harness.api.pause();
+
+  await harness.api.resume();
+
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().mode, 'playing');
+});
+
+test('pause invalidates a pending AudioContext resume before it can command audible playback', async () => {
+  let finishResume;
+  let delayResume = false;
+  const harness = createEngineHarness({
+    resumeContext: () => delayResume ? new Promise((resolve) => { finishResume = resolve; }) : undefined,
+  });
+  await harness.api.start(makeTrack());
+  await harness.api.pause();
+  const playsBefore = harness.portMessages('play').length;
+  delayResume = true;
+  const resume = harness.api.resume();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof finishResume, 'function');
+  await harness.api.pause();
+  assert.equal(harness.api.snapshot().paused, true);
+  finishResume();
+  await resume;
+  assert.equal(harness.portMessages('play').length, playsBefore,
+    'a late AudioContext resume cannot send a play command after Pause');
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.nodes[0].port.messages.at(-1).message.type, 'pause');
+});
+
+test('late pause completion cannot overwrite the mode of a newer explicit resume', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  let finishSuspend;
+  harness.contexts[0].suspend = () => {
+    harness.contexts[0].state = 'suspended';
+    return new Promise((resolve) => { finishSuspend = resolve; });
+  };
+  const pause = harness.api.pause();
+  assert.equal(harness.api.snapshot().paused, true);
+  await harness.api.resume();
+  assert.equal(harness.api.snapshot().paused, false);
+  const resumedMode = harness.engine.mode;
+  finishSuspend();
+  await pause;
+  assert.equal(harness.engine.mode, resumedMode);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.nodes[0].port.messages.at(-1).message.type, 'play');
 });
 
 test('resolved resume keeps playback paused while the AudioContext remains suspended', async () => {
@@ -1585,7 +1695,7 @@ test('playing seek keeps current audible until a buffered continuity head commit
     generation: target.generation,
     streamId: target.streamId,
     sequence: 1,
-    samples: [0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4],
+    samples: new Array(12_000 * 2).fill(0.25),
   }, { role: 'current' });
   assert.equal(harness.api.snapshot().diagnostics.staleMessages, staleBeforePromotedWirePcm);
   assert.equal(harness.portMessages('enqueue').at(-1).role, 'current');
@@ -1594,8 +1704,8 @@ test('playing seek keeps current audible until a buffered continuity head commit
     generation: target.generation,
     streamId: target.streamId,
     role: 'continuity',
-    emittedFrames: 12_004,
-    authoritativeTotalFrames: 156_004,
+    emittedFrames: 24_000,
+    authoritativeTotalFrames: 168_000,
   });
   assert.equal(
     harness.api.snapshot().duration,
@@ -1620,8 +1730,353 @@ test('playing seek keeps current audible until a buffered continuity head commit
     renderedFrame: 128, contextTime: 2,
   });
   await harness.settle();
-  assert.equal(harness.sent('open').at(-1).path, 'C:/Music/Album/queued.flac');
-  assert.equal(harness.sent('open').at(-1).role, 'continuity');
+  const restoredQueued = harness.sent('open').at(-1);
+  assert.equal(restoredQueued.path, 'C:/Music/Album/queued.flac');
+  assert.equal(restoredQueued.role, 'continuity');
+  assert.deepEqual([...harness.api.snapshot().diagnostics.activeRoles], ['current', 'continuity']);
+
+  const restoredCreditCount = harness.sent('credit')
+    .filter(({ streamId }) => streamId === restoredQueued.streamId).length;
+  acceptMetadata(harness, restoredQueued);
+  const restoredCredits = harness.sent('credit')
+    .filter(({ streamId }) => streamId === restoredQueued.streamId);
+  assert.equal(
+    restoredCredits.length,
+    restoredCreditCount + 1,
+    'an EOS seek tail shorter than one second must not defer queued-next initial credit',
+  );
+  assert.ok(restoredCredits.at(-1).frames > 0);
+  assert.equal(harness.engine.roles.continuity.initialCreditDeferred, false);
+});
+
+test('forward seek within current ring preserves prepared queued-next PCM', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  const queued = harness.sent('open').at(-1);
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  const openCount = harness.sent('open').length;
+  const currentCreditCount = harness.sent('credit')
+    .filter(({ streamId }) => streamId === current.streamId).length;
+
+  const seek = harness.api.seek(3);
+  const reservation = harness.portMessages('reserve-buffered-seek').at(-1);
+  assert.deepEqual({ ...reservation }, {
+    type: 'reserve-buffered-seek',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+  });
+  const firstFrameBeforeSeek = harness.engine.diagnostics.firstFrameAtMs;
+  harness.setNow(1001);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    renderedFrame: 128,
+    timelineFrame: 144_000,
+    skippedFrames: 120_000,
+    bufferedFrames: 72_000,
+    silentFrames: 0,
+    capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+  assert.equal(await seek, harness.engine.roles.current);
+
+  assert.equal(harness.sent('open').length, openCount);
+  assert.equal(harness.sent('close').length, 0);
+  assert.equal(harness.sent('promote').length, 0);
+  assert.equal(harness.engine.roles.current.streamId, current.streamId);
+  assert.equal(harness.engine.roles.continuity.streamId, queued.streamId);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  const currentCredits = harness.sent('credit')
+    .filter(({ streamId }) => streamId === current.streamId);
+  assert.equal(currentCredits.length, currentCreditCount + 1);
+  assert.ok(currentCredits.at(-1).frames > 0);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.api.snapshot().diagnostics.seekSilentFrames, 0);
+  assert.ok(harness.api.snapshot().diagnostics.firstFrameAtMs > firstFrameBeforeSeek);
+  assert.ok(
+    harness.api.snapshot().diagnostics.firstFrameAtMs
+      >= harness.api.snapshot().diagnostics.seekCommittedAtMs,
+  );
+  assert.deepEqual(harness.api.snapshot().diagnostics.seekCapture, {
+    outgoing: { frames: 64 }, incoming: { frames: 1 },
+  });
+});
+
+test('forward seek beyond unread current PCM uses continuity replacement', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const replacement = await harness.api.seek(3);
+
+  assert.equal(harness.portMessages('reserve-buffered-seek').length, 0);
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(harness.sent('close').at(-1).reason, 'seek-replaced');
+  assert.equal(harness.sent('open').at(-1).path, current.path);
+});
+
+test('new fallback seek supersedes a pending buffered forward seek once', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.snapshot.currentTime = 2;
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  assert.equal(harness.engine.roles.continuity.continuityOptions.kind, 'queued-next');
+  assert.equal(harness.engine.snapshot.paused, false);
+
+  const bufferedSeek = harness.api.seek(3);
+  assert.ok(harness.engine.pendingBufferedSeek);
+  const fallbackSeek = harness.api.seek(1);
+
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(await bufferedSeek, null);
+  const replacement = await fallbackSeek;
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(harness.sent('open').filter(({ path }) => path === current.path).length, 2);
+});
+
+test('pause supersedes a pending buffered forward seek without starting fallback', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+  const openCount = harness.sent('open').length;
+
+  const seek = harness.api.seek(3);
+  assert.ok(harness.engine.pendingBufferedSeek);
+  await harness.api.pause();
+
+  assert.equal(await seek, null);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.api.snapshot().paused, true);
+  assert.equal(harness.sent('open').length, openCount);
+});
+
+test('late buffered boundary after pause still reconciles skipped PCM accounting', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+  await harness.api.pause();
+  assert.equal(await seek, null);
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.ok(harness.engine.deferredCreditFrames.current > 0);
+});
+
+test('late superseded buffered boundary reconciles accounting without completing newer seek', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const firstSeek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const secondSeek = harness.api.seek(3.5);
+  assert.equal(await firstSeek, null);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.engine.supersededBufferedSeek.requestId, 1);
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.engine.pendingBufferedSeek, null);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+  assert.equal(harness.engine.diagnostics.seekCommittedAtMs, 0);
+  const replacement = await secondSeek;
+  assert.equal(replacement.continuityOptions.kind, 'seek');
+  assert.equal(replacement.generation, current.generation);
+  assert.equal(replacement.track.path, current.path);
+  await harness.api.pause();
+});
+
+test('prepared track replacement retains late buffered boundary accounting', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  const replacementStart = harness.api.start(makeTrack('replacement.flac'));
+  assert.equal(await seek, null);
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 72_000);
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+  await harness.api.pause();
+  await replacementStart;
+});
+
+test('late buffered boundary clears its retained identity after current role changes', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-reserved', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+  });
+  await harness.api.pause();
+  assert.equal(await seek, null);
+  harness.engine.roles.current = harness.engine.roles.continuity;
+  harness.engine.roles.continuity = null;
+  const staleMessages = harness.engine.diagnostics.staleMessages;
+
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-boundary', generation: current.generation,
+    requestId: 1, streamId: current.streamId, timelineFrame: 144_000,
+    renderedFrame: 128, skippedFrames: 120_000, bufferedFrames: 72_000,
+    silentFrames: 0, capture: { outgoing: { frames: 64 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.diagnostics.staleMessages, staleMessages + 1);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 192_000);
+  assert.equal(harness.engine.supersededBufferedSeek, null);
+});
+
+test('rejected buffered forward seek falls back to continuity replacement', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('current.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 192_000;
+  await harness.api.continuity(makeTrack('queued.flac'));
+  const queued = harness.sent('open').at(-1);
+  harness.engine.diagnostics.bufferedFrames.continuity = 48_000;
+
+  const seek = harness.api.seek(3);
+  harness.nodes[0].port.dispatch({
+    type: 'buffered-seek-rejected',
+    generation: current.generation,
+    requestId: 1,
+    streamId: current.streamId,
+    timelineFrame: 144_000,
+    reason: 'unavailable',
+  });
+  const replacement = await seek;
+
+  assert.equal(replacement.role, 'continuity');
+  assert.equal(replacement.startFrame, 144_000);
+  assert.equal(harness.sent('close').at(-1).streamId, queued.streamId);
+  assert.equal(harness.sent('close').at(-1).reason, 'seek-replaced');
+  assert.equal(harness.sent('open').at(-1).streamId, replacement.streamId);
+  assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, replacement.streamId);
 });
 
 test('current EOS cannot replace an in-progress seek target with queued-next continuity', async () => {
@@ -1803,6 +2258,74 @@ test('uses a boundary to promote the stable server stream and waits for its ack 
   });
   await harness.settle();
   assert.equal(harness.sent('open').length, 3, 'duplicate promotion acknowledgement is idempotent');
+});
+
+test('production ring limits give every track the same cushion after a boundary swap', () => {
+  const coreState = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/js/runtime/core-state-and-helpers.js'),
+    'utf8',
+  );
+  const [, currentSeconds, continuitySeconds] = coreState.match(
+    /limits: \{ currentSeconds: (\d+), continuitySeconds: (\d+) \}/,
+  );
+  assert.equal(
+    continuitySeconds,
+    currentSeconds,
+    'rings swap at every promotion, so a smaller continuity ring starves every second track',
+  );
+});
+
+test('a promoted track keeps the full protected cushion with equal production rings', async () => {
+  const harness = createEngineHarness();
+  harness.engine.limits = { currentSeconds: 12, continuitySeconds: 12 };
+  await harness.api.start(makeTrack('01.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 12.5,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('02.flac'));
+  const continuity = harness.sent('open').at(-1);
+  acceptMetadata(harness, continuity);
+
+  harness.nodes[0].port.dispatch({
+    type: 'boundary',
+    generation: current.generation,
+    outgoingStreamId: current.streamId,
+    incomingStreamId: continuity.streamId,
+    renderedFrame: 1,
+    timelineFrame: 1,
+    capture: { outgoing: { frames: 1 }, incoming: { frames: 1 } },
+  });
+
+  assert.equal(harness.engine.roles.current.streamId, continuity.streamId);
+  assert.equal(harness.engine.roles.current.targetBufferFrames, 12 * 48_000);
+});
+
+test('a finished rebuffer reports its measured stall over the playback socket', async () => {
+  const harness = createEngineHarness();
+  harness.setNow(1_000);
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const identity = {
+    generation: current.generation, streamId: current.streamId, role: 'current', timelineFrame: 0,
+  };
+
+  harness.nodes[0].port.dispatch({ type: 'buffering-start', ...identity });
+  harness.setNow(4_600);
+  harness.nodes[0].port.dispatch({ type: 'buffering-end', ...identity });
+
+  assert.deepEqual({ ...harness.sent('stall-report').at(-1) }, {
+    type: 'stall-report',
+    generation: current.generation,
+    streamId: current.streamId,
+    durationMs: 3_600,
+    targetBufferFrames: 11 * 48_000,
+    pageVisible: true,
+  });
 });
 
 test('swapped physical rings keep promoted and replacement roles within their inherited capacities', async () => {
@@ -2945,6 +3468,238 @@ test('playing replacement prepares a clean head and cuts over without clearing a
   assert.deepEqual([...harness.api.snapshot().diagnostics.activeRoles], ['current']);
 });
 
+for (const pauseAt of ['before-prepare', 'before-boundary', 'queued-boundary']) {
+  test(`pause cancels replacement at ${pauseAt} without changing resumed audible track`, async (t) => {
+    const harness = createEngineHarness({ realProcessor: true });
+    t.after(() => harness.api.stop());
+    const track = makeTrack('outgoing.flac');
+    await harness.api.start(track);
+    const outgoing = harness.sent('open')[0];
+    acceptMetadata(harness, outgoing);
+    receivePcmAndAssertEnqueue(harness, {
+      generation: outgoing.generation, streamId: outgoing.streamId,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+    const node = harness.nodes[0];
+    node.render();
+    node.deliverEvents();
+    receivePcmAndAssertEnqueue(harness, {
+      generation: outgoing.generation, streamId: outgoing.streamId, sequence: 1,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+    node.render();
+    node.deliverEvents();
+    const starting = harness.api.start(makeTrack('replacement.flac')).catch(() => null);
+    const replacement = harness.sent('open').at(-1);
+    assert.notEqual(replacement.streamId, outgoing.streamId);
+    if (pauseAt !== 'before-prepare') {
+      acceptMetadata(harness, replacement);
+      receivePcmAndAssertEnqueue(harness, {
+        role: 1, generation: replacement.generation, streamId: replacement.streamId,
+        samples: new Array(48_000 * 2).fill(0.75),
+      });
+      receivePcmAndAssertEnqueue(harness, {
+        role: 1, generation: replacement.generation, streamId: replacement.streamId, sequence: 1,
+        samples: new Array(48_000 * 2).fill(0.75),
+      });
+      node.deliverEvents();
+      assert.equal(harness.engine.pendingSeek.prepareSent, true);
+    }
+    if (pauseAt === 'queued-boundary') {
+      assert.ok(node.render()[0].every((sample) => sample === 0.75));
+      assert.ok(node.port.events.some((event) => event.type === 'seek-boundary'));
+    }
+    const retainedTime = harness.api.snapshot().currentTime;
+    await harness.api.pause();
+    assert.equal(harness.engine.pendingSeek, null,
+      'pause must cancel a pending replacement before its delayed cutover');
+    node.render();
+    node.deliverEvents();
+    const restored = harness.sent('open').at(-1);
+    if (restored.streamId !== replacement.streamId) {
+      assert.equal(restored.startFrame, Math.round(retainedTime * 48_000));
+      acceptMetadata(harness, restored);
+    }
+    await harness.api.resume();
+    if (restored.streamId !== replacement.streamId) {
+      receivePcmAndAssertEnqueue(harness, {
+        generation: restored.generation, streamId: restored.streamId,
+        samples: new Array(48_000 * 2).fill(0.25),
+      });
+      receivePcmAndAssertEnqueue(harness, {
+        generation: restored.generation, streamId: restored.streamId, sequence: 1,
+        samples: new Array(48_000 * 2).fill(0.25),
+      });
+    }
+    const output = node.render();
+    node.deliverEvents();
+    assert.equal(harness.engine.roles.current?.track.path, track.path,
+      'cancelled replacement must not become the engine current track');
+    assert.ok(output[0].every((sample) => sample === 0.25),
+      'resume must render outgoing PCM, never cancelled replacement PCM or silence');
+    await starting;
+  });
+}
+
+function loadLeaseRecoveryRuntime(harness) {
+  const { context } = harness;
+  Object.assign(context, {
+    AbortController,
+    getPlayerPlaybackSnapshot: harness.api.snapshot,
+    setInterval: () => 0,
+    clearInterval: () => {},
+    fetch: async (url) => ({ ok: true, json: async () => url === '/playback/refs'
+      ? { protocol: 1, expiresAt: '2099-10-24T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] }
+      : { ok: true, protocol: 1, claimToken: 'fresh-claim', expiresAt: new Date(context.Date.now() + 30_000).toISOString(), leaseMs: 30_000,
+        is_playing_elsewhere: false, is_playing_here: false } }),
+  });
+  for (const filename of ['playback-ownership-helpers.js', 'player-loop-playback.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), filename), 'utf8'), context);
+  }
+  context.updatePlayerUi = () => {};
+  context.state.player.ownership = { tabId: 'lease-client', requestVersion: 0, activeClaim: null };
+}
+
+for (const interruptionMs of [1_000, 3_600_001]) {
+  test(`lease interruption of ${interruptionMs}ms resets contiguous listening while preserving session identity`, async () => {
+    const harness = createEngineHarness({ measuredListening: true });
+    loadLeaseRecoveryRuntime(harness);
+    const { context } = harness;
+    const track = makeTrack('interrupted-listen.flac');
+    context.state.player.current = track;
+    const requests = [];
+    const fetch = context.fetch;
+    context.fetch = (url, options) => { requests.push(url); return fetch(url, options); };
+    let now = harness.dateNow();
+    context.Date.now = () => now;
+    context.isoNow = () => new Date(now).toISOString();
+    context.unixNowSeconds = () => Math.floor(now / 1000);
+    const consumeTwentySeconds = () => {
+      const role = harness.engine.roles.current;
+      harness.nodes.at(-1).port.dispatch({ type: 'consumed', generation: role.generation,
+        streamId: role.streamId, role: 'current', frames: 20 * 48_000, bufferedFrames: 0, audible: true });
+    };
+    try {
+      assert.equal(await context.claimPlaybackOwnership(track), true);
+      await context.resumeListenSessionPlayback(track, 0);
+      await harness.api.start(track);
+      const original = context.state.player.listenSession;
+      consumeTwentySeconds();
+      assert.equal(original.measurement.total, 20);
+      assert.equal(original.measurement.longest, 20);
+      const requestsBeforeLoss = requests.length;
+      context.losePlaybackOwnership();
+      await harness.settle();
+      assert.equal(requests.length, requestsBeforeLoss,
+        'lease-loss bookkeeping must not send unauthorized listen effects');
+      now += interruptionMs;
+      await context.handlePlaybackOwnershipEvent();
+      context.togglePlayerPlayback({ focusTimelineOnResume: false });
+      await harness.settle();
+      await harness.settle();
+      consumeTwentySeconds();
+      const resumed = context.state.player.listenSession;
+      assert.strictEqual(resumed, original, 'time-only interruption must not create another provider identity');
+      assert.equal(resumed.measurement.total, 40, 'interrupted silence adds no measured time');
+      assert.equal(resumed.measurement.longest, 20,
+        'separate audible intervals must not merge across ownership loss');
+    } finally {
+      clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+      await harness.api.stop();
+    }
+  });
+}
+
+test('lease recovery reinstalls the active loop before first-frame queued-next scheduling', async () => {
+  const harness = createEngineHarness();
+  loadLeaseRecoveryRuntime(harness);
+  const { context } = harness;
+  const track = makeTrack('looping.flac');
+  const next = makeTrack('queued-next.flac');
+  Object.assign(context.state.player, { current: track, loopActive: true, loopStart: 20, loopEnd: 40 });
+  const firstFrame = () => {
+    const role = harness.engine.roles.current;
+    harness.nodes.at(-1).port.dispatch({ type: 'first-frame', generation: role.generation,
+      streamId: role.streamId, renderedFrame: 0, contextTime: 1 });
+  };
+  try {
+    assert.equal(await context.claimPlaybackOwnership(track), true);
+    await harness.api.start(track, { startSeconds: 25 });
+    firstFrame();
+    await context.scheduleActiveStreamingLoop();
+    assert.equal(harness.engine.loopContinuity?.kind, 'long-loop');
+    context.peekNextQueuedTrack = () => next;
+    context.losePlaybackOwnership();
+    await harness.settle();
+    const opensBeforeRecovery = harness.sent('open').length;
+    await context.handlePlaybackOwnershipEvent();
+    context.togglePlayerPlayback({ focusTimelineOnResume: false });
+    await harness.settle();
+    firstFrame();
+    await harness.settle();
+    assert.equal(context.state.player.loopActive, true);
+    assert.equal(harness.engine.loopContinuity?.kind, 'long-loop',
+      'the still-active loop must be installed in the restarted engine');
+    assert.equal(harness.engine.loopContinuity.startSeconds, 20);
+    assert.equal(harness.engine.loopContinuity.endSeconds, 40);
+    assert.equal(harness.engine.roles.continuity?.track.path, track.path);
+    assert.equal(harness.sent('open').slice(opensBeforeRecovery).some(open => open.path === next.path), false,
+      'first-frame recovery must not open the queued next track while looping');
+  } finally {
+    clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+    await harness.api.stop();
+  }
+});
+
+test('explicit Play after lease loss reopens the real current stream at its retained audible offset', async () => {
+  const harness = createEngineHarness({ realProcessor: true });
+  loadLeaseRecoveryRuntime(harness);
+  const { context } = harness;
+  const track = makeTrack('lease-recovery.flac');
+  context.state.player.current = track;
+  try {
+    assert.equal(await context.claimPlaybackOwnership(track), true);
+    await harness.api.start(track, { startSeconds: 12 });
+    const initial = harness.sent('open')[0];
+    acceptMetadata(harness, initial);
+    receivePcmAndAssertEnqueue(harness, { generation: initial.generation, streamId: initial.streamId,
+      samples: new Array(48_000 * 2).fill(0.25) });
+    receivePcmAndAssertEnqueue(harness, { generation: initial.generation, streamId: initial.streamId,
+      sequence: 1, samples: new Array(48_000 * 2).fill(0.25) });
+    assert.ok(harness.nodes[0].render()[0].every(sample => sample === 0.25));
+    harness.nodes[0].deliverEvents();
+    const retainedSeconds = harness.api.snapshot().currentTime;
+    assert.ok(retainedSeconds >= 12);
+    context.losePlaybackOwnership();
+    await harness.settle();
+    assert.equal(harness.api.snapshot().paused, true);
+    assert.equal(harness.engine.roles.current, null);
+    await context.handlePlaybackOwnershipEvent();
+    assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+    await harness.settle();
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.equal(harness.engine.roles.current?.track.path, track.path,
+      'explicit Play must recreate a real current decoder, not resume an empty engine');
+    const reopened = harness.sent('open').at(-1);
+    assert.equal(reopened.startFrame, Math.round(retainedSeconds * 48_000));
+    const socket = harness.sockets.at(-1);
+    socket.receive({ type: 'metadata', generation: reopened.generation, streamId: reopened.streamId,
+      role: 'current', sampleRate: 48_000, channels: 2, provisionalTotalFrames: 11_520_000,
+      requestedStartFrame: reopened.startFrame, timelineStartFrame: reopened.startFrame });
+    receivePcmAndAssertEnqueue(harness, { generation: reopened.generation, streamId: reopened.streamId,
+      samples: new Array(48_000 * 2).fill(0.75) }, { socket });
+    receivePcmAndAssertEnqueue(harness, { generation: reopened.generation, streamId: reopened.streamId,
+      sequence: 1, samples: new Array(48_000 * 2).fill(0.75) }, { socket });
+    assert.ok(harness.nodes.at(-1).render()[0].every(sample => sample === 0.75),
+      'the recovered current stream must render actual non-silent PCM');
+    harness.nodes.at(-1).deliverEvents();
+    assert.ok(harness.api.snapshot().currentTime >= retainedSeconds);
+  } finally {
+    clearTimeout(context.getPlaybackOwnershipState().expiryTimer);
+    await harness.api.stop();
+  }
+});
+
 test('prepared replacement preserves its buffered outgoing cushion while retaining head priority', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack('outgoing.flac'));
@@ -3935,7 +4690,7 @@ test('concurrent restore and manual resume post play exactly once', async () => 
   assert.equal(harness.engine.roles.current, restored);
   assert.equal(harness.contexts[0].state, 'running');
   assert.equal(harness.api.snapshot().paused, false);
-  assert.equal(harness.api.snapshot().mode, 'starting');
+  assert.equal(harness.api.snapshot().mode, 'playing');
   assert.equal(harness.portMessages('play').length, 1);
   assert.equal(
     harness.sent('credit').filter(({ streamId }) => streamId === current.streamId).length,
@@ -5193,4 +5948,514 @@ test('unknown active-stream control type is a fatal socket protocol error', asyn
   assert.equal(settled.mode, 'error');
   assert.equal(settled.diagnostics.lastError.source, 'socket');
   assert.match(settled.diagnostics.lastError.message, /unknown|protocol|control/i);
+});
+
+test('tracks play in a context at their own sample rate with rate-scaled buffers', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
+  const track = makeTrack();
+
+  await harness.api.start(track, { startSeconds: 2 });
+
+  assert.equal(harness.contexts[0].sampleRate, 44_100);
+  const open = harness.sent('open')[0];
+  assert.equal(open.sampleRate, 44_100);
+  assert.equal(open.startFrame, 88_200);
+  const configure = harness.portMessages('configure')[0];
+  assert.equal(configure.sampleRate, 44_100);
+  assert.equal(configure.currentCapacityFrames, 529_200);
+  assert.equal(configure.startupBufferFrames, 88_200);
+  acceptMetadata(harness, open, { sampleRate: 44_100 });
+  assert.equal(harness.api.snapshot().sampleRate, 44_100);
+});
+
+test('a queued track at another rate opens no continuity and is handed over on ended', async () => {
+  const ended = [];
+  
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    trackSampleRate: (path) => (path.endsWith('next.flac') ? 96_000 : 44_100),
+    handleStreamingPlaybackEnded: (event) => ended.push(structuredClone(event)),
+  });
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current, { sampleRate: 44_100 });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: current.generation,
+    streamId: current.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+
+  harness.engine.diagnostics.bufferedFrames.current = 44_100;
+  const nextTrack = makeTrack('next.flac');
+  await harness.api.continuity(nextTrack);
+  assert.equal(harness.sockets[0].probes.length, 1, 'the next track never waits for a probe');
+  const refused = harness.sent('open').at(-1);
+  assert.equal(refused.sampleRate, 44_100);
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: refused.generation,
+    streamId: refused.streamId,
+    sampleRate: 96_000,
+    fallbackSampleRate: 48_000,
+  });
+  assert.equal(harness.engine.roles.continuity, null);
+  assert.equal(harness.portMessages('expect-continuity').at(-1).active, false);
+
+  harness.nodes[0].port.dispatch({
+    type: 'ended',
+    generation: current.generation,
+    streamId: current.streamId,
+    timelineFrame: 44_100,
+  });
+  assert.equal(ended[0].startNextTrackPath, nextTrack.path);
+
+  await harness.api.start(nextTrack);
+  assert.equal(harness.contexts.length, 2);
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.contexts[1].sampleRate, 96_000);
+  assert.equal(harness.sockets.length, 1, 'the one PCM socket survives the rate change');
+  assert.equal(harness.sent('open').at(-1).sampleRate, 96_000);
+});
+
+test('a same-rate queued track keeps the context and opens gapless continuity', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current, { sampleRate: 44_100 });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: current.generation,
+    streamId: current.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 44_100;
+
+  await harness.api.continuity(makeTrack('next.flac'));
+
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.sent('open').at(-1).role, 'continuity');
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+});
+
+test('an unreadable track rate fails the start instead of assuming one', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 0 });
+
+  await assert.rejects(harness.api.start(makeTrack()), /sample rate could not be read/);
+
+  assert.equal(harness.contexts.length, 0);
+  assert.equal(harness.sent('open').length, 0);
+});
+
+function encodedFrame(open, sequence, bytes) {
+  const buffer = new ArrayBuffer(24 + bytes.length);
+  const view = new DataView(buffer);
+  [65, 72, 80, 67].forEach((value, index) => view.setUint8(index, value));
+  view.setUint8(4, 2);
+  view.setUint8(5, open.role === 'current' ? 0 : 1);
+  view.setUint32(8, open.generation, false);
+  view.setUint32(12, open.streamId, false);
+  view.setUint32(16, sequence, false);
+  view.setUint32(20, bytes.length, false);
+  new Uint8Array(buffer, 24).set(bytes);
+  return buffer;
+}
+
+function rampDecoder(framesPerPacket) {
+  let nextSample = 0;
+  return () => ({
+    ready: Promise.resolve(),
+    free() {},
+    decode() {
+      const left = Float32Array.from({ length: framesPerPacket }, () => (nextSample += 1) / 1_000);
+      return { channelData: [left, left], samplesDecoded: framesPerPacket };
+    },
+  });
+}
+
+function encodedHarness(options = {}) {
+  const harness = createEngineHarness({
+    createStreamingDecoder: rampDecoder(1_152),
+    ...options,
+  });
+  harness.engine.encodedCodecs = ['mp3', 'flac'];
+  return harness;
+}
+
+async function startEncoded(harness, track, metadata = {}) {
+  await harness.api.start(track);
+  const open = harness.sent('open').at(-1);
+  acceptMetadata(harness, open, {
+    codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000, ...metadata,
+  });
+  await harness.settle();
+  return open;
+}
+
+test('encoded streams advertise codecs and keep exactly the samples the server maps', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+  assert.deepEqual(open.codecs, ['mp3', 'flac']);
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(100)));
+  harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
+  harness.sockets[0].receive(encodedFrame(open, 2, new Uint8Array(100)));
+  await harness.settle();
+  harness.sockets[0].receive({
+    type: 'eos',
+    generation: open.generation,
+    streamId: open.streamId,
+    role: 'current',
+    emittedFrames: 2_000,
+    authoritativeTotalFrames: 2_000,
+  });
+  await harness.settle();
+
+  const enqueued = harness.portMessages('enqueue');
+  const left = enqueued.flatMap(({ pcm }) => [...pcm].filter((_, index) => index % 2 === 0));
+  assert.equal(left.length, 2_000, 'the map decides the count, not the decoder');
+  assert.ok(Math.abs(left[0] - 1.106) < 1e-5, 'the skipped decoder samples never play');
+  assert.deepEqual(enqueued.map(({ sequence }) => sequence), enqueued.map((_, index) => index));
+  const eos = harness.portMessages('eos').at(-1);
+  assert.equal(eos.emittedFrames, 2_000);
+  assert.equal(eos.authoritativeTotalFrames, 2_000);
+  assert.equal(harness.engine.diagnostics.decoderFallback, undefined);
+});
+
+test('audio the server sends on open counts as already requested', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), {
+    initialCreditBytes: 64 * 1024,
+  });
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+});
+
+test('encoded bytes are requested separately from decoded ring credit', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+
+  const credit = harness.sent('credit');
+  assert.equal(credit.length, 1, 'one bounded byte request is outstanding at a time');
+  assert.equal(credit[0].frames, 64 * 1024);
+});
+
+test('encoded bytes beyond granted credit are a protocol failure', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((64 * 1024) + 1)));
+
+  assert.match(harness.engine.diagnostics.lastError.message, /byte credit/);
+});
+
+test('a decoder failure replays the track from its position on server decoding', async () => {
+  const harness = encodedHarness({
+    createStreamingDecoder: () => ({
+      ready: Promise.resolve(),
+      free() {},
+      decode() { throw new Error('decoder fault'); },
+    }),
+  });
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+  harness.engine.snapshot.currentTime = 12;
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(100)));
+  await harness.settle();
+
+  assert.equal(harness.engine.diagnostics.decoderFallback, 'decode-error');
+  assert.deepEqual(harness.sent('decoder-fallback').map(({ reason }) => reason), ['decode-error']);
+  const replay = harness.sent('open').at(-1);
+  assert.equal(replay.path, open.path);
+  assert.equal(replay.startFrame, 576_000);
+  assert.equal(replay.codecs, undefined, 'the replay is decoded by the server');
+});
+
+test('a short decode is reported and later tracks use server decoding', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 5_000 });
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(100)));
+  await harness.settle();
+  harness.sockets[0].receive({
+    type: 'eos',
+    generation: open.generation,
+    streamId: open.streamId,
+    role: 'current',
+    emittedFrames: 5_000,
+    authoritativeTotalFrames: 5_000,
+  });
+  await harness.settle();
+
+  assert.equal(harness.engine.diagnostics.decoderFallback, 'short-decode');
+  assert.equal(harness.engine.encodedCodecs.length, 0);
+  assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 47);
+});
+
+test('FLAC drops to 320 kbps after a recent stall and never changes an MP3', async () => {
+  const harness = encodedHarness({
+    trackSampleRates: new Map(),
+    trackSampleRate: () => 96_000,
+  });
+  harness.engine.lastStallAtMs = 1_000;
+
+  await harness.api.start(makeTrack('hi.flac'));
+  const open = harness.sent('open').at(-1);
+  assert.equal(open.quality, '320');
+
+  await harness.api.stop();
+  harness.engine.encodedCodecs = ['mp3', 'flac'];
+  await harness.api.start(makeTrack('song.mp3'));
+  assert.equal(harness.sent('open').at(-1).quality, undefined);
+});
+
+test('a decoder failure never carries a 320 kbps request to server decoding', async () => {
+  const harness = encodedHarness({
+    trackSampleRates: new Map(),
+    trackSampleRate: () => 44_100,
+    createStreamingDecoder: () => ({
+      ready: Promise.resolve(),
+      free() {},
+      decode() { throw new Error('decoder fault'); },
+    }),
+  });
+  harness.engine.qualityPreference = '320';
+  const open = await startEncoded(harness, makeTrack('hi.flac'), { sampleRate: 44_100 });
+  assert.equal(open.quality, '320');
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(100)));
+  await harness.settle();
+
+  const replay = harness.sent('open').at(-1);
+  assert.notEqual(replay.streamId, open.streamId);
+  assert.equal(replay.quality, undefined);
+  assert.equal(replay.codecs, undefined);
+});
+
+test('a good connection keeps FLAC at original quality', async () => {
+  const harness = encodedHarness();
+
+  await harness.api.start(makeTrack('hi.flac'));
+
+  assert.equal(harness.sent('open').at(-1).quality, undefined);
+});
+
+test('a manual quality preference overrides the connection measurement', async () => {
+  const harness = encodedHarness();
+  harness.engine.lastStallAtMs = 1_000;
+  harness.engine.qualityPreference = 'original';
+
+  await harness.api.start(makeTrack('hi.flac'));
+
+  assert.equal(harness.sent('open').at(-1).quality, undefined);
+});
+
+test('a decoder failure during a seek restarts at the seek target instead of hanging', async () => {
+  let decodeCalls = 0;
+  const harness = encodedHarness({
+    createStreamingDecoder: () => ({
+      ready: Promise.resolve(),
+      free() {},
+      decode() {
+        decodeCalls += 1;
+        throw new Error('decoder fault');
+      },
+    }),
+  });
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.engine.roles.current.encoded = null;
+
+  await harness.api.seek(30);
+  const seek = harness.sent('open').at(-1);
+  acceptMetadata(harness, seek, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000 });
+  await harness.settle();
+  harness.sockets[0].receive(encodedFrame(seek, 0, new Uint8Array(100)));
+  await harness.settle();
+
+  assert.equal(decodeCalls, 1);
+  assert.equal(harness.engine.pendingSeek, null);
+  const replay = harness.sent('open').at(-1);
+  assert.equal(replay.startFrame, 1_440_000);
+  assert.equal(replay.codecs, undefined);
+});
+
+test('padding after the last mapped sample never delays end of stream', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { skipFrames: 0, totalFrames: 1_152 });
+  harness.engine.roles.current.encoded.localCreditFrames = 1_152;
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(100)));
+  await harness.settle();
+  harness.engine.roles.current.encoded.localCreditFrames = 0;
+  harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
+  harness.sockets[0].receive({
+    type: 'eos',
+    generation: open.generation,
+    streamId: open.streamId,
+    role: 'current',
+    emittedFrames: 1_152,
+    authoritativeTotalFrames: 1_152,
+  });
+  await harness.settle();
+
+  assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
+});
+
+test('music playback asks for large output buffers', async () => {
+  const harness = createEngineHarness();
+
+  await harness.api.start(makeTrack());
+
+  assert.equal(harness.contexts[0].latencyHint, 'playback');
+});
+
+test('audio output details are reported once and again only when dropouts grow', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  const context = harness.contexts[0];
+  context.baseLatency = 0.05;
+  context.playbackStats = { underrunEvents: 0, underrunDuration: 0 };
+  const position = () => harness.nodes[0].port.dispatch({
+    type: 'position',
+    generation: open.generation,
+    streamId: open.streamId,
+    timelineFrame: 48_000,
+  });
+
+  harness.setNow(10_000);
+  position();
+  harness.setNow(16_000);
+  position();
+  assert.equal(harness.sent('output-report').length, 1);
+  assert.equal(harness.sent('output-report')[0].baseLatencyMs, 50);
+
+  context.playbackStats = { underrunEvents: 3, underrunDuration: 0.09 };
+  harness.setNow(22_000);
+  position();
+
+  const report = harness.sent('output-report').at(-1);
+  assert.equal(report.underruns, 3);
+  assert.equal(report.underrunMs, 90);
+  assert.equal(report.statsAvailable, true);
+});
+
+test('a prepared replacement checks the waveform cache before audio is ready', async () => {
+  const probes = [];
+  const harness = createEngineHarness({
+    probeCachedWaveformPeaks: (path, generation) => probes.push({ path, generation }),
+  });
+  await harness.api.start(makeTrack('01.flac'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 96_000;
+  probes.length = 0;
+
+  void harness.api.start(makeTrack('02.flac'));
+  await harness.settle();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(probes)), [
+    { path: 'C:/Music/Album/02.flac', generation: open.generation },
+  ]);
+});
+
+test('a seek stops the old position downloading so its audio arrives first', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 1,
+  });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+  await harness.settle();
+  const creditsBeforeSeek = harness.sent('credit').filter(({ streamId }) => streamId === open.streamId);
+
+  await harness.api.seek(30);
+  harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
+  await harness.settle();
+
+  const creditsAfterSeek = harness.sent('credit').filter(({ streamId }) => streamId === open.streamId);
+  assert.equal(creditsAfterSeek.length, creditsBeforeSeek.length);
+});
+
+test('a switch to an unknown encoded track opens at once and needs one second of head', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  await harness.api.start(makeTrack('01.mp3'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 12.5,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  const probes = harness.sockets[0].probes.length;
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await harness.settle();
+
+  assert.equal(harness.sockets[0].probes.length, probes, 'a switch never waits for a probe');
+  const replacement = harness.sent('open').at(-1);
+  assert.equal(replacement.role, 'continuity');
+  acceptMetadata(harness, replacement, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  assert.equal(harness.engine.roles.continuity.targetBufferFrames, 48_000);
+});
+
+test('a refused switch restarts cleanly at the track rate', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  await harness.api.start(makeTrack('01.mp3'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame',
+    generation: open.generation,
+    streamId: open.streamId,
+    renderedFrame: 0,
+    contextTime: 12.5,
+  });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+
+  const switching = harness.api.start(makeTrack('02.mp3'));
+  await harness.settle();
+  const refused = harness.sent('open').at(-1);
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: refused.generation,
+    streamId: refused.streamId,
+    sampleRate: 44_100,
+    fallbackSampleRate: 44_100,
+  });
+  const started = await switching;
+
+  assert.equal(harness.contexts.at(-1).sampleRate, 44_100);
+  assert.equal(harness.sent('open').at(-1).role, 'current');
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+  assert.equal(started.track.path, makeTrack('02.mp3').path);
 });

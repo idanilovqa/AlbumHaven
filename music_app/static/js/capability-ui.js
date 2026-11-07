@@ -24,12 +24,21 @@
   function install(document) {
     const policy = readPolicy(document);
     const allows = (action) => Boolean(policy && policy.actions[action] === true);
-    const allowsUtilityTab = (tab) => Boolean(policy && policy.availableTabs.includes(tab));
+    // The Android tab is client-owned: only the APK's injected bridge object can reveal it, never an
+    // element or frame window that named access exposes under its name. The runtime's bridge
+    // client asks this same predicate.
+    const isAndroidShell = () => {
+      const bridge = root.AlbumHavenBridge;
+      return typeof bridge?.postMessage === 'function' && bridge.window !== bridge;
+    };
+    const allowsUtilityTab = (tab) => tab === 'android'
+      ? isAndroidShell()
+      : Boolean(policy && policy.availableTabs.includes(tab));
     const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
-    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate,
+    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate, isAndroidShell,
       clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;

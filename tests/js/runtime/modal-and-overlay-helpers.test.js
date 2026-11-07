@@ -179,11 +179,15 @@ function loadHelper() {
       return rafQueue.length;
     },
     cancelBrowserAnimationFrame() {},
-    scheduleBrowserTimeout(callback) {
+    scheduleBrowserTimeout(callback, delay = 0) {
+      if (delay >= 8000) return 1;
       if (typeof callback === 'function') {
         callback();
       }
       return 1;
+    },
+    clearBrowserTimeout() {
+      return true;
     },
     escapeHtml(value) {
       return String(value ?? '');
@@ -312,6 +316,302 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
   assert.equal(context.state.view.non_album_tracks_deferred, false);
   assert.equal(controlSyncs, 1);
+});
+
+test('deferred non-album hydration accepts an equivalent reordered category scope', async () => {
+  const { context } = loadHelper();
+  let resolveRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => {
+    const params = new URLSearchParams({
+      surface: 'albums',
+      artist: view.selected_artist || '',
+    });
+    for (const category of view.visible_library_categories || []) {
+      params.append('category', category);
+    }
+    return `/view-data?${params}`;
+  };
+  context.fetch = async () => new Promise((resolve) => {
+    resolveRequest = () => resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [{ path: '/music/neal-morse/loose.flac', title: 'Loose' }],
+        non_album_tracks_deferred: false,
+      }),
+    });
+  });
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  const hydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+  context.state.view.visible_library_categories = ['hoard', 'main_library', 'new_arrivals'];
+  resolveRequest();
+  await hydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['Loose'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
+test('library-wide non-album tracks hydrate after artist hydration completes', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    const libraryWide = new URL(url, 'http://localhost')
+      .searchParams.get('include_library_wide_non_album') === '1';
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        non_album_tracks: [{ path: '/music/artist/loose.flac', title: 'Artist Loose' }],
+        ...(libraryWide ? {
+          library_non_album_tracks: [{ path: '/music/other/loose.flac', title: 'Library Loose' }],
+        } : {}),
+      }),
+    };
+  };
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  await context.hydrateDeferredNonAlbumTracks();
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+
+  assert.equal(requested.length, 2);
+  assert.deepEqual(
+    Array.from(context.state.view.library_non_album_tracks, (track) => track.title),
+    ['Library Loose'],
+  );
+
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'The Other Artist',
+    non_album_tracks: [],
+    library_non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  await context.hydrateDeferredNonAlbumTracks();
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 4);
+});
+
+test('current artist hydration reaches terminal state while library-wide hydration is pending', async () => {
+  const { context } = loadHelper();
+  let resolveArtistRequest;
+  let resolveLibraryRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => new Promise((resolve) => {
+    const libraryWide = new URL(url, 'http://localhost')
+      .searchParams.get('include_library_wide_non_album') === '1';
+    const respond = () => resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [],
+        ...(libraryWide ? {
+          library_non_album_tracks: [{ path: '/music/other/loose.flac', title: 'Library Loose' }],
+        } : {}),
+      }),
+    });
+    if (libraryWide) resolveLibraryRequest = respond;
+    else resolveArtistRequest = respond;
+  });
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  const artistHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+  const libraryHydration = context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await Promise.resolve();
+  resolveArtistRequest();
+  await artistHydration;
+
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+  assert.deepEqual(Array.from(context.state.view.non_album_tracks), []);
+
+  resolveLibraryRequest();
+  await libraryHydration;
+  assert.deepEqual(
+    Array.from(context.state.view.library_non_album_tracks, (track) => track.title),
+    ['Library Loose'],
+  );
+});
+
+test('late artist hydration preserves completed library-wide non-album tracks', async () => {
+  const { context } = loadHelper();
+  let resolveArtistRequest;
+  let resolveLibraryRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => new Promise((resolve) => {
+    const libraryWide = new URL(url, 'http://localhost')
+      .searchParams.get('include_library_wide_non_album') === '1';
+    const respond = () => resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [],
+        ...(libraryWide ? {
+          library_non_album_tracks: [{ path: '/music/other/loose.flac', title: 'Library Loose' }],
+        } : {}),
+      }),
+    });
+    if (libraryWide) resolveLibraryRequest = respond;
+    else resolveArtistRequest = respond;
+  });
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+
+  const artistHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+  const libraryHydration = context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await Promise.resolve();
+  resolveLibraryRequest();
+  await libraryHydration;
+  resolveArtistRequest();
+  await artistHydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.library_non_album_tracks, (track) => track.title),
+    ['Library Loose'],
+  );
+});
+
+test('deferred non-album hydration starts a new request after gallery identity changes', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  let resolveRootRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(url);
+    if (requested.length === 1) {
+      return new Promise((resolve) => {
+        resolveRootRequest = () => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ non_album_tracks: [] }),
+        });
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Neal Morse',
+        non_album_tracks: [{ path: '/music/neal-morse/loose.flac', title: 'Loose Track' }],
+      }),
+    };
+  };
+
+  context.state.view = {
+    selected_artist: '',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const rootHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const artistHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  assert.equal(requested.length, 2);
+  resolveRootRequest();
+  await Promise.all([rootHydration, artistHydration]);
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['Loose Track'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
+test('an older deferred hydration cannot overwrite a newer scope for the same artist', async () => {
+  const { context } = loadHelper();
+  let resolveOldRequest;
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}&query=${encodeURIComponent(view.query || '')}`;
+  context.fetch = async (url) => {
+    if (new URL(url, 'http://localhost').searchParams.get('query') === 'old') {
+      return new Promise((resolve) => {
+        resolveOldRequest = () => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            non_album_tracks: [{ path: '/music/neal-morse/old.flac', title: 'Old Scope' }],
+          }),
+        });
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        non_album_tracks: [{ path: '/music/neal-morse/new.flac', title: 'New Scope' }],
+      }),
+    };
+  };
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    query: 'old',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  const oldHydration = context.hydrateDeferredNonAlbumTracks();
+  await Promise.resolve();
+
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    query: 'new',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  await context.hydrateDeferredNonAlbumTracks();
+  resolveOldRequest();
+  await oldHydration;
+
+  assert.deepEqual(
+    Array.from(context.state.view.non_album_tracks, (track) => track.title),
+    ['New Scope'],
+  );
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
@@ -650,6 +950,39 @@ async function flushLightboxPromises() {
   assert.equal(imageElement.attributes['aria-hidden'], undefined);
 }
 
+test('a successful gallery cover load clears a stale local cover failure', () => {
+  const { context } = loadHelper();
+  const coverPath = 'C:/covers/reconnected-drive-cover.jpg';
+  const imageElement = new FakeElement('reconnected-drive-cover');
+  imageElement.complete = true;
+  imageElement.naturalWidth = 480;
+  imageElement.setAttribute('data-cover-path', coverPath);
+  imageElement.currentSrc = `/cover?path=${encodeURIComponent(coverPath)}&size=480`;
+  imageElement.src = imageElement.currentSrc;
+  context.rememberFailedLocalDisplayCoverPath(coverPath);
+
+  assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
+  assert.match(
+    context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }),
+    /^\/cover\?path=C%3A%2Fcovers%2Freconnected-drive-cover\.jpg&size=480&v=/,
+  );
+});
+
+test('a successful remote fallback does not clear the failed local cover path', () => {
+  const { context } = loadHelper();
+  const coverPath = 'C:/covers/still-unavailable.jpg';
+  const imageElement = new FakeElement('remote-cover-fallback');
+  imageElement.complete = true;
+  imageElement.naturalWidth = 480;
+  imageElement.setAttribute('data-cover-path', coverPath);
+  imageElement.currentSrc = 'https://images.example/fallback.jpg';
+  imageElement.src = imageElement.currentSrc;
+  context.rememberFailedLocalDisplayCoverPath(coverPath);
+
+  assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
+  assert.equal(context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }), '');
+});
+
 test('album cover load records native decode readiness and clears the prior source timestamp', async () => {
   const { context } = loadHelper();
   let resolveDecode;
@@ -777,10 +1110,12 @@ test('lightbox stays pending through decode and falls back when full-source deco
   assert.equal(loading.hidden, false);
   context.__preloaders[0].rejectDecode(new Error('full source decode failed'));
   await flushLightboxPromises();
-  assert.equal(context.__preloaders[1].src, '/cover?path=joseph&size=480', 'a failed full source should preload the proven preview source');
-  context.__preloaders[1].onload();
+  assert.match(context.__preloaders[1].src, /^\/cover\?path=joseph&full=1&_album_haven_retry=/);
+  context.__preloaders[1].onerror();
+  assert.equal(context.__preloaders[2].src, '/cover?path=joseph&size=480', 'a failed full source should preload the proven preview source');
+  context.__preloaders[2].onload();
   assert.equal(image.hidden, true, 'preview must also remain pending through decode');
-  context.__preloaders[1].resolveDecode();
+  context.__preloaders[2].resolveDecode();
   await flushLightboxPromises();
   assert.equal(image.src, '/cover?path=joseph&size=480');
   assert.equal(image.hidden, false);
@@ -810,8 +1145,9 @@ test('lightbox exhausts broken sources without a native broken image and retries
   });
   context.__preloaders[0].onerror();
   context.__preloaders[1].onerror();
-  assert.equal(context.__preloaders[2].src, '/remote-cover?album=joseph', 'the remote source should remain the final image fallback');
   context.__preloaders[2].onerror();
+  assert.equal(context.__preloaders[3].src, '/remote-cover?album=joseph', 'the remote source should remain the final image fallback');
+  context.__preloaders[3].onerror();
   assert.equal(image.src, '');
   assert.equal(image.hidden, true, 'an exhausted fallback chain must not leave the browser broken-image icon visible');
   assert.equal(loading.hidden, true, 'terminal exhaustion must not leave a false loading status');
@@ -822,19 +1158,159 @@ test('lightbox exhausts broken sources without a native broken image and retries
     remoteSrc: '/remote-cover?album=joseph',
   }), true);
   assert.equal(
-    context.__preloaders[3].src,
+    context.__preloaders[4].src,
     '/cover?path=joseph&full=1',
     'each explicit reopen should retry the full source after a transient failure',
   );
-  context.__preloaders[3].onload();
+  context.__preloaders[4].onload();
   assert.equal(image.hidden, true);
-  context.__preloaders[3].resolveDecode();
+  context.__preloaders[4].resolveDecode();
   await flushLightboxPromises();
   assert.equal(image.src, '/cover?path=joseph&full=1');
   assert.equal(image.hidden, false);
   assert.equal(image.alt, 'Full-size album cover');
   assert.equal(image.getAttribute('aria-hidden'), '');
   assert.equal(loading.hidden, true);
+});
+
+test('lightbox bounds stalled sources and exposes an explicit retry after exhaustion', () => {
+  const { context } = loadHelper();
+  const image = new FakeElement('image-lightbox-image');
+  const loading = new FakeElement('image-lightbox-loading');
+  const error = new FakeElement('image-lightbox-error');
+  const status = new FakeElement('image-lightbox-status');
+  const retry = new FakeElement('image-lightbox-retry');
+  const timers = new Map();
+  const delays = [];
+  let nextTimerId = 0;
+
+  image.src = '';
+  const removeImageAttribute = image.removeAttribute.bind(image);
+  image.removeAttribute = (name) => {
+    if (name === 'src') image.src = '';
+    removeImageAttribute(name);
+  };
+  context.getLightboxElements = () => ({
+    image,
+    loading,
+    error,
+    status,
+    retry,
+    overlay: new FakeElement('image-lightbox'),
+  });
+  context.setLightboxZoom = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    const timerId = ++nextTimerId;
+    delays.push(delay);
+    timers.set(timerId, callback);
+    return timerId;
+  };
+  context.clearBrowserTimeout = (timerId) => timers.delete(timerId);
+  context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
+
+  const runNextTimer = () => {
+    const nextTimer = timers.entries().next().value;
+    assert.ok(nextTimer, 'an active source attempt should have a timeout');
+    const [timerId, callback] = nextTimer;
+    timers.delete(timerId);
+    callback();
+  };
+
+  assert.equal(context.showStandaloneLightboxItem({
+    src: '/cover?path=iliad&full=1',
+    previewSrc: '/cover?path=iliad&size=480',
+    remoteSrc: '/remote-cover?album=iliad',
+    alt: 'Album cover for A Grand Piano Extravaganza',
+  }), true);
+  assert.equal(timers.size, 1, 'the full-size source must have a bounded load attempt');
+  assert.equal(loading.hidden, false);
+  assert.equal(error.hidden, true);
+  assert.equal(retry.hidden, true);
+
+  runNextTimer();
+  assert.equal(context.__preloaders[1].src, '/cover?path=iliad&size=480');
+  runNextTimer();
+  assert.equal(context.__preloaders[2].src, '/remote-cover?album=iliad');
+  runNextTimer();
+
+  assert.equal(image.hidden, true);
+  assert.equal(loading.hidden, true, 'terminal failure must stop the loading indicator');
+  assert.equal(error.hidden, false, 'terminal failure should expose the retryable error state');
+  assert.equal(status.textContent, 'Cover could not be loaded.');
+  assert.equal(retry.hidden, false);
+  assert.ok(delays.every((delay) => delay === 8000), 'every source attempt must use the fixed bound');
+
+  assert.equal(context.retryActiveLightboxImage(), true);
+  assert.match(context.__preloaders[3].src, /^\/cover\?path=iliad&full=1&_album_haven_retry=/);
+  assert.equal(error.hidden, true);
+  assert.equal(loading.hidden, false);
+  assert.equal(retry.hidden, true);
+});
+
+test('local full-size failure retries once then keeps the preview visible with manual recovery', async () => {
+  const { context } = loadHelper();
+  const image = new FakeElement('image-lightbox-image');
+  const loading = new FakeElement('image-lightbox-loading');
+  const error = new FakeElement('image-lightbox-error');
+  const status = new FakeElement('image-lightbox-status');
+  const retry = new FakeElement('image-lightbox-retry');
+  const timers = new Map();
+  let nextTimerId = 0;
+
+  image.src = '';
+  const removeImageAttribute = image.removeAttribute.bind(image);
+  image.removeAttribute = (name) => {
+    if (name === 'src') image.src = '';
+    removeImageAttribute(name);
+  };
+  context.getLightboxElements = () => ({
+    image,
+    loading,
+    error,
+    status,
+    retry,
+    overlay: new FakeElement('image-lightbox'),
+  });
+  context.setLightboxZoom = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    const timerId = ++nextTimerId;
+    timers.set(timerId, { callback, delay });
+    return timerId;
+  };
+  context.clearBrowserTimeout = (timerId) => timers.delete(timerId);
+  context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
+
+  const fullSource = '/cover?path=C%3A%2FMusic%2FIliad%2FA%20Grand%20Piano%20Extravaganza%2Fcover.jpg&v=cov-008';
+  const previewSource = `${fullSource}&size=480`;
+  context.showStandaloneLightboxItem({
+    src: fullSource,
+    previewSrc: previewSource,
+    alt: 'Album cover for A Grand Piano Extravaganza',
+  });
+
+  context.__preloaders[0].onerror();
+  assert.equal(context.__preloaders.length, 1, 'the first local failure should schedule one same-source retry');
+  assert.deepEqual([...timers.values()].map((timer) => timer.delay), [150]);
+
+  const automaticRetry = timers.values().next().value;
+  timers.clear();
+  automaticRetry.callback();
+  assert.match(context.__preloaders[1].src, /_album_haven_retry=/);
+  context.__preloaders[1].onerror();
+  assert.equal(context.__preloaders[2].src, previewSource);
+  context.__preloaders[2].onload();
+  context.__preloaders[2].resolveDecode();
+  await flushLightboxPromises();
+
+  assert.equal(image.src, previewSource);
+  assert.equal(image.hidden, false);
+  assert.equal(retry.hidden, false);
+  assert.match(retry.textContent, /retry full-size cover/i);
+
+  assert.equal(context.retryActiveLightboxImage(), true);
+  assert.equal(image.src, previewSource, 'manual retry must preserve the usable preview');
+  assert.equal(image.hidden, false);
+  assert.match(context.__preloaders[3].src, /_album_haven_retry=/);
 });
 
 test('stale navigation and close-like invalidation during decode cannot reveal an old source', async () => {
@@ -1001,6 +1477,21 @@ test('album display cover rejects an older preview revision for the current loca
   assert.notEqual(url, stalePreviewUrl);
   assert.equal(parsed.searchParams.get('path'), 'C:/music/Kaipa/cover.jpg');
   assert.equal(parsed.searchParams.get('v'), 'selected-front-revision');
+});
+
+test('album display cover uses a server preview when a compact payload omits the private path', () => {
+  const { context } = loadHelper();
+  const canonicalPreviewUrl = '/cover?path=opaque-preview&size=480&v=preview-revision';
+
+  assert.equal(
+    context.buildAlbumDisplayCoverUrl({
+      key: 'notification-summary',
+      name: 'Notification summary',
+      album_artist: 'Artist',
+      cover_preview_url: canonicalPreviewUrl,
+    }),
+    canonicalPreviewUrl,
+  );
 });
 
 test('markAlbumCoverPathsFresh preserves authoritative album and track cover revisions', () => {
@@ -1188,6 +1679,19 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
       album_artist: 'Howard Shore',
       cover_path: 'C:/covers/local-primary-1.jpg',
       remote_cover_url: 'https://images.example/primary-1.jpg',
+    }),
+    true,
+  );
+}
+
+{
+  const { context } = loadHelper();
+  assert.equal(
+    context.albumHasDisplayCover({
+      key: 'preview-only',
+      name: 'Preview Only',
+      album_artist: 'Howard Shore',
+      cover_preview_url: '/cover?path=opaque&size=480&v=revision',
     }),
     true,
   );
@@ -1406,6 +1910,7 @@ test('backdrop tap retains its pointer origin through delayed touch click, but i
 for (const allowed of [false, true, undefined]) {
   test(`duplicate Folder actions use the shared location capability for delegated and direct entry (${allowed === undefined ? 'legacy' : allowed ? 'allowed' : 'denied'})`, async () => {
     const requests = [], captures = [];
+    let now = 1800000;
     const album = { key: 'duplicate-album', tracks: [{ path: 'owned-duplicate.flac' }] };
     const folder = {};
     const document = {
@@ -1416,7 +1921,7 @@ for (const allowed of [false, true, undefined]) {
         denied_selectors: allowed ? [] : ['[data-open-track-modal-duplicate-folder]'],
       }) } : null,
     };
-    const context = vm.createContext({ window: { document }, document, console,
+    const context = vm.createContext({ window: { document }, document, console, Date: { now: () => now },
       fetch: async (url, options) => { requests.push({ url, album: JSON.parse(options.body).album });
         return { ok: true, json: async () => ({ ok: true }) }; },
       showToast: () => assert.fail('location capability denial must not report a server error'),
@@ -1435,6 +1940,7 @@ for (const allowed of [false, true, undefined]) {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(stopped, allowed === false);
     assert.equal(requests.length, allowed === false ? 0 : 1);
+    now += 750;
     await context.openAlbumInExplorer(album);
     assert.equal(requests.length, allowed === false ? 0 : 2);
     for (const request of requests) {
@@ -1443,6 +1949,76 @@ for (const allowed of [false, true, undefined]) {
     }
   });
 }
+
+
+test('Explorer dispatch ignores overlapping and rapid successful repeats without queueing them', async () => {
+  const requests = [];
+  let now = 1800000;
+  let resolveFirstRequest;
+  const firstResponse = new Promise((resolve) => { resolveFirstRequest = resolve; });
+  const context = vm.createContext({
+    window: {},
+    Date: { now: () => now },
+    console,
+    ALBUM_MENU_LOG_PREFIX: '[test]',
+    fetch: async () => {
+      requests.push(true);
+      if (requests.length === 1) return firstResponse;
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    showToast: () => assert.fail('successful Explorer dispatch must not show an error'),
+  });
+  vm.runInContext(helperSource, context);
+  const album = { key: 'duplicate-album', open_directory_paths: ['C:\\Music\\Album'] };
+
+  const first = context.openAlbumInExplorer(album);
+  const repeated = context.openAlbumInExplorer(album);
+
+  assert.equal(requests.length, 1);
+  resolveFirstRequest({ ok: true, json: async () => ({ ok: true }) });
+  await Promise.all([first, repeated]);
+
+  await context.openAlbumInExplorer({
+    key: 'other-album',
+    open_directory_paths: ['D:\\Music\\Other Album'],
+  });
+  assert.equal(requests.length, 2);
+
+  now += 749;
+  await context.openAlbumInExplorer(album);
+  assert.equal(requests.length, 2);
+
+  now += 1;
+  await context.openAlbumInExplorer(album);
+  assert.equal(requests.length, 3);
+});
+
+
+test('Explorer dispatch allows an immediate retry after failure', async () => {
+  const requests = [];
+  const toasts = [];
+  const context = vm.createContext({
+    window: {},
+    Date: { now: () => 1800000 },
+    console,
+    ALBUM_MENU_LOG_PREFIX: '[test]',
+    fetch: async () => {
+      requests.push(true);
+      return requests.length === 1
+        ? { ok: false, json: async () => ({ ok: false, error: 'Explorer unavailable' }) }
+        : { ok: true, json: async () => ({ ok: true }) };
+    },
+    showToast: (message, type) => toasts.push({ message, type }),
+  });
+  vm.runInContext(helperSource, context);
+  const album = { key: 'duplicate-album', open_directory_paths: ['C:\\Music\\Album'] };
+
+  await context.openAlbumInExplorer(album);
+  await context.openAlbumInExplorer(album);
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(toasts, [{ message: 'Explorer unavailable', type: 'error' }]);
+});
 
 
 test('paged root loose tracks remain visible outside the loaded artist window', () => {

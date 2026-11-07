@@ -14,6 +14,7 @@ const REQUIRED_JOBS = [
 ];
 
 const REVIEW_JOBS = ['pr_agent_review', 'codex_review'];
+const ANDROID_JOBS = ['test_android', 'test_android_instrumentation'];
 
 function validInput(mode = 'trusted', reviewMode = 'full') {
   const trusted = mode === 'trusted';
@@ -26,10 +27,12 @@ function validInput(mode = 'trusted', reviewMode = 'full') {
     ['test_js', 'test_components', 'e2e_production_parity', 'review_scope', 'review_prerequisites'].includes(job) ? 'success' : 'skipped'
   )]));
   if (trusted) REVIEW_JOBS.forEach((job, index) => { jobResults[job] = reviewExpectations[index]; });
+  for (const job of ANDROID_JOBS) jobResults[job] = 'skipped';
   return {
     mode,
     pipelineMode: 'full',
     reviewMode,
+    runAndroid: false,
     jobResults,
   };
 }
@@ -241,6 +244,64 @@ test('workflow review prerequisite uses explicit PR context and final gates requ
   }
   assert.doesNotMatch(workflow, /^    if: .*always\(\)/m, 'job conditions must permit cancellation');
   assert.match(workflow, /^        if: .*always\(\)/m, 'step cleanup and artifact collection remain unconditional');
+});
+
+test('Android jobs must succeed exactly when Android paths changed, for trusted and fork runs', () => {
+  const { validateCloudVerificationGate, ANDROID_JOBS: exported } = require(validatorPath);
+  assert.deepEqual(exported, ANDROID_JOBS);
+  for (const mode of ['trusted', 'fork']) {
+    const passing = mode === 'trusted' ? 'success' : 'non-authoritative';
+    const unchanged = validInput(mode);
+    assert.equal(validateCloudVerificationGate(unchanged).conclusion, passing);
+    const changed = { ...unchanged, runAndroid: true, jobResults: { ...unchanged.jobResults } };
+    for (const job of ANDROID_JOBS) changed.jobResults[job] = 'success';
+    assert.equal(validateCloudVerificationGate(changed).conclusion, passing);
+    for (const job of ANDROID_JOBS) {
+      for (const result of [undefined, 'failure', 'cancelled', 'skipped']) {
+        const input = { ...changed, jobResults: { ...changed.jobResults, [job]: result } };
+        assert.equal(validateCloudVerificationGate(input).conclusion, 'failure', `${mode} ${job} ${result}`);
+      }
+      const ranUnneeded = { ...unchanged, jobResults: { ...unchanged.jobResults, [job]: 'success' } };
+      assert.equal(validateCloudVerificationGate(ranUnneeded).conclusion, 'failure');
+    }
+    for (const runAndroid of [undefined, 'true']) {
+      assert.equal(validateCloudVerificationGate({ ...unchanged, runAndroid }).conclusion, 'failure');
+    }
+  }
+});
+
+test('workflow runs the Android jobs behind reviews only for Android changes and gates on them', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  assert.match(workflow, /run_android: \$\{\{ steps\.classify\.outputs\.run_android \}\}/);
+  for (const job of ANDROID_JOBS) {
+    const start = workflow.indexOf(`  ${job}:`);
+    const nextJob = workflow.slice(start + 3).match(/^  [a-z0-9_]+:\s*$/m);
+    const block = workflow.slice(start, start + 3 + nextJob.index);
+    assert.match(block, /^      - review_prerequisites\r?$/m);
+    assert.match(block, /if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success' && needs\.review_scope\.result == 'success' && needs\.review_scope\.outputs\.skip_tests != 'true' && needs\.review_scope\.outputs\.pipeline_mode == 'full' && needs\.review_scope\.outputs\.run_android == 'true' \}\}/);
+    assert.doesNotMatch(block, /secrets\./);
+    // android-promote builds the head commit, so the Android jobs verify exactly it, not the merge.
+    assert.match(block, /uses: actions\/checkout@v5\r?\n {8}with:\r?\n {10}ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\r?\n/);
+  }
+  const unit = workflow.slice(workflow.indexOf('  test_android:'), workflow.indexOf('  test_android_instrumentation:'));
+  for (const task of ['assembleStableRelease', 'assembleSandboxRelease', 'lintStableRelease', 'lintSandboxRelease', 'testStableDebugUnitTest', 'testSandboxDebugUnitTest']) {
+    assert.match(unit, new RegExp(task));
+  }
+  // The browser side of the shared fixtures runs once, in test_js's complete Node suite.
+  assert.doesNotMatch(unit, /setup-node|node --test/);
+  // The repository is public: APKs are never uploaded, only their checksums.
+  assert.doesNotMatch(unit, /\.apk\s*$/m);
+  assert.doesNotMatch(unit, /android-unsigned-apks-/);
+  assert.match(unit, /sha256sum "\$\{apks\[@\]\}"/);
+  assert.match(unit, /unsigned-apk-sha256\.txt/);
+  const instrumentation = workflow.slice(workflow.indexOf('  test_android_instrumentation:'), workflow.indexOf('  test_js:'));
+  assert.match(instrumentation, /api-level: 29/);
+  assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765/);
+  const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
+  for (const job of ANDROID_JOBS) assert.match(gate, new RegExp(`^      - ${job}\\r?$`, 'm'));
+  assert.match(gate, /runAndroid = \$env:RUN_ANDROID -eq "true"/);
+  assert.match(gate, /test_android = \$env:ANDROID_RESULT/);
+  assert.match(gate, /test "\$ANDROID_INSTRUMENTATION_RESULT" = "\$android_expected"/);
 });
 
 test('draft reviews remain inapplicable without authorizing the final cloud gate', () => {

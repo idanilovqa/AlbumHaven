@@ -21,6 +21,7 @@
     back: 'M19 12H5m7-7-7 7 7 7',
     previous: 'm15 6-6 6 6 6',
     next: 'm9 6 6 6-6 6',
+    refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6',
     bolt: 'm13 2-9 12h7l-1 8 10-13h-7z',
   });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));

@@ -287,10 +287,11 @@ test('album artist and album snapshot survive streaming persistence and restore'
   });
 }
 
-test('paired unload events preserve the first rendered snapshot exactly once', () => {
+test('cancelled beforeunload is inert and pagehide preserves its first rendered snapshot', () => {
   const storedSnapshots = [];
-  const flushedReasons = [];
+  const flushedSnapshots = [];
   let releaseCalls = 0;
+  let snapshotReads = 0;
   let renderedCurrentTime = 3.219;
   const currentTrack = {
     src: '/track?path=song.flac',
@@ -308,19 +309,22 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
         lastPersistedSnapshot: '',
       },
     },
-    getPlayerPlaybackSnapshot: () => ({
-      src: currentTrack.src,
-      paused: true,
-      ended: false,
-      currentTime: renderedCurrentTime,
-      duration: 10,
-    }),
+    getPlayerPlaybackSnapshot: () => {
+      snapshotReads += 1;
+      return {
+        src: currentTrack.src,
+        paused: true,
+        ended: false,
+        currentTime: renderedCurrentTime,
+        duration: 10,
+      };
+    },
     setLocalStorageItem: (_key, value) => {
       storedSnapshots.push(JSON.parse(value));
       return true;
     },
-    flushListenSessionOnUnload: (reason) => {
-      flushedReasons.push(reason);
+    flushListenSessionOnUnload: (reason, snapshot) => {
+      flushedSnapshots.push({ reason, snapshot: { ...snapshot } });
     },
   });
   context.releasePlaybackOwnership = () => {
@@ -329,15 +333,121 @@ test('paired unload events preserve the first rendered snapshot exactly once', (
     context.persistPlayerState();
   };
 
-  context.persistPlayerStateForUnload('pagehide');
-  renderedCurrentTime = 0;
-  context.persistPlayerStateForUnload('beforeunload');
+  assert.equal(context.persistPlayerStateForUnload('beforeunload'), false);
+  assert.equal(snapshotReads, 0);
+  assert.deepEqual(flushedSnapshots, []);
+  assert.deepEqual(storedSnapshots, []);
 
-  assert.equal(releaseCalls, 1);
-  assert.deepEqual(flushedReasons, ['pagehide']);
+  assert.equal(context.persistPlayerStateForUnload('pagehide'), true);
+  renderedCurrentTime = 0;
+  assert.equal(context.persistPlayerStateForUnload('pagehide'), false);
+
+  assert.equal(releaseCalls, 0, 'unload leaves claim expiry to bound recovery after final beacon effects');
+  assert.equal(snapshotReads, 1);
+  assert.deepEqual(flushedSnapshots.map(({ reason }) => reason), ['pagehide']);
+  assert.deepEqual(flushedSnapshots.map(({ snapshot }) => snapshot.currentTime), [3.219]);
   assert.deepEqual(storedSnapshots.map((snapshot) => snapshot.paused), [false]);
   assert.equal(storedSnapshots.at(-1).currentTime, 3.22);
   assert.equal(storedSnapshots.at(-1).paused, false);
+  assert.equal(context.resetPlayerUnloadPersistence().currentTime, 3.219);
+});
+
+test('delayed pageshow cannot autoplay with an expired restore claim', async () => {
+  const starts = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  let now = Date.now();
+  let initialPageshow;
+  const restoredTrack = { src: '/track?path=expired-restore.flac', path: 'C:/Music/expired-restore.flac',
+    title: 'Restored', durationSeconds: 120 };
+  const context = loadHelper({
+    AbortController,
+    Date: class extends Date { static now() { return now; } },
+    performance: { now: () => now },
+    setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
+    clearTimeout: id => timers.delete(id),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    getLocalStorageItem: () => JSON.stringify({ track: restoredTrack, currentTime: 18, paused: false }),
+    startStreamingTrack: async (track, options) => { starts.push({ track, options }); },
+    setCurrentPlayerTrack: track => { context.state.player.current = track; },
+    fetch: async url => ({ ok: true, json: async () => url === '/playback/refs'
+      ? { protocol: 1, expiresAt: new Date(now + 86_400_000).toISOString(), tracks: [{ playbackRef: 'restore-ref' }] }
+      : { protocol: 1, claimToken: 'restore-claim', expiresAt: new Date(now + 30_000).toISOString(), leaseMs: 30_000 } }),
+    window: { crypto: { randomUUID: () => 'restore-client' }, addEventListener(type, listener) {
+      if (type === 'pageshow') initialPageshow = listener;
+    } },
+  });
+  const ownershipPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), context, { filename: ownershipPath });
+  context.restorePlayerState();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof initialPageshow, 'function');
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.deepEqual(starts, []);
+  const expiry = timers.get(context.getPlaybackOwnershipState().expiryTimer);
+  assert.equal(typeof expiry, 'function');
+  now += 31_000;
+  expiry();
+  assert.equal(context.isActivePlaybackOwner(), false);
+  initialPageshow();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(starts.some(start => start.options.autoplay), false,
+    'an earlier successful acquisition cannot authorize autoplay after its lease expired');
+});
+
+test('active restore awaits server ownership before requesting autoplay', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const starts = [];
+  let initialPageshow = null;
+  const restoredTrack = {
+    src: '/track?path=restored.flac',
+    path: 'C:/Music/restored.flac',
+    title: 'Restored',
+    artist: 'Artist',
+    album: 'Album',
+    coverPath: '',
+  };
+  const context = loadHelper({
+    state: {
+      player: {
+        current: null,
+        lastKnownWasPlaying: false,
+        lastPersistedSnapshot: '',
+        restoredFromStorage: false,
+        playbackQueue: null,
+      },
+    },
+    getLocalStorageItem: () => JSON.stringify({
+      track: restoredTrack,
+      playbackQueue: null,
+      currentTime: 18,
+      paused: false,
+      loop: { active: false, start: 0, end: 0 },
+    }),
+    canRestoreActivePlayback: () => claim,
+    startStreamingTrack: async (track, options) => { starts.push({ track, options }); },
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    resolveAlbumForPlayerTrack: () => null,
+    window: {
+      addEventListener(type, listener) {
+        if (type === 'pageshow') initialPageshow = listener;
+      },
+    },
+  });
+
+  context.restorePlayerState();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof initialPageshow, 'function');
+  initialPageshow();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(starts, [], 'restore cannot treat a pending Promise as authorization');
+
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].options.autoplay, true);
 });
 
 test('unload preserves the rendered playhead before playback ownership teardown', () => {
@@ -529,6 +639,71 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
     loop: { active: false, start: 0, end: 0 },
   });
 }
+
+test('restore accepts a legacy path-signature album ref before same-name resolution', () => {
+  const currentTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: currentTrackPath }],
+  };
+  const legacyAlbumRef = currentTrackPath;
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: currentTrackPath }],
+  };
+  let resolveCalls = 0;
+  const context = loadHelper({
+    getLocalStorageItem: () => JSON.stringify({
+      track: {
+        src: `/track?path=${encodeURIComponent(currentTrackPath)}`,
+        path: currentTrackPath,
+        title: 'Signal',
+        artist: 'Solo Voice',
+        album: queueSnapshot.name,
+        coverPath: '',
+      },
+      playbackQueue: {
+        tracks: [{
+          src: `/track?path=${encodeURIComponent(currentTrackPath)}`,
+          path: currentTrackPath,
+          title: 'Signal',
+          artist: 'Solo Voice',
+          album: queueSnapshot.name,
+          coverPath: '',
+        }],
+        currentIndex: 0,
+        albumRef: legacyAlbumRef,
+        albumSnapshot: queueSnapshot,
+      },
+      currentTime: 0,
+      paused: true,
+      loop: { active: false, start: 0, end: 0 },
+    }),
+    getAlbumRequestKey: (album) => String(album?.album_ref || album?.key || ''),
+    getAlbumIdentity: (album) => (Array.isArray(album?.tracks)
+      ? album.tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('|')
+      : ''),
+    resolveAlbumForPlayerTrack() {
+      resolveCalls += 1;
+      return sameNameFallback;
+    },
+  });
+
+  context.restorePlayerState();
+
+  assert.equal(resolveCalls, 0);
+  assert.equal(context.state.player.playbackQueue.albumRef, queueSnapshot.album_ref);
+  context.state.player.current = context.state.player.playbackQueue.tracks[0];
+  const persistedState = JSON.parse(JSON.stringify(context.buildPersistedPlayerState()));
+  assert.equal(persistedState.playbackQueue.albumRef, queueSnapshot.album_ref);
+  assert.equal(context.state.player.playbackQueue.albumSnapshot.album_ref, queueSnapshot.album_ref);
+});
 
 test('restore normalizes a persisted queue before opening the fresh streaming role', async () => {
   const calls = {
@@ -1403,6 +1578,29 @@ function loadCapabilityPlayerRestore(actions, paused) {
   return { context, effects, events, track };
 }
 
+test('stale saved-track acquisition cannot open a paused stream over a newer explicit selection', async () => {
+  const f = loadCapabilityPlayerRestore({ 'library.media.read': true }, false);
+  let finishOwnership;
+  f.context.canRestoreActivePlayback = () => new Promise((resolve) => { finishOwnership = resolve; });
+  const opened = [];
+  f.context.startStreamingTrack = async (track, options) => {
+    opened.push({ path: track.path, autoplay: options.autoplay });
+    return { generation: opened.length, streamId: opened.length };
+  };
+  f.context.restorePlayerState();
+  f.events.get('pageshow')();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof finishOwnership, 'function');
+  const selected = { ...f.track, path: 'selected.flac', title: 'Selected' };
+  await f.context.startStreamingTrack(selected, { autoplay: true });
+  f.context.state.player.current = selected;
+  f.context.state.player.ownership = { requestVersion: 2, activeClaim: { claimToken: 'selected-token' } };
+  finishOwnership(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(opened, [{ path: 'selected.flac', autoplay: true }]);
+  assert.equal(f.context.state.player.current.path, 'selected.flac');
+});
+
 for (const paused of [true, false]) for (const actions of [{ 'library.media.read': false }, {}]) {
   test(`denied saved ${paused ? 'paused' : 'playing'} track cannot restore state or claim ownership (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
     const f = loadCapabilityPlayerRestore(actions, paused);
@@ -1455,4 +1653,33 @@ test('bootstrap attach cannot restore denied media before the later engine prepa
   assert.deepEqual(order, ['attach', 'coordinator']);
   assert.deepEqual(f.effects, []);
   assert.equal(f.context.state.player.restoredFromStorage, false);
+});
+
+test('a restore inside the APK re-attaches to the native queue instead of starting it again', async () => {
+  const persistedTrack = { src: '/track?path=a.flac', path: 'C:/Music/a.flac', title: 'A', durationSeconds: 60 };
+  const persisted = JSON.stringify({ track: persistedTrack, playbackQueue: null, currentTime: 12, paused: false, loop: {} });
+  const run = async (attached) => {
+    const starts = [];
+    const attachments = [];
+    const context = loadHelper({
+      state: { player: { current: null, lastKnownWasPlaying: false, lastPersistedSnapshot: '', restoredFromStorage: false } },
+      getLocalStorageItem: () => persisted,
+      startStreamingTrack: (track, options) => { starts.push([track.path, options.startSeconds]); return Promise.resolve(null); },
+      attachAndroidNativePlayback: (state) => { attachments.push(state.track.path); return attached; },
+    });
+    context.restorePlayerState();
+    await new Promise((resolve) => setImmediate(resolve));
+    return { starts, attachments };
+  };
+
+  const adopted = await run(Promise.resolve(true));
+  assert.deepEqual(adopted.attachments, [persistedTrack.path]);
+  assert.deepEqual(adopted.starts, []);
+
+  // No live native queue to adopt: the persisted track restores exactly as before.
+  const restarted = await run(Promise.resolve(false));
+  assert.deepEqual(restarted.starts, [[persistedTrack.path, 12]]);
+  // Outside the APK the bridge answers null synchronously and nothing waits for it.
+  const browser = await run(null);
+  assert.deepEqual(browser.starts, [[persistedTrack.path, 12]]);
 });

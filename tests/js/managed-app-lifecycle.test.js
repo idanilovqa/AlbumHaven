@@ -186,16 +186,19 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   const requestPath = path.join(controlDirectory, 'restart-request.json');
   const ackPath = path.join(controlDirectory, 'restart-ack.json');
   let sleepCalls = 0;
+  let nowMs = 0;
 
   try {
     fs.writeFileSync(ackPath, JSON.stringify({ nonce: 'stale-nonce', status: 'ready' }));
     const lifecycle = createManagedAppLifecycle({
       environment: createValidEnvironment(root, controlDirectory),
       createNonce: () => nonce,
+      now: () => nowMs,
       pollIntervalMs: 1,
       timeoutMs: 100,
-      async sleep() {
+      async sleep(delayMs) {
         sleepCalls += 1;
+        nowMs += delayMs;
         assert.deepEqual(JSON.parse(fs.readFileSync(requestPath, 'utf8')), { nonce });
         assert.equal(
           fs.readdirSync(controlDirectory).some((entry) => entry.endsWith('.tmp')),
@@ -234,14 +237,14 @@ test('watcher cleanup emits a validated runner-owned directory identity and wait
           {
             nonce: 'watcher-cleanup-2',
             operation: 'watcher-cleanup',
-            ownedDirectoryName: 'gallery-native-response-overlap',
+            ownedDirectoryName: 'watcher-grouped-feature-credit',
           });
         fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
       },
     });
     assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
     assert.deepEqual(
-      await lifecycle.cleanupWatcherFixture('gallery-native-response-overlap'),
+      await lifecycle.cleanupWatcherFixture('watcher-grouped-feature-credit'),
       { nonce: 'watcher-cleanup-2', status: 'ready' },
     );
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

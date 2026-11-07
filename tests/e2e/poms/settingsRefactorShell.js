@@ -54,7 +54,9 @@ export class SettingsRefactorShell extends BasePage {
     // The same component changes from a desktop dialog to a mobile page region.
     this.dialog = page.locator('#utility-modal > .utility-modal-dialog');
     this.header = this.dialog.locator('.utility-modal-header');
-    this.tabs = this.dialog.locator('[data-utility-tab]');
+    // Tabs a user can see; the Android app tab exists only inside the Android shell.
+    this.tabs = this.dialog.locator('[data-utility-tab]:not([hidden])');
+    this.androidTab = this.dialog.locator('[data-utility-tab="android"]');
     this.selectedTab = this.dialog.locator('[data-utility-tab][aria-selected="true"]');
     this.close = this.dialog.locator('#utility-modal-close');
     this.body = this.dialog.locator('.utility-modal-body');

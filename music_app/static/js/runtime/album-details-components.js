@@ -185,9 +185,9 @@ function syncMobileAlbumComposition(album) {
       const artist = album.album_artist || album.artist || '';
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
-        title: album.name || 'Album',
-        eyebrow: centered ? [artist, album.year].filter(Boolean).join(' • ') : artist,
-        subtitle: centered ? '' : [album.year, album.total_duration_display].filter(Boolean).join(' • '),
+        title: album.display_name || album.name || 'Album',
+        eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
+        subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
         poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.

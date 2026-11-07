@@ -785,6 +785,7 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     callbacks = {}
     recorded = []
     reconciled = []
+    watcher_cover_refreshes = []
 
     class HealthService:
         def __init__(self, _store):
@@ -853,8 +854,8 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
             return None
 
     class TargetedReconciler:
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, **kwargs):
+            self.after_commit = kwargs["after_commit"]
 
         def reconcile(self, request, *, root_healthy):
             if request.root_id == "failed-root":
@@ -862,6 +863,19 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
             reconciled.append((request.root_id, root_healthy))
             if request.root_id == "sampling-source":
                 return SimpleNamespace(health=reconciliation_health)
+            if request.root_id == "healthy-source":
+                result = SimpleNamespace(
+                    revision=12,
+                    affected_album_keys=("artist::new album",),
+                    active_track_paths=(
+                        "C:/Existing Album/01.flac",
+                        "C:/Destination/01.flac",
+                    ),
+                    new_track_paths=("C:/Destination/01.flac",),
+                    health="healthy",
+                )
+                self.after_commit(result)
+                return result
             return root_healthy
 
         def replace_roots(self, _roots):
@@ -918,6 +932,18 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         state,
         "ensure_runtime_relation_projection_ready",
         lambda _runtime: None,
+    )
+    monkeypatch.setattr(
+        state,
+        "queue_watcher_cover_refresh_for_track_paths_for_state",
+        lambda _library_state,
+        _config,
+        _logger,
+        track_paths,
+        *,
+        affected_album_keys: watcher_cover_refreshes.append(
+            (set(track_paths), set(affected_album_keys))
+        ),
     )
     monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
@@ -1020,6 +1046,12 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     asyncio.run(exercise_problem_callback())
 
     assert recorded[0] == problem
+    assert watcher_cover_refreshes == [
+        (
+            {"C:/Destination/01.flac"},
+            {"artist::new album"},
+        )
+    ]
     assert reconciled == [
         ("main-root", False),
         ("healthy-source", False),

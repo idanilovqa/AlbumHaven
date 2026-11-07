@@ -65,12 +65,14 @@ const expectedRuntimeOrder = [
   'search-input.js',
   'gallery-main-interactions.js',
   'compact-player-helpers.js',
+  'player-streaming-decoders.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
   'account-menu.js',
   'bootstrap-refocus-helpers.js',
   'client-preferences-helpers.js',
   'gallery-display-preference-helpers.js',
+  'android-bridge-client.js',
   'playback-ownership-helpers.js',
   'modal-and-overlay-helpers.js',
   'track-modal-lightbox-helpers.js',
@@ -93,6 +95,7 @@ const expectedRuntimeOrder = [
   'cover-lookup-notification-helpers.js',
   'appearance-backgrounds-bridge.js',
   'problematic-files-virtual-list.js',
+  'android-settings.js',
   'utility-renderers-and-actions.js',
   'utility-loop-playback.js',
   'tag-editor-reorder.js',
@@ -198,6 +201,8 @@ test('startup album covers stay presentation-hidden until native decoded readine
   assert.match(appJs, /imageElement\.naturalWidth/);
   assert.match(appJs, /imageElement\.dataset\.coverVisualState = 'ready'/);
   assert.match(appJs, /imageElement\.removeAttribute\('aria-hidden'\)/);
+  assert.match(appJs, /loadedCoverPath === coverPath/);
+  assert.match(appJs, /delete getFailedStartupCoverPaths\(\)\[coverPath\]/);
   assert.match(appJs, /cover-placeholder cover-placeholder-blank/);
 });
 
@@ -242,4 +247,21 @@ test('startup fallback album cards render ten app-owned rating positions without
   assert.equal((unratedMarkup.match(/&#9733;/g) || []).length, 0);
   assert.equal((unratedMarkup.match(/&#9734;/g) || []).length, 10);
   assert.doesNotMatch(unratedMarkup, /class="rating-text"|0\/10/);
+});
+
+test('startup album cards prefer presentation-only title and year values', () => {
+  const buildStartupAlbumCardHtml = loadStartupAlbumCardRenderer();
+  const markup = buildStartupAlbumCardHtml({
+    key: 'lost-season-3',
+    name: 'Lost, Season 3: Original Television Soundtrack',
+    display_name: 'Lost: Season 3 (Original Television Soundtrack)',
+    album_artist: 'Michael Giacchino',
+    year: '2008-05-06',
+    display_year: '2008',
+  });
+
+  assert.match(markup, /Lost: Season 3 \(Original Television Soundtrack\)/);
+  assert.doesNotMatch(markup, /Lost, Season 3: Original Television Soundtrack/);
+  assert.match(markup, /class="album-year">2008<\/div>/);
+  assert.doesNotMatch(markup, /2008-05-06/);
 });

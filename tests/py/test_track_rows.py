@@ -20,6 +20,8 @@ def test_build_track_row_payload_returns_server_owned_album_detail_shape():
         track_number=1,
         disc_number=1,
         disc_number_raw="1",
+        total_discs=2,
+        disc_subtitle="Main Programme",
         artist="Guest Singer",
         album_artist="Artist One",
         duration_seconds=245,
@@ -31,6 +33,8 @@ def test_build_track_row_payload_returns_server_owned_album_detail_shape():
         "track_number": 1,
         "disc_number": 1,
         "disc_number_raw": "1",
+        "total_discs": 2,
+        "disc_subtitle": "Main Programme",
         "title": "Track One",
         "secondary_artist": "Guest Singer",
         "title_display": {
@@ -108,6 +112,50 @@ def test_build_track_rows_keeps_album_artist_matches_out_of_secondary_artist():
     rows = build_track_rows([track])
 
     assert rows[0]["secondary_artist"] is None
+
+
+def test_build_track_rows_distinguishes_joint_owners_from_split_and_guest_credits():
+    joint_album = SimpleNamespace(
+        album_artist="Brian Eno / David Byrne",
+        artists=["Brian Eno", "David Byrne"],
+        is_split_album=False,
+    )
+    split_album = SimpleNamespace(
+        album_artist="Jordsjo / Breidablik",
+        artists=["Jordsjo", "Breidablik"],
+        is_split_album=True,
+    )
+    joint_track = SimpleNamespace(
+        path=r"C:\Music\Brian Eno and David Byrne\Album\01 Track.flac",
+        title="Joint Track",
+        artist="Brian Eno",
+        album_artist=joint_album.album_artist,
+        duration_seconds=245,
+    )
+    split_track = SimpleNamespace(
+        path=r"C:\Music\Jordsjo and Breidablik\Split\01 Track.flac",
+        title="Split Track",
+        artist="Jordsjo",
+        album_artist=split_album.album_artist,
+        duration_seconds=245,
+    )
+    guest_track = SimpleNamespace(
+        path=r"C:\Music\Brian Eno and David Byrne\Album\02 Track.flac",
+        title="Joint Track With Guest",
+        artist="Brian Eno feat. Guest Voice",
+        album_artist=joint_album.album_artist,
+        duration_seconds=245,
+    )
+
+    assert build_track_rows([joint_track], album=joint_album)[0]["secondary_artist"] == (
+        "Brian Eno / David Byrne"
+    )
+    assert build_track_rows([split_track], album=split_album)[0]["secondary_artist"] == (
+        "Jordsjo"
+    )
+    assert build_track_rows([guest_track], album=joint_album)[0]["secondary_artist"] == (
+        "Brian Eno / David Byrne / feat. Guest Voice"
+    )
 
 
 @pytest.mark.parametrize(
@@ -190,6 +238,46 @@ def test_build_track_row_payload_prefers_persisted_secondary_credit_metadata():
 
     assert row["title"] == "Штиль"
     assert row["secondary_artist"] == "feat. U.D.O."
+
+
+def test_build_track_row_payload_groups_and_deduplicates_persisted_featured_artists():
+    album = SimpleNamespace(album_artist="Dante")
+    track = SimpleNamespace(
+        path=r"C:\Music\Dante\Album\01 Pool of the Naiads.flac",
+        title="Pool of the Naiads",
+        track_number=1,
+        disc_number=1,
+        disc_number_raw="1",
+        artist="Dante",
+        album_artist="Dante",
+        secondary_credit=(
+            "feat. Lars Fredrik Frøislie / feat. Eric Gillette / "
+            "feat. Lars Fredrik Frøislie"
+        ),
+        duration_seconds=929,
+    )
+
+    row = build_track_row_payload(track, album=album)
+
+    assert row["secondary_artist"] == "feat. Lars Fredrik Frøislie, Eric Gillette"
+
+
+def test_build_track_row_payload_groups_computed_featured_artists_under_one_marker():
+    album = SimpleNamespace(album_artist="Dante")
+    track = SimpleNamespace(
+        path=r"C:\Music\Dante\Album\04 Voyage.flac",
+        title="Voyage",
+        track_number=4,
+        disc_number=1,
+        disc_number_raw="1",
+        artist="Dante / Marjana Semkina / Nick D'Virgilio / Jim Grey / Marjana Semkina",
+        album_artist="Dante",
+        duration_seconds=1618,
+    )
+
+    row = build_track_row_payload(track, album=album)
+
+    assert row["secondary_artist"] == "feat. Marjana Semkina, Nick D'Virgilio, Jim Grey"
 
 
 @pytest.mark.parametrize(
@@ -768,6 +856,8 @@ def test_build_playlist_track_row_payload_wraps_shared_track_row_contract():
         "track_number": 3,
         "disc_number": 1,
         "disc_number_raw": "1",
+        "total_discs": None,
+        "disc_subtitle": None,
         "title": "Track Three",
         "secondary_artist": "Guest Singer",
         "title_display": {
@@ -857,6 +947,8 @@ def test_build_playlist_track_rows_supports_object_backed_entries():
             "track_number": 7,
             "disc_number": 2,
             "disc_number_raw": "2",
+            "total_discs": None,
+            "disc_subtitle": None,
             "title": "Track Seven",
             "secondary_artist": None,
             "title_display": {

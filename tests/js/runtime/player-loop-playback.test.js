@@ -322,6 +322,61 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('mirrored playback keeps metadata unobscured while showing its locked status', () => {
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const title = new FakeElement();
+  const albumLink = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ timeline, time, play, title, albumLink }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+  });
+
+  context.updatePlayerUi();
+
+  assert.equal(timelineWrap.classList.contains('is-idle'), false,
+    'the empty-player overlay must not cover mirrored metadata');
+  assert.equal(title.textContent, 'Artist - Song /');
+  assert.equal(albumLink.textContent, 'Album');
+  assert.equal(time.textContent, 'Playing in another tab');
+  assert.equal(time.hidden, false);
+  assert.equal(play.disabled, true);
+  assert.equal(timeline.disabled, true);
+
+  context.state.player.loopActive = true;
+  context.state.player.loopStart = 10;
+  context.state.player.loopEnd = 20;
+  context.updatePlayerUi();
+  assert.equal(time.textContent, 'Playing in another tab',
+    'mirrored ownership status takes precedence over the local loop range');
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.updatePlayerUi();
+  assert.equal(time.textContent, '10 - 20');
+});
+
+test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const player = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, timeline, time, play }),
+    stopStreamingPlayback: async () => {},
+    clearTimeout: () => {},
+  });
+  const ownershipPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), context, { filename: ownershipPath });
+  context.losePlaybackOwnership();
+  assert.match(time.textContent, /unavailable/i);
+  assert.doesNotMatch(play.getAttribute('aria-label'), /another tab/i);
+  assert.doesNotMatch(timelineWrap.getAttribute('data-idle-label'), /another tab/i);
+  assert.equal(play.disabled, true, 'unavailable playback must not become authorized by a label change');
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {
@@ -355,6 +410,29 @@ test('visible play control and global Space dispatch pause and resume through th
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), ['pause', 'resume']);
   assert.equal(audio.playCalls, 0);
+});
+
+test('pause silences streaming before pending listen effects finish', async () => {
+  let finishEffects;
+  const effects = new Promise((resolve) => { finishEffects = resolve; });
+  const calls = [];
+  const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false,
+    src: '/track?path=song.flac' };
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: () => { calls.push('pause'); snapshot.paused = true; },
+    maybeScrobbleListenSession: () => { calls.push('effects'); return effects; },
+    releasePlaybackOwnership: async () => { calls.push('release'); },
+  });
+  context.attachPlayerEvents();
+  playButton.dispatch('click');
+  assert.equal(snapshot.paused, true);
+  assert.deepEqual(calls, ['pause']);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['pause', 'effects']);
+  finishEffects();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['pause', 'effects', 'release']);
 });
 
 test('streaming position updates the facade at the bounded callback cadence', async () => {
@@ -512,6 +590,235 @@ test('global-player handoff shares its pending pause until streaming ownership i
   assert.equal(await context.pausePlayerPlaybackForHandoff({ ...snapshot, paused: true }), false);
 });
 
+for (const transition of ['resume', 'new-track']) {
+  test(`${transition} supersedes an old pending pause so the next pause silences immediately`, async () => {
+    let resolveEffects;
+    const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
+    const oldTrack = {
+      src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old',
+    };
+    const newTrack = {
+      src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New',
+    };
+    const ownership = { requestVersion: 1 };
+    const snapshot = {
+      currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src,
+    };
+    let pauseCalls = 0;
+    const { context } = loadHelper({
+      state: {
+        player: {
+          current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
+          loopStart: 0, loopEnd: 30, saveBusy: false, waveform: { renderToken: 0 },
+        },
+        utility: {
+          loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+          selectedLoopDetailMode: '', activeTab: '',
+        },
+      },
+      getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+      getPlaybackOwnershipState: () => ownership,
+      pauseStreamingPlayback: async () => {
+        pauseCalls += 1;
+        snapshot.paused = true;
+      },
+      persistPausedListenSession: () => pendingEffects,
+      maybeScrobbleListenSession: async () => false,
+      releasePlaybackOwnership: async () => true,
+      canStartPlaybackInThisTab: async () => {
+        ownership.requestVersion += 1;
+        return true;
+      },
+      resumeStreamingPlayback: async () => {
+        snapshot.paused = false;
+        return true;
+      },
+      startStreamingTrack: async () => {
+        snapshot.paused = false;
+        snapshot.src = newTrack.src;
+        return { role: 'current', streamId: 2, generation: 2 };
+      },
+    });
+
+    const firstPause = context.pausePlayerPlaybackForHandoff({ ...snapshot });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(pauseCalls, 1);
+
+    if (transition === 'resume') {
+      assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+      await new Promise((resolve) => setImmediate(resolve));
+    } else {
+      assert.equal(await context.playTrackFromPayload(newTrack), true);
+    }
+
+    const secondPause = context.pausePlayerPlaybackForHandoff({ ...snapshot, paused: false });
+    assert.notEqual(secondPause, firstPause, 'the new playback generation owns a fresh pause');
+    assert.equal(pauseCalls, 2, 'every audible pause request silences the engine immediately');
+
+    resolveEffects();
+    assert.equal(await firstPause, true);
+    assert.equal(await secondPause, true);
+  });
+}
+
+test('pause awaiting an old scrobble cannot checkpoint a newer playing session', async () => {
+  let finishScrobble;
+  const pendingScrobble = new Promise(resolve => { finishScrobble = resolve; });
+  const ownership = { requestVersion: 1 };
+  const checkpoints = [];
+  const releases = [];
+  const { context } = loadHelper({
+    getPlaybackOwnershipState: () => ownership,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120, paused: false }),
+    pauseStreamingPlayback: async () => true,
+    maybeScrobbleListenSession: () => pendingScrobble,
+    persistPausedListenSession: async session => { checkpoints.push(session); return true; },
+    releasePlaybackOwnership: async (...args) => { releases.push(args); },
+  });
+  context.state.player.listenSession = { id: 'old-session' };
+  const pause = context.pausePlayerPlaybackForHandoff();
+  await new Promise(resolve => setImmediate(resolve));
+  ownership.requestVersion += 1;
+  context.state.player.current = { path: 'new.flac', src: '/track?path=new.flac' };
+  const playingSession = { id: 'new-session', segmentActive: true };
+  context.state.player.listenSession = playingSession;
+  finishScrobble(true);
+  await pause;
+  assert.deepEqual(checkpoints, [], 'an old scrobble response must not finalize the new audible listen as paused');
+  assert.deepEqual(releases, []);
+  assert.strictEqual(context.state.player.listenSession, playingSession);
+});
+
+for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
+  test(`pause checkpoint ${outcome} reports only a current genuine save failure`, async () => {
+    const ownership = { requestVersion: 1 };
+    const warnings = [];
+    const releases = [];
+    const session = { id: 'paused-session' };
+    const { context } = loadHelper({
+      getPlaybackOwnershipState: () => ownership,
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120, paused: false }),
+      pauseStreamingPlayback: async () => true,
+      maybeScrobbleListenSession: async () => false,
+      persistPausedListenSession: async () => {
+        if (outcome === 'nothing-to-save') return false;
+        if (outcome === 'superseded-failure') ownership.requestVersion += 1;
+        throw new Error('checkpoint rejected');
+      },
+      showToast: (...args) => { warnings.push(args); },
+      releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
+    });
+    context.state.player.listenSession = session;
+    const result = await context.pausePlayerPlaybackForHandoff();
+    assert.equal(warnings.length, outcome === 'failure' ? 1 : 0);
+    if (outcome === 'failure') {
+      assert.equal(result, false, 'failed persistence must not report successful save');
+      assert.equal(warnings[0][1], 'error');
+      assert.equal(warnings[0][2], 4200);
+    }
+    assert.equal(releases.length, outcome === 'superseded-failure' ? 0 : 1,
+      'a failed save must not retain the playback lease indefinitely');
+    assert.strictEqual(context.state.player.listenSession, session);
+  });
+}
+
+test('an old pause completion cannot release a newer playback claim', async () => {
+  let resolveEffects;
+  const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
+  const oldTrack = {
+    src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old',
+  };
+  const newTrack = {
+    src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New',
+  };
+  const ownership = { requestVersion: 1 };
+  const releases = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
+        loopStart: 0, loopEnd: 30, saveBusy: false, waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    getPlaybackOwnershipState: () => ownership,
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src,
+    }),
+    pauseStreamingPlayback: async () => true,
+    persistPausedListenSession: () => pendingEffects,
+    maybeScrobbleListenSession: async () => false,
+    releasePlaybackOwnership: async (status, track) => { releases.push({ status, track }); },
+  });
+
+  const oldPause = context.pausePlayerPlaybackForHandoff();
+  await new Promise((resolve) => setImmediate(resolve));
+  ownership.requestVersion += 1;
+  context.state.player.current = newTrack;
+  resolveEffects();
+  assert.equal(await oldPause, true);
+  assert.deepEqual(releases, [], 'stale pause completion must retain the newer claim');
+});
+
+for (const pendingStage of ['claim', 'stream']) {
+test(`pause supersedes an earlier pending selection before its ${pendingStage} completes`, async () => {
+  let finishClaim;
+  let finishEffects;
+  const pendingClaim = new Promise((resolve) => { finishClaim = resolve; });
+  const pendingEffects = new Promise((resolve) => { finishEffects = resolve; });
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New' };
+  const ownership = { requestVersion: 1, activeClaim: { claimToken: 'shared-token' } };
+  const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src };
+  const starts = [];
+  const releases = [];
+  let pauses = 0;
+  const { context } = loadHelper({
+    state: { player: { current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
+      loopStart: 0, loopEnd: 30, saveBusy: false, waveform: { renderToken: 0 } },
+    utility: { loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+      selectedLoopDetailMode: '', activeTab: '' } },
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    getPlaybackOwnershipState: () => ownership,
+    canStartPlaybackInThisTab: async () => {
+      ownership.requestVersion += 1;
+      return pendingStage === 'claim' ? pendingClaim : true;
+    },
+    pauseStreamingPlayback: () => { pauses += 1; snapshot.paused = true; },
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: () => pendingEffects,
+    releasePlaybackOwnership: async (status, track) => {
+      releases.push({ status, path: track.path }); ownership.activeClaim = null; return true;
+    },
+    startStreamingTrack: async (track) => {
+      starts.push(track.path); snapshot.paused = false; snapshot.src = track.src;
+      if (pendingStage === 'stream') await pendingClaim;
+      return { generation: 2, streamId: 2 };
+    },
+  });
+  const selection = context.playTrackFromPayload(newTrack);
+  assert.equal(ownership.requestVersion, 2);
+  if (pendingStage === 'stream') await new Promise((resolve) => setImmediate(resolve));
+  const pause = context.pausePlayerPlaybackForHandoff();
+  assert.equal(pauses, 1);
+  assert.equal(snapshot.paused, true, 'Pause must silence the currently audible track immediately');
+  await new Promise((resolve) => setImmediate(resolve));
+  finishClaim(true);
+  const selected = await selection;
+  finishEffects();
+  await pause;
+  assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
+  assert.deepEqual(starts, pendingStage === 'claim' ? [] : [newTrack.path]);
+  assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
+  assert.equal(context.state.player.current.path, oldTrack.path);
+  assert.equal(ownership.activeClaim, null);
+  assert.deepEqual(releases, [{ status: 'paused', path: oldTrack.path }]);
+});
+}
+
 test('streaming terminal ended finalizes and releases ownership exactly once', async () => {
   const track = {
     src: '/track?path=song.flac',
@@ -571,6 +878,31 @@ test('streaming terminal ended finalizes and releases ownership exactly once', a
   }]);
   assert.deepEqual(releases, [{ status: 'stopped', track }]);
   assert.equal(uiUpdates, 1);
+});
+
+test('ended hands the queue to a track that needs another sample rate', async () => {
+  const track = { path: '/music/a.mp3', title: 'A' };
+  const nextTrack = { path: '/music/b.flac', title: 'B' };
+  const { context } = loadHelper({
+    state: { player: { current: track, listenSession: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 42 }),
+    releasePlaybackOwnership: () => {},
+  });
+  const played = [];
+  context.finalizeListenSession = async () => {};
+  context.updatePlayerUi = () => {};
+  context.peekNextQueuedTrack = () => nextTrack;
+  context.getNextQueuedTrack = () => nextTrack;
+  context.playTrackFromPayload = async (queued, options) => played.push({ queued, options });
+
+  await context.handleStreamingPlaybackEnded({
+    generation: 3, streamId: 9, trackPath: track.path, currentTime: 42,
+    startNextTrackPath: nextTrack.path,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(played)), [
+    { queued: nextTrack, options: { allowSuspendedAutoplayFallback: true } },
+  ]);
 });
 
 test('play command after terminal EOS opens a fresh generation at frame zero before requesting resume', async () => {
@@ -749,6 +1081,215 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
+test('BFCache resume uses consumed ownership once and opens one listen at the saved offset', async () => {
+  const streamingStarts = [];
+  const listenStarts = [];
+  let owned = true;
+  const { context } = loadHelper({
+    isActivePlaybackOwner: () => owned,
+    canStartPlaybackInThisTab: () => assert.fail('consumed ownership must not issue a second claim'),
+    async startStreamingTrack(track, options) {
+      streamingStarts.push({ track, options });
+    },
+    resumeListenSessionPlayback(track, startSeconds) {
+      listenStarts.push({ track, startSeconds });
+      return Promise.resolve(null);
+    },
+  });
+  const track = {
+    path: 'C:/Music/restored.flac',
+    src: '/track?path=restored.flac',
+    title: 'Restored',
+    artist: 'Artist',
+    album: 'Album',
+  };
+  context.state.player.current = track;
+
+  assert.equal(await context.resumePlayerPlaybackFromPageCache({ currentTime: 37.25 }), true);
+  assert.equal(streamingStarts.length, 1);
+  assert.strictEqual(streamingStarts[0].track, track);
+  assert.equal(streamingStarts[0].options.startSeconds, 37.25);
+  assert.equal(streamingStarts[0].options.autoplay, true);
+  assert.equal(listenStarts.length, 1);
+  assert.strictEqual(listenStarts[0].track, track);
+  assert.equal(listenStarts[0].startSeconds, 37.25);
+
+  owned = false;
+  assert.equal(await context.resumePlayerPlaybackFromPageCache({ currentTime: 41 }), false);
+  assert.equal(streamingStarts.length, 1);
+  assert.equal(listenStarts.length, 1);
+});
+
+test('playTrackFromPayload awaits server ownership before opening audible streaming', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const streamingStarts = [];
+  const { context } = loadHelper({
+    canStartPlaybackInThisTab: () => claim,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/awaited.flac', src: '/track?path=awaited.flac', title: 'Awaited',
+  }, { autoplay: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(streamingStarts, [], 'audio cannot open while claim acquisition is pending');
+
+  resolveClaim(true);
+  assert.equal(await pendingStart, true);
+  assert.equal(streamingStarts.length, 1);
+});
+
+test('different-track selection cancels optional waveform work before awaiting ownership', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const current = { path: 'C:/Music/current.flac', src: '/track?path=current.flac' };
+  const events = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current,
+        streaming: { generation: 7 },
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    cancelStreamingWaveformGeneration: (generation) => events.push(`cancel:${generation}`),
+    canStartPlaybackInThisTab: () => { events.push('claim'); return claim; },
+    startStreamingTrack: async () => { events.push('stream'); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/next.flac', src: '/track?path=next.flac', title: 'Next',
+  });
+
+  assert.deepEqual(events, ['cancel:7', 'claim']);
+  resolveClaim(false);
+  assert.equal(await pendingStart, false);
+  assert.deepEqual(events, ['cancel:7', 'claim']);
+  assert.strictEqual(context.state.player.current, current);
+});
+
+test('same-track and malformed selections do not cancel current waveform work', async () => {
+  const current = { path: 'C:/Music/current.flac', src: '/track?path=current.flac' };
+  const cancellations = [];
+  const starts = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current,
+        streaming: { generation: 7 },
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    cancelStreamingWaveformGeneration: (generation) => cancellations.push(generation),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: async (track) => { starts.push(track); },
+  });
+
+  assert.equal(await context.playTrackFromPayload(current), true);
+  assert.equal(await context.playTrackFromPayload({ path: '', src: '' }), false);
+  assert.deepEqual(cancellations, []);
+  assert.deepEqual(starts, [current]);
+});
+
+test('resume awaits server ownership and never treats its Promise as authorization', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  let resumeCalls = 0;
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: () => claim,
+    resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
+  });
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumeCalls, 0, 'a pending Promise is not a successful claim');
+
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumeCalls, 1);
+});
+
+test('pause waits for authorized listen effects before releasing ownership', async () => {
+  let resolveEffects;
+  const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
+  const order = [];
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: false, ended: false, src: '/track?path=song.flac',
+    }),
+    pauseStreamingPlayback: async () => { order.push('audio-stopped'); },
+    persistPausedListenSession: async () => {
+      order.push('listen-effects-started');
+      await pendingEffects;
+      order.push('listen-effects-finished');
+    },
+    releasePlaybackOwnership: async () => { order.push('claim-released'); },
+  });
+
+  const pause = context.pausePlayerPlaybackForHandoff();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ['audio-stopped', 'listen-effects-started']);
+  resolveEffects();
+  assert.equal(await pause, true);
+  assert.deepEqual(order, [
+    'audio-stopped',
+    'listen-effects-started',
+    'listen-effects-finished',
+    'claim-released',
+  ]);
+});
+
+test('terminal playback finalizes listen effects before releasing ownership', async () => {
+  const order = [];
+  const track = { path: 'C:/Music/song.flac', src: '/track?path=song.flac' };
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current: track,
+        listenSession: { id: 'listen-session' },
+        loopActive: false,
+        loopStart: 0,
+        loopEnd: 30,
+        saveBusy: false,
+        waveform: { renderToken: 0 },
+      },
+      utility: {},
+    },
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 60, duration: 60, paused: true, ended: true, src: track.src,
+    }),
+    finalizeListenSession: async () => { order.push('listen-finalized'); },
+    releasePlaybackOwnership: async () => { order.push('claim-released'); },
+  });
+
+  await context.handleStreamingPlaybackEnded({
+    generation: 1,
+    streamId: 1,
+    trackPath: track.path,
+    currentTime: 60,
+  });
+
+  assert.deepEqual(order, ['listen-finalized', 'claim-released']);
+});
+
 test('ownership denial leaves streaming, current track, and native src untouched', async () => {
   const current = { path: 'C:\\Music\\Current.flac', title: 'Current' };
   const audio = new FakeAudioElement({ src: '' });
@@ -847,6 +1388,7 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
   };
 
   const olderResult = context.playTrackFromPayload(olderTrack);
+  await new Promise((resolve) => setImmediate(resolve));
   const newerResult = context.playTrackFromPayload(newerTrack);
   secondStart.resolve({ role: 'current', streamId: 2, generation: 2 });
   await newerResult;
@@ -1444,7 +1986,7 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(audio.currentTime, 12);
 }
 
-{
+test('server ownership denial keeps the play control silent and reports the block', async () => {
   const calls = {
     showToast: [],
     updatePlayerUi: 0,
@@ -1460,7 +2002,7 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   const { context } = loadHelper({
     audio,
     playButton,
-    canStartPlaybackInThisTab: () => {
+    canStartPlaybackInThisTab: async () => {
       calls.showToast.push(['Playback is active in another tab.', 'error', 2800]);
       return false;
     },
@@ -1474,11 +2016,12 @@ test('streaming boundary identity mismatch fails without consuming or changing c
 
   context.attachPlayerEvents();
   playButton.dispatch('click');
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(audio.playCalls, 0);
   assert.deepEqual(calls.showToast, [['Playback is active in another tab.', 'error', 2800]]);
   assert.equal(calls.updatePlayerUi, 0);
-}
+});
 
 {
   const target = new FakeElement({
@@ -3315,4 +3858,24 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   context.state.player.current = { ...context.state.player.current, title: 'Hydrated title' };
   document.dispatch('pointerup', { pointerId: 7 });
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
+});
+
+test('a clicked track shows as playing before streaming starts', async () => {
+  let finishStart;
+  const shown = [];
+  const { context } = loadHelper({
+    state: { player: { current: { path: 'old.flac' }, selectedTrack: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 42 }),
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    getPlayerElements: () => ({}),
+    refreshTrackModalPlaybackState: () => shown.push(context.state.player.selectedTrack?.path || ''),
+    refreshNonAlbumModalPlaybackState: () => {},
+  });
+
+  const playing = context.playTrackFromPayload({ path: 'new.flac', src: 'new' });
+
+  assert.deepEqual(shown, ['new.flac'], 'the row updates before the switch completes');
+  finishStart(null);
+  await assert.rejects(playing, /did not start/);
+  assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
 });

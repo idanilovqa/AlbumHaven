@@ -183,9 +183,11 @@
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
 .album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }
-.gallery-scrollbar { scrollbar-width: thin; scrollbar-color: #ffffff24 transparent; }
-.gallery-scrollbar::-webkit-scrollbar { width: 10px; }
-.gallery-scrollbar::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 99px; background: #ffffff30; background-clip: padding-box; }
+@media (hover: hover) and (pointer: fine) {
+  .gallery-scrollbar { scrollbar-width: thin; scrollbar-color: #ffffff24 transparent; }
+  .gallery-scrollbar::-webkit-scrollbar { width: 10px; }
+  .gallery-scrollbar::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 99px; background: #ffffff30; background-clip: padding-box; }
+}
 @media (max-width: 720px) {
   .shell-layout .app-bar--library { padding-right: 24px; }
   .app-bar [data-shell-horizontal-align="gallery-body"] { margin-left: -6px; }

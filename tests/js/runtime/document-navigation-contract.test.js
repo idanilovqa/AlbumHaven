@@ -11,6 +11,7 @@ function source(relativePath) {
 
 test('full-document JavaScript navigation is limited to authentication and fatal startup recovery', () => {
   const allowed = new Map([
+    ['music_app/static/js/login.js', ['window.location.assign(reply.body.redirect)']],
     ['music_app/static/js/startup-progress.js', ["window.location.reload()"]],
     ['music_app/static/js/settings-navigation.js', ["window.location.assign('/login')"]],
     ['music_app/static/js/admin-members.js', ["window.location.assign('/login')"]],

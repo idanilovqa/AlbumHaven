@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/shell_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/canvas">
+
+    <WebView
+        android:id="@+id/shell_web_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/canvas" />
+
+    <!-- Non-blocking: the page stays usable around it. -->
+    <LinearLayout
+        android:id="@+id/sandbox_warning"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="12dp"
+        android:background="@drawable/alert_warning"
+        android:baselineAligned="false"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/alert_icon_well"
+            android:importantForAccessibility="no"
+            android:padding="8dp"
+            android:src="@drawable/ic_alert" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/RecoveryTitle"
+                android:accessibilityLiveRegion="polite"
+                android:gravity="start"
+                android:text="@string/sandbox_unsupported_title" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/sandbox_warning_switch"
+                    style="@style/RecoveryAction"
+                    android:text="@string/sandbox_switch" />
+
+                <Button
+                    android:id="@+id/sandbox_warning_dismiss"
+                    style="@style/RecoveryAction"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/sandbox_unsupported_dismiss" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/recovery_root"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/canvas"
+        android:clickable="true"
+        android:fillViewport="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <ImageView
+                android:layout_width="96dp"
+                android:layout_height="96dp"
+                android:contentDescription="@string/recovery_logo_description"
+                android:src="@drawable/album_haven_logo" />
+
+            <LinearLayout
+                android:id="@+id/recovery_loading"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/RecoveryTitle"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/recovery_loading_title" />
+
+                <TextView
+                    android:id="@+id/recovery_loading_detail"
+                    style="@style/RecoveryMessage"
+                    android:layout_marginTop="8dp" />
+
+                <ProgressBar
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="160dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:contentDescription="@string/recovery_loading_progress"
+                    android:indeterminate="true"
+                    android:indeterminateTint="@color/success" />
+
+                <Button
+                    android:id="@+id/recovery_loading_switch"
+                    style="@style/RecoveryAction"
+                    android:layout_marginTop="24dp"
+                    android:text="@string/sandbox_switch"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/sandbox_choice"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/RecoveryTitle"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/sandbox_choice_title" />
+
+                <TextView
+                    android:id="@+id/sandbox_choice_message"
+                    style="@style/RecoveryMessage"
+                    android:layout_marginTop="8dp" />
+
+                <LinearLayout
+                    android:id="@+id/sandbox_choice_slots"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="vertical" />
+
+                <TextView
+                    style="@style/RecoveryMessage"
+                    android:layout_marginTop="20dp"
+                    android:gravity="start"
+                    android:labelFor="@id/sandbox_choice_other"
+                    android:text="@string/sandbox_choice_other" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/sandbox_choice_other"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_surface"
+                        android:digits="0123456789"
+                        android:importantForAutofill="no"
+                        android:imeOptions="actionGo"
+                        android:inputType="number"
+                        android:maxLength="2"
+                        android:minHeight="48dp"
+                        android:paddingHorizontal="16dp"
+                        android:textColor="@color/text"
+                        android:textSize="16sp" />
+
+                    <Button
+                        android:id="@+id/sandbox_choice_connect"
+                        style="@style/RecoveryAction"
+                        android:layout_marginStart="8dp"
+                        android:enabled="false"
+                        android:text="@string/sandbox_choice_connect" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/recovery_alert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
+                android:baselineAligned="false"
+                android:orientation="horizontal"
+                android:padding="16dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/recovery_alert_icon"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/alert_icon_well"
+                    android:importantForAccessibility="no"
+                    android:padding="8dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/recovery_alert_title"
+                        style="@style/RecoveryTitle"
+                        android:gravity="start" />
+
+                    <TextView
+                        android:id="@+id/recovery_alert_message"
+                        style="@style/RecoveryMessage"
+                        android:layout_marginTop="4dp"
+                        android:gravity="start" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/recovery_action"
+                            style="@style/RecoveryAction" />
+
+                        <Button
+                            android:id="@+id/recovery_switch"
+                            style="@style/RecoveryAction"
+                            android:layout_marginStart="8dp"
+                            android:text="@string/sandbox_switch"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/recovery_progress_label"
+                        style="@style/RecoveryMessage"
+                        android:layout_marginTop="12dp"
+                        android:gravity="start"
+                        android:importantForAccessibility="no"
+                        android:visibility="gone" />
+
+                    <ProgressBar
+                        android:id="@+id/recovery_progress"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:max="100"
+                        android:progressTint="@color/text"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

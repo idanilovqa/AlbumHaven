@@ -65,6 +65,30 @@ def test_backfill_loads_distinct_database_cover_paths_and_uses_album_owned_stora
     assert "FROM library.local_albums" in connection.executed[0]
 
 
+def test_backfill_uses_a_bounded_background_pool_checkout(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    connection = _Connection([])
+    checkout_calls = []
+
+    def connect(database_url, **kwargs):
+        checkout_calls.append((database_url, kwargs))
+        return _ConnectionContext(connection)
+
+    worker = CoverPreviewBackfill(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library"},
+        connect=connect,
+    )
+
+    assert worker.run_once() == 0
+    assert checkout_calls == [
+        (
+            "postgresql://app@example/library",
+            {"workload": "background", "checkout_timeout_seconds": 1.0},
+        )
+    ]
+
+
 def test_backfill_pauses_for_foreground_activity_then_resumes(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 
@@ -144,6 +168,35 @@ def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
         (source, data_dir / "display-cover-cache", "cover-sha256")
     ]
     assert "metadata ->> 'cover_revision'" in connection.executed[0]
+
+
+def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    data_dir = tmp_path / "app-data"
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    generated = []
+
+    class AlbumFolderStoragePolicy:
+        def write_cache_root(self, source_path):
+            return Path(source_path).parent / ".album-haven"
+
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "DATA_DIR": str(data_dir),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **kwargs: generated.append(
+            (Path(source_path), Path(kwargs["cache_root"]))
+        ),
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert generated == [(source, data_dir / "display-cover-cache")]
 
 
 def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):

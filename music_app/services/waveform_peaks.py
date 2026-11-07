@@ -237,10 +237,9 @@ async def build_waveform_peaks(
     from music_app.services.mp3_gapless import ignored_mp3_gapless_info
 
     gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
-    sample_filter = (
-        gapless.decode_filters(WAVEFORM_ANALYSIS_SAMPLE_RATE)[1]
-        if gapless is not None else f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
-    )
+    sample_filter = f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
+    if gapless is not None:
+        sample_filter = f"{gapless.decode_filters()[1]},{sample_filter}"
     frames_per_bin = max(
         1,
         math.ceil(

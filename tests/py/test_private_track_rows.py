@@ -96,6 +96,8 @@ def test_build_private_track_row_read_projects_favorite_song_rows_with_shared_co
             "track_number": 1,
             "disc_number": 1,
             "disc_number_raw": "1",
+            "total_discs": None,
+            "disc_subtitle": None,
             "title": "Subdivisions",
             "secondary_artist": None,
             "title_display": {
@@ -206,6 +208,8 @@ def test_build_private_track_row_read_wraps_playlist_rows_without_changing_share
             "track_number": 1,
             "disc_number": 1,
             "disc_number_raw": "1",
+            "total_discs": None,
+            "disc_subtitle": None,
             "title": "Subdivisions",
             "secondary_artist": None,
             "title_display": {

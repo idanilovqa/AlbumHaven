@@ -1,0 +1,149 @@
+package org.albumhaven.shell.playback
+
+import org.json.JSONException
+import org.json.JSONObject
+
+/** Path-free track identity; [playbackRef] is the signed reference `/playback/pcm` resolves. */
+data class PcmTrack(val playbackRef: String, val durationSeconds: Double)
+
+/** Client controls handled by `_handle_control` in music_app/routes/playback_stream_asgi.py. */
+sealed interface PcmClientControl {
+    val generation: Long
+    val streamId: Long
+
+    data class Open(
+        override val generation: Long,
+        override val streamId: Long,
+        val role: PcmRole,
+        val track: PcmTrack,
+        val startFrame: Long,
+        val sampleRate: Int,
+    ) : PcmClientControl
+
+    data class Credit(override val generation: Long, override val streamId: Long, val frames: Int) :
+        PcmClientControl
+
+    data class Promote(override val generation: Long, override val streamId: Long) : PcmClientControl
+
+    data class Close(override val generation: Long, override val streamId: Long, val reason: String) :
+        PcmClientControl
+}
+
+/** Server events; numeric fields are null when absent or not integral, as the web engine validates them. */
+sealed interface PcmServerEvent {
+    val generation: Long?
+    val streamId: Long?
+
+    data class Metadata(
+        override val generation: Long?,
+        override val streamId: Long?,
+        val role: String?,
+        val sampleRate: Long?,
+        val channels: Long?,
+        val provisionalTotalFrames: Long?,
+        val requestedStartFrame: Long?,
+        val timelineStartFrame: Long?,
+        val codec: String?,
+    ) : PcmServerEvent
+
+    data class Eos(
+        override val generation: Long?,
+        override val streamId: Long?,
+        val role: String?,
+        val emittedFrames: Long?,
+        val authoritativeTotalFrames: Long?,
+    ) : PcmServerEvent
+
+    data class Promoted(override val generation: Long?, override val streamId: Long?, val role: String?) :
+        PcmServerEvent
+
+    data class Error(
+        override val generation: Long?,
+        override val streamId: Long?,
+        val code: String?,
+        val message: String?,
+    ) : PcmServerEvent
+
+    data class RateMismatch(override val generation: Long?, override val streamId: Long?, val sampleRate: Long?) :
+        PcmServerEvent
+
+    /** Answer to a `probe` request; native playback does not probe, so the engine ignores it. */
+    data object ProbeResult : PcmServerEvent {
+        override val generation: Long? = null
+        override val streamId: Long? = null
+    }
+
+    data class Unknown(val type: String?, override val generation: Long?, override val streamId: Long?) :
+        PcmServerEvent
+}
+
+object AhpcControlCodec {
+    fun encode(control: PcmClientControl): String {
+        val json = JSONObject()
+        when (control) {
+            is PcmClientControl.Open -> json
+                .put("type", "open")
+                .put("role", control.role.wire)
+                .put("playbackRef", control.track.playbackRef)
+                .put("startFrame", control.startFrame)
+                .put("sampleRate", control.sampleRate)
+                .put("durationSeconds", control.track.durationSeconds)
+            is PcmClientControl.Credit -> json.put("type", "credit").put("frames", control.frames)
+            is PcmClientControl.Promote -> json
+                .put("type", "promote")
+                .put("fromRole", PcmRole.CONTINUITY.wire)
+                .put("toRole", PcmRole.CURRENT.wire)
+            is PcmClientControl.Close -> json.put("type", "close").put("reason", control.reason)
+        }
+        return json
+            .put("generation", control.generation)
+            .put("streamId", control.streamId)
+            .toString()
+    }
+
+    fun decode(text: String): PcmServerEvent {
+        val json = try {
+            JSONObject(text)
+        } catch (_: JSONException) {
+            throw AhpcProtocolException("control is not a JSON object")
+        }
+        val generation = json.integer("generation")
+        val streamId = json.integer("streamId")
+        return when (val type = json.opt("type") as? String) {
+            "metadata" -> PcmServerEvent.Metadata(
+                generation = generation,
+                streamId = streamId,
+                role = json.opt("role") as? String,
+                sampleRate = json.integer("sampleRate"),
+                channels = json.integer("channels"),
+                provisionalTotalFrames = json.integer("provisionalTotalFrames"),
+                requestedStartFrame = json.integer("requestedStartFrame"),
+                timelineStartFrame = json.integer("timelineStartFrame"),
+                codec = json.opt("codec") as? String,
+            )
+            "eos" -> PcmServerEvent.Eos(
+                generation = generation,
+                streamId = streamId,
+                role = json.opt("role") as? String,
+                emittedFrames = json.integer("emittedFrames"),
+                authoritativeTotalFrames = json.integer("authoritativeTotalFrames"),
+            )
+            "promoted" -> PcmServerEvent.Promoted(generation, streamId, json.opt("role") as? String)
+            "error" -> PcmServerEvent.Error(
+                generation = generation,
+                streamId = streamId,
+                code = json.opt("code") as? String,
+                message = json.opt("message") as? String,
+            )
+            "rate-mismatch" -> PcmServerEvent.RateMismatch(generation, streamId, json.integer("sampleRate"))
+            "probe-result" -> PcmServerEvent.ProbeResult
+            else -> PcmServerEvent.Unknown(type, generation, streamId)
+        }
+    }
+
+    private fun JSONObject.integer(name: String): Long? = when (val value = opt(name)) {
+        is Int -> value.toLong()
+        is Long -> value
+        else -> null
+    }
+}

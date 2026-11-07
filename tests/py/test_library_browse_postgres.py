@@ -14595,7 +14595,7 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
         return []
 
     repository._load_missing_album_rows = load_missing_rows
-    repository._get_cached_utility_projection = lambda _kind: None
+    repository._get_cached_utility_projection = lambda _kind, **_options: None
     repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
         AssertionError("bounded page must not build the complete projection")
     )
@@ -14622,7 +14622,7 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
             AssertionError("a warm bounded page must not query Postgres")
         ),
     )
-    repository._get_cached_utility_projection = lambda kind: {
+    repository._get_cached_utility_projection = lambda kind, **_options: {
         "count": 3,
         "items": [
             {"key": "album-1", "detail_loaded": False},
@@ -14641,6 +14641,57 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
     assert payload["complete"] is False
     assert payload["projection_cache_status"] == "bounded"
     assert payload["initial_detail"]["key"] == "album-1"
+
+
+def test_a_built_first_page_is_reused_until_problematic_files_change():
+    """Every open repeated the whole-library candidate query (7-13 s on the owner's
+    library) until the complete list was cached."""
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-cache-test"
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": url},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    repository._browse_connection_context = lambda: _ProblematicSnapshotConnectionStub()
+    queries = []
+    row = _normal_problematic_product_row(album_key="album-1", album_title="Album 1")
+    row.update({"album_id": 1, "track_id": 501, "track_key": "track-1"})
+    repository._load_problematic_candidate_ids = lambda *, connection, limit: queries.append(limit) or [1]
+    repository._load_problematic_file_rows = lambda album_key=None, **kwargs: [row]
+    repository._load_missing_album_rows = lambda *, connection, limit: []
+    try:
+        first = repository.build_problematic_files_page(limit=50)
+        first["items"].clear()  # a caller's mutation never reaches the cache
+        again = repository.build_problematic_files_page(limit=50)
+        assert queries == [50], "the second open reuses the built page"
+        assert [item["key"] for item in again["items"]] == ["album-1"]
+
+        browse.invalidate_postgres_utility_projection_cache(database_url=url, kinds=("problematic-files",))
+        repository.build_problematic_files_page(limit=50)
+        assert queries == [50, 50], "a Problematic Files change drops the cached page"
+    finally:
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+def test_a_cached_complete_list_serves_the_first_page_without_copying_it_whole():
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-slice-test"
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": url},
+                                                        connect=lambda _url: None)
+    complete = {"items": [{"key": f"album-{index}", "detail_loaded": False} for index in range(500)],
+                "count": 500, "projection_cache_status": "hit"}
+    repository._set_cached_utility_projection("problematic-files", complete)
+    try:
+        page = repository.build_problematic_files_page(limit=50)
+        page["items"][0]["key"] = "mutated"
+        cached = repository._get_cached_utility_projection("problematic-files")
+        assert [item["key"] for item in page["items"][1:3]] == ["album-1", "album-2"]
+        assert cached["items"][0]["key"] == "album-0" and len(cached["items"]) == 500
+        assert page["count"] == 50 and page["projection_cache_status"] == "bounded"
+    finally:
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
 
 
 def test_problematic_files_summary_and_initial_detail_share_one_repeatable_read_snapshot():

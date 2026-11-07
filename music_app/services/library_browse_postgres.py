@@ -98,6 +98,8 @@ _SEARCH_ALL_ARTISTS_DISPLAY_COVER_QUEUE_LIMIT = 2
 _SEARCH_PREVIEW_ALBUM_LIMIT = 8
 _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
+# Built Problematic Files first pages, by limit, until the complete list is cached.
+_PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
@@ -145,6 +147,9 @@ def invalidate_postgres_utility_projection_cache(
         for kind in (kinds or ("problematic-files", "rules", "duplicate-identities", "duplicate-absence", "non-album-candidates", "relation-alias-maps"))
         if str(kind or "").strip()
     }
+    if "problematic-files" in normalized_kinds:
+        # Cached first pages follow the complete list they preview.
+        normalized_kinds.add(_PROBLEMATIC_FILES_PAGE_KIND)
     if not normalized_kinds:
         return
     with _UTILITY_PROJECTION_CACHE_LOCK:
@@ -2703,15 +2708,24 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
-        cached_payload = self._get_cached_utility_projection("problematic-files")
+        cached_payload = self._get_cached_utility_projection("problematic-files", copy_payload=False)
         if cached_payload is not None:
-            cached_items = list(cached_payload.get("items") or [])
-            cached_payload["items"] = cached_items[:limit]
-            cached_payload["count"] = len(cached_payload["items"])
-            cached_payload["complete"] = False
-            cached_payload["total_candidate_count"] = None
-            cached_payload["projection_cache_status"] = "bounded"
-            return cached_payload
+            # Copy only the page: the complete payload is megabytes on a real library.
+            page = deepcopy({key: value for key, value in cached_payload.items() if key != "items"})
+            page["items"] = deepcopy(list(cached_payload.get("items") or [])[:limit])
+            page["count"] = len(page["items"])
+            page["complete"] = False
+            page["total_candidate_count"] = None
+            page["projection_cache_status"] = "bounded"
+            return page
+        # Until the complete list is cached, a built first page is reused: every open
+        # would otherwise repeat the whole-library candidate query.
+        page_cache = self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}
+        if str(limit) in page_cache:
+            return deepcopy(page_cache[str(limit)])
+        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            page_generation = _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0)
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
@@ -2735,6 +2749,12 @@ class PostgresLibraryBrowseRepository:
         payload["complete"] = False
         payload["total_candidate_count"] = None
         payload["projection_cache_status"] = "bounded"
+        self._set_cached_utility_projection(
+            _PROBLEMATIC_FILES_PAGE_KIND,
+            {**(self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}),
+             str(limit): payload},
+            expected_generation=page_generation,
+        )
         return payload
 
     def _build_problematic_files_payload_from_rows(

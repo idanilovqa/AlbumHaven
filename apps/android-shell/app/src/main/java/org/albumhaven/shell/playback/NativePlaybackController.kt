@@ -190,8 +190,11 @@ class NativePlaybackController(
     private val failures: (RuntimeException) -> Unit = {},
     /** Audio focus: every start asks it, so nothing claims, announces or plays over a call. */
     private val startGate: StartGate = StartGate.OPEN,
+    /** Hears one path-free [StartTiming] line per user-initiated start, on the playback thread, once it is heard or given up. */
+    startTimings: (String) -> Unit = {},
 ) {
     private val tasks = LinkedBlockingQueue<Runnable>()
+    private val timing = StartTiming(startTimings)
 
     @Volatile private var running = false
 
@@ -290,26 +293,37 @@ class NativePlaybackController(
 
     // ---- Commands (any thread) ----
 
-    fun loadQueue(load: QueueLoad): CommandResult {
+    /**
+     * [start] is timed if the load autoplays: by default the web's track selection, arriving now;
+     * the shell's own resume names when it asked for the queue's references and when they came.
+     */
+    fun loadQueue(load: QueueLoad, start: StartCommand = StartCommand(StartKind.SELECT, CommandSource.WEB, clock())): CommandResult {
         synchronized(revisionLock) {
             if (load.queueRevision <= acceptedRevision && !documentRestarted) return CommandResult.STALE_REVISION
             acceptedRevision = load.queueRevision
             documentRestarted = false
         }
-        post { applyLoad(load) }
+        post { applyLoad(load, start) }
         return CommandResult.ACCEPTED
     }
 
-    fun play(queueRevision: Long, from: CommandSource = CommandSource.WEB) =
-        revisioned(queueRevision, from) { requestPlay() }
+    fun play(queueRevision: Long, from: CommandSource = CommandSource.WEB): CommandResult {
+        val start = StartCommand(StartKind.PLAY, from, clock())
+        return revisioned(queueRevision, from) { requestPlay(start) }
+    }
 
     fun seek(queueRevision: Long, positionMs: Long, from: CommandSource = CommandSource.WEB) =
         revisioned(queueRevision, from) { seekTo(positionMs) }
 
-    fun next(queueRevision: Long, from: CommandSource = CommandSource.WEB) = revisioned(queueRevision, from) { step(+1) }
+    fun next(queueRevision: Long, from: CommandSource = CommandSource.WEB): CommandResult {
+        val start = StartCommand(StartKind.NEXT, from, clock())
+        return revisioned(queueRevision, from) { step(+1, start) }
+    }
 
-    fun previous(queueRevision: Long, from: CommandSource = CommandSource.WEB) =
-        revisioned(queueRevision, from) { step(-1) }
+    fun previous(queueRevision: Long, from: CommandSource = CommandSource.WEB): CommandResult {
+        val start = StartCommand(StartKind.PREVIOUS, from, clock())
+        return revisioned(queueRevision, from) { step(-1, start) }
+    }
 
     fun setLoop(queueRevision: Long, range: LoopRange48k?) = revisioned(queueRevision) { applyLoop(range) }
 
@@ -427,6 +441,7 @@ class NativePlaybackController(
             val wasPausing = pausing()
             written = if (loaded && (claims.owned || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
             if (wasPausing && !pausing()) pauseSettled()
+            if (timing.awaitingAudible) sink?.let { timing.heard(clock(), it.heardFrames()) }
             maybeFinishDrainedQueue()
             maybeEmitPosition()
             maybeRelease()
@@ -503,7 +518,7 @@ class NativePlaybackController(
         return CommandResult.ACCEPTED
     }
 
-    private fun applyLoad(load: QueueLoad) {
+    private fun applyLoad(load: QueueLoad, start: StartCommand) {
         if (load.keepCurrent && keepCurrent(load)) return
         measureListening()
         val outgoing = queue.getOrNull(index)
@@ -521,7 +536,7 @@ class NativePlaybackController(
         changeListenTrack(outgoing, outgoingPositionMs)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
         if (load.autoplay) {
-            requestPlay()
+            requestPlay(start)
         } else {
             retireClaim()
             setState(NativePlaybackState.PAUSED)
@@ -576,21 +591,26 @@ class NativePlaybackController(
         emit { NativePlaybackEvent.Error(it, "start_stalled", "The track did not start. Press play to try again.") }
     }
 
-    private fun requestPlay() {
+    /** [start] is the user's command being timed; a start focus held back resumes untimed. */
+    private fun requestPlay(start: StartCommand? = null) {
         val item = queue.getOrNull(index) ?: return
         if (wantPlay && state != NativePlaybackState.PAUSED) return
+        start?.let { timing.begin(it, index, clock()) }
         // Held for the gate, the queue waits paused; a skip has already silenced the old track.
         if (!startGate.mayStart()) {
+            timing.finish("focus_refused", clock())
             retireClaim()
             setState(NativePlaybackState.PAUSED)
             return
         }
+        timing.mark(StartTiming.Stage.GATE, clock())
         wantPlay = true
         releasePending = false
         startRetried = false
         // A replaced or resumed item reports loading, so its first frame is a fresh `playing`.
         setState(NativePlaybackState.LOADING)
         ensureTransport()
+        if (transportOpen) timing.socketOpen(clock(), reused = true)
         // The stream fills its cushion while the claim is requested; nothing plays before it is granted.
         if (transportOpen && !loaded) startEngineAt(index, heldPositionMs)
         val requestRevision = revision
@@ -598,7 +618,10 @@ class NativePlaybackController(
         claims.acquire(item.claimTrack()) { outcome ->
             if (!wantPlay || revision != requestRevision || index != requestIndex) return@acquire
             when (outcome) {
-                ClaimOutcome.GRANTED -> startWhenReady()
+                ClaimOutcome.GRANTED -> {
+                    timing.mark(StartTiming.Stage.CLAIM, clock())
+                    startWhenReady()
+                }
                 ClaimOutcome.BLOCKED -> {
                     wantPlay = false
                     unload("ownership-blocked")
@@ -621,6 +644,8 @@ class NativePlaybackController(
         val current = engine
         if (loaded && current != null) {
             heldFrame = null
+            // Read while the output is still paused: a stream that already rendered is heard without a new write.
+            if (timing.active) sink?.let { timing.outputReady(it.heardFrames(), queued = firstFrameHeard) }
             current.play()
             if (state == NativePlaybackState.LOADING || state == NativePlaybackState.PAUSED) {
                 // A stream prepared while paused is heard only from its first frame.
@@ -653,6 +678,10 @@ class NativePlaybackController(
         firstFrameHeard = false
         endDrainUntilMs = null
         current.start(item.pcmTrack(), paused?.frame ?: msToFrames(positionMs, rate), playWhenReady, fadeIn = paused != null)
+        if (timing.active) {
+            timing.streamOpened(clock())
+            sink?.let { timing.outputReady(it.heardFrames(), queued = false) }
+        }
         startMeasuring()
         queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
         loop?.let { applyEngineLoop(current, it, rate) }
@@ -686,10 +715,13 @@ class NativePlaybackController(
 
     private fun onEngineEvent(event: PcmEngineEvent) {
         when (event) {
+            is PcmEngineEvent.StartAccepted -> timing.mark(StartTiming.Stage.METADATA, clock())
+            is PcmEngineEvent.StartPcmReceived -> timing.mark(StartTiming.Stage.FIRST_PCM, clock())
             is PcmEngineEvent.FirstFrame -> {
                 recoveryAttempted = false
                 startWaitSinceMs = null
                 firstFrameHeard = true
+                timing.written(clock())
                 setState(NativePlaybackState.PLAYING)
             }
             is PcmEngineEvent.Buffering ->
@@ -901,7 +933,7 @@ class NativePlaybackController(
      * queue group, with no restart of the current item and no step past the group's ends. Like the
      * web's, a skip always plays, also from a paused, ended or failed player.
      */
-    private fun step(direction: Int) {
+    private fun step(direction: Int, start: StartCommand) {
         val target = index + direction
         val reason = if (direction > 0) CurrentItemReason.NEXT else CurrentItemReason.PREVIOUS
         if (target !in queue.indices || index !in queue.indices || queue[target].queueGroup != queue[index].queueGroup) return
@@ -918,7 +950,7 @@ class NativePlaybackController(
         queue[index].let { claims.updateTrack(it.claimTrack()) }
         emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
         wantPlay = false
-        requestPlay()
+        requestPlay(start)
     }
 
     private fun applyLoop(range: LoopRange48k?) {
@@ -964,6 +996,7 @@ class NativePlaybackController(
 
     private fun transportOpened() {
         transportOpen = true
+        timing.socketOpen(clock(), reused = false)
         if (!wantPlay) return
         if (loaded) startWhenReady() else startEngineAt(index, heldPositionMs)
     }
@@ -1150,6 +1183,8 @@ class NativePlaybackController(
     }
 
     private fun setState(next: NativePlaybackState) {
+        // A start not heard yet ends as whatever stopped it: a pause, a stop, an error or the end.
+        if (!next.wanted) timing.finish(next.wire, clock())
         if (state == next) {
             refreshSnapshot()
             return

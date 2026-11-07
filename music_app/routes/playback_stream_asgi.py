@@ -298,6 +298,56 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
     }
 
 
+def _decoder_name(decoder: object) -> str:
+    return f"encoded-{decoder.codec}" if isinstance(decoder, EncodedStream) else "ffmpeg-pcm"
+
+
+def _elapsed_ms(started_at: float, at: float | None) -> str:
+    return "-" if at is None else str(round((at - started_at) * 1000))
+
+
+@dataclass(slots=True, eq=False)
+class _OpenTiming:
+    """Monotonic milestones of one `open`, logged once as one path-free line of fixed keys.
+
+    Every milestone counts from the open's arrival: the media resolved (authorization and
+    reference included), the decoder started or refused, the first credit, the first decoded PCM
+    and its send. The client's credit gates decoding, so a late first credit is the client's wait.
+    """
+
+    generation: int
+    stream_id: int
+    role: str
+    received_at: float
+    resolved_at: float | None = None
+    decoder_started_at: float | None = None
+    first_credit_at: float | None = None
+    first_decoded_at: float | None = None
+    first_sent_at: float | None = None
+    decoder: str = "-"
+    logged: bool = False
+
+    def log(self, outcome: str) -> None:
+        if self.logged:
+            return
+        self.logged = True
+        _LOGGER.info(
+            "Playback stream open generation=%s stream=%s role=%s decoder=%s outcome=%s "
+            "resolve_ms=%s decoder_start_ms=%s first_credit_ms=%s first_decoded_ms=%s "
+            "first_sent_ms=%s",
+            self.generation,
+            self.stream_id,
+            self.role,
+            self.decoder,
+            outcome,
+            _elapsed_ms(self.received_at, self.resolved_at),
+            _elapsed_ms(self.received_at, self.decoder_started_at),
+            _elapsed_ms(self.received_at, self.first_credit_at),
+            _elapsed_ms(self.received_at, self.first_decoded_at),
+            _elapsed_ms(self.received_at, self.first_sent_at),
+        )
+
+
 @dataclass(slots=True, eq=False)
 class _PlaybackStream:
     decoder: PcmDecoderProcess
@@ -306,6 +356,11 @@ class _PlaybackStream:
     role: str
     sequence: int = 0
     credit_task: asyncio.Task[None] | None = None
+    timing: _OpenTiming | None = None
+
+    def log_open_timing(self, outcome: str) -> None:
+        if self.timing is not None:
+            self.timing.log(outcome)
 
 
 def _log_slow_stream_step(step: str, stream: _PlaybackStream, started_at: float) -> None:
@@ -642,6 +697,7 @@ class _PlaybackPcmConnection:
             self._pending_opens.discard(task)
 
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
+        received_at = time.monotonic()
         if self._closed or not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
@@ -681,6 +737,7 @@ class _PlaybackPcmConnection:
         ):
             return await self._reject_open(CLOSE_INVALID_CONTROL)
 
+        timing = _OpenTiming(generation, stream_id, role, received_at)
         if "path" in control and "playbackRef" in control:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
         if "playbackRef" in control:
@@ -702,6 +759,7 @@ class _PlaybackPcmConnection:
             )
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+        timing.resolved_at = time.monotonic()
 
         generations = {stream.generation for stream in self._streams_by_id.values()}
         generations.update(
@@ -737,11 +795,13 @@ class _PlaybackPcmConnection:
                 quality=quality,
             ) or await PcmDecoderProcess.start(command)
         except BaseException as error:
+            timing.decoder_started_at = time.monotonic()
             await self._registry.release_decoder()
             if not isinstance(error, Exception):
                 raise
             if self._closed:
                 return False
+            timing.log("rate_mismatch" if isinstance(error, SampleRateMismatch) else "decoder_error")
             if isinstance(error, SampleRateMismatch):
                 await self._send_json(
                     {
@@ -761,11 +821,14 @@ class _PlaybackPcmConnection:
             )
             return True
 
+        timing.decoder_started_at = time.monotonic()
+        timing.decoder = _decoder_name(decoder)
         stream = _PlaybackStream(
             decoder=decoder,
             generation=generation,
             stream_id=stream_id,
             role=role,
+            timing=timing,
         )
         self._completed_streams_by_role.pop(role, None)
         for completed_role, completed_stream in list(self._completed_streams_by_role.items()):
@@ -779,8 +842,7 @@ class _PlaybackPcmConnection:
             _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
         )
         if isinstance(decoder, EncodedStream):
-            decoder.grant_credit(INITIAL_ENCODED_CREDIT_BYTES)
-            self._start_credit_drain(stream)
+            self._grant_credit(stream, INITIAL_ENCODED_CREDIT_BYTES)
         return True
 
     async def _reject_open(self, code: int) -> bool:
@@ -822,9 +884,14 @@ class _PlaybackPcmConnection:
             await self.reject(CLOSE_CREDIT_VIOLATION)
             return False
 
-        stream.decoder.grant_credit(frames)
-        self._start_credit_drain(stream)
+        self._grant_credit(stream, frames)
         return True
+
+    def _grant_credit(self, stream: _PlaybackStream, amount: int) -> None:
+        if stream.timing is not None and stream.timing.first_credit_at is None:
+            stream.timing.first_credit_at = time.monotonic()
+        stream.decoder.grant_credit(amount)
+        self._start_credit_drain(stream)
 
     def _start_credit_drain(self, stream: _PlaybackStream) -> None:
         if stream.credit_task is None or stream.credit_task.done():
@@ -844,7 +911,10 @@ class _PlaybackPcmConnection:
                     delivery_role=stream.role,
                 )
                 _log_slow_stream_step("decoder read", stream, read_started_at)
+                timing = stream.timing if stream.sequence == 0 else None
                 if chunk.frame_count:
+                    if timing is not None:
+                        timing.first_decoded_at = time.monotonic()
                     payload = (
                         pack_encoded_frame(
                             generation=stream.generation,
@@ -867,11 +937,15 @@ class _PlaybackPcmConnection:
                     if not await self._send_stream_bytes(stream, payload):
                         return
                     _log_slow_stream_step("socket send", stream, send_started_at)
+                    if timing is not None:
+                        timing.first_sent_at = time.monotonic()
+                        timing.log("first_frame")
                     stream.sequence += 1
                     await asyncio.sleep(PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS)
                     continue
 
                 metadata = await stream.decoder.finish()
+                stream.log_open_timing("eos")
                 try:
                     if not await self._send_stream_eos(stream, metadata):
                         return
@@ -885,6 +959,7 @@ class _PlaybackPcmConnection:
         except Exception as error:
             if self._closed or self._streams_by_id.get(stream.stream_id) is not stream:
                 return
+            stream.log_open_timing("decoder_error")
             await self._send_decoder_error(
                 generation=stream.generation,
                 stream_id=stream.stream_id,
@@ -1009,6 +1084,7 @@ class _PlaybackPcmConnection:
     async def _remove_stream(self, stream: _PlaybackStream, *, cancel: bool = True) -> None:
         if self._streams_by_id.get(stream.stream_id) is not stream:
             return
+        stream.log_open_timing("closed")
         await self._cancel_stream_credit_task(stream)
         if cancel:
             await stream.decoder.cancel()
@@ -1024,6 +1100,7 @@ class _PlaybackPcmConnection:
     def _retire_stream_unlocked(self, stream: _PlaybackStream) -> None:
         if self._streams_by_id.get(stream.stream_id) is not stream:
             return
+        stream.log_open_timing("closed")
         self._streams_by_id.pop(stream.stream_id, None)
         if self._streams_by_role.get(stream.role) is stream:
             self._streams_by_role.pop(stream.role, None)

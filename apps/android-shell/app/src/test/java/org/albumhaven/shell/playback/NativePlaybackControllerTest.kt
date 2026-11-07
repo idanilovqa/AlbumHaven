@@ -75,6 +75,9 @@ class ControllerHarness(
     val sinks = mutableListOf<RecordingSink>()
     val events = mutableListOf<NativePlaybackEvent>()
     val warms = mutableListOf<Boolean>()
+
+    /** Every [StartTiming] line the controller reported, in order. */
+    val timings = mutableListOf<String>()
     var listener: PcmTransportListener? = null
     var connects = 0
     var closes = 0
@@ -116,6 +119,7 @@ class ControllerHarness(
         wallClockMs = { 1_793_613_600_000L + now },
         failures = failures,
         startGate = startGate,
+        startTimings = { timings += it },
     )
 
     fun item(track: SyntheticTrack) = QueueItem(

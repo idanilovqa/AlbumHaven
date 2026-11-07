@@ -60,6 +60,9 @@ import org.albumhaven.shell.playback.ResumeAnswer
 import org.albumhaven.shell.playback.ResumeRunner
 import org.albumhaven.shell.playback.Resumption
 import org.albumhaven.shell.playback.SessionArtworkLoader
+import org.albumhaven.shell.playback.StartCommand
+import org.albumhaven.shell.playback.StartKind
+import org.albumhaven.shell.playback.StartTiming
 import org.albumhaven.shell.playback.SystemRequest
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -321,6 +324,8 @@ class PlaybackService : MediaLibraryService() {
             },
             failures = { failure -> if (BuildConfig.DEBUG) Log.w(TAG, "Playback stopped", failure) },
             startGate = focusPolicy,
+            // Path-free and once per start, so release builds log it too; off the playback thread.
+            startTimings = { line -> main.post { Log.i(StartTiming.LOG_TAG, line) } },
         )
         return created.also { it.start() }
     }
@@ -395,10 +400,12 @@ class PlaybackService : MediaLibraryService() {
         val selected = origin
         val api = HttpResumeApi(client, session(selected))
         val tokens = Resumption.tokens(queue)
+        val requestedAtMs = SystemClock.elapsedRealtime()
         return resumeRunner.start({ api.exchange(tokens) }, { player.showResumption(true) }) { answer ->
             if (destroyed || origin != selected) return@start
             val load = (answer as? ResumeAnswer.Refs)?.let { Resumption.load(queue, it.playbackRefs, revision, target) }
-            if (load == null || controller.loadQueue(load) != CommandResult.ACCEPTED) {
+            val start = StartCommand(StartKind.PLAY, CommandSource.SYSTEM, requestedAtMs, SystemClock.elapsedRealtime())
+            if (load == null || controller.loadQueue(load, start) != CommandResult.ACCEPTED) {
                 player.showResumption(false, resumeFailure(answer == ResumeAnswer.SignedOut))
             }
         }

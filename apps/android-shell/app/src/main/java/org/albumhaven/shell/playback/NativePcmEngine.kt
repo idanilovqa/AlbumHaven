@@ -49,6 +49,11 @@ fun interface PcmControlSender {
 enum class PcmBoundaryKind { QUEUED_NEXT, SEEK, LOOP }
 
 sealed interface PcmEngineEvent {
+    /** The server accepted the open of a [NativePcmEngine.start] stream: its decoder runs. */
+    data class StartAccepted(val streamId: Long) : PcmEngineEvent
+
+    /** The first PCM of a [NativePcmEngine.start] stream arrived; [FirstFrame] follows once the cushion is buffered. */
+    data class StartPcmReceived(val streamId: Long) : PcmEngineEvent
     data class FirstFrame(val streamId: Long, val timelineFrame: Long) : PcmEngineEvent
     data class Boundary(
         val kind: PcmBoundaryKind,
@@ -406,6 +411,7 @@ class NativePcmEngine(
         }
         ring.appendLittleEndian(frame.bytes, frame.payloadOffset, frame.frameCount)
         retainShortLoopPcm(stream, ring, frame.frameCount)
+        if (stream.kind == StreamKind.START && stream.receivedFrames == 0L) events(PcmEngineEvent.StartPcmReceived(stream.streamId))
         stream.nextSequence += 1
         stream.receivedFrames += frame.frameCount
         stream.inFlightFrames -= frame.frameCount
@@ -601,6 +607,7 @@ class NativePcmEngine(
             (event.timelineStartFrame ?: -1) >= 0
         if (!valid) return fail("metadata-protocol-error", "Invalid streaming metadata")
         stream.metadataAccepted = true
+        if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
         if (stream.kind == StreamKind.SEEK) {
             val remaining = checkNotNull(event.provisionalTotalFrames) - checkNotNull(event.timelineStartFrame)
             stream.targetBufferFrames = minOf(stream.targetBufferFrames.toLong(), maxOf(0L, remaining)).toInt()

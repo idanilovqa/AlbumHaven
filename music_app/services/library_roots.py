@@ -293,7 +293,14 @@ def summarize_root_provenance_payloads(payloads: list[dict[str, object]] | tuple
 
 
 def library_root_cache_identity(config: dict[str, object]) -> str:
-    payload = load_library_root_settings(config)
+    """Hash of the settings a scan's stored entries depend on.
+
+    A stored snapshot is reused only while this matches, so settings that do not
+    change what a scan reads stay out: changing them must not force every file
+    to be re-read. Excluding a key keeps the hash snapshots already carry.
+    """
+    payload = dict(load_library_root_settings(config))
+    payload.pop(METADATA_CORRECTIONS_KEY, None)
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 

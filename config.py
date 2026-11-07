@@ -264,6 +264,11 @@ class Config:
         os.environ.get("MUSICBRAINZ_ENRICHMENT_ENABLED", "0").strip().lower()
         not in {"0", "false", "no"}
     )
+    # Artists resolved at once by the enrichment worker (1-8). Each lane claims
+    # its own jobs; claims skip locked rows and writes lock per artist.
+    MUSICBRAINZ_ENRICHMENT_CONCURRENCY = max(1, min(8, int(
+        os.environ.get("MUSICBRAINZ_ENRICHMENT_CONCURRENCY", "1").strip() or "1"
+    )))
     MUSICBRAINZ_CONTACT_EMAIL = os.environ.get("MUSICBRAINZ_CONTACT_EMAIL", "albumhaven@example.com").strip()
     MUSICBRAINZ_USER_AGENT = os.environ.get(
         "MUSICBRAINZ_USER_AGENT",

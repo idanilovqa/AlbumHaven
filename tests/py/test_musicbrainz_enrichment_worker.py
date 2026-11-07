@@ -51,6 +51,7 @@ def test_worker_run_once_is_batch_bounded_and_stops_claiming_when_queue_is_empty
             "needs_review": 1,
             "retry_wait": 0,
             "exhausted": 0,
+            "rate_limited": 0,
         }
         await worker.stop()
 
@@ -245,3 +246,47 @@ def test_lifespan_source_starts_and_stops_the_musicbrainz_worker():
     assert "start_musicbrainz_enrichment_worker" in source
     assert "stop_musicbrainz_enrichment_worker" in source
     assert source.index("start_musicbrainz_enrichment_worker(") < source.index("yield")
+
+
+def test_lanes_claim_under_their_own_lease_owner_until_the_queue_is_empty():
+    api = worker_api()
+    processor = Processor([{"processed": True, "state": "succeeded"}] * 5)
+
+    async def scenario():
+        worker = api.MusicBrainzEnrichmentWorker(
+            processor=processor, worker_id="worker-a", batch_size=10, poll_seconds=30, concurrency=3,
+        )
+        summary = await worker.run_once()
+        await worker.stop()
+        return summary
+
+    summary = asyncio.run(scenario())
+
+    assert summary["processed"] == 5
+    assert set(processor.calls) == {"worker-a-lane0", "worker-a-lane1", "worker-a-lane2"}
+
+
+def test_a_busy_queue_is_claimed_again_without_the_idle_wait():
+    api = worker_api()
+    processor = Processor([{"processed": True, "state": "succeeded"}] * 3)
+
+    async def scenario():
+        worker = api.MusicBrainzEnrichmentWorker(
+            processor=processor, worker_id="worker-a", batch_size=1, poll_seconds=30,
+        )
+        worker.start()
+        # Three single-artist batches finish long before one 30 s idle wait could.
+        for _ in range(200):
+            if len(processor.calls) >= 4:
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop()
+
+    asyncio.run(scenario())
+    assert len(processor.calls) >= 4, "the worker waited between busy batches"
+
+
+def test_concurrency_must_be_positive():
+    api = worker_api()
+    with pytest.raises(ValueError):
+        api.MusicBrainzEnrichmentWorker(processor=Processor([]), worker_id="w", concurrency=0)

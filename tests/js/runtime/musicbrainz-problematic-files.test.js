@@ -383,3 +383,16 @@ test('Gallery country pills show the full country name, not the ISO code', () =>
   assert.match(context.buildGalleryArtistMetadataHtml({ country: 'GB', genres: [] }), />United Kingdom</);
   assert.match(context.buildGalleryArtistMetadataHtml({ country: 'Russia', genres: [] }), />Russia</, 'stored names pass through');
 });
+
+test('a MusicBrainz status change reloads only the Gallery view, never Problematic Files', () => {
+  const source = read('music_app/static/js/runtime/gallery-refresh-and-status.js');
+  const body = (name) => {
+    const start = source.indexOf(`function ${name}(`);
+    assert.notEqual(start, -1, name);
+    const rest = source.slice(start);
+    return rest.slice(0, rest.search(/\r?\n}\r?\n/));
+  };
+  // A2 calls refreshCurrentViewAfterBackgroundCompletion, which fetches the view only.
+  assert.doesNotMatch(body('refreshCurrentViewAfterBackgroundCompletion'), /loadProblematicFiles|\/utilities\/problematic-files/);
+  assert.doesNotMatch(body('fetchAndRender'), /loadProblematicFiles|\/utilities\/problematic-files/);
+});

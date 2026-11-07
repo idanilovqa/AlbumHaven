@@ -345,13 +345,16 @@ test('an artist row never requests an album detail', async () => {
 });
 
 test('a changed artist status reloads the Gallery view so its links and pills update', async () => {
-  let artists = [{ local_artist_name: 'Aina', unresolved_reason: null, problem_occurrence_id: null, match_state: 'pending' }];
+  let artists = [{ local_artist_name: 'Aina', unresolved_reason: null, problem_occurrence_id: null, match_state: 'pending' },
+    { local_artist_name: 'Angra', unresolved_reason: null, problem_occurrence_id: null, match_state: 'pending' }];
+  const shown = ['Aina'];
   const reloads = [];
   const context = {
     console,
     state: { status: { allowed_actions: { 'catalogue.enrichment.request': true } } },
     virtualGrid: { render: () => {} },
     refreshCurrentViewAfterBackgroundCompletion: async () => { reloads.push('view'); return true; },
+    getGalleryMainGroups: () => shown.map((artist) => ({ artist })),
     fetch: async () => ({ ok: true, json: async () => ({ artists }) }),
   };
   vm.createContext(context);
@@ -359,11 +362,14 @@ test('a changed artist status reloads the Gallery view so its links and pills up
 
   await context.refreshGalleryArtistMusicBrainzStatus();
   assert.deepEqual(reloads, [], 'the first status load keeps the view it was loaded with');
-  artists = [{ local_artist_name: 'Aina', unresolved_reason: null, problem_occurrence_id: null, match_state: 'matched' }];
+  artists = artists.filter((row) => row.local_artist_name !== 'Aina');
   await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
-  assert.deepEqual(reloads, ['view'], 'a finished lookup or re-check reloads the shared Gallery projection');
+  assert.deepEqual(reloads, ['view'], 'a finished lookup of a shown artist reloads the shared Gallery projection');
   await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
   assert.deepEqual(reloads, ['view'], 'an unchanged status does not reload again');
+  artists = [];
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  assert.deepEqual(reloads, ['view'], 'a change for an artist the view does not show never reloads it');
 });
 
 test('Gallery country pills show the full country name, not the ISO code', () => {

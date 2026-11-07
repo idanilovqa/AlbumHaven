@@ -4448,7 +4448,6 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
-// Country and genre pills only; the album count stays in the context summary.
 // MusicBrainz stores ISO 3166-1 codes; show the full English country name.
 const galleryCountryNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
   ? new Intl.DisplayNames(['en'], { type: 'region' })
@@ -4460,6 +4459,7 @@ function galleryCountryName(country) {
   try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
 }
 
+// Country and genre pills only; the album count follows the artist name.
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
@@ -4528,13 +4528,21 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       }
       const signature = JSON.stringify([...next]);
       if (signature === galleryArtistMusicBrainzStatus.signature) return false;
-      const statusChanged = galleryArtistMusicBrainzStatus.loadedAt > 0;
+      const previous = galleryArtistMusicBrainzStatus.byArtist;
+      const changed = galleryArtistMusicBrainzStatus.loadedAt > 0
+        ? new Set([...previous.keys(), ...next.keys()].filter((key) => (
+          JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
+        )))
+        : new Set();
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
       // A finished lookup, re-check or manual match changes the shared Gallery
-      // projection (links, pills), so reload the view rather than keep stale data.
-      if (statusChanged && typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
+      // projection (links, pills). Reload the view when it shows such an artist,
+      // and only then: a library-wide sync changes many artists every poll.
+      const shown = typeof getGalleryMainGroups === 'function' ? getGalleryMainGroups() : [];
+      if (changed.size && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+          && shown.some((group) => changed.has(galleryArtistMusicBrainzStatusKey(group?.artist)))) {
         void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
       }
       return true;

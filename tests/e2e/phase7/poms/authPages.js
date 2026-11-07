@@ -6,6 +6,7 @@ export class LoginPage {
     this.username = page.getByLabel('Username');
     this.password = page.getByLabel('Password', { exact: true });
     this.submit = page.getByRole('button', { name: 'Sign in' });
+    this.startupProgress = page.getByRole('region', { name: 'Loading Album Haven' });
   }
 
   async open(returnTo = '/') {

@@ -568,7 +568,6 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const isSearch = Boolean(String(state.view.query || '').trim());
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -615,15 +614,19 @@ function updateGalleryMainChrome() {
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
+    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = context.artist;
-    summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (metadata) {
-      const pills = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
-      metadata.hidden = !pills;
-      metadata.innerHTML = pills;
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = false;
+      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
     }
-    if (isSearch) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (metadata) {
+      metadata.hidden = false;
+      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);

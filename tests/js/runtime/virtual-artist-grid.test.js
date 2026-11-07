@@ -5708,7 +5708,7 @@ function musicBrainzArtistGroup(overrides = {}) {
 function assertArtistProblemHeader(markup) {
   const infoAt = markup.indexOf('data-artist-info-trigger="1"');
   const infoEndAt = markup.indexOf('</button>', infoAt);
-  const alertAt = markup.indexOf('small-alert--triangle-only');
+  const alertAt = markup.indexOf('small-alert small-alert--warning');
   const lineAt = markup.indexOf('gallery-divider__line', alertAt);
   assert.ok(infoAt >= 0 && infoAt < infoEndAt && infoEndAt < alertAt && alertAt < lineAt,
     'the shared alert must follow the existing info action and move only the separator line');
@@ -5771,7 +5771,7 @@ test('virtual and fallback headers keep pending distinct and matched artists ale
   const matchedMarkup = context.renderArtistGroupsMarkupFallback(
     [], [], [matched], 1, context.CARD_GALLERY_LAYOUT_CONFIG,
   );
-  assert.doesNotMatch(matchedMarkup, /small-alert--triangle-only|artist-musicbrainz-pending|ui-metadata-pill/);
+  assert.doesNotMatch(matchedMarkup, /small-alert|artist-musicbrainz-pending|ui-metadata-pill/);
 });
 
 test('artist enrichment does not alter unrelated GalleryCard markup', () => {
@@ -5785,7 +5785,7 @@ test('artist enrichment does not alter unrelated GalleryCard markup', () => {
     artist_musicbrainz: { country: 'Germany', genres: ['Heavy Metal'] },
   });
   assert.equal(enriched, baseline);
-  assert.doesNotMatch(enriched, /ui-metadata-pill|artist-musicbrainz-pending|small-alert--triangle-only/);
+  assert.doesNotMatch(enriched, /ui-metadata-pill|artist-musicbrainz-pending|small-alert/);
 });
 
 test('virtual artist sections model the rendered 32px header and 10px bottom margin', () => {

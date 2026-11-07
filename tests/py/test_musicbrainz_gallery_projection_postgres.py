@@ -122,6 +122,29 @@ def test_gallery_and_selected_artist_projection_is_safe_bounded_and_not_duplicat
     assert "private" not in repr(gallery_groups[0]["artist_musicbrainz"])
 
 
+def test_the_first_selected_artist_payload_carries_the_header_projection():
+    """The page's first payload uses the gallery_summary tier, whose album payloads
+    carry no per-album projection; the header pills arrived 2 s later with the next
+    payload. The primary group now takes the artist's projection from its rows."""
+    import inspect
+
+    from music_app.services import library_browse_postgres as browse
+
+    rows = [_stored_artist_row()]
+    summary_albums = browse._root_album_browse_album_payloads(
+        rows, "Кипелов", include_total_duration_seconds=True, include_artist_members=True,
+    )
+    assert all("artist_musicbrainz" not in album for album in summary_albums)
+    groups = browse._selected_artist_primary_groups(
+        "Кипелов", summary_albums, use_preview_albums=False,
+        artist_musicbrainz=browse._artist_musicbrainz_projection_from_rows(rows, artist="Кипелов"),
+        alias_to_canonical={}, canonical_to_aliases={},
+    )
+    assert groups[0]["artist_musicbrainz"] == SAFE_ARTIST_MUSICBRAINZ
+    source = inspect.getsource(browse.PostgresLibraryBrowseRepository.build_selected_artist_payload)
+    assert "preview_artist_musicbrainz = _artist_musicbrainz_projection_from_rows(rows, artist=artist_display)" in source
+
+
 def test_matched_artist_without_an_eligible_stored_genre_keeps_identity_and_explicit_fallback():
     from music_app.services import library_browse_postgres as browse
 

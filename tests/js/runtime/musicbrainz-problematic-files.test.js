@@ -315,3 +315,65 @@ test('without the server enrichment action the Gallery shows no artist warnings'
   assert.equal(await context.refreshGalleryArtistMusicBrainzStatus({ force: true }), false);
   assert.deepEqual(requests, []);
 });
+
+test('the complete Problematic Files list accepts the server-shaped artist row', () => {
+  // The exact row the server projects (tests/py/test_musicbrainz_problematic_files_projection.py).
+  // Before it carried detail_loaded: false, the owner's complete list failed validation:
+  // only the first page stayed, with a false "Unable to load" toast and no MBID filters.
+  const row = JSON.parse(read('tests/fixtures/musicbrainz/problematic-artist-summary-item.json'));
+  const context = { console };
+  vm.createContext(context);
+  vm.runInContext(read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), context, {
+    filename: 'utility-loaders-and-cover-lookup.js',
+  });
+  const album = { key: 'axxis::kingdom of the night', name: 'Kingdom of the Night', problem_reasons: ['Missing year'], detail_loaded: false };
+
+  const { summaryItems } = context.validateProblematicSummaryPayload({ ok: true, items: [row, album] });
+
+  assert.deepEqual(summaryItems.map((item) => item.key), [row.key, album.key]);
+});
+
+test('an artist row never requests an album detail', async () => {
+  const row = JSON.parse(read('tests/fixtures/musicbrainz/problematic-artist-summary-item.json'));
+  const { context, requests } = loadContext({ item: row });
+  vm.runInContext(read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), context, {
+    filename: 'utility-loaders-and-cover-lookup.js',
+  });
+
+  assert.equal(await context.loadProblematicAlbumDetail(row.key, true), row);
+  assert.deepEqual(requests, []);
+});
+
+test('a changed artist status reloads the Gallery view so its links and pills update', async () => {
+  let artists = [{ local_artist_name: 'Aina', unresolved_reason: null, problem_occurrence_id: null, match_state: 'pending' }];
+  const reloads = [];
+  const context = {
+    console,
+    state: { status: { allowed_actions: { 'catalogue.enrichment.request': true } } },
+    virtualGrid: { render: () => {} },
+    refreshCurrentViewAfterBackgroundCompletion: async () => { reloads.push('view'); return true; },
+    fetch: async () => ({ ok: true, json: async () => ({ artists }) }),
+  };
+  vm.createContext(context);
+  vm.runInContext(read('music_app/static/js/runtime/gallery-main-components.js'), context);
+
+  await context.refreshGalleryArtistMusicBrainzStatus();
+  assert.deepEqual(reloads, [], 'the first status load keeps the view it was loaded with');
+  artists = [{ local_artist_name: 'Aina', unresolved_reason: null, problem_occurrence_id: null, match_state: 'matched' }];
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  assert.deepEqual(reloads, ['view'], 'a finished lookup or re-check reloads the shared Gallery projection');
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  assert.deepEqual(reloads, ['view'], 'an unchanged status does not reload again');
+});
+
+test('Gallery country pills show the full country name, not the ISO code', () => {
+  const context = { console };
+  vm.createContext(context);
+  vm.runInContext(read('music_app/static/js/runtime/markup-format-helpers.js'), context);
+  vm.runInContext(read('music_app/static/js/runtime/gallery-main-components.js'), context);
+
+  const html = context.buildGalleryArtistMetadataHtml({ country: 'AT', genres: ['black metal'] });
+  assert.match(html, /ui-metadata-pill--country">Austria</);
+  assert.match(context.buildGalleryArtistMetadataHtml({ country: 'GB', genres: [] }), />United Kingdom</);
+  assert.match(context.buildGalleryArtistMetadataHtml({ country: 'Russia', genres: [] }), />Russia</, 'stored names pass through');
+});

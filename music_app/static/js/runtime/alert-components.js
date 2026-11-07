@@ -30,9 +30,8 @@ function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
-  const triangleOnly = config.variant === 'triangle-only';
-  const interactive = triangleOnly && config.interactive === true;
-  const classes = `small-alert small-alert--${severity}${triangleOnly ? ' small-alert--triangle-only' : ''}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  const interactive = config.interactive === true;
+  const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
   const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
   if (interactive) {

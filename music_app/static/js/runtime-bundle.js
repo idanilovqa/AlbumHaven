@@ -4301,9 +4301,8 @@ function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
-  const triangleOnly = config.variant === 'triangle-only';
-  const interactive = triangleOnly && config.interactive === true;
-  const classes = `small-alert small-alert--${severity}${triangleOnly ? ' small-alert--triangle-only' : ''}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  const interactive = config.interactive === true;
+  const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
   const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
   if (interactive) {
@@ -4450,11 +4449,22 @@ function buildGalleryInfoGlyphHtml() {
 }
 
 // Country and genre pills only; the album count stays in the context summary.
+// MusicBrainz stores ISO 3166-1 codes; show the full English country name.
+const galleryCountryNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+function galleryCountryName(country) {
+  const value = String(country || '').trim();
+  if (!/^[A-Za-z]{2}$/.test(value) || !galleryCountryNames) return value;
+  try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
+}
+
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
-  const country = String(projection.country || '').trim();
+  const country = galleryCountryName(projection.country);
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
     .filter(Boolean)
@@ -4518,9 +4528,15 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       }
       const signature = JSON.stringify([...next]);
       if (signature === galleryArtistMusicBrainzStatus.signature) return false;
+      const statusChanged = galleryArtistMusicBrainzStatus.loadedAt > 0;
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      // A finished lookup, re-check or manual match changes the shared Gallery
+      // projection (links, pills), so reload the view rather than keep stale data.
+      if (statusChanged && typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
+        void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
+      }
       return true;
     })
     .catch(() => false)
@@ -4537,7 +4553,6 @@ function buildGalleryArtistStatusHtml(config = {}) {
     return buildSmallAlertHtml({
       severity: 'warning',
       message: problem.label,
-      variant: 'triangle-only',
       interactive: true,
       attributes: {
         'data-open-musicbrainz-artist-problem': problem.occurrence_id,
@@ -4622,7 +4637,6 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -4631,8 +4645,8 @@ function buildGalleryBarHtml(config = {}) {
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
-  const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${pills ? '' : ' hidden'}>${pills}</span></div>
+  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -7060,7 +7074,6 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const isSearch = Boolean(String(state.view.query || '').trim());
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -7107,15 +7120,19 @@ function updateGalleryMainChrome() {
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
+    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = context.artist;
-    summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (metadata) {
-      const pills = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
-      metadata.hidden = !pills;
-      metadata.innerHTML = pills;
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = false;
+      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
     }
-    if (isSearch) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (metadata) {
+      metadata.hidden = false;
+      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -26588,6 +26605,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (!normalizedKey) return null;
   const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
+    return currentAlbum;
+  }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {

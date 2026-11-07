@@ -1336,12 +1336,10 @@ class PostgresLibraryBrowseRepository:
             if use_summary_albums and not hydrate_query_primary_albums
             else _selected_artist_album_payloads(rows, artist_display)
         )
-        # Preview albums carry no per-album projection; the primary group takes the artist's own.
-        preview_artist_musicbrainz = (
-            _artist_musicbrainz_projection_from_rows(rows, artist=artist_display)
-            if use_preview_albums and not hydrate_query_primary_albums
-            else None
-        )
+        # Every tier's rows carry the projection columns, so the primary group takes
+        # the artist's own in the first payload too (summary and preview albums
+        # carry no per-album projection, and the header pills must not wait).
+        preview_artist_musicbrainz = _artist_musicbrainz_projection_from_rows(rows, artist=artist_display)
 
         selected_artist_keys = {
             _artist_display_dedupe_key(artist)
@@ -7242,7 +7240,8 @@ def _selected_artist_primary_groups(
         "sections": [] if use_preview_albums else _selected_artist_sections(albums),
     }
     artist_musicbrainz = artist_musicbrainz or _artist_group_musicbrainz_projection(
-        [album.get("artist_musicbrainz") for album in albums], artist=selected_artist,
+        [(album.get("album_artist"), album.get("artist_musicbrainz")) for album in albums],
+        artist=selected_artist,
     )
     if artist_musicbrainz is not None:
         primary_artist_group["artist_musicbrainz"] = artist_musicbrainz
@@ -7341,11 +7340,11 @@ def _attach_family_group_musicbrainz_projections(
             str(name or "").strip(), alias_to_canonical, normalized_alias_to_canonical=normalized_aliases,
         ))
 
-    projections_by_artist: dict[str, list[object]] = {}
+    projections_by_artist: dict[str, list[tuple[object, object]]] = {}
     for row in rows:
         payload = _row_mapping(row)
         projections_by_artist.setdefault(canonical_key(payload.get("artist_name")), []).append(
-            _artist_musicbrainz_projection(payload)
+            (payload.get("artist_name"), _artist_musicbrainz_projection(payload))
         )
     for group in family_artist_groups:
         artist = str(group.get("artist") or "").strip()
@@ -8104,25 +8103,37 @@ def _artist_musicbrainz_projection_from_rows(
     artist: str = "",
 ) -> dict[str, object] | None:
     return _artist_group_musicbrainz_projection(
-        [_artist_musicbrainz_projection(_row_mapping(row)) for row in rows],
+        [
+            (payload.get("artist_name"), _artist_musicbrainz_projection(payload))
+            for payload in map(_row_mapping, rows)
+        ],
         artist=artist,
     )
 
 
 def _artist_group_musicbrainz_projection(
-    projections: list[object],
+    entries: list[tuple[object, object]],
     *,
     artist: str = "",
 ) -> dict[str, object] | None:
-    """The Gallery artist's projection: the one its rows agree on, or, when an
-    alias-combined group mixes artists (Neal Morse with Neal Morse & The
-    Resonance), the one MusicBrainz names like the group itself."""
-    consistent = _consistent_artist_musicbrainz_projection(projections)
+    """The Gallery artist's projection from (local artist name, projection) rows.
+
+    The one all rows agree on; otherwise, when an alias-combined group mixes
+    artists (Rhapsody with Luca Turilli's Rhapsody), the one of the group's own
+    local artist, then the one MusicBrainz names like the group itself.
+    """
+    consistent = _consistent_artist_musicbrainz_projection([projection for _name, projection in entries])
     if consistent is not None or not artist:
         return consistent
     artist_key = local_inventory_identity_key(artist)
+    own = _consistent_artist_musicbrainz_projection([
+        projection for name, projection in entries
+        if local_inventory_identity_key(str(name or "")) == artist_key
+    ])
+    if own is not None:
+        return own
     return _consistent_artist_musicbrainz_projection([
-        projection for projection in projections
+        projection for _name, projection in entries
         if isinstance(projection, dict) and artist_key in {
             local_inventory_identity_key(projection.get("canonical_name") or ""),
             local_inventory_identity_key(projection.get("native_name") or ""),

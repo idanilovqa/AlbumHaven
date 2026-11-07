@@ -21,6 +21,16 @@ def test_alias_combined_group_takes_the_projection_named_like_the_group():
     assert browse._artist_musicbrainz_projection_from_rows(rows, artist="Neal Morse")["artist_mbid"] == NEAL
 
 
+def test_alias_combined_group_prefers_its_own_local_artist_over_a_differently_named_projection():
+    """Rhapsody's albums match Rhapsody of Fire; the alias-combined group also holds
+    Luca Turilli's Rhapsody albums, and neither MusicBrainz name is "Rhapsody"."""
+    fire, turilli = "4e0dffde-ad2d-45b7-9c75-d57ce55de061", "87f8cdb8-bea9-4460-978f-f76e0f1b9a5b"
+    rows = [*[_row("Rhapsody", fire, "Rhapsody of Fire")] * 11,
+            *[_row("Luca Turilli's Rhapsody", turilli, "Luca Turilli's Rhapsody")] * 2]
+
+    assert browse._artist_musicbrainz_projection_from_rows(rows, artist="Rhapsody")["artist_mbid"] == fire
+
+
 def test_group_projection_stays_empty_when_no_candidate_is_named_like_the_group():
     rows = [_row("Anderson Bruford Wakeman Howe", "11111111-1111-1111-1111-111111111111", "Yes"),
             _row("Anderson Bruford Wakeman Howe", "22222222-2222-2222-2222-222222222222", "ABWH")]

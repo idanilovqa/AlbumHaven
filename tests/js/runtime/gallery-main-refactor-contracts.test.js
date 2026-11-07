@@ -171,7 +171,8 @@ test('search gallery retains artist information and dividers in artist section h
   const galleryBar = context.buildGalleryBarHtml(config);
   const artistHeading = context.buildFamilyArtistHeaderHtml(config);
 
-  assert.doesNotMatch(galleryBar, /data-artist-info-trigger/);
+  // The owner asked for the artist's i icon in the header during search too.
+  assert.match(galleryBar, /data-artist-info-trigger/);
   assert.match(
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
@@ -301,8 +302,9 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(singleArtistBar, /data-gallery-context-name>Alestorm</);
   assert.match(singleArtistBar, /data-artist-info-trigger/);
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
-  assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary[^>]*>4 albums</);
+  // "Alestorm (i) • 4 albums" on the title line; the summary line is free for pills.
+  assert.match(singleArtistBar, /data-gallery-context-inline-total>4 albums<\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-summary hidden><\/span>/);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -326,7 +328,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
 });
 
-test('current GalleryBar owner renders stored artist metadata on one compact shared-pill row', () => {
+test('current GalleryBar owner puts the album count on the name line and the pills under it', () => {
   const context = loadRuntime();
   const projection = {
     country: 'Russia',
@@ -356,8 +358,11 @@ test('current GalleryBar owner renders stored artist metadata on one compact sha
 
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--genre\s*\{[^}]*background:\s*#11202a[^}]*border[^;]*#4199c3[^}]*color:\s*#8bd9ff/is);
-  assert.match(galleryMainCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*display:\s*inline-flex[^}]*flex-wrap:/s);
-  assert.match(markup, /data-gallery-context-summary>4 albums</, 'the summary keeps only the album count');
+  assert.match(markup, /data-gallery-context-inline-total>4 albums</, 'the count follows the name and i icon');
+  assert.match(markup, /data-gallery-context-summary hidden><\/span>/);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-total::before\s*\{[^}]*content:\s*"\\2022"/s, 'a fat dot leads the count');
+  // Summary and pills share one fixed-height second line, so the header never shifts while scrolling.
+  assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*height:\s*20px/s);
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {

@@ -211,3 +211,16 @@ def test_a_stale_stored_mbid_is_ignored_rather_than_failing_the_lookup():
 
     assert outcome["classification"] == "found"
     assert outcome["artist"]["mbid"] == AINA_OPERA
+
+
+def test_a_spent_request_budget_never_accepts_before_every_candidate_is_scored(monkeypatch):
+    from music_app.services import musicbrainz_enrichment
+
+    # Room for the search and the first candidate only; the second is never scored.
+    monkeypatch.setattr(musicbrainz_enrichment, "_MAX_REQUESTS_PER_ARTIST", 4)
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Kingdom of the Night"]})
+
+    outcome = resolve_artist(_context("Kingdom of the Night"), client=client)
+
+    assert outcome["classification"] == "ambiguous"
+    assert {candidate["artist_mbid"] for candidate in outcome["candidates"]} == {GERMAN, TRANCE}

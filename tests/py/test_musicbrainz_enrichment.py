@@ -541,3 +541,14 @@ def test_a_release_credit_match_stores_the_local_credit_name():
     )
 
     assert repository.automatic_outcomes[0]["credit_name"] == "3 Crows"
+
+
+def test_a_manual_match_is_never_moved_to_conflict_by_a_recheck():
+    _result, repository = _process(
+        {"existing_artist_mbid": ARTIST_MBID, "existing_match_state": "matched", "manual_decision": True,
+         "projection_is_fresh": False},
+        {"classification": "found", "artist": {"mbid": OTHER_MBID, "canonical_name": "Shadowland"},
+         "confidence": 1, "evidence_summary": "MusicBrainz search evidence agreed."},
+    )
+
+    assert repository.candidate_replacements == []

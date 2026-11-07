@@ -192,6 +192,7 @@ class MusicBrainzArtistEnrichmentProcessor:
         stored_mbid = str(context.get("existing_artist_mbid") or "").lower()
         if (
             classification == "found"
+            and not context.get("manual_decision")
             and context.get("existing_match_state") == "matched"
             and stored_mbid
             and found_mbid != stored_mbid
@@ -329,6 +330,7 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
     local_keys = name_keys(local_name)
     albums = _local_albums(context)
     pool: dict[str, dict[str, object]] = {}
+    unscored: list[dict[str, object]] = []
 
     def add(candidate: dict[str, object], origin: str) -> dict[str, object]:
         entry = pool.setdefault(candidate["mbid"], {**candidate, "credits": {}, "releases": {}})
@@ -348,14 +350,21 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
                     continue
                 candidate.update(lookup["artist"])
             _gather_album_evidence(candidate, albums, local_name, mirror)
-            evidence = candidate.get("albums") or []
+            if candidate.get("albums") is None:
+                unscored.append(candidate)
+                continue
+            evidence = candidate["albums"]
             candidate["name_agrees"] = bool(candidate_name_keys(candidate) & local_keys)
             agreeing = [index for index, album in enumerate(evidence) if album["level"] in {"strong", "agree"}]
             candidate["credit_agrees"] = bool(agreeing) and all(
                 any(name_keys(name) & local_keys for name in candidate["credits"].get(index, ()))
                 for index in agreeing
             ) and any(evidence[index]["signals"] & {"track_list", "durations"} for index in agreeing)
-        return decide([candidate for candidate in pool.values() if candidate.get("albums") is not None])
+        decision = decide([candidate for candidate in pool.values() if candidate.get("albums") is not None])
+        if decision["classification"] == "matched" and unscored:
+            # The request budget ran out before every candidate was scored: never decide early.
+            return {"classification": "ambiguous", "candidates": [*decision["candidates"], *unscored]}
+        return decision
 
     # 1. Names: exact phrases for the local name and its variants, then one plain page.
     queries = [(name, {}) for name in _name_queries(local_name)]
@@ -450,7 +459,10 @@ def _gather_album_evidence(candidate, albums, local_name, mirror) -> None:
             agreement = title_agreement(album["title"], group.get("title"), names)
             if agreement and best_title != "exact":
                 best, best_title = group, agreement
+        # A release found by title counts only when it belongs to the matched group.
         release = candidate["releases"].get(index) or {}
+        if not best or release.get("release_group_id") != best.get("id"):
+            release = {}
         remote = {"first_release_date": (best or {}).get("first_release_date") or release.get("date"),
                   "track_count": release.get("track_count")}
         signals = album_signals(album, remote) if best_title else set()

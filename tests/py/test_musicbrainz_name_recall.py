@@ -9,9 +9,9 @@ import pytest
 
 from music_app.services.musicbrainz_client import MusicBrainzClient, name_match_key
 from music_app.services.musicbrainz_enrichment import resolve_artist
+from tests.py.musicbrainz_test_mirror import OK, release_groups_payload, release_paths
+from tests.py.musicbrainz_test_mirror import albums as local_albums
 
-
-OK = {"status": "network", "http_status": 200, "cache_hit": False}
 OCEANS = "00000000-0000-4000-8000-000000000101"
 ME_AND_OCEANS = "00000000-0000-4000-8000-000000000102"
 ABIGAIL = "00000000-0000-4000-8000-000000000103"
@@ -84,18 +84,20 @@ def _client():
             artists = [{**ARTISTS[mbid], "score": 100} for mbid in found]
             return {"count": len(artists), "artists": artists}, OK
         if parsed.path.endswith("/release-group"):
-            titles = RELEASE_GROUPS.get(query["artist"][0], [])
-            return {"release-group-count": len(titles),
-                    "release-groups": [{"title": title} for title in titles]}, OK
+            artist = query["artist"][0]
+            return release_groups_payload(artist, RELEASE_GROUPS.get(artist, [])), OK
+        answered = release_paths(url)
+        if answered is not None:
+            return answered
         return ARTISTS[parsed.path.rsplit("/", 1)[-1]], OK
 
     return MusicBrainzClient(base_url="https://mirror.test/ws/2/", user_agent="Test", get_json=get_json), calls
 
 
-def _resolve(name, *albums):
+def _resolve(name, *album_titles):
     client, calls = _client()
     outcome = resolve_artist(
-        {"local_artist_id": 7, "local_name": name, "album_titles": list(albums)},
+        {"local_artist_id": 7, "local_name": name, "albums": local_albums(*album_titles)},
         client=client,
     )
     return outcome, calls
@@ -126,16 +128,22 @@ def test_plain_fallback_runs_only_when_the_phrase_search_has_no_name_match():
     assert searches == ['artist:"(Sandy) Alex G"', r"\(Sandy\) Alex G"]
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["Anderson/Wakeman", "Alan Menken & Howard Ashman", "A & Z"],
-)
-def test_collaboration_credits_and_near_names_stay_not_found(name):
+@pytest.mark.parametrize("name", ["Anderson/Wakeman", "Alan Menken & Howard Ashman"])
+def test_collaboration_credits_stay_not_found(name):
     outcome, calls = _resolve(name, "Anything")
 
     assert outcome["classification"] == "not_found"
-    assert outcome["evidence_summary"] == "No MusicBrainz artist has this name."
+    assert outcome["evidence_summary"] == "No MusicBrainz artist has this name or one of your albums."
     assert not [url for url in calls if "/release-group" in url], "members are never looked up"
+
+
+def test_a_separator_variant_is_only_a_candidate_until_the_albums_agree():
+    # "A & Z" and "A-Z" are one name to compare ("A-Z" is the owner's band), so
+    # the rapper "AZ" is retrieved too; without album evidence it is never accepted.
+    outcome, _calls = _resolve("A & Z", "Anything")
+
+    assert outcome["classification"] == "unconfirmed"
+    assert [candidate["artist_mbid"] for candidate in outcome["candidates"]] == [AZ]
 
 
 def test_a_single_name_match_without_album_agreement_is_unconfirmed_not_matched():

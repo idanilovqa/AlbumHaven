@@ -491,3 +491,53 @@ def test_contradicted_identity_keeps_candidates_for_conflict_review():
     [replacement] = repository.candidate_replacements
     assert replacement["match_state"] == "conflict"
     assert replacement["candidates"] == candidates
+
+
+def _process(context, outcome):
+    api = enrichment_api()
+    repository = Repository()
+    repository.claims.append({"id": 17, "local_artist_id": 41, "attempt_count": 1})
+    repository.contexts[17] = {"local_artist_id": 41, "local_name": "Shadowland", "manual_decision": False, **context}
+    processor = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository, client=object(), resolve_artist=Resolver(outcome), now=lambda: NOW,
+    )
+    return processor.process_next(worker_id="worker-a"), repository
+
+
+OTHER_MBID = "b3fd6f66-a24e-4336-9fdd-2fa249de6d3b"
+
+
+def test_a_recheck_that_finds_another_artist_moves_the_match_to_conflict_never_replacing_it():
+    result, repository = _process(
+        {"existing_artist_mbid": ARTIST_MBID, "existing_match_state": "matched", "existing_canonical_name": "Shadowland"},
+        {"classification": "found", "artist": {"mbid": OTHER_MBID, "canonical_name": "Shadowland",
+                                               "disambiguation": "British prog rock"},
+         "confidence": 1, "evidence_summary": "MusicBrainz search evidence agreed."},
+    )
+
+    assert result["state"] == "needs_review"
+    assert repository.automatic_outcomes == [], "the stored match is never overwritten"
+    replacement = repository.candidate_replacements[0]
+    assert replacement["match_state"] == "conflict"
+    assert [candidate["artist_mbid"] for candidate in replacement["candidates"]] == [ARTIST_MBID, OTHER_MBID]
+
+
+def test_a_recheck_that_confirms_the_stored_match_records_it_again():
+    _result, repository = _process(
+        {"existing_artist_mbid": ARTIST_MBID, "existing_match_state": "matched"},
+        {"classification": "found", "artist": {"mbid": ARTIST_MBID, "canonical_name": "Shadowland"},
+         "confidence": 1, "evidence_summary": "MusicBrainz search evidence agreed."},
+    )
+
+    assert repository.automatic_outcomes[0]["state"] == "matched"
+    assert repository.candidate_replacements == []
+
+
+def test_a_release_credit_match_stores_the_local_credit_name():
+    _result, repository = _process(
+        {},
+        {"classification": "found", "artist": {"mbid": OTHER_MBID, "canonical_name": "Chris Buck"},
+         "confidence": 1, "evidence_summary": "MusicBrainz release credit evidence agreed.", "credit_name": "3 Crows"},
+    )
+
+    assert repository.automatic_outcomes[0]["credit_name"] == "3 Crows"

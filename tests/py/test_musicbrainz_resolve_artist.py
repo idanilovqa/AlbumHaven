@@ -4,12 +4,12 @@ from urllib.parse import parse_qs, urlparse
 
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_enrichment import resolve_artist
+from tests.py.musicbrainz_test_mirror import OK, albums, release_groups_payload, release_paths
 
 
 GERMAN = "00000000-0000-4000-8000-000000000011"
 TRANCE = "00000000-0000-4000-8000-000000000012"
 OTHER = "00000000-0000-4000-8000-000000000013"
-OK = {"status": "network", "http_status": 200, "cache_hit": False}
 
 
 def _client(release_groups, *, artists=None, search=None, fail_browse=False):
@@ -20,9 +20,11 @@ def _client(release_groups, *, artists=None, search=None, fail_browse=False):
         TRANCE: {"id": TRANCE, "name": "Axxis", "type": "Group", "disambiguation": "trance duo"},
         OTHER: {"id": OTHER, "name": "Axis Mundi", "type": "Group"},
     }
+    # Search results carry the display facts, as on the mirror.
     search = search or [
-        {"id": GERMAN, "name": "Axxis", "score": 100},
-        {"id": TRANCE, "name": "Axxis", "score": 100},
+        {"id": GERMAN, "name": "Axxis", "score": 100, "type": "Group", "country": "DE",
+         "disambiguation": "German hard rock band"},
+        {"id": TRANCE, "name": "Axxis", "score": 100, "type": "Group", "disambiguation": "trance duo"},
         {"id": OTHER, "name": "Axis Mundi", "score": 60},
     ]
 
@@ -35,11 +37,12 @@ def _client(release_groups, *, artists=None, search=None, fail_browse=False):
         if parsed.path.endswith("/release-group"):
             if fail_browse:
                 return None, {"status": "timeout", "cache_hit": False}
-            groups = release_groups.get(query["artist"][0], [])
-            offset = int(query.get("offset", ["0"])[0])
-            page = groups[offset:offset + 100]
-            return {"release-group-count": len(groups),
-                    "release-groups": [{"title": title} for title in page]}, OK
+            artist = query["artist"][0]
+            return release_groups_payload(artist, release_groups.get(artist, []),
+                                          offset=int(query.get("offset", ["0"])[0])), OK
+        answered = release_paths(url)
+        if answered is not None:
+            return answered
         mbid = parsed.path.rsplit("/", 1)[-1]
         return artists[mbid], OK
 
@@ -48,7 +51,7 @@ def _client(release_groups, *, artists=None, search=None, fail_browse=False):
 
 
 def _context(*titles):
-    return {"local_artist_id": 7, "local_name": "Axxis", "album_titles": list(titles)}
+    return {"local_artist_id": 7, "local_name": "Axxis", "albums": albums(*titles)}
 
 
 def test_search_match_uses_candidate_release_groups_against_local_albums():
@@ -108,15 +111,17 @@ def test_release_group_browse_is_bounded_and_stops_once_local_titles_are_found()
 
 
 def test_request_volume_per_artist_is_bounded_for_backfill_assessment():
-    # One search page, then one lookup and one release-group page per
-    # name-matching candidate: Axxis with two same-name candidates costs 5.
+    # One search page, one release-group page per name-matching candidate, the
+    # agreeing album's release and tracklist, then one lookup of the winner:
+    # Axxis with two same-name candidates costs 6.
     client, calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Dancefloor Mix"]})
 
     resolve_artist(_context("Kingdom of the Night"), client=client)
 
-    assert len(calls) == 5
+    assert len(calls) == 6
     assert sum("/artist/?" in url for url in calls) == 1
     assert sum("/release-group" in url for url in calls) == 2
+    assert sum("/release?" in url or "/release/" in url for url in calls) == 2
 
 
 def test_edition_suffixes_and_punctuation_do_not_hide_album_agreement():
@@ -150,7 +155,7 @@ _AINA_RELEASE_GROUPS = {
 
 def _aina_context(hint):
     return {"local_artist_id": 26, "local_name": "Aina",
-            "album_titles": ["Days Of Rising Doom - The Metal Opera"], "hinted_artist_mbids": [hint]}
+            "albums": albums("Days Of Rising Doom - The Metal Opera"), "hinted_artist_mbids": [hint]}
 
 
 def test_aina_stored_last_fm_mbid_never_beats_the_album_evidence():
@@ -192,7 +197,9 @@ def test_a_stale_stored_mbid_is_ignored_rather_than_failing_the_lookup():
         if parsed.path.endswith("/artist/"):
             return {"count": 1, "artists": [{"id": AINA_OPERA, "name": "Aina", "score": 100}]}, OK
         if parsed.path.endswith("/release-group"):
-            return {"release-group-count": 1, "release-groups": [{"title": "Days of Rising Doom: The Metal Opera"}]}, OK
+            return release_groups_payload(AINA_OPERA, ["Days of Rising Doom: The Metal Opera"]), OK
+        if release_paths(url) is not None:
+            return release_paths(url)
         mbid = parsed.path.rsplit("/", 1)[-1]
         if mbid == stale:
             return None, {"status": "network", "http_status": 404, "cache_hit": False}

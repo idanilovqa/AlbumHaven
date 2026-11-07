@@ -1,14 +1,13 @@
+"""The native-script display name MusicBrainz offers for a matched artist.
+
+Matching itself lives in ``musicbrainz_evidence``: names only retrieve
+candidates, and an artist is accepted on album evidence.
+"""
 from __future__ import annotations
 
 import unicodedata
-from copy import deepcopy
 
-from music_app.services.musicbrainz_client import (
-    artist_url,
-    name_match_key,
-    normalize_name,
-    release_title_key,
-)
+from music_app.services.musicbrainz_client import normalize_name
 
 
 JsonDict = dict[str, object]
@@ -18,30 +17,7 @@ def _values(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
 
-def candidate_names(candidate: JsonDict) -> set[str]:
-    """Name keys (see ``name_match_key``) of a candidate's name, sort name and aliases."""
-    names = {
-        name_match_key(candidate.get("canonical_name")),
-        name_match_key(candidate.get("sort_name")),
-    }
-    names.update(
-        name_match_key(alias.get("name"))
-        for alias in _values(candidate.get("aliases"))
-        if isinstance(alias, dict)
-    )
-    names.discard("")
-    return names
-
-
-def _release_titles(local: JsonDict) -> set[str]:
-    return {
-        release_title_key(credit.get("title"))
-        for credit in _values(local.get("release_credits"))
-        if isinstance(credit, dict) and release_title_key(credit.get("title"))
-    }
-
-
-def _native_name(local: JsonDict, candidate: JsonDict) -> str | None:
+def native_name(local: JsonDict, candidate: JsonDict) -> str | None:
     locale = str(local.get("locale") or "").strip().casefold()
     if not locale:
         return None
@@ -71,126 +47,3 @@ def _native_name(local: JsonDict, candidate: JsonDict) -> str | None:
     ]
     matches.sort(key=lambda alias: (not bool(alias.get("primary")), normalize_name(alias.get("name"))))
     return str(matches[0]["name"]).strip() if matches else None
-
-
-def _evidence(local: JsonDict, candidate: JsonDict) -> tuple[int, list[str]]:
-    reasons: list[str] = []
-    local_type = normalize_name(local.get("artist_type"))
-    candidate_type = normalize_name(candidate.get("artist_type"))
-    if local_type and candidate_type and local_type != candidate_type:
-        reasons.append("artist_type_conflict")
-
-    local_titles = _release_titles(local)
-    candidate_titles = {
-        release_title_key(title)
-        for title in _values(candidate.get("release_titles"))
-        if release_title_key(title)
-    }
-    release_match = bool(local_titles and candidate_titles and local_titles.intersection(candidate_titles))
-    if local_titles and candidate_titles and not release_match:
-        reasons.append("release_evidence_conflict")
-
-    names = candidate_names(candidate)
-    name_match = name_match_key(local.get("name")) in names
-    credited_names = {
-        name_match_key(credit.get("credited_artist"))
-        for credit in _values(local.get("release_credits"))
-        if isinstance(credit, dict) and name_match_key(credit.get("credited_artist"))
-    }
-    credit_match = bool(credited_names) and all(name in names for name in credited_names)
-    if not name_match:
-        reasons.append("name_conflict")
-    if credited_names and not credit_match:
-        reasons.append("release_credit_conflict")
-
-    strength = 0
-    if not reasons and name_match and credit_match and release_match:
-        strength = 3
-    return strength, reasons
-
-
-def _trusted_mbid(local: JsonDict) -> tuple[str, str]:
-    """A high-confidence asserted MBID that may pick among album-confirmed candidates.
-
-    No source, file tags included, can assign an MBID on its own: the asserted
-    candidate must still agree with the local albums.
-    """
-    assertion = local.get("existing_assertion")
-    assertion = assertion if isinstance(assertion, dict) else {}
-    asserted = str(
-        local.get("existing_assertion_mbid")
-        or local.get("asserted_mbid")
-        or assertion.get("mbid")
-        or ""
-    ).strip().lower()
-    confidence = str(
-        local.get("assertion_confidence")
-        or local.get("existing_assertion_confidence")
-        or assertion.get("confidence")
-        or ""
-    ).strip().casefold()
-    if artist_url(asserted) and confidence in {"high", "high_confidence", "trusted"}:
-        return asserted, "assertion"
-    return "", ""
-
-
-def match_artist(local_evidence: object, candidates: object) -> JsonDict:
-    local = local_evidence if isinstance(local_evidence, dict) else {}
-    raw_candidates = (
-        [candidate for candidate in candidates if isinstance(candidate, dict)]
-        if isinstance(candidates, list)
-        else []
-    )
-    assessed: list[tuple[JsonDict, int, list[str], int]] = []
-    for index, raw_candidate in enumerate(raw_candidates):
-        candidate = deepcopy(raw_candidate)
-        strength, reasons = _evidence(local, candidate)
-        if reasons:
-            candidate["rejection_reasons"] = reasons
-        assessed.append((candidate, strength, reasons, index))
-
-    def score(candidate: JsonDict) -> int:
-        try:
-            return int(candidate.get("score") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    assessed.sort(
-        key=lambda item: (-item[1], -score(item[0]), str(item[0].get("mbid") or ""), item[3])
-    )
-    ordered = [item[0] for item in assessed]
-
-    trusted_mbid, trusted_path = _trusted_mbid(local)
-    if trusted_mbid:
-        trusted = next(
-            (item for item in assessed if str(item[0].get("mbid") or "").lower() == trusted_mbid),
-            None,
-        )
-        if trusted is None or trusted[2] or trusted[1] == 0:
-            return {"classification": "permanent_mismatch", "candidates": ordered}
-        selected = trusted[0]
-    else:
-        strongest = [item for item in assessed if item[1] == 3]
-        if len(strongest) != 1:
-            named = [
-                item for item in assessed
-                if not {"name_conflict", "artist_type_conflict"}.intersection(item[2])
-            ]
-            if not assessed:
-                classification = "not_found"
-            elif not strongest and len(named) == 1:
-                # One artist has the name but no album confirms it: never auto-accepted.
-                classification = "unconfirmed"
-            else:
-                classification = "ambiguous"
-            return {"classification": classification, "candidates": ordered}
-        selected = strongest[0][0]
-        trusted_path = "search"
-
-    return {
-        "classification": "matched",
-        "selected_mbid": selected.get("mbid"),
-        "preferred_native_name": _native_name(local, selected),
-        "evidence_path": trusted_path,
-        "candidates": ordered,
-    }

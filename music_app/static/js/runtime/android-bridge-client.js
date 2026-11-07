@@ -239,6 +239,10 @@ const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1'
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
+// How long a seek outlasts positions Android sent before it took the seek, and how near the
+// target a report must be to show Android has taken it.
+const ANDROID_NATIVE_SEEK_HOLD_MS = 1500;
+const ANDROID_NATIVE_SEEK_MATCH_SECONDS = 0.5;
 
 const androidNativePlayback = {
   revision: 0,
@@ -260,6 +264,8 @@ const androidNativePlayback = {
   // `owned` follows Android's claim events; `ownerIntent` covers a start whose claim is pending.
   ownership: 'none',
   ownerIntent: false,
+  // The seek whose target the seekbar holds until Android reports it (androidNativeReportedSeconds).
+  seekHold: null,
   refs: new Map(),
   snapshot: { currentTime: 0, duration: 0, paused: true, ended: false, src: '', readyState: 0 },
 };
@@ -620,6 +626,9 @@ async function seekAndroidNativePlayback(seconds) {
   const startSeconds = Math.max(0, Number(seconds) || 0);
   native.snapshot.currentTime = startSeconds;
   native.snapshot.ended = false;
+  native.seekHold = {
+    seconds: startSeconds, streamId: native.streamId, untilMs: performance.now() + ANDROID_NATIVE_SEEK_HOLD_MS,
+  };
   await sendAndroidNativeTransport('playback.seek', {
     queueRevision: native.appliedRevision, positionMs: Math.round(startSeconds * 1000),
   });
@@ -785,13 +794,28 @@ function followAndroidNativeSystemStep(payload) {
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
 }
 
+// Android reports the seek target from the moment it takes a seek; a position it sent before that
+// still names the old place and would pull the seekbar back, so it reads as the target.
+function androidNativeReportedSeconds(payload) {
+  const native = androidNativePlayback;
+  const reported = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+  const hold = native.seekHold;
+  if (!hold) return reported;
+  if (hold.streamId !== native.streamId || performance.now() > hold.untilMs
+      || Math.abs(reported - hold.seconds) < ANDROID_NATIVE_SEEK_MATCH_SECONDS) {
+    native.seekHold = null;
+    return reported;
+  }
+  return hold.seconds;
+}
+
 function handleAndroidNativeState(payload) {
   const native = androidNativePlayback;
   const snapshot = native.snapshot;
   if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
-  snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+  snapshot.currentTime = androidNativeReportedSeconds(payload);
   // Android plays only while it holds the claim, and only with valid references.
   if (nativeState === 'playing') {
     native.ownership = 'owned';
@@ -834,7 +858,7 @@ function handleAndroidNativeState(payload) {
 function handleAndroidNativePosition(payload) {
   const native = androidNativePlayback;
   const trackPath = String(native.items[native.index]?.path || '');
-  native.snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+  native.snapshot.currentTime = androidNativeReportedSeconds(payload);
   if (typeof handleStreamingPlaybackPosition === 'function' && trackPath) {
     observeAndroidNativeFacade(handleStreamingPlaybackPosition({
       generation: native.generation, streamId: native.streamId, trackPath,

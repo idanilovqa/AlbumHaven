@@ -748,6 +748,23 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aSeekReportsItsTargetUntilItCutsOverAndNeverMovesBack() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        val before = harness.events.size
+
+        harness.controller.seek(1, 10_000)
+        harness.runUntil { harness.sinks.last().runs().size == 2 }
+        harness.step()
+
+        val positions = harness.events.drop(before).map { it.snapshot.positionMs }
+        assertTrue(positions.isNotEmpty())
+        assertTrue(positions.toString(), positions.all { it >= 10_000 })
+    }
+
+    @Test
     fun nextAndPreviousMoveWithinTheQueue() {
         val harness = ControllerHarness(first, second)
         harness.load(1, first, second, autoplay = false)

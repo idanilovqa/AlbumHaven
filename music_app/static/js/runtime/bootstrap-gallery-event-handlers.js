@@ -1552,6 +1552,14 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
+  // clearing the query and the artist the search selected.
+  const libraryHome = document?.querySelector?.('.app-bar-brand[data-library-home="1"]');
+  if (!String(nextQuery).trim() && libraryHome
+      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    libraryHome.click();
+    return;
+  }
   applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();

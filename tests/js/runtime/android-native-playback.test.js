@@ -247,6 +247,24 @@ test('transport commands name the applied revision and continuity reuses the nat
   assert.equal(api.snapshot().mode, 'stopped');
 });
 
+test('a seek holds the seekbar at its target over positions Android sent before taking it', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 3000));
+
+  await api.seek(42.5);
+  bridge.event('playback.position', state(1, 'playing', 3250));
+  assert.equal(api.snapshot().currentTime, 42.5);
+  bridge.event('playback.state', state(1, 'playing', 3500));
+  assert.equal(api.snapshot().currentTime, 42.5);
+
+  bridge.event('playback.position', state(1, 'playing', 42600));
+  assert.equal(api.snapshot().currentTime, 42.6);
+  // Once Android has reported the target, every later position is its own again.
+  bridge.event('playback.position', state(1, 'playing', 3000));
+  assert.equal(api.snapshot().currentTime, 3);
+});
+
 test('a changed successor reloads the queue from the heard position', async () => {
   const { api, bridge, context } = createHarness();
   await api.start(tracks[0]);

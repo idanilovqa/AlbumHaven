@@ -165,6 +165,10 @@ class NativePcmEngine(
     var timelineFrame = 0L
         private set
 
+    /** Whether a seek has not cut over yet; until it does, [timelineFrame] still names the old place. */
+    val seekPending: Boolean
+        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null
+
     // Inspection for the engine's own tests; production reads only the events.
     @VisibleForTesting
     internal var staleMessages = 0

@@ -1206,7 +1206,8 @@ class NativePlaybackController(
     private fun positionMs(): Long {
         val current = engine
         val output = sink
-        if (!loaded || current == null || output == null) return heldPositionMs
+        // A seek reports its target until its PCM takes over, so the seekbar never jumps back.
+        if (!loaded || current == null || output == null || current.seekPending) return heldPositionMs
         val frames = (current.timelineFrame - output.pendingFrames()).coerceAtLeast(0)
         return frames * 1000 / output.sampleRate
     }

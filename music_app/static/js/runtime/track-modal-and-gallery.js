@@ -54,8 +54,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
-    else return;
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      scheduleProblematicServerSearch();
+    } else return;
     scheduleSearchRender();
   });
   els.search?.addEventListener('search', () => {
@@ -75,8 +77,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
-    else return;
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      scheduleProblematicServerSearch();
+    } else return;
     scheduleSearchRender();
   });
   els.overlay.addEventListener('click', (event) => {

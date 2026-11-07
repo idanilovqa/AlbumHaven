@@ -14986,6 +14986,127 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
     assert payload["initial_detail"]["key"] == "album-1"
 
 
+def _problematic_search_repository(rows, matching_album_ids):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    searches = []
+    evaluated = []
+
+    class SearchConnection(_ProblematicSnapshotConnectionStub):
+        def execute(self, sql, params=None):
+            if "strpos(lower(albums.title), %(needle)s)" in str(sql):
+                searches.append(dict(params))
+                return _InventoryCursor(rows=[{"id": album_id} for album_id in matching_album_ids])
+            return super().execute(sql, params)
+
+    repository._browse_connection_context = lambda: SearchConnection()
+
+    def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
+        assert album_key is None and candidate_summary is True and connection is not None
+        evaluated.append(list(album_ids))
+        return [row for row in rows if row["album_id"] in set(album_ids)]
+
+    repository._load_problematic_file_rows = load_rows
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
+        AssertionError("a search must not build the complete projection")
+    )
+    return repository, searches, evaluated
+
+
+def _numbered_problematic_rows(count):
+    rows = []
+    for index in range(1, count + 1):
+        row = _normal_problematic_product_row(album_key=f"album-{index:03d}", album_title=f"Album {index:03d}")
+        row.update({"album_id": index, "track_id": 500 + index, "track_key": f"track-{index}"})
+        rows.append(row)
+    return rows
+
+
+def test_problematic_files_search_reaches_albums_beyond_the_first_page_without_the_full_list():
+    rows = _numbered_problematic_rows(120)
+    rows[96]["album_title"] = "Needle In The Haystack"
+    repository, searches, evaluated = _problematic_search_repository(rows, [97])
+
+    payload = repository.build_problematic_files_search("  NEEDLE in ")
+
+    assert searches == [{"needle": "needle in", "limit": 2001}]
+    # Only the SQL-narrowed albums are evaluated, never the whole library.
+    assert evaluated == [[97]]
+    assert [item["key"] for item in payload["items"]] == ["album-097"]
+    assert payload["count"] == 1
+    assert payload["complete"] is False
+    assert payload["search_truncated"] is False
+    assert payload["projection_cache_status"] == "search"
+
+
+def test_problematic_files_search_drops_narrowed_albums_the_list_filter_would_not_show():
+    rows = _numbered_problematic_rows(3)
+    # The album artist matched in SQL, but its summary shows a different artist.
+    repository, _searches, evaluated = _problematic_search_repository(rows, [1, 2, 3])
+
+    payload = repository.build_problematic_files_search("Album 002")
+
+    assert evaluated == [[1, 2, 3]]
+    assert [item["key"] for item in payload["items"]] == ["album-002"]
+
+
+def test_problematic_files_search_marks_a_truncated_narrowing():
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _numbered_problematic_rows(3)
+    repository, _searches, evaluated = _problematic_search_repository(rows, [1, 2, 3])
+    original = browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT
+    browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT = 2
+    try:
+        payload = repository.build_problematic_files_search("album")
+    finally:
+        browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT = original
+
+    assert evaluated == [[1, 2]]
+    assert payload["search_truncated"] is True
+
+
+def test_problematic_files_search_filters_the_cached_complete_list_exactly():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("a cached search must not query Postgres")
+        ),
+    )
+    repository._get_cached_utility_projection = lambda kind: {
+        "count": 3,
+        "items": [
+            {"key": "a", "name": "Alpha", "problem_reasons": ["Year mismatch"]},
+            {"key": "b", "name": "Beta", "search_text": "Hidden Track"},
+            {"key": "c", "name": "Gamma", "raw_name": "Р“Р°РјРјР°"},
+        ],
+        "initial_detail": {"key": "a"},
+    } if kind == "problematic-files" else None
+
+    assert [item["key"] for item in repository.build_problematic_files_search("YEAR MISMATCH")["items"]] == ["a"]
+    assert [item["key"] for item in repository.build_problematic_files_search("hidden")["items"]] == ["b"]
+    cached = repository.build_problematic_files_search("Р“Р°Рј")
+    assert [item["key"] for item in cached["items"]] == ["c"]
+    assert cached["complete"] is True
+    assert cached["initial_detail"] is None
+
+
+def test_problematic_files_search_requires_a_query():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"})
+    with pytest.raises(ValueError):
+        repository.build_problematic_files_search("   ")
+
+
 def test_problematic_files_page_reuses_complete_projection_cache_before_querying():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 

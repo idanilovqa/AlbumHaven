@@ -5023,6 +5023,18 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
+        def build_problematic_files_search(self, query):
+            assert query == "needle"
+            return {
+                "count": 1,
+                "items": [{"key": "needle-album", "detail_loaded": False}],
+                "initial_detail": None,
+                "complete": False,
+                "persistence_backend": "postgres",
+                "persistence_seam": "library_browse",
+                "view_data_source": "postgres_library_browse",
+            }
+
         def build_problematic_file_detail_payload_for_track_path(self, track_path):
             if track_path == "missing.flac":
                 return None
@@ -5065,6 +5077,14 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "/utilities/problematic-files",
         query={"limit": "50"},
     )
+    search_status, _search_headers, search_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"q": "needle", "limit": "50"},
+    )
+    assert search_status == 200
+    assert json.loads(search_body)["items"] == [{"key": "needle-album", "detail_loaded": False}]
     invalid_limit_status, _invalid_limit_headers, invalid_limit_body = _run_asgi_request(
         asgi_app,
         "GET",
@@ -5180,7 +5200,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config] * 7
+    assert repository_configs == [app.config] * 8
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

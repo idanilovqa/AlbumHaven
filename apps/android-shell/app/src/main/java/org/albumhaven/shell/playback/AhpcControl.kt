@@ -18,6 +18,10 @@ sealed interface PcmClientControl {
         val track: PcmTrack,
         val startFrame: Long,
         val sampleRate: Int,
+        /** Codecs this client decodes itself; the server then sends their encoded bytes. */
+        val codecs: List<String> = emptyList(),
+        /** `320` asks for a 320 kbps MP3 of a FLAC file, for a weak connection. */
+        val quality: String? = null,
     ) : PcmClientControl
 
     data class Credit(override val generation: Long, override val streamId: Long, val frames: Int) :
@@ -44,6 +48,11 @@ sealed interface PcmServerEvent {
         val requestedStartFrame: Long?,
         val timelineStartFrame: Long?,
         val codec: String?,
+        /** For an encoded stream: decoded frames to drop first, then frames to keep. */
+        val skipFrames: Long? = null,
+        val totalFrames: Long? = null,
+        /** Byte credit the server granted with the open, unasked. */
+        val initialCreditBytes: Long? = null,
     ) : PcmServerEvent
 
     data class Eos(
@@ -88,6 +97,11 @@ object AhpcControlCodec {
                 .put("startFrame", control.startFrame)
                 .put("sampleRate", control.sampleRate)
                 .put("durationSeconds", control.track.durationSeconds)
+                .apply {
+                    if (control.codecs.isNotEmpty()) put("codecs", org.json.JSONArray(control.codecs))
+                    control.quality?.let { put("quality", it) }
+                }
+            // An encoded stream's credit counts bytes in the same field.
             is PcmClientControl.Credit -> json.put("type", "credit").put("frames", control.frames)
             is PcmClientControl.Promote -> json
                 .put("type", "promote")
@@ -120,6 +134,9 @@ object AhpcControlCodec {
                 requestedStartFrame = json.integer("requestedStartFrame"),
                 timelineStartFrame = json.integer("timelineStartFrame"),
                 codec = json.opt("codec") as? String,
+                skipFrames = json.integer("skipFrames"),
+                totalFrames = json.integer("totalFrames"),
+                initialCreditBytes = json.integer("initialCreditBytes"),
             )
             "eos" -> PcmServerEvent.Eos(
                 generation = generation,

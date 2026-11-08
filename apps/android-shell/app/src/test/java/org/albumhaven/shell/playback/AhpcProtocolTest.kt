@@ -20,7 +20,7 @@ class AhpcProtocolTest {
 
     @Test
     fun decodesTheServerFrameLayout() {
-        val frame = AhpcFrameCodec.decode(pythonFrame)
+        val frame = AhpcFrameCodec.decode(pythonFrame) as AhpcPcmFrame
 
         assertEquals(PcmRole.CONTINUITY, frame.role)
         assertEquals(7L, frame.generation)
@@ -31,6 +31,19 @@ class AhpcProtocolTest {
         ring.appendLittleEndian(frame.bytes, frame.payloadOffset, frame.frameCount)
         assertArrayEquals(floatArrayOf(0.5f, -0.25f, 1f, -1f, 0f, 0f, 0f, 0f), ring.samples, 0f)
         assertArrayEquals(pythonFrame, pcmFrame(PcmRole.CONTINUITY, 7, 3, 2, floatArrayOf(0.5f, -0.25f, 1f, -1f)))
+    }
+
+    @Test
+    fun decodesTheServerEncodedFrameLayout() {
+        // pack_encoded_frame(generation=7, stream_id=3, role="continuity", sequence=2, payload=b"abc").
+        val frame = AhpcFrameCodec.decode(hex("41485043020100000000000700000003000000020000000361626" + "3")) as AhpcEncodedFrame
+
+        assertEquals(PcmRole.CONTINUITY, frame.role)
+        assertEquals(7L, frame.generation)
+        assertEquals(3L, frame.streamId)
+        assertEquals(2L, frame.sequence)
+        assertEquals(3, frame.payloadLength)
+        assertEquals("abc", String(frame.bytes, frame.payloadOffset, frame.payloadLength))
     }
 
     @Test
@@ -51,7 +64,8 @@ class AhpcProtocolTest {
         assertEquals("frame is shorter than the AHPC header", reason(pythonFrame.copyOf(23)))
         assertEquals("bad AHPC magic", reason(pythonFrame.copyOf().also { it[0] = 'X'.code.toByte() }))
         assertEquals("unsupported AHPC version", reason(pythonFrame.copyOf().also { it[4] = 3 }))
-        assertEquals("encoded AHPC frames were not negotiated", reason(pythonFrame.copyOf().also { it[4] = 2 }))
+        // Version 2 counts payload bytes, so a PCM frame's frame count no longer matches its length.
+        assertEquals("declared frame length does not match payload", reason(pythonFrame.copyOf().also { it[4] = 2 }))
         assertEquals("invalid stream role", reason(pythonFrame.copyOf().also { it[5] = 2 }))
         assertEquals("nonzero reserved flags", reason(pythonFrame.copyOf().also { it[7] = 1 }))
         assertEquals("declared frame length does not match payload", reason(pythonFrame.copyOf(36)))
@@ -78,6 +92,11 @@ class AhpcProtocolTest {
         assertEquals(RATE, open.getInt("sampleRate"))
         assertEquals(12.5, open.getDouble("durationSeconds"), 0.0)
 
+        // An encoded open names the codecs this client decodes and, on a weak connection, 320 kbps.
+        val encoded = json(PcmClientControl.Open(4, 9, PcmRole.CURRENT, track, 0, RATE, listOf("mp3", "flac"), "320"))
+        assertEquals(listOf("mp3", "flac"), encoded.getJSONArray("codecs").let { array -> (0 until array.length()).map(array::getString) })
+        assertEquals("320", encoded.getString("quality"))
+
         val credit = json(PcmClientControl.Credit(4, 9, 48_000))
         assertEquals(setOf("type", "generation", "streamId", "frames"), credit.keys().asSequence().toSet())
         assertEquals(listOf("credit", 4, 9, 48_000), listOf("type", "generation", "streamId", "frames").map(credit::get))
@@ -96,6 +115,14 @@ class AhpcProtocolTest {
         assertEquals(
             PcmServerEvent.Metadata(1, 2, "current", 48_000, 2, 96_000, 0, 0, null),
             metadata,
+        )
+        assertEquals(
+            PcmServerEvent.Metadata(1, 2, "current", 44_100, 2, 96_000, 0, 0, "mp3", 1105, 94_895, 65_536),
+            AhpcControlCodec.decode(
+                """{"codec":"mp3","skipFrames":1105,"totalFrames":94895,"initialCreditBytes":65536,"type":"metadata",""" +
+                    """"generation":1,"streamId":2,"role":"current","sampleRate":44100,"channels":2,""" +
+                    """"provisionalTotalFrames":96000,"requestedStartFrame":0,"timelineStartFrame":0}""",
+            ),
         )
         assertEquals(
             PcmServerEvent.Eos(1, 2, "continuity", 10, 10),

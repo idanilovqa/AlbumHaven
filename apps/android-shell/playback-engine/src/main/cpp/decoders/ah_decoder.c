@@ -36,6 +36,10 @@ int ah_decoder_write(ah_decoder *decoder, const unsigned char *bytes, size_t len
     return ah_byte_queue_write(&decoder->queue, bytes, length);
 }
 
+size_t ah_decoder_buffered_bytes(ah_decoder *decoder) {
+    return ah_byte_queue_size(&decoder->queue);
+}
+
 void ah_decoder_end(ah_decoder *decoder) {
     ah_byte_queue_end(&decoder->queue);
 }

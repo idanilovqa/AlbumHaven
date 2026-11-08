@@ -31,6 +31,8 @@ import androidx.media3.session.MediaSession
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import org.albumhaven.playback.decode.DecoderSelfCheck
+import org.albumhaven.playback.decode.ThreadedEncodedDecoders
 import org.albumhaven.shell.net.ShellSession
 import org.albumhaven.shell.playback.AudioFocusPolicy
 import org.albumhaven.shell.playback.AudioTrackPcmSink
@@ -140,6 +142,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        verifyDecoders()
         origin = host.initialOrigin()
         val preferences = getSharedPreferences(RESTORE_PREFERENCES, MODE_PRIVATE)
         restoreStore = PlaybackRestoreStore(object : RestoreStorage {
@@ -326,8 +329,22 @@ class PlaybackService : MediaLibraryService() {
             startGate = focusPolicy,
             // Path-free and once per start, so release builds log it too; off the playback thread.
             startTimings = { line -> main.post { Log.i(StartTiming.LOG_TAG, line) } },
+            decoders = { post -> ThreadedEncodedDecoders(post) },
+            codecs = { verifiedCodecs },
         )
         return created.also { it.start() }
+    }
+
+    /** The web player's decoder self-check, once per process and off the main thread; until it passes, streams are server PCM. */
+    private fun verifyDecoders() {
+        if (decodersChecked) return
+        decodersChecked = true
+        Thread({
+            verifiedCodecs = DecoderSelfCheck.verifiedCodecs(clip = { codec ->
+                assets.open(DecoderSelfCheck.clipAsset(codec)).use { it.readBytes() }
+            })
+            if (ShellChannel.tracesPlayback) Log.w(TAG, "[playback] decoders verified: ${verifiedCodecs.joinToString { it.wire }}")
+        }, "AlbumHavenDecoderCheck").start()
     }
 
     /** A random, path-free installation ID that keeps listen sessions apart, as the browser's per-profile one does. */
@@ -547,5 +564,8 @@ class PlaybackService : MediaLibraryService() {
         /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */
         private const val REPLACEMENT_WAIT_MS = 8_000L
         private const val TAG = "AlbumHavenPlayback"
+
+        @Volatile private var verifiedCodecs: Set<org.albumhaven.playback.decode.AudioCodec> = emptySet()
+        private var decodersChecked = false
     }
 }

@@ -19,6 +19,9 @@ ah_decoder *ah_decoder_open(ah_codec codec);
 /* Queues bytes; returns 0, or -1 when memory runs out. */
 int ah_decoder_write(ah_decoder *decoder, const unsigned char *bytes, size_t length);
 
+/* Bytes written and not handed to the codec yet; callable from any thread. */
+size_t ah_decoder_buffered_bytes(ah_decoder *decoder);
+
 /* No more bytes follow. */
 void ah_decoder_end(ah_decoder *decoder);
 

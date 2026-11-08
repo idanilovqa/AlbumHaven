@@ -50,6 +50,14 @@ Java_org_albumhaven_playback_decode_StreamDecoder_nativeWrite(
     return result == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL
+Java_org_albumhaven_playback_decode_StreamDecoder_nativeBufferedBytes(JNIEnv *env, jclass type, jlong handle) {
+    (void) env;
+    (void) type;
+    size_t size = ah_decoder_buffered_bytes(from_handle(handle)->decoder);
+    return size > 0x7FFFFFFF ? 0x7FFFFFFF : (jint) size;
+}
+
 JNIEXPORT void JNICALL
 Java_org_albumhaven_playback_decode_StreamDecoder_nativeEnd(JNIEnv *env, jclass type, jlong handle) {
     (void) env;

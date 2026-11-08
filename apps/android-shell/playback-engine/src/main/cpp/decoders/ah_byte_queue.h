@@ -21,6 +21,8 @@ void ah_byte_queue_destroy(ah_byte_queue *queue);
 
 /* Returns 0, or -1 when memory runs out. */
 int ah_byte_queue_write(ah_byte_queue *queue, const unsigned char *bytes, size_t length);
+/* Bytes written and not read yet. */
+size_t ah_byte_queue_size(ah_byte_queue *queue);
 void ah_byte_queue_end(ah_byte_queue *queue);
 void ah_byte_queue_cancel(ah_byte_queue *queue);
 

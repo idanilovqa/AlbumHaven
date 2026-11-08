@@ -1,5 +1,10 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.playback.decode.AudioCodec
+import org.albumhaven.playback.decode.DecodedAudio
+import org.albumhaven.playback.decode.EncodedDecodeListener
+import org.albumhaven.playback.decode.EncodedDecoders
+import org.albumhaven.playback.decode.EncodedDecoding
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -11,6 +16,86 @@ const val RATE = 48_000
 /** Every sample identifies itself: left is its source frame index, right is its track tag. */
 class SyntheticTrack(val tag: Int, val frames: Long, val sampleRate: Int = RATE) {
     val pcm = PcmTrack("ref-$tag", frames.toDouble() / sampleRate)
+}
+
+fun encodedFrame(role: PcmRole, generation: Long, streamId: Long, sequence: Long, payload: ByteArray): ByteArray {
+    val buffer = ByteBuffer.allocate(AhpcFrameCodec.HEADER_BYTES + payload.size)
+    buffer.put("AHPC".toByteArray()).put(2.toByte()).put(role.code.toByte()).putShort(0)
+    buffer.putInt(generation.toInt()).putInt(streamId.toInt()).putInt(sequence.toInt()).putInt(payload.size)
+    buffer.put(payload)
+    return buffer.array()
+}
+
+/**
+ * The fake codec of [FakeAhpcServer.encoded] streams: its bytes are the synthetic frames as f32le,
+ * preceded by [ENCODED_SKIP_FRAMES] and followed by [ENCODED_TRAILING_FRAMES] junk frames the
+ * server's sample map tells the client to drop, as a decoder's priming and padding are.
+ */
+const val ENCODED_SKIP_FRAMES = 300
+const val ENCODED_TRAILING_FRAMES = 200
+const val JUNK_TAG = -7f
+
+/** Decodes the fake codec only as far as [EncodedDecoding.request] asks, when a test lets it [run]. */
+class FakeDecoders : EncodedDecoders {
+    inner class Decoding(val codec: AudioCodec, private val listener: EncodedDecodeListener) : EncodedDecoding {
+        private var bytes = ByteArray(0)
+        private var wanted = 0
+        private var ended = false
+        var closed = false
+        private var finished = false
+        var failNext = false
+
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            check(!closed) { "write after close" }
+            this.bytes += bytes.copyOfRange(offset, offset + length)
+        }
+
+        override fun end() {
+            ended = true
+        }
+
+        override fun request(frames: Int) {
+            wanted = frames
+        }
+
+        override val bufferedBytes: Int get() = bytes.size
+
+        override fun close() {
+            closed = true
+        }
+
+        /** Decodes what is asked and available; returns whether anything happened. */
+        fun run(): Boolean {
+            if (closed || finished) return false
+            if (failNext && bytes.isNotEmpty()) {
+                closed = true
+                listener.failed("corrupt frame")
+                return true
+            }
+            val frames = minOf(wanted, bytes.size / AhpcFrameCodec.BYTES_PER_FRAME)
+            if (frames > 0) {
+                val buffer = ByteBuffer.wrap(bytes, 0, frames * AhpcFrameCodec.BYTES_PER_FRAME).order(ByteOrder.LITTLE_ENDIAN)
+                val samples = FloatArray(frames * 2) { buffer.float }
+                bytes = bytes.copyOfRange(frames * AhpcFrameCodec.BYTES_PER_FRAME, bytes.size)
+                wanted -= frames
+                listener.decoded(DecodedAudio(samples, RATE))
+                return true
+            }
+            if (ended && bytes.size < AhpcFrameCodec.BYTES_PER_FRAME) {
+                finished = true
+                listener.finished()
+                return true
+            }
+            return false
+        }
+    }
+
+    val opened = mutableListOf<Decoding>()
+
+    override fun open(codec: AudioCodec, listener: EncodedDecodeListener): EncodedDecoding =
+        Decoding(codec, listener).also(opened::add)
+
+    fun run(): Boolean = opened.toList().fold(false) { any, decoding -> decoding.run() || any }
 }
 
 fun pcmFrame(
@@ -38,7 +123,15 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
         var position = start
         var sequence = 0L
         var outstanding = 0
+        /** The fake codec's bytes for an encoded stream, and how many of them were sent. */
+        var encodedBytes: ByteArray? = null
+        var sentBytes = 0
     }
+
+    /** Streams offered `mp3` are sent encoded, in [encodedChunkBytes] pieces that split frames. */
+    var encoded = false
+    var encodedChunkBytes = 10_000
+    val bytesCredited = mutableListOf<Int>()
 
     private val tracksByRef = tracks.associateBy { it.pcm.playbackRef }
     private val streams = linkedMapOf<Long, ServerStream>()
@@ -115,11 +208,27 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
         }
         completed.entries.removeIf { it.value == role }
         val start = json.getLong("startFrame")
-        streams[id] = ServerStream(generation, id, role, track, start)
-        outbox += JSONObject().put("type", "metadata").put("generation", generation).put("streamId", id)
+        val stream = ServerStream(generation, id, role, track, start)
+        streams[id] = stream
+        val offered = json.optJSONArray("codecs")?.let { array -> (0 until array.length()).map(array::getString) }.orEmpty()
+        val metadata = JSONObject().put("type", "metadata").put("generation", generation).put("streamId", id)
             .put("role", role.wire).put("sampleRate", track.sampleRate).put("channels", 2)
             .put("provisionalTotalFrames", track.frames).put("requestedStartFrame", start)
-            .put("timelineStartFrame", start).toString()
+            .put("timelineStartFrame", start)
+        if (encoded && "mp3" in offered) {
+            val kept = track.frames - start
+            val buffer = ByteBuffer.allocate(((ENCODED_SKIP_FRAMES + kept + ENCODED_TRAILING_FRAMES) * 8).toInt())
+                .order(ByteOrder.LITTLE_ENDIAN)
+            repeat(ENCODED_SKIP_FRAMES) { buffer.putFloat(-1f).putFloat(JUNK_TAG) }
+            for (frame in start until track.frames) buffer.putFloat(frame.toFloat()).putFloat(track.tag.toFloat())
+            repeat(ENCODED_TRAILING_FRAMES) { buffer.putFloat(-1f).putFloat(JUNK_TAG) }
+            stream.encodedBytes = buffer.array()
+            stream.outstanding = INITIAL_CREDIT_BYTES
+            metadata.put("codec", "mp3").put("skipFrames", ENCODED_SKIP_FRAMES).put("totalFrames", kept)
+                .put("initialCreditBytes", INITIAL_CREDIT_BYTES)
+        }
+        outbox += metadata.toString()
+        if (stream.encodedBytes != null && decoding) drain(stream)
     }
 
     private fun credit(id: Long, frames: Int) {
@@ -130,11 +239,36 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
         }
         stream.outstanding += frames
         maxOutstanding = maxOf(maxOutstanding, stream.outstanding)
-        if (stream.outstanding > RATE) violations += "outstanding credit ${stream.outstanding} exceeds $RATE"
+        if (stream.encodedBytes != null) {
+            bytesCredited += frames
+            if (stream.outstanding > MAX_ENCODED_CREDIT_BYTES) violations += "outstanding byte credit ${stream.outstanding}"
+        } else if (stream.outstanding > RATE) {
+            violations += "outstanding credit ${stream.outstanding} exceeds $RATE"
+        }
         if (decoding) drain(stream)
     }
 
+    private fun drainEncoded(stream: ServerStream, bytes: ByteArray) {
+        while (stream.outstanding > 0 && stream.sentBytes < bytes.size && streams[stream.id] === stream) {
+            val length = minOf(stream.outstanding, encodedChunkBytes, bytes.size - stream.sentBytes)
+            outbox += encodedFrame(stream.role, stream.generation, stream.id, stream.sequence,
+                bytes.copyOfRange(stream.sentBytes, stream.sentBytes + length))
+            stream.sequence += 1
+            stream.sentBytes += length
+            stream.outstanding -= length
+        }
+        if (stream.sentBytes == bytes.size && streams[stream.id] === stream) {
+            val total = stream.track.frames
+            outbox += JSONObject().put("type", "eos").put("generation", stream.generation)
+                .put("streamId", stream.id).put("role", stream.role.wire)
+                .put("emittedFrames", total - stream.start).put("authoritativeTotalFrames", total).toString()
+            streams.remove(stream.id)
+            completed[stream.id] = stream.role
+        }
+    }
+
     private fun drain(stream: ServerStream) {
+        stream.encodedBytes?.let { return drainEncoded(stream, it) }
         while (stream.outstanding > 0 && streams[stream.id] === stream) {
             val remaining = stream.track.frames - stream.position
             if (remaining <= 0) {
@@ -376,25 +510,41 @@ class RecordingSink(
 
 data class Run(val tag: Int, val start: Long, val length: Long)
 
+/** `INITIAL_ENCODED_CREDIT_BYTES` and `MAX_ENCODED_CREDIT_BYTES` in music_app/services/playback_encoded.py. */
+const val INITIAL_CREDIT_BYTES = 64 * 1024
+const val MAX_ENCODED_CREDIT_BYTES = 1024 * 1024
+
 class PcmHarness(
     vararg tracks: SyntheticTrack,
     config: PcmEngineConfig = PcmEngineConfig(RATE),
     chunkFrames: Int = 4_096,
     val sink: RecordingSink = RecordingSink(),
+    /** Streams come encoded and decode through [decoders]. */
+    encoded: Boolean = false,
 ) {
-    val server = FakeAhpcServer(tracks.toList(), chunkFrames)
+    val server = FakeAhpcServer(tracks.toList(), chunkFrames).also { it.encoded = encoded }
     val events = mutableListOf<PcmEngineEvent>()
     /** The engine's clock; it stands still unless a test moves it, so arrival counts as instant. */
     var nowMs = 0L
-    val engine = NativePcmEngine(config, sink, server, clockMs = { nowMs }) { events += it }
+    val decoders = FakeDecoders()
+
+    /** Whether the fake decoders decode during [deliver]; off, decoded audio waits as a slow decoder's would. */
+    var decoding = true
+    val engine = NativePcmEngine(
+        config, sink, server, clockMs = { nowMs },
+        decoders = decoders.takeIf { encoded },
+        codecs = { setOf(AudioCodec.MP3) },
+    ) { events += it }
 
     fun deliver() {
-        while (server.outbox.isNotEmpty()) {
-            when (val message = server.outbox.removeFirst()) {
-                is String -> engine.onServerText(message)
-                is ByteArray -> engine.onBinary(message)
+        do {
+            while (server.outbox.isNotEmpty()) {
+                when (val message = server.outbox.removeFirst()) {
+                    is String -> engine.onServerText(message)
+                    is ByteArray -> engine.onBinary(message)
+                }
             }
-        }
+        } while ((decoding && decoders.run()) || server.outbox.isNotEmpty())
     }
 
     fun step(frames: Int = 1_024): Int {

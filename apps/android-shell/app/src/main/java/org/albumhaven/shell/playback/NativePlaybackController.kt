@@ -1,5 +1,7 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.playback.decode.AudioCodec
+import org.albumhaven.playback.decode.EncodedDecoders
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executor
@@ -192,7 +194,19 @@ class NativePlaybackController(
     private val startGate: StartGate = StartGate.OPEN,
     /** Hears one path-free [StartTiming] line per user-initiated start, on the playback thread, once it is heard or given up. */
     startTimings: (String) -> Unit = {},
+    /** Builds the decoders for encoded streams around the playback thread's task queue; null keeps server PCM. */
+    decoders: ((post: (Runnable) -> Unit) -> EncodedDecoders)? = null,
+    /** The codecs whose decoders passed their self-check; the server streams these encoded. */
+    private val codecs: () -> Set<AudioCodec> = { emptySet() },
 ) {
+    private val decoders: EncodedDecoders? = decoders?.invoke { task -> post(task) }
+
+    /** Codecs whose decoder failed in this session; their streams fall back to server PCM. */
+    private val failedCodecs = mutableSetOf<AudioCodec>()
+
+    /** When the output last ran dry while playing, on [clock]; a recent stall asks for 320 kbps FLAC. */
+    private var lastStallAtMs: Long? = null
+
     private val tasks = LinkedBlockingQueue<Runnable>()
     private val timing = StartTiming(startTimings)
 
@@ -705,7 +719,13 @@ class NativePlaybackController(
         val newSink = sinks(rate)
         // Android opens rates the PCM socket refuses; such an output is let go before it is ever used.
         val created = try {
-            NativePcmEngine(PcmEngineConfig(rate), newSink, sender, lastGeneration, clock, ::onEngineEvent)
+            NativePcmEngine(
+                PcmEngineConfig(rate), newSink, sender, lastGeneration, clock,
+                decoders = decoders,
+                codecs = { codecs() - failedCodecs },
+                quality = { lowBitrateWanted(rate) },
+                events = ::onEngineEvent,
+            )
         } catch (refused: RuntimeException) {
             newSink.release()
             throw refused
@@ -714,6 +734,15 @@ class NativePlaybackController(
         engine = created
         preferredRate = rate
         return created
+    }
+
+    /**
+     * `chooseStreamingQuality`: within a minute of a stall a FLAC stream comes as 320 kbps MP3. Its
+     * rate is the FLAC's own only up to 48 kHz, so higher-rate engines keep the original.
+     */
+    private fun lowBitrateWanted(rate: Int): String? {
+        val stall = lastStallAtMs ?: return null
+        return if (rate <= LOW_BITRATE_MAX_RATE && clock() - stall < RECENT_STALL_MS) "320" else null
     }
 
     private fun onEngineEvent(event: PcmEngineEvent) {
@@ -760,7 +789,11 @@ class NativePlaybackController(
                 }
             }
             is PcmEngineEvent.Failed -> post { failed(event) }
-            is PcmEngineEvent.Underrun -> if (measuring) itemUnderruns += 1
+            is PcmEngineEvent.DecoderFailed -> failedCodecs += event.codec
+            is PcmEngineEvent.Underrun -> {
+                if (measuring) itemUnderruns += 1
+                if (firstFrameHeard) lastStallAtMs = clock()
+            }
         }
     }
 
@@ -833,6 +866,12 @@ class NativePlaybackController(
             val stopped = engine
             val item = queue.getOrNull(index)
             heldFrame = if (stopped != null && item != null) HeldFrame(item.playbackRef, preferredRate, stopped.timelineFrame) else null
+            return
+        }
+        // A failed decoder's codec is no longer offered, so the stream reopens as server PCM where it stopped.
+        if (event.code == "decoder-failed" && wantPlay && !recoveryAttempted) {
+            recoveryAttempted = true
+            startEngineAt(index, position)
             return
         }
         val recoverable = socketClosed && closeCode !in REFUSED_CLOSE_CODES && !recoveryAttempted
@@ -1277,6 +1316,12 @@ class NativePlaybackController(
     companion object {
         /** Most albums are CD audio; a wrong guess costs one refused open, as on the web. */
         const val DEFAULT_RATE = 44_100
+
+        /** `STREAMING_RECENT_STALL_MS`. */
+        const val RECENT_STALL_MS = 60_000L
+
+        /** `fallback_sample_rate`: a 320 kbps MP3 keeps the source rate up to 48 kHz. */
+        const val LOW_BITRATE_MAX_RATE = 48_000
         const val RENDER_CHUNK_FRAMES = 4_096
         /** How long the thread waits for work while it feeds the output. */
         const val RENDER_WAIT_MS = 5L

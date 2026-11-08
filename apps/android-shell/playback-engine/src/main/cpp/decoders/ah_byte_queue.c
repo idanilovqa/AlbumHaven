@@ -43,6 +43,13 @@ int ah_byte_queue_write(ah_byte_queue *queue, const unsigned char *bytes, size_t
     return result;
 }
 
+size_t ah_byte_queue_size(ah_byte_queue *queue) {
+    pthread_mutex_lock(&queue->lock);
+    size_t size = queue->end - queue->start;
+    pthread_mutex_unlock(&queue->lock);
+    return size;
+}
+
 static void raise_flag(ah_byte_queue *queue, int *flag) {
     pthread_mutex_lock(&queue->lock);
     *flag = 1;

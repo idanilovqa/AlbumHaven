@@ -24,6 +24,9 @@ class DecoderException(message: String) : Exception(message)
 interface AudioDecoder : AutoCloseable {
     fun write(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size - offset)
 
+    /** Bytes written and not decoded yet; callable from any thread. */
+    val bufferedBytes: Int
+
     /** No more bytes follow; [decode] returns null once it has decoded them all. */
     fun end()
 
@@ -44,6 +47,8 @@ class StreamDecoder private constructor(private var handle: Long) : AudioDecoder
         require(offset >= 0 && length >= 0 && offset + length <= bytes.size) { "range is outside the bytes" }
         if (length > 0 && !nativeWrite(live(), bytes, offset, length)) throw DecoderException("decoder ran out of memory")
     }
+
+    override val bufferedBytes: Int get() = nativeBufferedBytes(live())
 
     override fun end() = nativeEnd(live())
 
@@ -79,6 +84,7 @@ class StreamDecoder private constructor(private var handle: Long) : AudioDecoder
 
         @JvmStatic private external fun nativeOpen(codec: Int): Long
         @JvmStatic private external fun nativeWrite(handle: Long, bytes: ByteArray, offset: Int, length: Int): Boolean
+        @JvmStatic private external fun nativeBufferedBytes(handle: Long): Int
         @JvmStatic private external fun nativeEnd(handle: Long)
         @JvmStatic private external fun nativeCancel(handle: Long)
         @JvmStatic private external fun nativeProcess(handle: Long): Int

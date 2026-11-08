@@ -34,6 +34,19 @@ class PcmRing(val capacityFrames: Int) {
         bufferedFrames += frames
     }
 
+    /** Appends [frames] interleaved stereo frames of [source] from sample [offsetSamples], as decoded audio arrives. */
+    fun appendFloats(source: FloatArray, offsetSamples: Int, frames: Int) {
+        require(frames in 0..freeFrames) { "frames exceed free ring capacity" }
+        var copied = 0
+        while (copied < frames) {
+            val run = minOf(frames - copied, capacityFrames - writeFrame)
+            System.arraycopy(source, offsetSamples + copied * CHANNELS, samples, writeFrame * CHANNELS, run * CHANNELS)
+            writeFrame = (writeFrame + run) % capacityFrames
+            copied += run
+        }
+        bufferedFrames += frames
+    }
+
     /** Frames readable from [readFrame] without wrapping. */
     fun contiguousFrames(): Int = minOf(bufferedFrames, capacityFrames - readFrame)
 

@@ -2,6 +2,10 @@ package org.albumhaven.shell.playback
 
 import androidx.annotation.VisibleForTesting
 import kotlin.math.roundToLong
+import org.albumhaven.playback.decode.AudioCodec
+import org.albumhaven.playback.decode.DecodedAudio
+import org.albumhaven.playback.decode.EncodedDecodeListener
+import org.albumhaven.playback.decode.EncodedDecoders
 
 /**
  * Buffer and credit limits of the web streaming engine
@@ -47,6 +51,19 @@ data class PcmEngineConfig(
 
         /** The Web Audio render quantum the worklet's buffered seek must back after its skip. */
         const val RENDER_QUANTUM_FRAMES = 128
+
+        // Encoded streams, as `refillStreamingEncodedBytes` and `streamingEncodedBufferBytes` size them.
+        const val ENCODED_CREDIT_BYTES = 64 * 1024
+
+        /** Several credits in flight, so a slow round trip does not cap a lossless stream's throughput. */
+        const val ENCODED_MAX_OUTSTANDING_BYTES = 4 * ENCODED_CREDIT_BYTES
+        const val ENCODED_CURRENT_BUFFER_SECONDS = 120
+        const val ENCODED_CONTINUITY_BUFFER_SECONDS = 30
+        const val ENCODED_BUFFER_MIN_BYTES = 1024 * 1024
+        const val ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024
+
+        /** `STREAMING_FALLBACK_BYTES_PER_SECOND`, until the stream's own rate is measured. */
+        const val ENCODED_FALLBACK_BYTES_PER_SECOND = 40_000
     }
 }
 
@@ -78,6 +95,9 @@ sealed interface PcmEngineEvent {
     /** The started track has another native rate; nothing played, so it restarts on a new engine now. */
     data class StartRateRequired(val track: PcmTrack, val startFrame: Long, val sampleRate: Int) : PcmEngineEvent
     data class Failed(val code: String, val message: String) : PcmEngineEvent
+
+    /** [codec]'s decoder failed; [Failed] follows, and later opens should not offer the codec. */
+    data class DecoderFailed(val codec: AudioCodec) : PcmEngineEvent
 }
 
 /**
@@ -94,6 +114,12 @@ class NativePcmEngine(
     lastGeneration: Long = 0,
     /** Milliseconds on a monotonic clock. */
     private val clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** Decodes encoded streams; without it every stream is server-decoded PCM. */
+    private val decoders: EncodedDecoders? = null,
+    /** The codecs each open offers the server. */
+    private val codecs: () -> Set<AudioCodec> = { emptySet() },
+    /** The quality each open asks for: null for the original, or `320` on a weak connection. */
+    private val quality: () -> String? = { null },
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -126,7 +152,73 @@ class NativePcmEngine(
         var firstFrameRendered = false
         /** The range a loop stream was opened for; another range reopens it, as the web's identity does. */
         var loopRange: LoopRange? = null
+
+        /** The codecs this stream's open offered; metadata may name only one of them. */
+        var offeredCodecs: Set<AudioCodec> = emptySet()
+        var encoded: EncodedStream? = null
     }
+
+    /**
+     * The web's encoded role (`createStreamingEncodedRole`): encoded bytes go to the decoder as they
+     * arrive, under byte credits sized to minutes of audio, while the stream's frame credits are
+     * met locally from decoded audio, trimmed to the server's sample map.
+     */
+    private inner class EncodedStream(
+        val stream: Stream,
+        val codec: AudioCodec,
+        var skipFrames: Long,
+        var remainingFrames: Long,
+        initialCreditBytes: Int,
+    ) : EncodedDecodeListener {
+        val decoding = checkNotNull(decoders).open(codec, this)
+        var outstandingBytes = initialCreditBytes
+        var receivedBytes = 0L
+        val decoded = ArrayDeque<FloatArray>()
+        var decodedHeadFrame = 0
+        var decodedFrames = 0
+        var localCreditFrames = 0
+        var deliveredFrames = 0L
+
+        /** Every frame the decoder produced, trimmed or not, for the stream's measured byte rate. */
+        var decoderFrames = 0L
+        var serverEos: PcmServerEvent.Eos? = null
+        var decoderFinished = false
+        var closed = false
+
+        override fun decoded(audio: DecodedAudio) {
+            if (closed || failed) return
+            decoderFrames += audio.frames
+            val skipped = minOf(skipFrames, audio.frames.toLong()).toInt()
+            skipFrames -= skipped
+            val kept = minOf((audio.frames - skipped).toLong(), remainingFrames).toInt()
+            if (kept > 0) {
+                remainingFrames -= kept
+                decoded.addLast(audio.samples.copyOfRange(skipped * PcmRing.CHANNELS, (skipped + kept) * PcmRing.CHANNELS))
+                decodedFrames += kept
+            }
+            pumpEncoded(stream)
+        }
+
+        override fun finished() {
+            if (closed || failed) return
+            decoderFinished = true
+            pumpEncoded(stream)
+        }
+
+        override fun failed(message: String) {
+            if (closed || failed) return
+            events(PcmEngineEvent.DecoderFailed(codec))
+            fail("decoder-failed", "The ${codec.wire} decoder failed: $message")
+        }
+
+        fun close() {
+            if (closed) return
+            closed = true
+            decoding.close()
+        }
+    }
+
+    private var pumpingEncoded = false
 
     private data class LoopRange(val startFrame: Long, val endFrame: Long, val short: Boolean) {
         val frames: Int get() = (endFrame - startFrame).toInt()
@@ -402,7 +494,12 @@ class NativePcmEngine(
         }
         when (event) {
             is PcmServerEvent.Metadata -> acceptMetadata(stream, event)
-            is PcmServerEvent.Eos -> acceptEos(stream, event)
+            is PcmServerEvent.Eos -> stream.encoded?.let { encoded ->
+                if (encoded.serverEos != null) return
+                encoded.serverEos = event
+                encoded.decoding.end()
+                finishEncodedWhenDrained(stream)
+            } ?: acceptEos(stream, event)
             is PcmServerEvent.Promoted -> acceptPromoted(event)
             is PcmServerEvent.RateMismatch -> acceptRateMismatch(stream, event)
             is PcmServerEvent.Error ->
@@ -438,28 +535,125 @@ class NativePcmEngine(
             return
         }
         if (!stream.metadataAccepted) return fail("pcm-protocol-error", "PCM arrived before metadata")
-        if (frame.frameCount > stream.inFlightFrames) {
-            return fail("pcm-protocol-error", "frame exceeds granted credit")
+        val encoded = stream.encoded
+        when (frame) {
+            is AhpcPcmFrame -> {
+                if (encoded != null) return fail("pcm-protocol-error", "PCM arrived on an encoded stream")
+                if (frame.frameCount > stream.inFlightFrames) {
+                    return fail("pcm-protocol-error", "frame exceeds granted credit")
+                }
+                if (frame.frameCount > capacityFrames(stream.role) - ringFor(stream.role).bufferedFrames) {
+                    return fail("pcm-protocol-error", "frame exceeds inherited backing capacity")
+                }
+                stream.nextSequence += 1
+                acceptPcm(stream, frame.frameCount) { ring -> ring.appendLittleEndian(frame.bytes, frame.payloadOffset, frame.frameCount) }
+            }
+            is AhpcEncodedFrame -> {
+                if (encoded == null) return fail("pcm-protocol-error", "encoded audio arrived on a PCM stream")
+                if (frame.payloadLength > encoded.outstandingBytes) {
+                    return fail("pcm-protocol-error", "frame exceeds granted byte credit")
+                }
+                stream.nextSequence += 1
+                encoded.outstandingBytes -= frame.payloadLength
+                encoded.receivedBytes += frame.payloadLength
+                encoded.decoding.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
+                refillEncodedBytes(stream)
+            }
         }
+    }
+
+    /** Takes [frames] new frames of [stream], which [append] writes into its ring. */
+    private fun acceptPcm(stream: Stream, frames: Int, append: (PcmRing) -> Unit) {
         val ring = ringFor(stream.role)
-        if (frame.frameCount > capacityFrames(stream.role) - ring.bufferedFrames) {
-            return fail("pcm-protocol-error", "frame exceeds inherited backing capacity")
-        }
-        ring.appendLittleEndian(frame.bytes, frame.payloadOffset, frame.frameCount)
-        retainShortLoopPcm(stream, ring, frame.frameCount)
+        append(ring)
+        retainShortLoopPcm(stream, ring, frames)
         if (stream.receivedFrames == 0L) {
             stream.firstPcmAtMs = clockMs()
             if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartPcmReceived(stream.streamId))
         }
-        stream.nextSequence += 1
-        stream.receivedFrames += frame.frameCount
-        stream.inFlightFrames -= frame.frameCount
+        stream.receivedFrames += frames
+        stream.inFlightFrames -= frames
         if (stream.role == PcmRole.CURRENT) {
             grantDeferredInitialCredit()
             reconcileContinuity()
         }
         refillCredit(stream)
         prepareSeekWhenBuffered(stream)
+    }
+
+    /** Meets [stream]'s local frame credit from decoded audio and keeps its decoder and byte credit going. */
+    private fun pumpEncoded(stream: Stream) {
+        val encoded = stream.encoded ?: return
+        // Delivering refills the credit, which pumps again; the loop below takes that credit.
+        if (pumpingEncoded) return
+        pumpingEncoded = true
+        try {
+            while (!failed && !encoded.closed && encoded.localCreditFrames > 0 && encoded.decodedFrames > 0) {
+                val head = encoded.decoded.first()
+                val offset = encoded.decodedHeadFrame
+                val frames = minOf(encoded.localCreditFrames, head.size / PcmRing.CHANNELS - offset)
+                encoded.decodedHeadFrame += frames
+                if (encoded.decodedHeadFrame * PcmRing.CHANNELS == head.size) {
+                    encoded.decoded.removeFirst()
+                    encoded.decodedHeadFrame = 0
+                }
+                encoded.localCreditFrames -= frames
+                encoded.decodedFrames -= frames
+                encoded.deliveredFrames += frames
+                acceptPcm(stream, frames) { ring -> ring.appendFloats(head, offset * PcmRing.CHANNELS, frames) }
+            }
+        } finally {
+            pumpingEncoded = false
+        }
+        if (failed || encoded.closed) return
+        val wanted = if (encoded.remainingFrames > 0) encoded.localCreditFrames - encoded.decodedFrames else 0
+        encoded.decoding.request(maxOf(0, wanted))
+        refillEncodedBytes(stream)
+        finishEncodedWhenDrained(stream)
+    }
+
+    /** Keeps minutes of [stream]'s encoded audio buffered, credited in 64 KiB steps. */
+    private fun refillEncodedBytes(stream: Stream) {
+        val encoded = stream.encoded ?: return
+        if (failed || encoded.closed || encoded.serverEos != null) return
+        // The stream being left must not compete with the audio the listener just asked for.
+        if (stream === current && pendingSeek != null) return
+        var missing = encodedTargetBytes(stream, encoded) - encoded.decoding.bufferedBytes - encoded.outstandingBytes
+        while (missing >= PcmEngineConfig.ENCODED_CREDIT_BYTES &&
+            encoded.outstandingBytes + PcmEngineConfig.ENCODED_CREDIT_BYTES <= PcmEngineConfig.ENCODED_MAX_OUTSTANDING_BYTES
+        ) {
+            if (!send(PcmClientControl.Credit(stream.generation, stream.streamId, PcmEngineConfig.ENCODED_CREDIT_BYTES))) return
+            encoded.outstandingBytes += PcmEngineConfig.ENCODED_CREDIT_BYTES
+            missing -= PcmEngineConfig.ENCODED_CREDIT_BYTES
+        }
+    }
+
+    private fun encodedTargetBytes(stream: Stream, encoded: EncodedStream): Int {
+        val consumedBytes = encoded.receivedBytes - encoded.decoding.bufferedBytes
+        // Half a second of decoded audio measures the stream's own byte rate.
+        val bytesPerSecond = if (encoded.decoderFrames >= config.sampleRate / 2 && consumedBytes > 0) {
+            consumedBytes.toDouble() * config.sampleRate / encoded.decoderFrames
+        } else {
+            PcmEngineConfig.ENCODED_FALLBACK_BYTES_PER_SECOND.toDouble()
+        }
+        val seconds = if (stream.role == PcmRole.CURRENT) {
+            PcmEngineConfig.ENCODED_CURRENT_BUFFER_SECONDS
+        } else {
+            PcmEngineConfig.ENCODED_CONTINUITY_BUFFER_SECONDS
+        }
+        return (bytesPerSecond * seconds).toInt()
+            .coerceIn(PcmEngineConfig.ENCODED_BUFFER_MIN_BYTES, PcmEngineConfig.ENCODED_BUFFER_MAX_BYTES)
+    }
+
+    /** `finishStreamingEncodedRole`: once every kept frame is delivered, the stream ends at what was heard. */
+    private fun finishEncodedWhenDrained(stream: Stream) {
+        val encoded = stream.encoded ?: return
+        val eos = encoded.serverEos ?: return
+        if (stream.eosReceived || encoded.decodedFrames > 0) return
+        if (encoded.remainingFrames > 0 && !encoded.decoderFinished) return
+        val authoritative = (eos.authoritativeTotalFrames ?: 0) - encoded.remainingFrames
+        encoded.close()
+        acceptEos(stream, eos.copy(emittedFrames = encoded.deliveredFrames, authoritativeTotalFrames = authoritative))
     }
 
     /** The worklet's `enqueue` capture: the loop stream's first loop-length frames are kept for replay. */
@@ -601,6 +795,7 @@ class NativePcmEngine(
     private fun promote(kind: PcmBoundaryKind, incomingTimelineFrame: Long) {
         val outgoing = checkNotNull(current)
         val incoming = checkNotNull(continuity)
+        outgoing.encoded?.close()
         val outgoingRing = currentRing
         currentRing = continuityRing
         continuityRing = outgoingRing
@@ -634,15 +829,24 @@ class NativePcmEngine(
     }
 
     private fun acceptMetadata(stream: Stream, event: PcmServerEvent.Metadata) {
+        val codec = event.codec?.let { AudioCodec.fromWire(it)?.takeIf(stream.offeredCodecs::contains) }
         val valid = event.role == stream.role.wire &&
             event.sampleRate == config.sampleRate.toLong() &&
             event.channels == 2L &&
-            event.codec == null &&
+            (event.codec == null || (codec != null && (event.skipFrames ?: -1) >= 0 && (event.totalFrames ?: -1) >= 0 &&
+                (event.initialCreditBytes ?: -1) >= 0)) &&
             (event.provisionalTotalFrames ?: -1) >= 0 &&
             event.requestedStartFrame == stream.startFrame &&
             (event.timelineStartFrame ?: -1) >= 0
         if (!valid) return fail("metadata-protocol-error", "Invalid streaming metadata")
         stream.metadataAccepted = true
+        if (codec != null) {
+            stream.encoded = EncodedStream(
+                stream, codec, checkNotNull(event.skipFrames), checkNotNull(event.totalFrames),
+                checkNotNull(event.initialCreditBytes).toInt(),
+            )
+            refillEncodedBytes(stream)
+        }
         if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
         if (stream.kind == StreamKind.SEEK) {
             val remaining = checkNotNull(event.provisionalTotalFrames) - checkNotNull(event.timelineStartFrame)
@@ -738,6 +942,7 @@ class NativePcmEngine(
 
     private fun closeContinuity(reason: String) {
         val stream = continuity ?: return
+        stream.encoded?.close()
         continuity = null
         continuityRing.clear()
         if (pendingSeek?.streamId == stream.streamId) pendingSeek = null
@@ -761,8 +966,13 @@ class NativePcmEngine(
             stream.loopRange = loop
             if (loop?.short == true && retainedStreamId == null) retainedStreamId = stream.streamId
         }
+        if (decoders != null) stream.offeredCodecs = codecs()
         val accepted = send(
-            PcmClientControl.Open(generation, stream.streamId, role, track, startFrame, config.sampleRate),
+            PcmClientControl.Open(
+                generation, stream.streamId, role, track, startFrame, config.sampleRate,
+                codecs = AudioCodec.entries.filter(stream.offeredCodecs::contains).map { it.wire },
+                quality = quality(),
+            ),
         )
         return if (accepted) stream else null
     }
@@ -811,6 +1021,14 @@ class NativePcmEngine(
         val serverAvailable = config.maxCreditFrames - stream.inFlightFrames
         val frames = minOf(requestedFrames, available, serverAvailable)
         if (frames <= 0) return 0
+        val encoded = stream.encoded
+        if (encoded != null) {
+            // Frame credit for an encoded stream is met from its decoder, not asked of the server.
+            encoded.localCreditFrames += frames
+            stream.inFlightFrames += frames
+            pumpEncoded(stream)
+            return frames
+        }
         if (!send(PcmClientControl.Credit(stream.generation, stream.streamId, frames))) return 0
         stream.inFlightFrames += frames
         return frames
@@ -882,6 +1100,7 @@ class NativePcmEngine(
     }
 
     private fun resetPlayback() {
+        listOfNotNull(current, continuity).forEach { it.encoded?.close() }
         resetRetainedLoop()
         current = null
         continuity = null

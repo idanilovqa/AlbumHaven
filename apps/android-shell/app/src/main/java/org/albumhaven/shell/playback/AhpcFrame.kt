@@ -12,22 +12,29 @@ enum class PcmRole(val code: Int, val wire: String) {
 
 class AhpcProtocolException(message: String) : Exception(message)
 
-/** One validated version-1 PCM frame; samples stay in [bytes] as interleaved f32le stereo. */
-class AhpcPcmFrame(
+/** One validated `AHPC` frame: decoded PCM (version 1) or encoded audio bytes (version 2). */
+sealed class AhpcFrame(
     val role: PcmRole,
     val generation: Long,
     val streamId: Long,
     val sequence: Long,
-    val frameCount: Int,
     val bytes: ByteArray,
 ) {
     val payloadOffset: Int get() = AhpcFrameCodec.HEADER_BYTES
 }
 
+/** Interleaved f32le stereo samples in [bytes]. */
+class AhpcPcmFrame(role: PcmRole, generation: Long, streamId: Long, sequence: Long, val frameCount: Int, bytes: ByteArray) :
+    AhpcFrame(role, generation, streamId, sequence, bytes)
+
+/** [payloadLength] encoded bytes in [bytes]; the server's credit for them counted bytes. */
+class AhpcEncodedFrame(role: PcmRole, generation: Long, streamId: Long, sequence: Long, val payloadLength: Int, bytes: ByteArray) :
+    AhpcFrame(role, generation, streamId, sequence, bytes)
+
 /**
- * The `AHPC` binary frame from `pack_pcm_frame`: a 24-byte big-endian header
- * (`AHPC`, version, role, reserved u16, generation, stream id, sequence,
- * frame count as u32) followed by little-endian float32 stereo frames.
+ * The `AHPC` binary frame from `pack_pcm_frame` and `pack_encoded_frame`: a 24-byte big-endian
+ * header (`AHPC`, version, role, reserved u16, generation, stream id, sequence, count as u32)
+ * followed by little-endian float32 stereo frames (version 1) or that many encoded bytes (version 2).
  */
 object AhpcFrameCodec {
     const val HEADER_BYTES = 24
@@ -36,7 +43,7 @@ object AhpcFrameCodec {
     private const val ENCODED_VERSION = 2
     private val MAGIC = "AHPC".toByteArray(Charsets.US_ASCII)
 
-    fun decode(bytes: ByteArray): AhpcPcmFrame {
+    fun decode(bytes: ByteArray): AhpcFrame {
         if (bytes.size < HEADER_BYTES) throw AhpcProtocolException("frame is shorter than the AHPC header")
         if ((0 until 4).any { bytes[it] != MAGIC[it] }) throw AhpcProtocolException("bad AHPC magic")
         val version = u8(bytes, 4)
@@ -45,20 +52,19 @@ object AhpcFrameCodec {
         }
         val role = PcmRole.fromCode(u8(bytes, 5)) ?: throw AhpcProtocolException("invalid stream role")
         if (u8(bytes, 6) != 0 || u8(bytes, 7) != 0) throw AhpcProtocolException("nonzero reserved flags")
-        // Native playback never offers `codecs`, so the server must not send encoded frames.
-        if (version == ENCODED_VERSION) throw AhpcProtocolException("encoded AHPC frames were not negotiated")
-        val frameCount = u32(bytes, 20)
-        if (frameCount <= 0 || bytes.size.toLong() != HEADER_BYTES + frameCount * BYTES_PER_FRAME) {
+        val count = u32(bytes, 20)
+        val unit = if (version == PCM_VERSION) BYTES_PER_FRAME else 1
+        if (count <= 0 || bytes.size.toLong() != HEADER_BYTES + count * unit) {
             throw AhpcProtocolException("declared frame length does not match payload")
         }
-        return AhpcPcmFrame(
-            role = role,
-            generation = u32(bytes, 8),
-            streamId = u32(bytes, 12),
-            sequence = u32(bytes, 16),
-            frameCount = frameCount.toInt(),
-            bytes = bytes,
-        )
+        val generation = u32(bytes, 8)
+        val streamId = u32(bytes, 12)
+        val sequence = u32(bytes, 16)
+        return if (version == PCM_VERSION) {
+            AhpcPcmFrame(role, generation, streamId, sequence, count.toInt(), bytes)
+        } else {
+            AhpcEncodedFrame(role, generation, streamId, sequence, count.toInt(), bytes)
+        }
     }
 
     private fun u8(bytes: ByteArray, offset: Int): Int = bytes[offset].toInt() and 0xFF

@@ -67,9 +67,12 @@ class ControllerHarness(
     startGate: StartGate = StartGate.OPEN,
     /** Each output models an AudioTrack's quarter-second queue, which every step plays for its time. */
     private val outputModel: Boolean = false,
+    /** Offers `mp3`, which the server then streams encoded through [decoders]. */
+    encoded: Boolean = false,
 ) {
     var now = 0L
-    val server = FakeAhpcServer(tracks.toList())
+    val server = FakeAhpcServer(tracks.toList()).also { it.encoded = encoded }
+    val decoders = FakeDecoders()
     val claims = FakeClaimApi()
     val listen = FakeListenApi()
     val sinks = mutableListOf<RecordingSink>()
@@ -120,6 +123,8 @@ class ControllerHarness(
         failures = failures,
         startGate = startGate,
         startTimings = { timings += it },
+        decoders = if (encoded) { _ -> decoders } else null,
+        codecs = { setOf(org.albumhaven.playback.decode.AudioCodec.MP3) },
     )
 
     fun item(track: SyntheticTrack) = QueueItem(
@@ -151,6 +156,8 @@ class ControllerHarness(
         if (outputModel) sinks.lastOrNull()?.let { it.advance((it.sampleRate * ms / 1000).toInt()) }
         deliver()
         controller.runOnce()
+        // The decode threads report on the playback thread, which this test thread stands for.
+        while (decoders.run()) Unit
         deliver()
     }
 
@@ -1172,5 +1179,45 @@ class NativePlaybackControllerTest {
         val complete = writes.single { it.first == ListenEffect.COMPLETE }.second
         assertEquals(fresh.pcm.playbackRef, complete.getString("playbackRef"))
         assertEquals("ended", complete.getString("completion_reason"))
+    }
+}
+
+class EncodedNativePlaybackControllerTest {
+    private val first = SyntheticTrack(tag = 1, frames = 3L * RATE)
+    private val second = SyntheticTrack(tag = 2, frames = 2L * RATE)
+
+    /** Every accepted open, as (offered codecs, start frame); the first at the default rate is refused. */
+    private fun ControllerHarness.opens(): List<Pair<List<String>, Long>> =
+        server.texts.map(::JSONObject).filter { it.getString("type") == "open" }.map { open ->
+            val codecs = open.optJSONArray("codecs")?.let { array -> (0 until array.length()).map(array::getString) }.orEmpty()
+            codecs to open.getLong("startFrame")
+        }
+
+    @Test
+    fun anEncodedQueuePlaysGaplesslyToItsEnd() {
+        val harness = ControllerHarness(first, second, encoded = true)
+        harness.load(1, first, second)
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+
+        assertEquals(listOf(Run(1, 0, first.frames), Run(2, 0, second.frames)), harness.sinks.last().runs())
+        assertTrue(harness.opens().all { (codecs, _) -> codecs == listOf("mp3") })
+        assertTrue(harness.decoders.opened.isNotEmpty())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aFailedDecoderReopensTheTrackAsServerPcmWhereItStopped() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long, encoded = true)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) > RATE / 2 }
+        harness.decoders.opened.last().failNext = true
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+
+        val (codecs, startFrame) = harness.opens().last()
+        assertEquals(emptyList<String>(), codecs)
+        assertTrue("the reopen starts where playback stopped", startFrame > 0)
+        assertEquals(listOf("mp3"), harness.opens().first().first)
+        assertEquals(long.frames - 1, harness.sinks.flatMap { it.runs() }.maxOf { it.start + it.length - 1 })
     }
 }

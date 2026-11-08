@@ -33,6 +33,7 @@ class DecoderSelfCheckTest {
     /** Decodes every clip into [frames] frames whose left samples are each [left]. */
     private class FakeDecoder(private val frames: Int, private val left: Float) : AudioDecoder {
         var written = 0
+        override val bufferedBytes = 0
         private var ended = false
         private var delivered = false
 

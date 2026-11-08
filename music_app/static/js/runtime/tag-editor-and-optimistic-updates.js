@@ -1880,6 +1880,8 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+const renderedTrackModalHeaderHtml = new WeakMap();
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -1934,7 +1936,7 @@ function renderTrackModalRelease(album) {
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+    const headerHtml = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: album.album_artist || '',
       album: album.display_name || album.name || 'Album',
@@ -1944,7 +1946,17 @@ function renderTrackModalRelease(album) {
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
-    els = getTrackModalElements();
+    // The summary render and the hydrated details usually build the same header;
+    // rewriting it replaced Close and the header actions under the pointer
+    // (a close click then waited ~500 ms for the new button). Other owners edit
+    // the header in place (closing clears the title), so the live DOM must
+    // still be exactly what this render wrote.
+    const rendered = renderedTrackModalHeaderHtml.get(els.header);
+    if (!rendered || rendered.built !== headerHtml || rendered.dom !== els.header.innerHTML) {
+      els.header.innerHTML = headerHtml;
+      renderedTrackModalHeaderHtml.set(els.header, { built: headerHtml, dom: els.header.innerHTML });
+      els = getTrackModalElements();
+    }
   }
   if (els.folder) {
     els.folder.dataset.album = '';

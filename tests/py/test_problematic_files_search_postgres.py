@@ -64,3 +64,43 @@ def test_search_finds_a_problematic_album_beyond_the_first_page():
     complete = repository.build_problematic_files_payload()
     assert [item["key"] for item in complete["items"] if "Needle Track" in item.get("search_text", "")] \
         == [item["key"] for item in by_track["items"]]
+
+
+def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
+    """Migration 0117 keeps the last complete list; a cold process reads it
+    instead of the ~5 s whole-library candidate pass."""
+    import json
+
+    from music_app.services import library_browse_postgres as browse
+
+    import psycopg
+
+    database_url = _seed_problematic_albums(8)
+    writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    complete = writer._build_problematic_files_payload_uncached()
+    fingerprint = complete.pop(browse._SNAPSHOT_FINGERPRINT_KEY)
+    writer._store_problematic_files_snapshot(json.dumps({**complete, browse._SNAPSHOT_FINGERPRINT_KEY: fingerprint}, default=str))
+    cache_key = (database_url, "problematic-files")
+
+    def restart_and_open_first_page():
+        # A "restart": nothing in memory for this database.
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
+            registry.pop(cache_key, None)
+        browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
+        return browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url}) \
+            .build_problematic_files_page(limit=5)
+
+    page = restart_and_open_first_page()
+    assert page["projection_cache_status"] == "stale"
+    assert [item["key"] for item in page["items"]] == [item["key"] for item in complete["items"][:5]]
+    assert browse._SNAPSHOT_FINGERPRINT_KEY not in page
+
+    # Any later library change (a tag edit bumps the inventory revision) makes
+    # the stored list unusable: it may list merged or removed albums.
+    with psycopg.connect(database_url) as connection:
+        connection.execute("""update library.libraries set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb),
+            '{inventory_mutation_revision}', to_jsonb(coalesce((metadata ->> 'inventory_mutation_revision')::bigint, 0) + 1))
+            where library_kind = 'local' and name = 'Local Library'""")
+        connection.commit()
+    assert restart_and_open_first_page()["projection_cache_status"] == "bounded"
+    browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)

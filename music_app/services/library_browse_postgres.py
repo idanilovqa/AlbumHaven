@@ -122,6 +122,10 @@ _UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
 # serves both the bounded first page and searches before the list completes.
 _PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
 _PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
+# Migration 0117's stored last complete list: read once per process when no
+# list is in memory; databases without the table skip it.
+_PROBLEMATIC_SNAPSHOT_CHECKED: set[tuple[str, str]] = set()
+_PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES: set[str] = set()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -186,9 +190,12 @@ def invalidate_postgres_utility_projection_cache(
             _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
-            payload = _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
-            if payload is not None and cache_key[1] in _STALE_SERVED_UTILITY_KINDS:
-                _UTILITY_PROJECTION_STALE[cache_key] = payload
+            _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            # A changed library may have removed or merged listed albums: the
+            # previous list is never served again (a click on a merged-away
+            # identity found no album). Only a stored list whose inventory
+            # fingerprint still matches may answer early.
+            _UTILITY_PROJECTION_STALE.pop(cache_key, None)
             rewarm = _UTILITY_PROJECTION_REWARM.get(cache_key)
             if rewarm is not None and cache_key not in _UTILITY_PROJECTION_REWARM_PENDING:
                 _UTILITY_PROJECTION_REWARM_PENDING.add(cache_key)
@@ -2727,6 +2734,7 @@ class PostgresLibraryBrowseRepository:
             cache_key = self._utility_projection_cache_key(kind)
             if cache_key is None:
                 payload = self._build_problematic_files_payload_uncached()
+                payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
                 payload["projection_cache_status"] = "rebuilt"
                 return payload
             with _UTILITY_PROJECTION_CACHE_LOCK:
@@ -2743,7 +2751,12 @@ class PostgresLibraryBrowseRepository:
             flight.wait()
         try:
             payload = self._build_problematic_files_payload_uncached()
+            fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
             self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                current = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
+            if current and fingerprint:
+                self._queue_problematic_files_snapshot_store(payload, fingerprint)
             payload["projection_cache_status"] = "rebuilt"
             return payload
         finally:
@@ -2757,10 +2770,14 @@ class PostgresLibraryBrowseRepository:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            return self._build_problematic_files_payload_from_rows(
+            payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(connection=connection),
             )
+            # Same snapshot as the rows: a stored list is served only while
+            # the inventory is still exactly this one.
+            payload[_SNAPSHOT_FINGERPRINT_KEY] = _problematic_inventory_fingerprint(connection)
+            return payload
 
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
@@ -4012,7 +4029,76 @@ class PostgresLibraryBrowseRepository:
             return None
         with _UTILITY_PROJECTION_CACHE_LOCK:
             payload = _UTILITY_PROJECTION_STALE.get(cache_key)
-            return None if payload is None else deepcopy(payload)
+            load_snapshot = (
+                payload is None and kind == "problematic-files"
+                and cache_key not in _PROBLEMATIC_SNAPSHOT_CHECKED
+            )
+            if load_snapshot:
+                _PROBLEMATIC_SNAPSHOT_CHECKED.add(cache_key)
+        if load_snapshot:
+            # A restarted server has no list in memory: the last stored one
+            # answers the first page until the fresh list completes.
+            snapshot = self._load_problematic_files_snapshot()
+            if snapshot is not None:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    if cache_key not in _UTILITY_PROJECTION_CACHE:
+                        _UTILITY_PROJECTION_STALE.setdefault(cache_key, snapshot)
+                    payload = _UTILITY_PROJECTION_STALE.get(cache_key)
+        return None if payload is None else deepcopy(payload)
+
+    def _problematic_snapshot_available(self) -> bool:
+        return (
+            self._use_shared_connection_pool
+            and self._database_url not in _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES
+        )
+
+    def _load_problematic_files_snapshot(self) -> dict[str, object] | None:
+        if not self._problematic_snapshot_available():
+            return None
+        try:
+            with self._connect_to_database() as connection:
+                row = connection.execute(_problematic_files_snapshot_load_sql()).fetchone()
+                current_fingerprint = _problematic_inventory_fingerprint(connection) if row is not None else None
+        except Exception as error:
+            if _is_undefined_table_error(error):
+                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
+                return None
+            logging.getLogger(__name__).warning("Problematic Files snapshot could not be read.", exc_info=True)
+            return None
+        payload = _row_mapping(row).get("payload") if row is not None else None
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, Mapping):
+            return None
+        payload = dict(payload)
+        # A list stored before any later library change is never served: it
+        # may list albums since merged, split or removed.
+        if not current_fingerprint or payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None) != current_fingerprint:
+            return None
+        return payload
+
+    def _queue_problematic_files_snapshot_store(self, payload: Mapping[str, object], fingerprint: str) -> None:
+        # Browse-only instances never write the shared database.
+        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") or not self._problematic_snapshot_available():
+            return
+        document = json.dumps(
+            {
+                **{key: value for key, value in payload.items() if key != "projection_cache_status"},
+                _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
+            },
+            default=str,
+        )
+        _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(self._store_problematic_files_snapshot, document)
+
+    def _store_problematic_files_snapshot(self, document: str) -> None:
+        try:
+            with self._connect_to_database() as connection:
+                connection.execute(_problematic_files_snapshot_store_sql(), {"payload": document})
+        except Exception as error:
+            if _is_undefined_table_error(error):
+                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
+                return
+            logging.getLogger(__name__).warning("Problematic Files snapshot could not be stored.", exc_info=True)
 
     def _problematic_candidate_album_ids(self, connection: Any) -> frozenset[int]:
         """Every album the complete list evaluates, computed once per invalidation generation."""
@@ -6596,6 +6682,49 @@ def _problematic_search_album_ids_sql() -> str:
           )
         order by albums.id
         limit %(limit)s
+    """
+
+
+_SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
+
+
+def _problematic_inventory_fingerprint(connection: Any) -> str:
+    """The inventory revision plus root and exception-override versions, as text."""
+    fingerprint = _duplicate_inventory_fingerprint(connection).get("fingerprint")
+    return json.dumps(fingerprint, default=str) if fingerprint else ""
+
+
+def _is_undefined_table_error(error: BaseException) -> bool:
+    return getattr(error, "sqlstate", None) == "42P01"
+
+
+_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL = """
+    select libraries.id
+    from app.bootstrap_owners owners
+    join library.libraries libraries
+      on libraries.owner_account_id = owners.account_id
+     and libraries.name = 'Local Library'
+     and libraries.library_kind = 'local'
+    where owners.owner_key = 'local-bootstrap-owner'
+    limit 1
+"""
+
+
+def _problematic_files_snapshot_load_sql() -> str:
+    return f"""
+        select snapshots.payload
+        from library.problematic_files_snapshots snapshots
+        where snapshots.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _problematic_files_snapshot_store_sql() -> str:
+    return f"""
+        insert into library.problematic_files_snapshots (library_id, payload, built_at)
+        select ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}), %(payload)s::jsonb, now()
+        where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
+        on conflict (library_id) do update
+          set payload = excluded.payload, built_at = excluded.built_at
     """
 
 

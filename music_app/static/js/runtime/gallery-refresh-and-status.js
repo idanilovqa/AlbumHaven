@@ -1436,6 +1436,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     : '';
   state.ui.activeViewRequestController = controller;
   state.ui.pendingViewRequest = null;
+  // A search's Loose Tracks indicator runs alongside it, not after the gallery.
+  if (typeof prefetchLibraryNonAlbumSearch === 'function') prefetchLibraryNonAlbumSearch(apiUrl);
   state.busy = true;
   state.ui.activeViewPayloadReady = false;
   const retainsMountedSelectedViewState = Boolean(

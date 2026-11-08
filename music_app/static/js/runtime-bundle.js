@@ -12481,9 +12481,51 @@ function getNonAlbumMenuLabel() {
 // The library-wide request is the current browse scope without the open
 // artist or family selection, so every artist page shares one library result.
 // A search keeps its own view request: its loose tracks are query-scoped.
+// A search's library-wide Loose Tracks depend only on these: never on the
+// artist the search auto-selects, so the request can start with the search.
+const LIBRARY_NON_ALBUM_SEARCH_PARAMS = new Set(['surface', 'q', 'gallery_scope', 'category']);
+
+function buildLibraryNonAlbumSearchUrl(sourceUrl) {
+  const source = new URL(sourceUrl, 'http://localhost');
+  const url = new URL(source.pathname, 'http://localhost');
+  for (const [key, value] of source.searchParams.entries()) {
+    if (LIBRARY_NON_ALBUM_SEARCH_PARAMS.has(key)) url.searchParams.append(key, value);
+  }
+  url.searchParams.set('omit_sidebar', '1');
+  url.searchParams.set('include_non_album', '1');
+  url.searchParams.set('include_library_wide_non_album', '1');
+  return url;
+}
+
+let libraryNonAlbumSearchPrefetch = null;
+
+// Started with the search's own view request so the Loose Tracks indicator is
+// not a second round trip after the gallery (it was ~0.5 s on the synthetic
+// library, 1-2 s on the owner's).
+function prefetchLibraryNonAlbumSearch(searchRequestUrl) {
+  const source = new URL(searchRequestUrl, 'http://localhost');
+  if (!String(source.searchParams.get('q') || '').trim() || source.pathname !== '/view-data') return;
+  const url = buildLibraryNonAlbumSearchUrl(source);
+  const key = getDeferredNonAlbumScopeKey(url);
+  if (libraryNonAlbumSearchPrefetch?.key === key) return;
+  const promise = fetchNonAlbumPayload(url);
+  promise.catch(() => {});
+  libraryNonAlbumSearchPrefetch = { key, promise };
+}
+
+function fetchLibraryNonAlbumPayload(url) {
+  const prefetched = libraryNonAlbumSearchPrefetch;
+  if (prefetched?.key === getDeferredNonAlbumScopeKey(url)) {
+    libraryNonAlbumSearchPrefetch = null;
+    return prefetched.promise;
+  }
+  return fetchNonAlbumPayload(url);
+}
+
 function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
   const searching = withQuery && Boolean(String(view.query || '').trim());
-  const url = new URL(buildApiUrl(searching ? view : {
+  if (searching) return buildLibraryNonAlbumSearchUrl(buildApiUrl(view, { omitSidebar: true }));
+  const url = new URL(buildApiUrl({
     ...view,
     query: '',
     selected_artist: '',
@@ -12562,7 +12604,7 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
   const request = { key: requestKey, promise: null };
   request.promise = (async () => {
     const probed = view.library_non_album_search_probe_scope === scopeKey;
-    let tracks = probed ? [] : libraryTracks(await fetchNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
+    let tracks = probed ? [] : libraryTracks(await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
     const searchMatched = searching && tracks.length > 0;
     if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
       return state.view?.library_non_album_tracks || [];
@@ -18094,6 +18136,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     : '';
   state.ui.activeViewRequestController = controller;
   state.ui.pendingViewRequest = null;
+  // A search's Loose Tracks indicator runs alongside it, not after the gallery.
+  if (typeof prefetchLibraryNonAlbumSearch === 'function') prefetchLibraryNonAlbumSearch(apiUrl);
   state.busy = true;
   state.ui.activeViewPayloadReady = false;
   const retainsMountedSelectedViewState = Boolean(
@@ -36809,6 +36853,8 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+const renderedTrackModalHeaderHtml = new WeakMap();
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -36863,7 +36909,7 @@ function renderTrackModalRelease(album) {
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+    const headerHtml = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: album.album_artist || '',
       album: album.display_name || album.name || 'Album',
@@ -36873,7 +36919,17 @@ function renderTrackModalRelease(album) {
       tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
-    els = getTrackModalElements();
+    // The summary render and the hydrated details usually build the same header;
+    // rewriting it replaced Close and the header actions under the pointer
+    // (a close click then waited ~500 ms for the new button). Other owners edit
+    // the header in place (closing clears the title), so the live DOM must
+    // still be exactly what this render wrote.
+    const rendered = renderedTrackModalHeaderHtml.get(els.header);
+    if (!rendered || rendered.built !== headerHtml || rendered.dom !== els.header.innerHTML) {
+      els.header.innerHTML = headerHtml;
+      renderedTrackModalHeaderHtml.set(els.header, { built: headerHtml, dom: els.header.innerHTML });
+      els = getTrackModalElements();
+    }
   }
   if (els.folder) {
     els.folder.dataset.album = '';

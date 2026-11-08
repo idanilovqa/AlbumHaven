@@ -2673,7 +2673,9 @@ function renderTagEditor(options = {}) {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
-      const folderName = showFolderNames ? getTagEditorTrackFolderName(path) : '';
+      // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
+      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>

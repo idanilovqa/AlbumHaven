@@ -8024,3 +8024,23 @@ test('watchSaveTask hydrates an open merged destination from canonical visible s
   assert.equal(context.state.modalReleases[0].tracks.length, 17);
   assert.equal(context.state.modalReleases[0].preview_only, false);
 });
+
+test('Edit Tags orders untagged multi-disc files by the disc in their folder, then by file name (Kiama)', () => {
+  const context = loadHelpers();
+  const track = (folder, file) => ({ path: ['N:', 'Music', 'Kiama', '2016 - Sign Of IV', folder, file].join('/') });
+  const ordered = context.orderAlbumTracks([
+    track('cd2 (bonus)', '01. Come On Home.mp3'),
+    track('CD1', '02. Tears.mp3'),
+    track('cd2 (bonus)', '02. The Things You Do.mp3'),
+    track('CD1', '01. Cold Black Heart.mp3'),
+  ]);
+  assert.deepEqual(Array.from(ordered, (item) => item.path.split('/').slice(-2).join('/')), [
+    'CD1/01. Cold Black Heart.mp3',
+    'CD1/02. Tears.mp3',
+    'cd2 (bonus)/01. Come On Home.mp3',
+    'cd2 (bonus)/02. The Things You Do.mp3',
+  ]);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/TFK/Adam & Eve CD2/01.flac' }), 2);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/Band/Discography/01.flac' }), null);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/CD3/01.flac', disc_number: '1' }), 1, 'a disc tag wins');
+});

@@ -39,10 +39,22 @@ function getAlbumTrackDisplayNumber(track, index) {
   return index + 1;
 }
 
+// A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".
+const ALBUM_TRACK_DISC_FOLDER_PATTERN = /(?:^|[^a-z])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?!\d)/i;
+
+// The tagged disc number, or the disc marker in the file's folder when the tag is empty.
+function getAlbumTrackDiscNumber(track) {
+  const tagged = getPositiveAlbumTrackSortNumber(track?.disc_number);
+  if (tagged !== null) return tagged;
+  const parts = String(track?.path || '').split(/[\\/]/);
+  const folder = parts.length > 1 ? parts[parts.length - 2] : '';
+  return getPositiveAlbumTrackSortNumber(folder.match(ALBUM_TRACK_DISC_FOLDER_PATTERN)?.[1]);
+}
+
 function compareAlbumTracks(left, right) {
   const discCompare = compareAlbumTrackSortNumbers(
-    getPositiveAlbumTrackSortNumber(left?.disc_number),
-    getPositiveAlbumTrackSortNumber(right?.disc_number),
+    getAlbumTrackDiscNumber(left),
+    getAlbumTrackDiscNumber(right),
   );
   if (discCompare) return discCompare;
 

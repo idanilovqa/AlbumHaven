@@ -969,9 +969,13 @@ test('searching loader hides previous gallery until the search settles', () => {
   const { context, elements, loader, spinner, title, scroll } = createLoaderRenderFixture();
   const railAttributes = new Map();
   elements['shell-navigation-rail'] = {
-    toggleAttribute(name, enabled) { if (enabled) railAttributes.set(name, ''); else railAttributes.delete(name); },
+    hasAttribute(name) { return railAttributes.has(name); },
+    removeAttribute(name) { railAttributes.delete(name); },
     setAttribute(name, value) { railAttributes.set(name, value); },
   };
+  const timers = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearTimeout = () => {};
   vm.runInContext(`
     state.ui.pendingViewTransition = true;
     state.ui.pendingGallerySearch = true;
@@ -993,6 +997,10 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(loader.hidden, true);
   assert.equal(scroll.hidden, false);
   assert.equal(loader.classList.contains('is-searching'), false);
+  // The loader ends a frame before the tree re-renders; the tree stays hidden until it renders the new results.
+  assert.equal(railAttributes.has('data-search-pending'), true, 'the old tree is not revealed with the loader');
+  vm.runInContext('releaseSearchPendingRail();', context);
   assert.equal(railAttributes.has('data-search-pending'), false, 'the new tree shows with the results');
   assert.equal(railAttributes.get('aria-busy'), 'false');
+  assert.equal(timers.length, 1, 'a search whose tree needs no re-render still releases it');
 });

@@ -50,8 +50,6 @@ function syncMobilePageShell() {
     mobilePageState.titleBeforePages = null;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
-  // Album sources placed in the shared page header (large cover layout) belong to the album page only.
-  if (active?.kind !== 'album') header.querySelectorAll?.(':scope > .album-details-cover-source-markers').forEach((node) => node.remove());
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
   syncMobileAlbumHeader();
   syncMobileLoopHeader();

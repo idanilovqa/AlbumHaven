@@ -83,20 +83,22 @@
   outline: none;
 }
 
-/* presentation: 'badge' — a solid, colorful icon-only marker; its name stays in aria-label and never prints. */
+/* presentation: 'badge' — an icon-only marker drawn like the Gallery's source badges (INT-040, owner): the source
+   color outlines it and draws its glyph on the panel; its name stays in aria-label until a tap expands it. */
 .small-alert.small-alert--badge,
 .small-alert.small-alert--badge:is(:hover, :focus-visible) {
   width: 28px;
   max-width: none;
   height: 28px;
-  border-color: color-mix(in srgb, var(--alert-edge) 70%, white 30%);
-  background: var(--alert-edge);
-  color: #0b1018;
-  box-shadow: 0 1px 6px rgb(0 0 0 / .45);
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: var(--panel, #161b22);
+  color: var(--alert-edge);
+  box-shadow: 0 1px 6px rgb(0 0 0 / .35);
 }
 .small-alert--badge:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
-.small-alert--badge .small-alert__icon { width: 26px; height: 26px; }
-.small-alert--badge .small-alert__icon svg { stroke-width: 2.6; }
+.small-alert--badge .small-alert__icon { width: 22px; height: 22px; color: inherit; }
+.small-alert--badge .small-alert__icon svg { stroke: currentColor; stroke-width: 2.2; }
 .small-alert--badge .small-alert__text { display: none; }
 
 .alert-label {
@@ -273,7 +275,7 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 
 /* A tapped badge shows its name beside the icon. */
 .small-alert.small-alert--badge.is-expanded { width: auto; max-width: 240px; padding-right: 10px; z-index: 5; position: relative; cursor: pointer; }
-.small-alert--badge.is-expanded .small-alert__text { display: inline; margin-left: 2px; color: #0b1018; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.small-alert--badge.is-expanded .small-alert__text { display: inline; margin-left: 2px; color: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .small-alert--badge { cursor: pointer; }
 /* Expanded alerts show their full text (owner, 11-08): it wraps instead of being cut at the edge. */
 :is(.small-alert:hover, .small-alert:focus-visible, .album-card__artbox-trigger:focus-visible .small-alert):not(.small-alert--badge) .small-alert__text { white-space: normal; padding-block: 6px; line-height: 1.3; }

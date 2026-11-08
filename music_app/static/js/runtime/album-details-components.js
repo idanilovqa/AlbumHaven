@@ -171,10 +171,8 @@ function syncMobileAlbumComposition(album) {
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
   let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
-  const mobileHeader = document.getElementById('mobile-page-header');
   const freshSourceMarkers = overlay.querySelector('.album-details-header .album-details-cover-source-markers');
   const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector('.album-details-cover-source-markers')
     || cover.querySelector('.track-modal-cover-shell > .album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
@@ -198,14 +196,13 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    // INT-040: web shows the sources on the art (on hover) in every layout; mobile places them per layout:
-    // large cover in the page header's top right, centered cover beside the art's bottom-left, compact on the
-    // art's corner.
+    // INT-040 (owner, 11-08 evening): web shows the sources on the art (on hover) in every layout; on a phone
+    // Compact and Large cover pin them inside the art's bottom-left corner (Compact's never expand), and
+    // Centered cover keeps them beside the art, under Back.
     const artHost = cover.querySelector('.track-modal-cover-shell');
-    const host = !mobile ? artHost
-      : layout === 'classic_bar' ? mobileHeader
-        : layout === 'editorial_canvas' ? rail : artHost;
+    const host = mobile && layout === 'editorial_canvas' ? rail : artHost;
     if (host) host.appendChild(sourceMarkers);
+    sourceMarkers.toggleAttribute('data-badges-fixed', mobile && layout === 'stacked_bar');
   }
   if (identity) {
     identity.hidden = !inline;

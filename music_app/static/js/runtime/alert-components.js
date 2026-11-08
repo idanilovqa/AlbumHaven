@@ -81,7 +81,7 @@ function toggleSmallAlertBadge(event) {
   if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
   const badge = event.target?.closest?.('.small-alert--badge');
   document.querySelectorAll('.small-alert--badge.is-expanded').forEach((node) => { if (node !== badge) node.classList.remove('is-expanded'); });
-  if (!badge) return;
+  if (!badge || badge.closest('[data-badges-fixed]')) return;
   if (event.type === 'keydown') event.preventDefault();
   badge.classList.toggle('is-expanded');
 }

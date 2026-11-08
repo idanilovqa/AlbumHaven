@@ -178,9 +178,12 @@ test('alert browser exports tolerate standalone and bundled loading in the same 
 
 test('a SmallAlert badge shows its name when tapped and hides it on the next tap elsewhere', () => {
   const context = loadAlertComponents();
-  const makeBadge = () => {
+  const makeBadge = (fixed = false) => {
     const classes = new Set(['small-alert--badge']);
-    return { classList: { toggle: (name) => (classes.has(name) ? classes.delete(name) : classes.add(name)), remove: (name) => classes.delete(name), has: (name) => classes.has(name) } };
+    return {
+      closest: (selector) => (fixed && selector === '[data-badges-fixed]' ? {} : null),
+      classList: { toggle: (name) => (classes.has(name) ? classes.delete(name) : classes.add(name)), remove: (name) => classes.delete(name), has: (name) => classes.has(name) },
+    };
   };
   const hoard = makeBadge();
   const arrivals = makeBadge();
@@ -193,6 +196,10 @@ test('a SmallAlert badge shows its name when tapped and hides it on the next tap
   assert.equal(arrivals.classList.has('is-expanded'), true);
   tap(null);
   assert.equal(arrivals.classList.has('is-expanded'), false, 'tapping elsewhere hides it');
+  // INT-040 (owner): the Compact cover's badges never expand on tap.
+  const fixed = makeBadge(true);
+  tap(fixed);
+  assert.equal(fixed.classList.has('is-expanded'), false);
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
   assert.match(css, /\.small-alert--badge\.is-expanded \.small-alert__text \{ display: inline;/);
 });

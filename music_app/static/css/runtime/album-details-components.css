@@ -52,7 +52,8 @@
 .album-details-header[data-album-details-layout="editorial_canvas"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 /* The album info starts on the header line, beside the actions: no empty band right of the art's top. */
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__identity { display: grid; grid-column: 1; grid-row: 1; gap: 7px; padding-top: 0; align-self: start; }
-.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__actions { grid-column: 2; grid-row: 1; }
+/* INT-040 (owner): the actions keep the other layouts' top-of-header position instead of centering beside the tall title. */
+.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__actions { grid-column: 2; grid-row: 1; align-self: start; }
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__primary {
   font-size: clamp(1.35rem, 2.5vw, 2rem);
   line-height: 1.15;

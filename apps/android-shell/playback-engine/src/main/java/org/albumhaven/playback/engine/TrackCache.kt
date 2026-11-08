@@ -17,6 +17,8 @@ class CachedTrack(
     val skipFrames: Long,
     val totalFrames: Long,
     val bytes: ByteArray,
+    /** The server's seek table of the stream, so seeks inside a kept track decode on the device. */
+    val table: SeekTable? = null,
 )
 
 /** Recently played tracks kept on the device; [load] runs on the playback thread. */
@@ -48,7 +50,15 @@ class DiskTrackCache(
                 val totalFrames = input.readLong()
                 val bytes = ByteArray(input.readInt())
                 input.readFully(bytes)
-                CachedTrack(codec, sampleRate, skipFrames, totalFrames, bytes)
+                val entries = input.readInt()
+                val table = if (entries == 0) null else {
+                    val prefixBytes = input.readInt()
+                    val prerollFrames = input.readLong()
+                    val offsets = IntArray(entries) { input.readInt() }
+                    val samples = LongArray(entries) { input.readLong() }
+                    SeekTable(prefixBytes, prerollFrames, offsets, samples)
+                }
+                CachedTrack(codec, sampleRate, skipFrames, totalFrames, bytes, table)
             }.also { file.setLastModified(System.currentTimeMillis()) }
         } catch (_: IOException) {
             file.delete()
@@ -70,6 +80,14 @@ class DiskTrackCache(
                     output.writeLong(track.totalFrames)
                     output.writeInt(track.bytes.size)
                     output.write(track.bytes)
+                    val table = track.table
+                    output.writeInt(table?.offsets?.size ?: 0)
+                    if (table != null) {
+                        output.writeInt(table.prefixBytes)
+                        output.writeLong(table.prerollFrames)
+                        table.offsets.forEach(output::writeInt)
+                        table.samples.forEach(output::writeLong)
+                    }
                 }
                 if (!partial.renameTo(target)) partial.delete()
                 evictOverQuota()
@@ -97,7 +115,8 @@ class DiskTrackCache(
     }
 
     private companion object {
-        const val FORMAT = 1
+        /** 2 added the seek table; a version-1 file is dropped and streamed again. */
+        const val FORMAT = 2
         const val SUFFIX = ".track"
     }
 }

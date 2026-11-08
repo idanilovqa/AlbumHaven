@@ -30,6 +30,18 @@ class DiskTrackCacheTest {
     }
 
     @Test
+    fun aKeptTrackKeepsItsSeekTable() {
+        val table = SeekTable(42, 0, intArrayOf(42, 900, 5042), longArrayOf(0, 4096, 1234))
+        cache.store("t", CachedTrack("flac", 96_000, 0, 1234, ByteArray(5000), table))
+        val loaded = cache.load("t")!!.table!!
+
+        assertEquals(42, loaded.prefixBytes)
+        assertArrayEquals(table.offsets, loaded.offsets)
+        assertArrayEquals(table.samples, loaded.samples)
+        assertNull(cache.load("t")!!.let { cache.store("u", track(10)); cache.load("u")!!.table })
+    }
+
+    @Test
     fun theOldestUsedTracksGoOnceTheQuotaIsExceeded() {
         quota = 25_000
         cache.store("a", track(10_000))

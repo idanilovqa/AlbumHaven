@@ -25,6 +25,8 @@ sealed interface PcmClientControl {
         val codecs: List<String> = emptyList(),
         /** `320` asks for a 320 kbps MP3 of a FLAC file, for a weak connection. */
         val quality: String? = null,
+        /** Asks for the stream's seek table, to seek inside the bytes it received. */
+        val seekTable: Boolean = false,
     ) : PcmClientControl
 
     data class Credit(override val generation: Long, override val streamId: Long, val frames: Int) :
@@ -79,6 +81,10 @@ sealed interface PcmServerEvent {
     data class RateMismatch(override val generation: Long?, override val streamId: Long?, val sampleRate: Long?) :
         PcmServerEvent
 
+    /** Where the stream's positions can be decoded from its bytes; null when the event is malformed. */
+    data class SeekTableEvent(override val generation: Long?, override val streamId: Long?, val table: SeekTable?) :
+        PcmServerEvent
+
     /** Answer to a `probe` request; native playback does not probe, so the engine ignores it. */
     data object ProbeResult : PcmServerEvent {
         override val generation: Long? = null
@@ -103,6 +109,7 @@ object AhpcControlCodec {
                 .apply {
                     if (control.codecs.isNotEmpty()) put("codecs", org.json.JSONArray(control.codecs))
                     control.quality?.let { put("quality", it) }
+                    if (control.seekTable) put("seekTable", true)
                 }
             // An encoded stream's credit counts bytes in the same field.
             is PcmClientControl.Credit -> json.put("type", "credit").put("frames", control.frames)
@@ -156,9 +163,26 @@ object AhpcControlCodec {
                 message = json.opt("message") as? String,
             )
             "rate-mismatch" -> PcmServerEvent.RateMismatch(generation, streamId, json.integer("sampleRate"))
+            "seek-table" -> PcmServerEvent.SeekTableEvent(generation, streamId, seekTable(json))
             "probe-result" -> PcmServerEvent.ProbeResult
             else -> PcmServerEvent.Unknown(type, generation, streamId)
         }
+    }
+
+    private fun seekTable(json: JSONObject): SeekTable? {
+        val offsets = json.optJSONArray("offsets") ?: return null
+        val samples = json.optJSONArray("samples") ?: return null
+        val prefix = json.integer("prefixBytes") ?: return null
+        val preroll = json.integer("prerollFrames") ?: return null
+        if (offsets.length() == 0 || offsets.length() != samples.length() || prefix < 0 || preroll < 0) return null
+        val offsetValues = IntArray(offsets.length())
+        val sampleValues = LongArray(samples.length())
+        for (index in 0 until offsets.length()) {
+            offsetValues[index] = (offsets.opt(index) as? Number)?.toInt() ?: return null
+            sampleValues[index] = (samples.opt(index) as? Number)?.toLong() ?: return null
+            if (index > 0 && (offsetValues[index] < offsetValues[index - 1] || sampleValues[index] < sampleValues[index - 1])) return null
+        }
+        return SeekTable(prefix.toInt(), preroll, offsetValues, sampleValues)
     }
 
     private fun JSONObject.integer(name: String): Long? = when (val value = opt(name)) {

@@ -123,8 +123,6 @@ class NativePcmEngine(
     private val quality: () -> String? = { null },
     /** Recently played tracks; a cached track starts and follows with no server round trip. */
     private val cache: TrackCache? = null,
-    /** Indexes a stream's kept bytes for seeks on the device: (codec, first kept frame, kept frames). */
-    private val seekIndexes: (AudioCodec, Long, Long) -> EncodedSeekIndex? = ::seekIndexFor,
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -198,19 +196,17 @@ class NativePcmEngine(
         val initialTotalFrames = remainingFrames
 
         /**
-         * A stream from the track's first frame keeps its bytes as they arrive, indexed, so a seek
-         * into them decodes on the device and the whole track can be kept in the cache.
+         * The stream keeps its bytes as they arrive, so a seek into them decodes on the device by the
+         * server's seek [table], and a whole track (from its first frame) can be kept in the cache.
          */
         var store: ByteStore? = null
-        var index: EncodedSeekIndex? = null
+        var table: SeekTable? = null
 
         /** A seek decoding from the kept bytes until its first audio is ready to cut over to. */
         var localSeek: LocalSeek? = null
 
         fun keepBytes() {
-            if (stream.startFrame != 0L) return
             store = ByteStore()
-            index = seekIndexes(codec, initialSkipFrames, initialTotalFrames)
         }
 
         fun write(bytes: ByteArray, offset: Int, length: Int) {
@@ -219,11 +215,9 @@ class NativePcmEngine(
             val kept = store ?: return
             if (kept.size + length > MAX_CACHED_TRACK_BYTES) {
                 store = null
-                index = null
                 return
             }
             kept.append(bytes, offset, length)
-            index?.update(kept)
         }
 
         fun end() {
@@ -283,7 +277,7 @@ class NativePcmEngine(
 
         init {
             val store = checkNotNull(encoded.store)
-            if (window.prefix.isNotEmpty()) decoding.write(window.prefix, 0, window.prefix.size)
+            if (window.prefixBytes > 0) decoding.write(store.bytes, 0, window.prefixBytes)
             decoding.write(store.bytes, window.byteOffset, store.size - window.byteOffset)
             if (encoded.serverEos != null) decoding.end()
             decoding.request(config.frames(LOCAL_SEEK_READY_SECONDS) * 2)
@@ -538,7 +532,10 @@ class NativePcmEngine(
         val encoded = stream.encoded ?: return false
         if (loop != null || stream.eosReceived || encoded.closed) return false
         val store = encoded.store ?: return false
-        val window = encoded.index?.window(store, frame - stream.startFrame) ?: return false
+        val window = encoded.table?.lookup(
+            encoded.initialSkipFrames, encoded.initialTotalFrames, stream.startFrame, frame,
+            receivedBytes = store.size, ended = encoded.serverEos != null,
+        ) ?: return false
         // The newest seek wins: an older one, local or on the server, is dropped.
         encoded.localSeek?.decoding?.close()
         if (continuity?.kind == StreamKind.SEEK) closeContinuity("seek-replaced")
@@ -646,6 +643,10 @@ class NativePcmEngine(
             } ?: acceptEos(stream, event)
             is PcmServerEvent.Promoted -> acceptPromoted(event)
             is PcmServerEvent.RateMismatch -> acceptRateMismatch(stream, event)
+            is PcmServerEvent.SeekTableEvent -> {
+                val table = event.table ?: return fail("control-protocol-error", "Invalid seek table")
+                stream.encoded?.table = table
+            }
             is PcmServerEvent.Error ->
                 fail("server-error", event.message ?: event.code ?: "Streaming failed")
             is PcmServerEvent.Unknown ->
@@ -1107,10 +1108,11 @@ class NativePcmEngine(
 
     /** Keeps a whole encoded track on the device once every byte arrived. */
     private fun keepInCache(stream: Stream, encoded: EncodedStream) {
+        if (stream.startFrame != 0L) return
         val store = encoded.store ?: return
         val key = stream.track.cacheKey ?: return
         val bytes = store.copyOfRange(0, store.size)
-        cache?.store(key, CachedTrack(encoded.codec.wire, config.sampleRate, encoded.initialSkipFrames, encoded.initialTotalFrames, bytes))
+        cache?.store(key, CachedTrack(encoded.codec.wire, config.sampleRate, encoded.initialSkipFrames, encoded.initialTotalFrames, bytes, encoded.table))
     }
 
     /**
@@ -1129,6 +1131,7 @@ class NativePcmEngine(
         val encoded = EncodedStream(stream, codec, cached.skipFrames, cached.totalFrames, initialCreditBytes = 0)
         stream.encoded = encoded
         encoded.receivedBytes = cached.bytes.size.toLong()
+        encoded.table = cached.table
         encoded.keepBytes()
         encoded.write(cached.bytes, 0, cached.bytes.size)
         encoded.end()
@@ -1161,6 +1164,7 @@ class NativePcmEngine(
                 generation, stream.streamId, role, track, startFrame, config.sampleRate,
                 codecs = AudioCodec.entries.filter(stream.offeredCodecs::contains).map { it.wire },
                 quality = quality(),
+                seekTable = stream.offeredCodecs.isNotEmpty(),
             ),
         )
         return if (accepted) stream else null

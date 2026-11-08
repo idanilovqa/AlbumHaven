@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from music_app.services.album_local_membership import local_album_membership_ctes_sql
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -268,10 +267,17 @@ def _non_album_candidates_sql(
         with bootstrap_context as (
           {_bootstrap_context_sql()}
         ),
-        {local_album_membership_ctes_sql()},
         eligible_track_file_ids as (
-          select file_id as track_file_id from local_album_membership
-          where problem is not null
+          -- Scan-published membership problems, scoped like the branches below:
+          -- a materialized whole-library CTE read every file's metadata (1.05 s
+          -- at 162k files) even when a search passed the cached track ids.
+          select files.id as track_file_id
+          from library.local_track_files files
+          join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
+          join bootstrap_context on bootstrap_context.library_id = roots.library_id
+          where files.scan_cache_stale is false
+            and (%(track_id_count)s = 0 or files.track_id = any(%(track_ids)s::bigint[]))
+            and nullif(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
           union
           select library.local_track_files.id as track_file_id
           from library.local_tracks

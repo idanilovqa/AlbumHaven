@@ -564,7 +564,7 @@ class PostgresLibraryBrowseRepository:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
             }, generation)
-        scoped_entries = _non_album_entries_from_inventory_candidates(
+        return _non_album_entries_from_inventory_candidates(
             rows,
             visible_library_categories=list(
                 view_state.get("visible_library_categories") or []
@@ -573,17 +573,7 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=canonical_to_aliases,
             visible_artist_names=scoped_artist_names,
             query=query,
-        )
-        if not include_library_wide:
-            return scoped_entries
-        return scoped_entries, _non_album_entries_from_inventory_candidates(
-            rows,
-            visible_library_categories=list(
-                view_state.get("visible_library_categories") or []
-            ),
-            alias_to_canonical=alias_to_canonical,
-            canonical_to_aliases=canonical_to_aliases,
-            query=query,
+            include_library_wide=include_library_wide,
         )
 
     def build_root_counts_payload(
@@ -4318,7 +4308,10 @@ def _non_album_entries_from_inventory_candidates(
     canonical_to_aliases: Mapping[str, object],
     visible_artist_names: Iterable[object] = (),
     query: object = "",
-) -> list[dict[str, object]]:
+    include_library_wide: bool = False,
+) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Loose-track entries visible to the artist scope; with ``include_library_wide``
+    also the library-wide list, from one pass."""
     from music_app.services.view_search import fold_search_accents, normalize_search_text
 
     visible_artists = {
@@ -4346,6 +4339,7 @@ def _non_album_entries_from_inventory_candidates(
         if local_inventory_identity_key(alias)
     }
     entries: list[dict[str, object]] = []
+    library_entries: list[dict[str, object]] = []
     for row in rows:
         payload = _row_mapping(row)
         entry = _non_album_entry_from_inventory_candidate(payload)
@@ -4375,11 +4369,12 @@ def _non_album_entries_from_inventory_candidates(
             for part in Path(relative_path).parts[:-1]
             if normalize_search_text(part)
         }
-        if visible_artist_keys and (
+        in_artist_scope = not visible_artist_keys or not (
             local_inventory_identity_key(entry_artist) not in visible_artist_keys
             and local_inventory_identity_key(canonical_artist) not in visible_artist_keys
             and not visible_path_parts.intersection(path_parts)
-        ):
+        )
+        if not in_artist_scope and not include_library_wide:
             continue
         if folded_query:
             file_name = Path(str(entry.get("path") or "")).name
@@ -4396,8 +4391,12 @@ def _non_album_entries_from_inventory_candidates(
             )
             if not (artist_match or text_match):
                 continue
-        entries.append(entry)
-    return entries
+        if include_library_wide:
+            library_entries.append(entry)
+        if in_artist_scope:
+            # Separate dicts: callers enrich each list independently.
+            entries.append(dict(entry) if include_library_wide else entry)
+    return (entries, library_entries) if include_library_wide else entries
 
 def _connect(database_url: str) -> Any:
     if psycopg is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 import shlex
 import unicodedata
@@ -14,7 +15,12 @@ _SEARCH_COMMIT_DEBOUNCE_MS = 150
 
 
 def fold_search_accents(value: str) -> str:
-    text = str(value or "").strip().casefold()
+    return _fold_search_accents(str(value or ""))
+
+
+@lru_cache(maxsize=131072)
+def _fold_search_accents(value: str) -> str:
+    text = value.strip().casefold()
     if text.isascii():
         return text
     decomposed = unicodedata.normalize("NFD", text)
@@ -23,6 +29,13 @@ def fold_search_accents(value: str) -> str:
 
 
 def normalize_search_text(value: str) -> str:
+    return _normalize_search_string(value if isinstance(value, str) else (value or ""))
+
+
+# Search text helpers are pure string functions applied to the same library
+# words on every request (a search's Loose Tracks pass alone made ~21k calls).
+@lru_cache(maxsize=131072)
+def _normalize_search_string(value: str) -> str:
     text = unicodedata.normalize("NFC", (value or "").strip().casefold())
     text = text.replace("'", "").replace("\u2019", "")
     text = _SEARCH_PUNCT_RE.sub(" ", text)
@@ -419,8 +432,11 @@ def bounded_edit_distance(left: str, right: str, max_distance: int = 2) -> int:
 
 
 def search_word_matches(query_word: str, candidate_word: str) -> bool:
-    query_text = str(query_word or "").strip()
-    candidate_text = str(candidate_word or "").strip()
+    return _search_word_matches(str(query_word or "").strip(), str(candidate_word or "").strip())
+
+
+@lru_cache(maxsize=262144)
+def _search_word_matches(query_text: str, candidate_text: str) -> bool:
     if not query_text or not candidate_text:
         return False
     if query_text == candidate_text:

@@ -6,13 +6,14 @@ import binascii
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
+from functools import partial
 import hashlib
 import json
 import logging
 from pathlib import Path
 from os.path import basename, normcase
 import re
-from threading import Event, Lock
+from threading import Event, Lock, Timer
 from time import perf_counter, thread_time
 from types import SimpleNamespace
 from typing import Any
@@ -110,6 +111,17 @@ _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+# The last complete Problematic Files list survives invalidation so the first
+# page and early search answer at once while the fresh list rebuilds.
+_STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
+_UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
+_UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
+_UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
+_UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
+# Candidate album ids per (cache key, generation); one whole-library pass
+# serves both the bounded first page and searches before the list completes.
+_PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
+_PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -152,6 +164,7 @@ def invalidate_postgres_utility_projection_cache(
     }
     if not normalized_kinds:
         return
+    rewarms = []
     with _UTILITY_PROJECTION_CACHE_LOCK:
         if normalized_database_url:
             affected_keys = {
@@ -173,7 +186,26 @@ def invalidate_postgres_utility_projection_cache(
             _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
-            _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            payload = _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            if payload is not None and cache_key[1] in _STALE_SERVED_UTILITY_KINDS:
+                _UTILITY_PROJECTION_STALE[cache_key] = payload
+            rewarm = _UTILITY_PROJECTION_REWARM.get(cache_key)
+            if rewarm is not None and cache_key not in _UTILITY_PROJECTION_REWARM_PENDING:
+                _UTILITY_PROJECTION_REWARM_PENDING.add(cache_key)
+                rewarms.append((cache_key, rewarm))
+    for cache_key, rewarm in rewarms:
+        # Let the invalidating write commit (and bursts settle) before rebuilding.
+        timer = Timer(
+            _UTILITY_PROJECTION_REWARM_DELAY_SECONDS, _run_utility_projection_rewarm, (cache_key, rewarm),
+        )
+        timer.daemon = True
+        timer.start()
+
+
+def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        _UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+    rewarm()
 
 
 def _request_flag(value: object) -> bool:
@@ -2743,23 +2775,30 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
+        status = "bounded"
         cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is None:
+            cached_payload = self._get_stale_utility_projection("problematic-files")
+            status = "stale"
         if cached_payload is not None:
             cached_items = list(cached_payload.get("items") or [])
             cached_payload["items"] = cached_items[:limit]
             cached_payload["count"] = len(cached_payload["items"])
             cached_payload["complete"] = False
             cached_payload["total_candidate_count"] = None
-            cached_payload["projection_cache_status"] = "bounded"
+            cached_payload["projection_cache_status"] = status
             return cached_payload
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            album_ids = self._load_problematic_candidate_ids(
-                connection=connection,
-                limit=limit,
-            )
+            album_ids = [
+                int(_row_mapping(row)["album_id"])
+                for row in connection.execute(
+                    _problematic_page_album_ids_sql(),
+                    {"candidate_ids": sorted(self._problematic_candidate_album_ids(connection)), "limit": limit},
+                ).fetchall()
+            ]
             payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(
@@ -2780,25 +2819,30 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_search(self, query: str) -> dict[str, object]:
         """Every problematic album whose summary matches ``query``, without the full list.
 
-        The complete projection answers exactly once cached. Before that, SQL
-        narrows the search to albums whose title, artist, year or track titles
-        contain the text, and only those albums are evaluated, so a search
-        reaches albums far beyond the first page in well under the full build.
-        Matches only visible in computed text (problem reasons, repaired
-        spellings) arrive with the complete list (``complete: false``).
+        The complete projection answers exactly once cached; the last complete
+        list answers at once while a fresh one rebuilds. With neither, SQL
+        narrows the candidate albums (the ones the complete list evaluates) to
+        those whose title, artist, year or track titles contain the text, and
+        only those are evaluated. Matches only visible in computed text
+        (problem reasons, repaired spellings) arrive with the complete list
+        (``complete: false``).
         """
         needle = str(query or "").strip().lower()
         if not needle:
             raise ValueError("Problematic Files search needs a query.")
+        complete, status = True, "hit"
         cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is None:
+            complete, status = False, "stale"
+            cached_payload = self._get_stale_utility_projection("problematic-files")
         if cached_payload is not None:
             items = [
                 item for item in cached_payload.get("items") or []
                 if _problematic_summary_matches_query(item, needle)
             ]
             cached_payload.update(
-                items=items, count=len(items), initial_detail=None, complete=True,
-                query=query, search_truncated=False, projection_cache_status="hit",
+                items=items, count=len(items), initial_detail=None, complete=complete,
+                query=query, search_truncated=False, projection_cache_status=status,
             )
             return cached_payload
         with self._browse_connection_context() as connection:
@@ -2809,7 +2853,11 @@ class PostgresLibraryBrowseRepository:
                 int(_row_mapping(row)["id"])
                 for row in connection.execute(
                     _problematic_search_album_ids_sql(),
-                    {"needle": needle, "limit": PROBLEMATIC_SEARCH_ALBUM_LIMIT + 1},
+                    {
+                        "needle": needle,
+                        "candidate_ids": sorted(self._problematic_candidate_album_ids(connection)),
+                        "limit": PROBLEMATIC_SEARCH_ALBUM_LIMIT + 1,
+                    },
                 ).fetchall()
             ]
             truncated = len(album_ids) > PROBLEMATIC_SEARCH_ALBUM_LIMIT
@@ -3878,29 +3926,6 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as owned_connection:
             return load_rows(owned_connection)
 
-    def _load_problematic_candidate_ids(
-        self,
-        *,
-        connection: Any,
-        limit: int,
-    ) -> list[int]:
-        cursor = _execute_problematic_sql(
-            connection,
-            self._database_url,
-            lambda path_columns: _problematic_files_sql(
-                candidate_summary=True,
-                candidate_ids_page=True,
-                path_columns=path_columns,
-            ),
-            {
-                "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
-                "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
-                "limit": limit,
-            },
-        )
-        rows = [_row_mapping(row) for row in cursor.fetchall()]
-        return [int(row["album_id"]) for row in rows]
-
     def _load_utility_rules_rows(self) -> list[object]:
         with self._connect_to_database() as connection:
             cursor = connection.execute(_utility_rules_sql(), {})
@@ -3975,6 +4000,49 @@ class PostgresLibraryBrowseRepository:
             ):
                 return
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
+            if kind in _STALE_SERVED_UTILITY_KINDS:
+                _UTILITY_PROJECTION_STALE.pop(cache_key, None)
+                if self._allow_background_prewarm:
+                    # A list someone opened stays warm across later library changes.
+                    _UTILITY_PROJECTION_REWARM[cache_key] = partial(self.queue_utility_projection_prewarm, kind)
+
+    def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
+        cache_key = self._utility_projection_cache_key(kind)
+        if cache_key is None:
+            return None
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            payload = _UTILITY_PROJECTION_STALE.get(cache_key)
+            return None if payload is None else deepcopy(payload)
+
+    def _problematic_candidate_album_ids(self, connection: Any) -> frozenset[int]:
+        """Every album the complete list evaluates, computed once per invalidation generation."""
+        cache_key = self._utility_projection_cache_key("problematic-files")
+        with _PROBLEMATIC_CANDIDATE_IDS_LOCK:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) if cache_key else None
+                cached = _PROBLEMATIC_CANDIDATE_IDS.get(cache_key) if cache_key else None
+            if cached is not None and cached[0] == generation:
+                return cached[1]
+            cursor = _execute_problematic_sql(
+                connection,
+                self._database_url,
+                lambda path_columns: _problematic_files_sql(
+                    candidate_summary=True, candidate_ids_only=True, path_columns=path_columns,
+                ),
+                {
+                    "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                    "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+                },
+            )
+            # Loose files without an album join the union as null album ids.
+            album_ids = frozenset(
+                int(album_id) for row in cursor.fetchall()
+                if (album_id := _row_mapping(row)["album_id"]) is not None
+            )
+            if cache_key is not None:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    _PROBLEMATIC_CANDIDATE_IDS[cache_key] = (generation, album_ids)
+            return album_ids
 
     def queue_settings_projection_prewarm(self) -> None:
         if not self._allow_background_prewarm:
@@ -6463,33 +6531,41 @@ def _problematic_summary_matches_query(album: Mapping[str, object], needle: str)
 
 
 def _problematic_search_album_ids_sql() -> str:
-    """Albums whose own title, artist, year or track titles contain the needle."""
+    """Candidate albums whose own title, artist, year or track titles contain the needle."""
     return """
-        with bootstrap_context as (
-          select library.libraries.id as library_id
-          from app.bootstrap_owners
-          join library.libraries
-            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
-           and library.libraries.name = 'Local Library'
-           and library.libraries.library_kind = 'local'
-          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-          limit 1
-        )
         select albums.id
         from library.local_albums albums
-        join bootstrap_context on bootstrap_context.library_id = albums.library_id
         left join library.local_artists artists on artists.id = albums.artist_id
-        where strpos(lower(albums.title), %(needle)s) > 0
-           or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
-           or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
-           or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
-           or exists (
-             select 1 from library.local_tracks tracks
-             where tracks.album_id = albums.id
-               and strpos(lower(tracks.title), %(needle)s) > 0
-           )
+        where albums.id = any(%(candidate_ids)s::bigint[])
+          and (
+            strpos(lower(albums.title), %(needle)s) > 0
+            or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
+            or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
+            or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
+            or exists (
+              select 1 from library.local_tracks tracks
+              where tracks.album_id = albums.id
+                and strpos(lower(tracks.title), %(needle)s) > 0
+            )
+          )
         order by albums.id
         limit %(limit)s
+    """
+
+
+def _problematic_page_album_ids_sql() -> str:
+    """The first ``limit`` candidate albums in the complete list's order."""
+    return """
+        select albums.id as album_id
+        from library.local_albums albums
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where albums.id = any(%(candidate_ids)s::bigint[])
+        order by
+          lower(coalesce(albums.title, '')) collate "C",
+          lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name, '')) collate "C",
+          coalesce(albums.release_year::text, '') collate "C",
+          lower(coalesce(albums.album_key, '')) collate "C"
+        limit %(limit)s::integer
     """
 
 
@@ -11092,7 +11168,6 @@ def _problematic_files_sql(
     *,
     candidate_summary: bool = False,
     candidate_ids_only: bool = False,
-    candidate_ids_page: bool = False,
     selected_album_ids: bool = False,
     targeted_problem_owners: bool = False,
     duplicate_candidates: bool = False,
@@ -11114,9 +11189,9 @@ def _problematic_files_sql(
 
     if duplicate_sources_only and (not duplicate_candidates or candidate_summary or targeted_problem_owners):
         raise ValueError("Duplicate source projection requires only duplicate_candidates=True.")
-    if (candidate_ids_only or candidate_ids_page or selected_album_ids) and not candidate_summary:
+    if (candidate_ids_only or selected_album_ids) and not candidate_summary:
         raise ValueError("Problematic candidate query modes require candidate_summary=True.")
-    if sum((candidate_ids_only, candidate_ids_page, selected_album_ids)) > 1:
+    if candidate_ids_only and selected_album_ids:
         raise ValueError("Problematic candidate query modes are mutually exclusive.")
     inventory_physical_context = candidate_summary and not selected_album_ids
     physical_scope_ctes = ""
@@ -11599,37 +11674,6 @@ def _problematic_files_sql(
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
             from candidate_album_ids;
-        """
-    if candidate_ids_page:
-        candidate_ctes_sql = candidate_ctes.rstrip()
-        if candidate_ctes_sql.endswith(","):
-            candidate_ctes_sql = candidate_ctes_sql[:-1]
-        return f"""
-            with bootstrap_context as (
-              select library.libraries.id as library_id
-              from app.bootstrap_owners
-              join library.libraries
-                on library.libraries.owner_account_id = app.bootstrap_owners.account_id
-               and library.libraries.name = 'Local Library'
-               and library.libraries.library_kind = 'local'
-              where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-              limit 1
-            ),
-            {spotify_quota_cte}
-            {physical_file_ctes}
-            {candidate_ctes_sql}
-            select library.local_albums.id as album_id
-            from library.local_albums
-            left join library.local_artists
-              on library.local_artists.id = library.local_albums.artist_id
-            where library.local_albums.id = any(array(select album_id from candidate_album_ids))
-            order by
-              lower(coalesce(library.local_albums.title, '')) collate "C",
-              lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''),
-                             library.local_artists.name, '')) collate "C",
-              coalesce(library.local_albums.release_year::text, '') collate "C",
-              lower(coalesce(library.local_albums.album_key, '')) collate "C"
-            limit %(limit)s::integer;
         """
     if selected_album_ids:
         selected_album_filter = (

@@ -221,9 +221,44 @@ test('split album conflict closes Cover Lookup, asks in a compact chooser, then 
     { album: secondRelease, task_id: 'stale-task' },
   );
 
+  // UI-5 (owner, 11-08 evening): once the user has chosen a release, that's it. Reopening the notification or
+  // a task update replacing the open album goes to the chosen release; the chooser never comes back.
   overlay.hidden = true;
   await context.openCoverLookupModal(oldAlbum, { taskId: 'stale-task' });
-  assert.equal(dialogs.length, 2, 'reopening the same notification goes straight to the chooser');
+  assert.equal(dialogs.length, 1, 'no second chooser');
+  assert.equal(context.state.coverLookup.modal.album.album_id, 42);
+  assert.equal(requests.at(-1).album.identity_resolution, 'album_split_choice');
+  context.state.coverLookup.modal.album = { ...firstRelease, identity_resolution: undefined };
+  context.handleCoverLookupSplitResponse([firstRelease, secondRelease]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(dialogs.length, 1, 'a split answer for the chosen notification restores the choice instead of asking');
+  assert.equal(context.state.coverLookup.modal.album.album_id, 42);
+});
+
+test('UI-5: a split answer is handled even when a newer gallery request has started during a search', async () => {
+  const album = { album_id: 7, name: 'Ремиксы', key: 'ddt::remixes' };
+  const releases = [{ album_id: 1, name: 'A', track_count: 3 }, { album_id: 2, name: 'B', track_count: 3 }];
+  const overlay = { hidden: false, classList: { contains: () => false, toggle: () => {} }, querySelector: () => null };
+  let release;
+  const context = {
+    window: {},
+    state: { coverLookup: { tasks: [], modal: { album, taskId: 'running-task', pastedImages: [] } } },
+    console,
+    showToast: () => {},
+    fetch: () => new Promise((resolve) => { release = resolve; }),
+    document: { body: { classList: { add: () => {} } }, getElementById: (id) => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const handled = [];
+  context.handleCoverLookupSplitResponse = (current) => handled.push(current.length);
+  context.renderCoverLookupModal = () => {};
+  const first = context.refreshCoverLookupGallery(false);
+  const firstResponse = release;
+  void context.refreshCoverLookupGallery(false);
+  firstResponse({ ok: false, json: async () => ({ ok: false, resolution_kind: 'album_split', current_releases: releases }) });
+  await first;
+  assert.deepEqual(handled, [2], 'the progress poll that superseded the request does not swallow the split');
 });
 
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {

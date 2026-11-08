@@ -32206,7 +32206,9 @@ function syncCoverLookupAlbumReferences(updatedAlbums) {
   if (modalAlbum) {
     const replacement = findCoverLookupAlbumReplacement(modalAlbum, candidates);
     if (replacement) {
-      state.coverLookup.modal.album = replacement;
+      // UI-5 (owner): a chosen split release keeps its identity through task updates.
+      state.coverLookup.modal.album = modalAlbum.identity_resolution === 'album_split_choice'
+        ? { ...replacement, identity_resolution: 'album_split_choice' } : replacement;
     }
   }
   const taskIds = [];
@@ -34396,21 +34398,17 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
       body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '', ...(!includeLocal ? { include_local: false } : {}) }),
     });
     const data = await response.json().catch(() => ({}));
+    const isSplit = !response.ok && data.resolution_kind === 'album_split'
+      && Array.isArray(data.current_releases) && data.current_releases.length > 1;
+    // UI-5 (owner): a split is a fact about this lookup, not this request. While a search runs, each progress
+    // poll starts a newer request, so a split answer must not be dropped as stale or the chooser waits for
+    // the search to end.
+    if (isSplit && state.coverLookup.modal.album === album) {
+      handleCoverLookupSplitResponse(data.current_releases);
+      return;
+    }
     if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
-      if (
-        data.resolution_kind === 'album_split'
-        && Array.isArray(data.current_releases)
-        && data.current_releases.length > 1
-      ) {
-        const taskId = String(state.coverLookup.modal.taskId || '');
-        const overlay = getCoverLookupModalElements().overlay;
-        const mobileSheet = Boolean(overlay && isCoverLookupMobileSheet(overlay));
-        if (taskId) coverLookupSplitReleasesByTask.set(taskId, data.current_releases);
-        closeCoverLookupModal();
-        void presentCoverLookupSplitChoice(data.current_releases, { taskId, mobileSheet });
-        return;
-      }
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
@@ -34438,6 +34436,32 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
 }
 
 const coverLookupSplitReleasesByTask = new Map();
+// UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
+const coverLookupSplitChoiceByTask = new Map();
+
+function handleCoverLookupSplitResponse(releases) {
+  const taskId = String(state.coverLookup.modal.taskId || '');
+  const album = state.coverLookup.modal.album;
+  const overlay = getCoverLookupModalElements().overlay;
+  const mobileSheet = Boolean(overlay && isCoverLookupMobileSheet(overlay));
+  coverLookupGalleryRequest += 1;
+  if (taskId) coverLookupSplitReleasesByTask.set(taskId, releases);
+  const chosen = coverLookupSplitChoiceByTask.get(taskId);
+  if (chosen && album?.identity_resolution !== 'album_split_choice') {
+    // The open album lost its chosen identity (a task update replaced it): restore it and reload, never re-ask.
+    state.coverLookup.modal.album = { ...album, ...chosen };
+    void refreshCoverLookupGallery(false);
+    return;
+  }
+  if (chosen) {
+    state.coverLookup.modal.galleryError = 'This release changed again. Reopen the notification to choose it.';
+    coverLookupSplitChoiceByTask.delete(taskId);
+    renderCoverLookupModal();
+    return;
+  }
+  closeCoverLookupModal();
+  void presentCoverLookupSplitChoice(releases, { taskId, mobileSheet });
+}
 
 function buildCoverLookupSplitReleaseItemsHtml(releases) {
   return releases.map((release) => {
@@ -34479,8 +34503,10 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
     },
     onSubmit: () => chosenId,
   });
-  const release = releases.find((candidate) => String(candidate?.album_id || '') === String(chosen || ''));
-  if (!release) return false;
+  const found = releases.find((candidate) => String(candidate?.album_id || '') === String(chosen || ''));
+  if (!found) return false;
+  const release = { ...found, identity_resolution: 'album_split_choice' };
+  if (taskId) coverLookupSplitChoiceByTask.set(taskId, release);
   await openCoverLookupModal(release, { taskId, mobileSheet });
   return true;
 }
@@ -34509,7 +34535,9 @@ async function openCoverLookupModal(album, options = {}) {
       : Number(window.innerWidth || 0) > 0 && Number(window.innerWidth) <= 900
   );
   const knownSplit = coverLookupSplitReleasesByTask.get(String(options.taskId || ''));
-  if (knownSplit && album.identity_resolution !== 'album_split_choice') {
+  const chosenSplit = coverLookupSplitChoiceByTask.get(String(options.taskId || ''));
+  if (knownSplit && chosenSplit && album.identity_resolution !== 'album_split_choice') album = { ...chosenSplit };
+  else if (knownSplit && album.identity_resolution !== 'album_split_choice') {
     await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
     return;
   }

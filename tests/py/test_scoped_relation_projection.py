@@ -361,12 +361,13 @@ def test_foreground_edit_refuses_an_unpublished_library_level_journal_row():
             if 'select album_id,album_keys from library.local_relation_dirty_albums' in sql:
                 return Cursor([])
             if 'select 1 from library.local_relation_dirty_albums' in sql:
-                assert params == (1, [1])
+                assert 'album_id<=0' in sql
+                assert params == (1,)
                 return Cursor([{'exists': 1}])
             if 'select album_id,first_inventory_revision' in sql:
                 assert 'from library.local_relation_dirty_albums' in sql
                 assert 'order by album_id limit 5' in sql
-                assert params == (1, [1])
+                assert params == (1,)
                 return Cursor([{'album_id': -1, 'first_inventory_revision': 1,
                                 'first_gallery_generation': 1, 'first_change_xid': '1',
                                 'publication_xid': '2'}])

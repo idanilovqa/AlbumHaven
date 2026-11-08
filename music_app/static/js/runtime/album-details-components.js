@@ -170,7 +170,8 @@ function syncMobileAlbumComposition(album) {
   const mobileHeader = document.getElementById('mobile-page-header');
   const freshSourceMarkers = overlay.querySelector('.album-details-header .album-details-cover-source-markers');
   const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector('.album-details-cover-source-markers');
+    || mobileHeader?.querySelector('.album-details-cover-source-markers')
+    || cover.querySelector('.track-modal-cover-shell > .album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
   }
@@ -193,9 +194,14 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    const artHost = mobile ? cover.querySelector('.track-modal-cover-shell') : null;
-    if (artHost) artHost.appendChild(sourceMarkers);
-    else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
+    // INT-040: web shows the sources on the art (on hover) in every layout; mobile places them per layout:
+    // large cover in the page header's top right, centered cover beside the art's bottom-left, compact on the
+    // art's corner.
+    const artHost = cover.querySelector('.track-modal-cover-shell');
+    const host = !mobile ? artHost
+      : layout === 'classic_bar' ? mobileHeader
+        : layout === 'editorial_canvas' ? rail : artHost;
+    if (host) host.appendChild(sourceMarkers);
   }
   if (identity) {
     identity.hidden = !inline;

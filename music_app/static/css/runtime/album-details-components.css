@@ -81,3 +81,13 @@
 #track-modal.is-mobile-page .track-modal-body > .album-details-art-quality-alert { position: absolute; top: 8px; right: 8px; z-index: 2; }
 #track-modal.is-mobile-page .track-modal-body:has(> .album-details-art-quality-alert) { position: relative; }
 :root[data-album-art-quality-alert="disabled"] .album-details-art-quality-alert { display: none; }
+
+/* INT-040, web: the library sources sit on the album art's top-left corner in every layout and appear on hover. */
+#track-modal:not(.is-mobile-page) .track-modal-cover-shell > .album-details-cover-source-markers {
+  position: absolute; top: 8px; left: 8px; z-index: 3; display: flex; gap: 4px; min-height: 0; margin: 0;
+  opacity: 0; pointer-events: none; transition: opacity 150ms ease;
+}
+#track-modal:not(.is-mobile-page) .track-modal-cover-shell:is(:hover, :focus-within) > .album-details-cover-source-markers { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) {
+  #track-modal:not(.is-mobile-page) .track-modal-cover-shell > .album-details-cover-source-markers { transition: none; }
+}

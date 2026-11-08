@@ -314,10 +314,20 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-page-header[data-inline-album-layout="true"][data-album-identity-in-body="true"] { visibility: hidden; pointer-events: none; }
   .mobile-album-overview { flex: 0 0 auto; display: grid; align-items: start; gap: 12px; min-width: 0; width: 100%; }
   .mobile-album-overview__rail { grid-column: 1; grid-row: 1; align-self: start; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 32px; }
-  /* INT-040: library source badges sit on the album art's top-left corner in every Album Details layout. */
+  /* INT-040 (mobile): compact layout - small badges overlap on the art's bottom-right corner, barely covering
+     it (like stacked contributor avatars). Large cover - the page header's top right. Centered cover - beside
+     the art's bottom-left, under Back. Each badge is tappable to show its name. */
   #track-modal.is-mobile-page .track-modal-cover-shell > .album-details-cover-source-markers {
-    position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 4px; min-height: 0; margin: 0;
+    position: absolute; right: -6px; bottom: -6px; z-index: 2; display: flex; flex-direction: row-reverse; min-height: 0; margin: 0;
   }
+  #track-modal.is-mobile-page .track-modal-cover-shell > .album-details-cover-source-markers .small-alert--badge:not(.is-expanded) {
+    width: 22px; height: 22px; border: 2px solid var(--appearance-main-surface, var(--bg));
+  }
+  #track-modal.is-mobile-page .track-modal-cover-shell > .album-details-cover-source-markers .small-alert--badge + .small-alert--badge { margin-right: -7px; }
+  #track-modal.is-mobile-page .track-modal-cover-shell > .album-details-cover-source-markers .small-alert__icon { width: 18px; height: 18px; }
+  .mobile-page-header > .album-details-cover-source-markers { display: flex; gap: 6px; margin: 0 0 0 auto; min-height: 0; align-self: flex-start; }
+  .mobile-album-overview__rail > .album-details-cover-source-markers { display: flex; flex-direction: column; gap: 6px; margin: auto 0 0; min-height: 0; }
+  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview__rail { align-self: stretch; }
   .mobile-album-overview__rail > #mobile-back-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
   .mobile-album-overview__rail > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: auto; container-type: normal; contain-intrinsic-size: none; }

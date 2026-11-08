@@ -267,3 +267,8 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   min-height: 30px;
   padding: 0 10px;
 }
+
+/* A tapped badge shows its name beside the icon. */
+.small-alert.small-alert--badge.is-expanded { width: auto; max-width: 240px; padding-right: 10px; z-index: 5; position: relative; cursor: pointer; }
+.small-alert--badge.is-expanded .small-alert__text { display: inline; margin-left: 2px; color: #0b1018; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.small-alert--badge { cursor: pointer; }

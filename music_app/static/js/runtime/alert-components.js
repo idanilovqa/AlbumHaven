@@ -76,3 +76,16 @@ if (typeof window !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
 }
+
+function toggleSmallAlertBadge(event) {
+  if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+  const badge = event.target?.closest?.('.small-alert--badge');
+  document.querySelectorAll('.small-alert--badge.is-expanded').forEach((node) => { if (node !== badge) node.classList.remove('is-expanded'); });
+  if (!badge) return;
+  if (event.type === 'keydown') event.preventDefault();
+  badge.classList.toggle('is-expanded');
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', toggleSmallAlertBadge);
+  document.addEventListener('keydown', toggleSmallAlertBadge);
+}

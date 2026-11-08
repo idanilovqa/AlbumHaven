@@ -175,3 +175,24 @@ test('alert browser exports tolerate standalone and bundled loading in the same 
   assert.equal(context.window.AlertComponent.buildOnPageAlertHtml, context.buildOnPageAlertHtml);
   assert.match(context.window.AlertComponent.buildSmallAlertHtml({ message: '<missing>' }), /&lt;missing&gt;/);
 });
+
+test('a SmallAlert badge shows its name when tapped and hides it on the next tap elsewhere', () => {
+  const context = loadAlertComponents();
+  const makeBadge = () => {
+    const classes = new Set(['small-alert--badge']);
+    return { classList: { toggle: (name) => (classes.has(name) ? classes.delete(name) : classes.add(name)), remove: (name) => classes.delete(name), has: (name) => classes.has(name) } };
+  };
+  const hoard = makeBadge();
+  const arrivals = makeBadge();
+  context.document = { querySelectorAll: () => [hoard, arrivals].filter((badge) => badge.classList.has('is-expanded')) };
+  const tap = (badge) => context.toggleSmallAlertBadge({ type: 'click', target: { closest: () => badge } });
+  tap(hoard);
+  assert.equal(hoard.classList.has('is-expanded'), true);
+  tap(arrivals);
+  assert.equal(hoard.classList.has('is-expanded'), false, 'one name shows at a time');
+  assert.equal(arrivals.classList.has('is-expanded'), true);
+  tap(null);
+  assert.equal(arrivals.classList.has('is-expanded'), false, 'tapping elsewhere hides it');
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
+  assert.match(css, /\.small-alert--badge\.is-expanded \.small-alert__text \{ display: inline;/);
+});

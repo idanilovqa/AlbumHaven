@@ -6541,7 +6541,9 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
     silentFrames: 0,
   });
   assert.equal(harness.engine.roles.current, local);
+  await harness.settle();
   assert.equal(harness.sent('promote').length, 0, 'the server stream stays its current one');
+  assert.equal(harness.sent('close').length, 0);
   assert.equal(harness.engine.pendingPromotion, null);
 
   // Bytes the server keeps sending reach the role now reading the stream.
@@ -6600,4 +6602,81 @@ test('an open socket sends a keepalive every 25 seconds and stops with its socke
   harness.engine.socket = null;
   keepalive.callback();
   assert.equal(harness.sent('keepalive').length, 1);
+});
+
+function withTrackCache(harness, stored = new Map()) {
+  const kept = [];
+  Object.assign(harness.context, {
+    streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+    loadStreamingCachedTrack: async key => stored.get(key) || null,
+    keepStreamingCachedTrack: (key, entry) => kept.push({ key, entry }),
+  });
+  return kept;
+}
+
+test('a whole stream is kept for its next play, with its map and seek table', async () => {
+  const { create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  const kept = withTrackCache(harness);
+  const open = await startEncoded(harness, makeTrack('01.mp3'), {
+    skipFrames: 1_105, totalFrames: 20_000, initialCreditBytes: 4_000,
+  });
+  harness.sockets[0].receive(fakeSeekTable(open, 22_000));
+  harness.sockets[0].receive(encodedFrame(open, 0, Uint8Array.from({ length: 2_000 }, (_, index) => index % 251)));
+  harness.sockets[0].receive({
+    type: 'eos', generation: open.generation, streamId: open.streamId, role: 'current',
+    emittedFrames: 20_000, authoritativeTotalFrames: 20_000,
+  });
+  await harness.settle();
+
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].key, `${makeTrack('01.mp3').path}|original`);
+  const { entry } = kept[0];
+  assert.deepEqual([entry.codec, entry.sampleRate, entry.skipFrames, entry.totalFrames, entry.authoritativeTotalFrames],
+    ['mp3', 48_000, 1_105, 20_000, 20_000]);
+  assert.equal(entry.bytes.length, 2_000);
+  assert.equal(entry.bytes[300], 300 % 251);
+  assert.equal(entry.table.samples.at(-1), 22_000);
+});
+
+test('a kept track plays with no server stream, and leaving it closes nothing', async () => {
+  const { decoders, create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  const track = makeTrack('01.mp3');
+  const bytes = Uint8Array.from({ length: 2_000 }, (_, index) => index % 251);
+  withTrackCache(harness, new Map([[`${track.path}|original`, {
+    codec: 'mp3', sampleRate: 48_000, skipFrames: 0, totalFrames: 20_000, authoritativeTotalFrames: 20_000,
+    table: fakeSeekTable({ generation: 1, streamId: 1 }, 20_000), bytes,
+  }]]));
+
+  await harness.api.start(track);
+  await harness.settle();
+
+  assert.equal(harness.sent('open').length, 0, 'the server is not asked for a kept track');
+  const current = harness.engine.roles.current;
+  assert.equal(current.cachedTrack !== undefined, true);
+  assert.equal(harness.engine.diagnostics.cachedStarts, 1);
+  assert.equal(decoders.at(-1).inputs[0].length, 2_000);
+  assert.ok(harness.portMessages('enqueue').length > 0, 'its audio reaches the worklet');
+
+  await harness.api.start(makeTrack('02.mp3'));
+  assert.equal(harness.sent('close').length, 0);
+  assert.equal(harness.sent('open').length, 1);
+});
+
+test('a kept track starts mid-track from its seek table', async () => {
+  const { decoders, create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  const track = makeTrack('01.mp3');
+  withTrackCache(harness, new Map([[`${track.path}|original`, {
+    codec: 'mp3', sampleRate: 48_000, skipFrames: 0, totalFrames: 2_000_000, authoritativeTotalFrames: 2_000_000,
+    table: fakeSeekTable({ generation: 1, streamId: 1 }), bytes: Uint8Array.from({ length: 173_700 }, (_, index) => index % 251),
+  }]]));
+
+  await harness.api.start(track, { startSeconds: 30 });
+  await harness.settle();
+
+  assert.equal(harness.sent('open').length, 0);
+  assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
+  assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
 });

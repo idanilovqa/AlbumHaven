@@ -404,6 +404,22 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
+    "case": "startup bar stays visible on the app page for a default-appearance account",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-player-colors",
+      "appearance-independent-startup-background"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
     "case": "startup progress honors reduced motion with an immediate stage update",
     "profile": null,
     "setupScope": "suite",

@@ -296,7 +296,7 @@ test('workflow runs the Android jobs behind reviews only for Android changes and
   assert.match(unit, /unsigned-apk-sha256\.txt/);
   const instrumentation = workflow.slice(workflow.indexOf('  test_android_instrumentation:'), workflow.indexOf('  test_js:'));
   assert.match(instrumentation, /api-level: 29/);
-  assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765/);
+  assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765/);
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
   for (const job of ANDROID_JOBS) assert.match(gate, new RegExp(`^      - ${job}\\r?$`, 'm'));
   assert.match(gate, /runAndroid = \$env:RUN_ANDROID -eq "true"/);

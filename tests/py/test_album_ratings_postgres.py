@@ -479,7 +479,7 @@ def _album(key, album_rating, discs):
 
 def test_tag_disc_rating_candidates_take_only_consistent_differing_discs(ratings_module):
     albums = [
-        _album("all the wars", 5, {1: [5, 5], 2: [8, 8]}),
+        _album("all the wars", 5, {"1/2": [5, 5], "2/2": [8, 8]}),
         _album("worded bonus", 6, {"1/2": [6], " Bonus  Disc ": [9]}),
         _album("untagged main disc", 6, {None: [6], "Extras": [4]}),
         _album("same rating", 7, {1: [7], 2: [7]}),

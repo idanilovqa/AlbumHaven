@@ -5982,7 +5982,7 @@ def _seed_disc_rating_album(fixture, *, album="All the Wars", disc_two_ratings=(
         for index in (1, 2)
     ] + [
         {**fixture.entry(f"Owner/{album}/CD2/0{index}.flac", album=album),
-         "track_number": index, "disc_number": None, "disc_number_raw": "Bonus Disc", "album_rating": rating}
+         "track_number": index, "disc_number": 2, "disc_number_raw": "2/2", "album_rating": rating}
         for index, rating in enumerate(disc_two_ratings, start=1)
     ]
     fixture.seed(*entries)
@@ -6030,14 +6030,14 @@ def test_live_explicit_import_seeds_only_the_owners_differing_consistent_disc_ra
     assert first["disc_ratings"] == {"created": 1, "authority_skipped": 0}
     assert second["disc_ratings"] == {"created": 0, "authority_skipped": 1}
     assert _disc_rating_rows(fixture.setup_url) == [
-        {"album_key": album["album_key"], "disc_key": "bonus disc", "rating": 8,
+        {"album_key": album["album_key"], "disc_key": "2", "rating": 8,
          "provenance": "explicit_import", "is_owner": True},
     ]
     detail = PostgresLibraryBrowseRepository(fixture.config).build_album_detail_payload(
         album["album_key"]
     )
     assert detail["album_preference"]["rating"] == 5
-    assert detail["album_preference"]["disc_ratings"] == [{"disc_key": "bonus disc", "rating": 8}]
+    assert detail["album_preference"]["disc_ratings"] == [{"disc_key": "2", "rating": 8}]
 
 
 def test_live_import_never_overwrites_an_existing_disc_rating_row(watcher_repair_inventory):
@@ -6049,7 +6049,7 @@ def test_live_import_never_overwrites_an_existing_disc_rating_row(watcher_repair
         connection.execute(
             """
             insert into app.album_disc_ratings (account_id, library_id, album_key, disc_key, rating, provenance)
-            select account_id, %(library_id)s, %(album_key)s, 'bonus disc', null, 'explicit_clear'
+            select account_id, %(library_id)s, %(album_key)s, '2', null, 'explicit_clear'
             from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'
             """,
             {"library_id": album["library_id"], "album_key": album["album_key"]},

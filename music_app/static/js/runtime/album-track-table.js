@@ -49,16 +49,16 @@ function isValidAlbumRating(value) {
   return Number.isInteger(value) && value >= 1 && value <= 10;
 }
 
-// A bonus disc shows its own rating only when it and the album are both
-// rated and the two ratings differ; main album discs never do.
-function buildBonusDiscRatingHtml(group, albumRating) {
+// A disc after the first shows its own rating only when it and the album are
+// both rated and the two ratings differ; the first disc never does.
+function buildDiscRatingHtml(group, groupIndex, albumRating) {
   const discRating = group?.discRating;
-  if (!group?.isBonus || !isValidAlbumRating(discRating) || !isValidAlbumRating(albumRating)) return '';
+  if (groupIndex < 1 || !isValidAlbumRating(discRating) || !isValidAlbumRating(albumRating)) return '';
   if (discRating === albumRating) return '';
   return buildGalleryRatingHtml({
     value: discRating,
     maximum: 10,
-    label: `Bonus disc rating ${discRating}/10`,
+    label: `Disc rating ${discRating}/10`,
     className: 'album-track-table__disc-rating',
   });
 }
@@ -106,7 +106,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
-    const ratingHtml = showLabel ? buildBonusDiscRatingHtml(group, config.albumRating) : '';
+    const ratingHtml = showLabel ? buildDiscRatingHtml(group, groupIndex, config.albumRating) : '';
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;

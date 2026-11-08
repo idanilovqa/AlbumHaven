@@ -302,36 +302,40 @@ function discHeaders(html) {
   return [...html.matchAll(/<div class="album-track-table__disc-header">([\s\S]*?)<\/div><\/div><\/div>/g)].map((match) => match[1]);
 }
 
-test('AlbumTrackTable shows a bonus disc rating on its heading only when both are rated and they differ', () => {
+test('AlbumTrackTable shows a later disc rating on its heading only when both are rated and they differ', () => {
   const context = loadTrackTableWithRating();
   const track = (name) => ({ path: `C:/Music/${name}.flac`, title: name, trackNumber: 1, duration: '3:00' });
-  const render = (discRating, albumRating, isBonus = true) => context.buildAlbumTrackTableHtml({
-    albumRating,
-    groups: [
-      { discNumber: 1, discLabel: 'CD 1', tracks: [track('main')], discRating: 5 },
-      { discNumber: 2, discLabel: 'Bonus CD', isBonus, tracks: [track('bonus')], discRating },
-    ],
-    multiDisc: true,
-  });
+  const render = (discRating, albumRating, { firstDiscRating = null, secondLabel = 'CD 2', isBonus = false } = {}) => (
+    context.buildAlbumTrackTableHtml({
+      albumRating,
+      groups: [
+        { discNumber: 1, discLabel: 'CD 1', tracks: [track('main')], discRating: firstDiscRating },
+        { discNumber: 2, discLabel: secondLabel, isBonus, tracks: [track('second')], discRating },
+      ],
+      multiDisc: true,
+    })
+  );
 
+  // The Pineapple Thief "All the Wars": album 5, disc 2 tagged "2/2" and rated 8.
   const rated = discHeaders(render(8, 5));
   assert.equal(rated.length, 1);
-  assert.match(rated[0], /^<h4 class="album-track-table__disc-heading">Bonus CD<\/h4><div class="rating-row/);
+  assert.match(rated[0], /^<h4 class="album-track-table__disc-heading">CD 2<\/h4><div class="rating-row/);
   assert.match(rated[0], /class="rating-row album-track-table__disc-rating" data-rating-value="8"/);
-  assert.match(rated[0], /aria-label="Bonus disc rating 8\/10"/);
+  assert.match(rated[0], /aria-label="Disc rating 8\/10"/);
   assert.equal((rated[0].match(/class="star filled"/g) || []).length, 8);
   assert.match(rated[0], /<div class="rating-text">8\/10$/);
+  assert.equal(discHeaders(render(9, 5, { secondLabel: 'Bonus CD', isBonus: true })).length, 1);
 
-  for (const [discRating, albumRating, isBonus] of [
-    [5, 5, true],
-    [null, 5, true],
-    [0, 5, true],
-    [11, 5, true],
-    [8, null, true],
-    [8, 0, true],
-    [8, 5, false],
+  for (const [discRating, albumRating, options] of [
+    [5, 5, {}],
+    [null, 5, {}],
+    [0, 5, {}],
+    [11, 5, {}],
+    [8, null, {}],
+    [8, 0, {}],
+    [null, 5, { firstDiscRating: 8 }],
   ]) {
-    const html = render(discRating, albumRating, isBonus);
-    assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${isBonus}`);
+    const html = render(discRating, albumRating, options);
+    assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${JSON.stringify(options)}`);
   }
 });

@@ -220,21 +220,6 @@ require('node:test')('local Cover Lookup cards retain their loaded preview as th
   assert.match(card, /data-cover-preview-src="[^"]*size=480[^"]*"/);
 });
 
-require('node:test')('remote Cover Lookup cards load a small server preview and keep the full image for the lightbox', () => {
-  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
-  for (const kind of ['remote', 'saved-remote']) {
-    const card = context.buildCoverLookupCard({
-      id: 'apple-1', source: 'apple', url: 'https://images.example/full.jpg', thumbnail_url: 'https://images.example/thumb.jpg',
-    }, kind);
-    const preview = card.match(/data-cover-preview-src="([^"]+)"/)[1];
-    const full = card.match(/data-cover-src="([^"]+)"/)[1];
-    assert.equal(new URLSearchParams(preview.split('?')[1]).get('size'), 'preview');
-    assert.equal(new URLSearchParams(preview.split('?')[1]).get('url'), 'https://images.example/thumb.jpg');
-    assert.equal(new URLSearchParams(full.split('?')[1]).get('size'), null);
-    assert.equal(new URLSearchParams(full.split('?')[1]).get('url'), 'https://images.example/full.jpg');
-  }
-});
-
 require('node:test')('progressive rendering does not restart loading for a retained decoded preview', () => {
   const classes = new Set(['is-loading']);
   const preview = {

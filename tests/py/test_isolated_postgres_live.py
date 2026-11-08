@@ -5975,22 +5975,28 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
         lease.release()
 
 
-def _seed_disc_rating_album(fixture, *, album="All the Wars", disc_two_ratings=(8, 8)):
+def _seed_disc_rating_albums(fixture, albums=None):
+    # One snapshot holds every album: each seed replaces the whole library.
+    albums = albums or {"All the Wars": (8, 8)}
     entries = [
-        {**fixture.entry(f"Owner/{album}/CD1/0{index}.flac", album=album),
-         "track_number": index, "disc_number": 1, "disc_number_raw": "1/2", "album_rating": 5}
-        for index in (1, 2)
-    ] + [
-        {**fixture.entry(f"Owner/{album}/CD2/0{index}.flac", album=album),
-         "track_number": index, "disc_number": 2, "disc_number_raw": "2/2", "album_rating": rating}
-        for index, rating in enumerate(disc_two_ratings, start=1)
+        entry
+        for album, disc_two_ratings in albums.items()
+        for entry in [
+            {**fixture.entry(f"Owner/{album}/CD1/0{index}.flac", album=album),
+             "track_number": index, "disc_number": 1, "disc_number_raw": "1/2", "album_rating": 5}
+            for index in (1, 2)
+        ] + [
+            {**fixture.entry(f"Owner/{album}/CD2/0{index}.flac", album=album),
+             "track_number": index, "disc_number": 2, "disc_number_raw": "2/2", "album_rating": rating}
+            for index, rating in enumerate(disc_two_ratings, start=1)
+        ]
     ]
     fixture.seed(*entries)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         return connection.execute(
             "select library_id, album_key, metadata -> 'tag_album_rating' as tag_rating"
             " from library.local_albums where title = %(title)s",
-            {"title": album},
+            {"title": next(iter(albums))},
         ).fetchone()
 
 
@@ -6019,8 +6025,7 @@ def test_live_explicit_import_seeds_only_the_owners_differing_consistent_disc_ra
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     fixture = watcher_repair_inventory
-    album = _seed_disc_rating_album(fixture)
-    _seed_disc_rating_album(fixture, album="Mixed Bonus", disc_two_ratings=(8, 9))
+    album = _seed_disc_rating_albums(fixture, {"All the Wars": (8, 8), "Mixed Bonus": (8, 9)})
     assert album["tag_rating"] == 5
     service = PostgresAlbumRatingsService(fixture.config)
 
@@ -6044,7 +6049,7 @@ def test_live_import_never_overwrites_an_existing_disc_rating_row(watcher_repair
     from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 
     fixture = watcher_repair_inventory
-    album = _seed_disc_rating_album(fixture)
+    album = _seed_disc_rating_albums(fixture)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         connection.execute(
             """
@@ -6067,7 +6072,7 @@ def test_live_disc_rating_follows_an_album_key_rename(watcher_repair_inventory):
     from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 
     fixture = watcher_repair_inventory
-    album = _seed_disc_rating_album(fixture)
+    album = _seed_disc_rating_albums(fixture)
     PostgresAlbumRatingsService(fixture.config).import_missing_tag_ratings()
 
     with isolatedPostgres._connect(fixture.setup_url) as connection:

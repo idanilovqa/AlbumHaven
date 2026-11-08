@@ -14618,6 +14618,89 @@ function buildCustomCollectionIndex(items = []) {
     }));
 }
 
+// The library-wide request is the current browse scope without the open
+// artist or family selection, so every artist page shares one library result.
+// A search keeps its own view request: its loose tracks are query-scoped.
+// A search's library-wide Loose Tracks depend only on these: never on the
+// artist the search auto-selects, so the request can start with the search.
+const LIBRARY_NON_ALBUM_SEARCH_PARAMS = new Set(['surface', 'q', 'gallery_scope', 'category']);
+
+function buildLibraryNonAlbumSearchUrl(sourceUrl) {
+  const source = new URL(sourceUrl, 'http://localhost');
+  const url = new URL(source.pathname, 'http://localhost');
+  for (const [key, value] of source.searchParams.entries()) {
+    if (LIBRARY_NON_ALBUM_SEARCH_PARAMS.has(key)) url.searchParams.append(key, value);
+  }
+  url.searchParams.set('omit_sidebar', '1');
+  url.searchParams.set('include_non_album', '1');
+  url.searchParams.set('include_library_wide_non_album', '1');
+  return url;
+}
+
+let libraryNonAlbumSearchPrefetch = null;
+
+// Started with the search's own view request so the Loose Tracks indicator is
+// not a second round trip after the gallery (it was ~0.5 s on the synthetic
+// library, 1-2 s on the owner's).
+function prefetchLibraryNonAlbumSearch(searchRequestUrl) {
+  const source = new URL(searchRequestUrl, 'http://localhost');
+  if (!String(source.searchParams.get('q') || '').trim() || source.pathname !== '/view-data') return;
+  const url = buildLibraryNonAlbumSearchUrl(source);
+  const key = getDeferredNonAlbumScopeKey(url);
+  if (libraryNonAlbumSearchPrefetch?.key === key) return;
+  const promise = fetchNonAlbumPayload(url);
+  promise.catch(() => {});
+  libraryNonAlbumSearchPrefetch = { key, promise };
+}
+
+function fetchLibraryNonAlbumPayload(url) {
+  const prefetched = libraryNonAlbumSearchPrefetch;
+  if (prefetched?.key === getDeferredNonAlbumScopeKey(url)) {
+    libraryNonAlbumSearchPrefetch = null;
+    return prefetched.promise;
+  }
+  return fetchNonAlbumPayload(url);
+}
+
+function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
+  const searching = withQuery && Boolean(String(view.query || '').trim());
+  if (searching) return buildLibraryNonAlbumSearchUrl(buildApiUrl(view, { omitSidebar: true }));
+  const url = new URL(buildApiUrl({
+    ...view,
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    search_context: null,
+  }, { omitSidebar: true }), 'http://localhost');
+  url.searchParams.set('include_non_album', '1');
+  url.searchParams.set('include_library_wide_non_album', '1');
+  return url;
+}
+
+function getLibraryNonAlbumScopeKey(view = state.view || {}) {
+  return getDeferredNonAlbumScopeKey(buildLibraryNonAlbumRequestUrl(view));
+}
+
+function hasHydratedLibraryNonAlbumTracks() {
+  const view = state.view || {};
+  return Boolean(view.library_non_album_tracks_hydrated_scope)
+    && view.library_non_album_tracks_hydrated_scope === getLibraryNonAlbumScopeKey(view);
+}
+
+function hasNonAlbumSearchMatches(options = {}) {
+  const view = state.view || {};
+  if (!String(view.query || '').trim()) return false;
+  if (options.libraryWide) {
+    return hasHydratedLibraryNonAlbumTracks()
+      && view.library_non_album_tracks_search_matched === true
+      && getVisibleNonAlbumTracks(options).length > 0;
+  }
+  if (view.non_album_tracks_deferred) return false;
+  return getVisibleNonAlbumTracks(options).length > 0;
+}
+
 let deferredNonAlbumHydrationRequest = null;
 
 function getDeferredNonAlbumScopeKey(url) {
@@ -14634,39 +14717,87 @@ function needsNonAlbumHydration(options = {}) {
   const view = state.view || {};
   if (view.non_album_tracks_deferred) return true;
   if (options.libraryWide !== true) return false;
-  const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
-  requestUrl.searchParams.set('include_non_album', '1');
-  return view.library_non_album_tracks_hydrated_scope !== getDeferredNonAlbumScopeKey(requestUrl);
+  return !hasHydratedLibraryNonAlbumTracks();
+}
+
+let libraryNonAlbumHydrationRequest = null;
+
+async function fetchNonAlbumPayload(url) {
+  const response = await fetch(`${url.pathname}${url.search}`, {
+    headers: { Accept: 'application/json' },
+  });
+  const payload = await response.json();
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
+  }
+  return payload;
+}
+
+function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
+  const view = state.view || {};
+  const scopeKey = getLibraryNonAlbumScopeKey(view);
+  if (view.library_non_album_tracks_hydrated_scope === scopeKey) {
+    return Promise.resolve(view.library_non_album_tracks || []);
+  }
+  // A search that found no loose tracks only resolves the whole library when
+  // Loose Tracks is actually opened; the search indicator never pays for it.
+  if (!resolveLibrary && view.library_non_album_search_probe_scope === scopeKey) return Promise.resolve([]);
+  const requestKey = `${scopeKey}|${resolveLibrary ? 'library' : 'probe'}`;
+  if (libraryNonAlbumHydrationRequest?.key === requestKey) return libraryNonAlbumHydrationRequest.promise;
+  const searching = Boolean(String(view.query || '').trim());
+  const libraryTracks = (payload) => (Array.isArray(payload?.library_non_album_tracks)
+    ? payload.library_non_album_tracks
+    : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
+  const request = { key: requestKey, promise: null };
+  request.promise = (async () => {
+    const probed = view.library_non_album_search_probe_scope === scopeKey;
+    let tracks = probed ? [] : libraryTracks(await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
+    const searchMatched = searching && tracks.length > 0;
+    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+      return state.view?.library_non_album_tracks || [];
+    }
+    if (searching && !searchMatched) {
+      state.view.library_non_album_search_probe_scope = scopeKey;
+      if (!resolveLibrary) {
+        if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+        return [];
+      }
+      // A search narrows Loose Tracks only when it found loose tracks.
+      tracks = libraryTracks(await fetchNonAlbumPayload(
+        buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
+      ));
+      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+        return state.view?.library_non_album_tracks || [];
+      }
+    }
+    state.view.library_non_album_tracks = tracks;
+    state.view.library_non_album_tracks_search_matched = searchMatched;
+    state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    return tracks;
+  })().finally(() => {
+    if (libraryNonAlbumHydrationRequest === request) libraryNonAlbumHydrationRequest = null;
+  });
+  libraryNonAlbumHydrationRequest = request;
+  return request.promise;
 }
 
 async function hydrateDeferredNonAlbumTracks(options = {}) {
+  if (options.libraryWide === true) {
+    return hydrateLibraryNonAlbumTracks({ resolveLibrary: options.resolveLibrary === true });
+  }
   const view = state.view || {};
-  const libraryWide = options.libraryWide === true;
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
   const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
-  if (!view.non_album_tracks_deferred
-      && (!libraryWide || view.library_non_album_tracks_hydrated_scope === requestScopeKey)) {
-    return view.non_album_tracks || [];
-  }
-  if (libraryWide) {
-    requestUrl.searchParams.set('include_library_wide_non_album', '1');
-  }
-  const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
-  const requestIdentity = getDeferredNonAlbumScopeKey(requestUrl);
-  if (deferredNonAlbumHydrationRequest?.key === requestIdentity) {
+  if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
+  if (deferredNonAlbumHydrationRequest?.key === requestScopeKey) {
     return deferredNonAlbumHydrationRequest.promise;
   }
-  const request = { key: requestIdentity, promise: null };
+  const request = { key: requestScopeKey, promise: null };
   request.promise = (async () => {
-    const response = await fetch(requestKey, {
-      headers: { Accept: 'application/json' },
-    });
-    const payload = await response.json();
-    if (!response.ok || payload?.ok === false) {
-      throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
-    }
+    const payload = await fetchNonAlbumPayload(requestUrl);
     const currentView = state.view || {};
     const currentScopeUrl = new URL(
       buildApiUrl(currentView, { omitSidebar: true }),
@@ -14681,12 +14812,6 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
       ? payload.non_album_tracks
       : [];
-    if (libraryWide) {
-      state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
-        ? payload.library_non_album_tracks
-        : state.view.non_album_tracks;
-      state.view.library_non_album_tracks_hydrated_scope = requestScopeKey;
-    }
     state.view.non_album_tracks_deferred = false;
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
@@ -20292,6 +20417,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     : '';
   state.ui.activeViewRequestController = controller;
   state.ui.pendingViewRequest = null;
+  // A search's Loose Tracks indicator runs alongside it, not after the gallery.
+  if (typeof prefetchLibraryNonAlbumSearch === 'function') prefetchLibraryNonAlbumSearch(apiUrl);
   state.busy = true;
   state.ui.activeViewPayloadReady = false;
   const retainsMountedSelectedViewState = Boolean(

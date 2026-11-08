@@ -41,6 +41,7 @@ from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 from music_app.services.cover_lookup_runtime import (
     CoverLookupFinishingError,
     fetch_remote_cover_bytes,
+    fetch_remote_cover_preview,
     merge_lookup_matches,
     queue_cover_lookup_save_remote_task,
     queue_cover_lookup_task,
@@ -2047,7 +2048,7 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
         return _json_response(({"ok": False, "error": "Missing remote image URL"}, 400))
     config = _app_config(request)
     payload, mime_type = await run_in_threadpool(
-        fetch_remote_cover_bytes,
+        fetch_remote_cover_preview if request.query_params.get("size") == "preview" else fetch_remote_cover_bytes,
         image_url,
         config=config,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),

@@ -1,0 +1,57 @@
+name: Android Test Build
+
+# The owner's `test_build` label: promotes a same-repository pull request's head to the sandbox
+# channel without waiting for PR Gates (docs/android-release-signing.md). This run executes the
+# pull request's own workflow definition, so it holds no secret, checks out nothing and only asks
+# main's android-promote.yml to promote the head. Main's workflow then verifies, builds, signs in
+# the main-only android-sandbox environment and records the promotion, exactly as a manual
+# sandbox dispatch does. Removing the label stops further builds; GitHub keeps one pending
+# promotion per channel, so a newer request supersedes one still queued and never cancels a
+# running one.
+on:
+  pull_request:
+    types:
+      - labeled
+      - synchronize
+      - reopened
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Request Sandbox Promotion
+    # Forks never qualify: their heads are not on a branch here and their token cannot dispatch.
+    # Only the owner's own label or push requests a build; adding any other label requests nothing.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.sender.login == github.repository_owner
+      && github.event.pull_request.state == 'open'
+      && (github.event.action == 'labeled' && github.event.label.name == 'test_build'
+      || github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'test_build'))
+    # On the job, not the workflow: a run whose job is skipped (another label) never joins the
+    # group, so it cannot cancel the request of the push before it.
+    concurrency:
+      group: android-test-build-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the sandbox promotion of the pull request head
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const commit = process.env.COMMIT;
+            if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('The pull request head is not a 40-character commit SHA');
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'android-promote.yml',
+              ref: 'main',
+              inputs: { commit, channel: 'sandbox' },
+            });
+            await core.summary.addHeading('Android sandbox test build requested')
+              .addRaw(`Android Promote runs on main as "Android sandbox promotion of ${commit}".`).write();

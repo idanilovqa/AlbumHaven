@@ -1556,6 +1556,82 @@ def test_set_based_track_upsert_skips_unchanged_conflict_rows():
     ) in sql
 
 
+def test_set_based_track_upsert_reports_albums_that_moved_tracks_left():
+    from music_app.services import scan_cache_persistence
+
+    sql = _normalized_sql(scan_cache_persistence._upsert_local_track_sql())
+
+    assert "returning library.local_tracks.id, library.local_tracks.album_id )" in sql
+    assert (
+        "select distinct previous_track.album_id as vacated_album_id, "
+        "upserted_tracks.album_id as successor_album_id from upserted_tracks "
+        "join library.local_tracks as previous_track on previous_track.id = upserted_tracks.id "
+        "where previous_track.album_id is not null "
+        "and previous_track.album_id is distinct from upserted_tracks.album_id;"
+    ) in sql
+
+
+def _move(vacated, successor):
+    return {"vacated_album_id": vacated, "successor_album_id": successor}
+
+
+@pytest.mark.parametrize("vacated_batches, expected", [
+    (
+        [[_move(7, 9), _move(3, 4)], [_move(7, 9), _move(3, 5)]],
+        {"album_ids": [3, 7], "successor_ids": [None, 9]},
+    ),
+    ([[_move(3, None)], []], {"album_ids": [3], "successor_ids": [None]}),
+    ([[], []], None),
+])
+def test_track_upsert_retires_only_vacated_albums_in_same_connection(
+    monkeypatch, vacated_batches, expected
+):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "_PIPELINE_BATCH_SIZE", 1)
+    batches = iter(vacated_batches)
+
+    class VacatingConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            result = super().execute(sql, params)
+            return FakeCursor(next(batches)) if "vacated_album_id" in sql else result
+
+    connection = VacatingConnection()
+    scan_cache_persistence._upsert_local_tracks_and_retire_vacated_albums(
+        connection, [{"track_key": "one"}, {"track_key": "two"}]
+    )
+
+    retirement = [
+        (sql, params) for sql, params in connection.executed
+        if "insert into app.album_ratings" in sql or "delete from library.local_albums" in sql
+    ]
+    if expected is None:
+        assert retirement == []
+    else:
+        (carry_sql, carry_params), (delete_sql, delete_params) = retirement
+        assert "insert into app.album_ratings" in carry_sql
+        assert "delete from library.local_albums" in delete_sql
+        assert carry_params == delete_params == expected
+
+
+def test_retirement_carries_ratings_then_deletes_only_unowned_empty_albums():
+    from music_app.services import empty_local_album_retirement as retirement
+
+    executed = []
+    connection = SimpleNamespace(execute=lambda sql, params: executed.append((sql, params)))
+    retirement.retire_vacated_local_albums(connection, [(5, 8)])
+
+    (carry_sql, _), (delete_sql, params) = executed
+    assert params == {"album_ids": [5], "successor_ids": [8]}
+    carry, delete = _normalized_sql(carry_sql), _normalized_sql(delete_sql)
+    assert "on conflict (account_id, library_id, album_key) do nothing" in carry
+    assert "rating.provenance" in carry
+    assert "carried.rating is not distinct from rating.rating" in delete
+    for name, clause in retirement.RETIREMENT_GUARDS:
+        assert (_normalized_sql(clause) in delete) is (name != "rating")
+        assert (_normalized_sql(clause) in carry) is (name != "rating")
+
+
 def test_set_based_track_file_sql_preserves_scoped_upsert_contract():
     from music_app.services import scan_cache_persistence
 
@@ -1739,7 +1815,7 @@ def test_scan_publication_relies_on_row_local_identity_constraint_without_full_l
     )
 
     assert "_upsert_local_album_sql()" in source
-    assert "_upsert_local_track_sql()" in source
+    assert "_upsert_local_tracks_and_retire_vacated_albums(connection, track_rows)" in source
     assert "_upsert_local_track_file_sql()" in source
     assert "_execute_semantic_local_album_reconciliation(connection)" not in source
 

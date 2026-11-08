@@ -3,6 +3,7 @@
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/scan_cache_persistence.py",
+    "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
     "music_app/services/gallery_projection_postgres.py",
     "music_app/routes/api_read_asgi_routes.py",
@@ -73,6 +74,7 @@
     {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
+        "music_app/services/empty_local_album_retirement.py",
         "music_app/services/relation_projection_postgres.py",
         "music_app/services/gallery_projection_postgres.py"
       ],

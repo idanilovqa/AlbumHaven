@@ -321,7 +321,15 @@ def decide(candidates: list[dict[str, object]], local_name: object = "") -> dict
                 return {"classification": "matched", "selected": winner, "candidates": ranked}
             return {"classification": "unconfirmed", "candidates": contenders[:3]}
         return {"classification": "ambiguous" if runner else "unconfirmed", "candidates": contenders}
-    siblings = {str(candidate.get("mbid")): candidate for candidate in ranked if candidate.get("sibling")}
+    tied = [candidate for candidate in ranked
+            if any(_LEVEL_RANK.get(str(album.get("level")), 0) for album in candidate.get("albums") or [])]
+    if tied:
+        # Albums several candidates agree on equally: the members of a joint credit
+        # (a collaboration, offered for confirmation) or same-named artists.
+        joint = all(candidate.get("joint_credit") for candidate in tied)
+        return {"classification": "unconfirmed" if joint or len(tied) == 1 else "ambiguous",
+                "candidates": tied[:3] if joint else tied}
+    siblings ={str(candidate.get("mbid")): candidate for candidate in ranked if candidate.get("sibling")}
     if len(siblings) == 1:
         # The same artist under another tag spelling ("Chick_Corea"), already matched
         # on its albums, and no album here points anywhere else.

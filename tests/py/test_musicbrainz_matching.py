@@ -183,6 +183,14 @@ def test_an_album_credited_to_several_artists_never_goes_to_one_of_them_under_an
     member["joint_credit"] = True
     assert decide([member], "Petrucci Rudess Duets")["classification"] == "unconfirmed"
 
+    # Alan Menken and Howard Ashman agree equally on "The Little Mermaid": the album
+    # counts for neither, yet both stay offered for confirmation, never "not found".
+    menken, ashman = (_candidate(mbid, ["strong"], name=False, signals=FULL) for mbid in ("menken", "ashman"))
+    menken["joint_credit"] = ashman["joint_credit"] = True
+    joint = decide([menken, ashman], "Alan Menken & Howard Ashman")
+    assert joint["classification"] == "unconfirmed"
+    assert {candidate["mbid"] for candidate in joint["candidates"]} == {"menken", "ashman"}
+
     # AC/DC is one MusicBrainz artist: its separator never makes it a collaboration.
     band = _candidate("acdc", ["strong"], canonical="AC/DC")
     assert decide([band], "AC/DC")["classification"] == "matched"

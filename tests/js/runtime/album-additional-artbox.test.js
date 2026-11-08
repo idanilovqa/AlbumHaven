@@ -160,6 +160,28 @@ test('UI-14: the album cover lookup dims the art in the second artbox', () => {
   assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), false, 'its own lookup can choose it');
 });
 
+test('UI-14: a Cover Look Up opened with another copy of the album still sees the saved second artbox', () => {
+  const { context } = load();
+  context.state.modalReleases = [{ ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] }];
+  // A gallery card or notification copy of the album carries no additional_artworks of its own.
+  context.state.coverLookup.modal = { artboxSlot: 0, album: testimony() };
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
+});
+
+test('UI-14: the second artbox lookup selects its saved remote art, and a click deselects it', () => {
+  const { context } = load();
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'remote', remote_cover_url: 'https://img.example/back.jpg' }] };
+  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: false, selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '' };
+  const saved = { id: 'r1', url: 'https://img.example/back.jpg' };
+  assert.equal(context.isSecondArtboxSavedRemoteActive(saved), true, 'blue frame on open');
+  assert.equal(context.isSecondArtboxSavedRemoteActive({ id: 'r2', url: 'https://img.example/other.jpg' }), false);
+  context.state.coverLookup.modal.artboxCleared = true;
+  assert.equal(context.isSecondArtboxSavedRemoteActive(saved), false, 'deselected');
+  assert.equal(context.isSecondArtboxSavedRemote(saved), true, 'still recognised, so a second click reselects it');
+  context.state.coverLookup.modal.artboxSlot = 0;
+  assert.equal(context.isSecondArtboxSavedRemoteActive(saved), false, 'never in the album cover lookup');
+});
+
 test('UI-14: saving the second artbox with nothing selected empties it', async () => {
   const album = { ...testimony(), additional_artworks: [{ slot: 1, cover_path: 'D:/Music/Testimony/back.jpg' }] };
   const { context, calls } = load({ savedArtworks: [] });

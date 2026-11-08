@@ -684,7 +684,8 @@ function applyCoverLookupGalleryPayload(gallery) {
       ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
         || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
       : null;
-    if (incomingActiveLocalCover) {
+    // UI-14 (owner): the second artbox's lookup keeps its own saved art selected, not the album cover.
+    if (incomingActiveLocalCover && !state.coverLookup.modal.artboxSlot) {
       state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
       const revision = String(incomingActiveLocalCover.cover_revision || '').trim();
       if (revision && !state.coverLookup.modal.saving
@@ -1082,7 +1083,9 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
-    const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
+    const cardId = String(card.getAttribute('data-select-remote-cover') || '');
+    const isActive = cardId === selectedRemoteId || (typeof isSecondArtboxSavedRemoteActive === 'function'
+      && isSecondArtboxSavedRemoteActive((state.coverLookup.modal.possibleMatches || []).find((candidate) => String(candidate?.id || '') === cardId)));
     const suggestedRemoteId = String(state.coverLookup.modal.suggestedRemoteId || '');
     const isSuggested = Boolean(suggestedRemoteId)
       && String(card.getAttribute('data-select-remote-cover') || '') === suggestedRemoteId;
@@ -2269,7 +2272,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && state.coverLookup.modal.localInventoryLoaded === true
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
-        && state.coverLookup.modal.selectedRemoteId === String(item?.id || '')));
+        && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
+          || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
   const isSuggested = kind === 'remote'
     && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
@@ -2310,7 +2314,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const actionLabel = inFirstArtbox ? 'In the first artbox' : inSecondArtbox ? 'In the second artbox' : kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = inOtherArtbox
+  // UI-14 (owner): hovering art held by the second artbox says how to free it.
+  const roleAttr = inSecondArtbox
+    ? 'role="group" aria-disabled="true" title="Deselect cover in the second artbox first"'
+    : inOtherArtbox
     ? 'role="group" aria-disabled="true"'
     : isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
@@ -3962,6 +3969,17 @@ function selectRemoteCoverFromLookup(candidateId) {
   ));
   if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved remote art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (typeof isSecondArtboxSavedRemote === 'function' && isSecondArtboxSavedRemote(selectedCandidate)
+      && !modalState.selectedRemoteId && !modalState.pendingLocalPath && !modalState.pendingPastedImageId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');

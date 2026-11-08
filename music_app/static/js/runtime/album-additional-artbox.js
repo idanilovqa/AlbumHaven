@@ -8,8 +8,13 @@ function getCurrentAlbumDetailsRelease() {
   return state.modalReleases?.[state.modalReleaseIndex] || null;
 }
 
+// UI-14 (owner): Cover Look Up may hold another copy of the album (gallery card, notification), so the
+// Album Details release that carries the saved artworks answers for it.
 function getAlbumAdditionalArtwork(album) {
-  const artworks = Array.isArray(album?.additional_artworks) ? album.additional_artworks : [];
+  const key = String(album?.key || '');
+  const source = Array.isArray(album?.additional_artworks) ? album
+    : (state.modalReleases || []).find((release) => key && String(release?.key || '') === key);
+  const artworks = Array.isArray(source?.additional_artworks) ? source.additional_artworks : [];
   return artworks.find((artwork) => Number(artwork?.slot) === ALBUM_ADDITIONAL_ARTBOX_SLOT) || null;
 }
 
@@ -212,6 +217,21 @@ async function saveAdditionalArtworkFromLookup() {
     modal.saving = false;
     syncCoverLookupSaveButton();
   }
+}
+
+// UI-14 (owner): the second artbox's Cover Look Up starts with its saved remote art selected (a blue frame);
+// clicking that art deselects it, so Save empties the artbox.
+function isSecondArtboxSavedRemote(candidate) {
+  const modal = state.coverLookup?.modal;
+  if (!modal?.artboxSlot) return false;
+  const url = String(getAlbumAdditionalArtwork(modal.album)?.remote_cover_url || '').trim();
+  return Boolean(url) && [candidate?.url, candidate?.thumbnail_url].map((value) => String(value || '').trim()).includes(url);
+}
+
+function isSecondArtboxSavedRemoteActive(candidate) {
+  const modal = state.coverLookup?.modal;
+  return Boolean(modal) && !modal.artboxCleared && !modal.selectedRemoteId && !modal.pendingLocalPath
+    && !modal.pendingPastedImageId && isSecondArtboxSavedRemote(candidate);
 }
 
 // UI-14 (owner): in the album cover's Cover Look Up, the art in the second artbox is dimmed and cannot be chosen.

@@ -8074,3 +8074,17 @@ require('node:test')('UI-3: a linked remote cover reads Selected only after LOCA
   context.state.coverLookup.modal.activeLocalSelectionPath = 'C:/Music/A/cover.jpg';
   assert.doesNotMatch(card(), /\bis-active\b/, 'an active local file keeps the selection');
 });
+
+require('node:test')('UI-14: art held by the second artbox is dimmed with the hover text that says how to free it', () => {
+  const context = loadHelper({
+    escapeHtml: value => String(value ?? ''),
+    buildCoverUrl: () => '/cover?path=back.jpg&size=480',
+    isCoverLookupItemInFirstArtbox: () => false,
+    isCoverLookupItemInSecondArtbox: (item) => item.path === 'back.jpg',
+  });
+  const held = context.buildCoverLookupCard({ path: 'back.jpg' }, 'local');
+  assert.match(held, /class="cover-lookup-art-card[^"]*is-disabled[^"]*"[^>]*title="Deselect cover in the second artbox first"/);
+  assert.doesNotMatch(held, /data-select-local-cover=/, 'it cannot be selected');
+  const free = context.buildCoverLookupCard({ path: 'cover.jpg' }, 'local');
+  assert.doesNotMatch(free, /second artbox first/);
+});

@@ -384,6 +384,14 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
                 if not lookup or lookup.get("classification") != "matched":
                     candidate["skipped"] = lookup is not None
                     continue
+                current = str(lookup["artist"].get("mbid") or "").lower()
+                if current and current != candidate["mbid"]:
+                    # A merged MusicBrainz artist answers under its current MBID
+                    # (Shamaani Duo's Last.fm MBID is Korpiklaani's): one candidate, not two.
+                    if current in pool:
+                        candidate["skipped"] = True
+                        continue
+                    pool[current] = pool.pop(candidate["mbid"])
                 candidate.update(lookup["artist"])
             candidate["name_agrees"] = bool(candidate_name_keys(candidate) & local_keys)
             _gather_album_evidence(candidate, albums, local_name, mirror,

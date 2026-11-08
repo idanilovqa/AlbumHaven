@@ -367,6 +367,21 @@ def test_a_margin_short_only_of_capped_tracklists_compares_the_rest_before_decid
     assert outcome["artist"]["mbid"] == GERMAN
 
 
+def test_a_merged_mbid_is_the_same_candidate_as_its_current_artist():
+    """Shamaani Duo: the stored Last.fm MBID was merged into Korpiklaani, which the
+    name search also finds; the artist tied with itself and stayed a multiple match."""
+    merged = "00000000-0000-4000-8000-0000000000aa"
+    artists = {GERMAN: {"id": GERMAN, "name": "Axxis", "type": "Group"},
+               merged: {"id": GERMAN, "name": "Axxis", "type": "Group"}}
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"]}, artists=artists,
+                             search=[{"id": GERMAN, "name": "Axxis", "score": 100}])
+
+    outcome = resolve_artist({**_context("Kingdom of the Night"), "hinted_artist_mbids": [merged]}, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+
+
 def test_a_special_purpose_artist_is_never_a_candidate():
     various = "89ad4ac3-39f7-470e-963a-56509c546377"
     client, _calls = _client({various: ["Kingdom of the Night"]}, search=[],

@@ -305,7 +305,7 @@ class BridgeControllerTest {
         assertTrue(ok(send(sandbox, command("playback.pause"))))
         assertTrue(ok(send(sandbox, command("playback.stop"))))
         assertTrue(ok(send(sandbox, load(revision = 4))))
-        assertTrue(ok(send(sandbox, load(revision = 5, items = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0,"year":"1999"}]"""))))
+        assertTrue(ok(send(sandbox, load(revision = 5, items = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0,"year":"1999","rating":8}]"""))))
         assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
     }
 
@@ -333,7 +333,7 @@ class BridgeControllerTest {
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"resumeToken\":null") + "]"),
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"resumeToken\":\"\"") + "]"),
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"year\":1999") + "]"),
-            load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"rating\":5") + "]"),
+            load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"rating\":11") + "]"),
             load(keepCurrent = "1"),
             command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"sampleRate":48000,"kind":"loop"}"""),
             // Loop points are counted at the track's own rate, which every loop names.

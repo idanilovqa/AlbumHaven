@@ -20,6 +20,7 @@ data class RestorableItem(
     val queueGroup: Int = 0,
     val resumeToken: String? = null,
     val year: String = "",
+    val rating: Int? = null,
 )
 
 /**
@@ -47,7 +48,7 @@ data class RestorableQueue(
                 snapshot.items.map { item ->
                     RestorableItem(
                         item.title, item.artist, item.album, item.artworkUrl, item.durationMs,
-                        item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken, item.year,
+                        item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken, item.year, item.rating,
                     )
                 },
             )
@@ -85,7 +86,8 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
                     .put("listenKey", item.listenKey)
                     .put("queueGroup", item.queueGroup)
                     .put("resumeToken", item.resumeToken ?: JSONObject.NULL)
-                    .apply { if (item.year.isNotEmpty()) put("year", item.year) },
+                    .apply { if (item.year.isNotEmpty()) put("year", item.year) }
+                    .apply { item.rating?.let { put("rating", it) } },
             )
         }
         storage.write(
@@ -130,7 +132,7 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
     private fun decodeItem(raw: Any?): RestorableItem? {
         val item = raw as? JSONObject ?: return null
         val fields = item.fieldNames()
-        if (fields != ITEM_KEYS && fields != ITEM_KEYS + "year") return null
+        if (!fields.containsAll(ITEM_KEYS) || !setOf("year", "rating").containsAll(fields - ITEM_KEYS)) return null
         val artwork = when (val value = item.opt("artworkUrl")) {
             JSONObject.NULL -> null
             is String -> value.takeIf(QueueItem::isArtworkPath) ?: return null
@@ -152,6 +154,7 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
             queueGroup = (item.opt("queueGroup") as? Int)?.takeIf { it in 0..MAX_ITEMS } ?: return null,
             resumeToken = resumeToken,
             year = if ("year" in fields) text(item.opt("year")) ?: return null else "",
+            rating = if ("rating" in fields) (item.opt("rating") as? Int)?.takeIf { it in 1..10 } ?: return null else null,
         )
     }
 

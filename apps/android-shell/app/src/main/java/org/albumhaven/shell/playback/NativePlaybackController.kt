@@ -45,6 +45,8 @@ data class QueueItem(
     val resumeToken: String? = null,
     /** The album's release year as the web shows it; empty when unknown. */
     val year: String = "",
+    /** The album's rating out of 10, as the web's stars show it; null when unrated. */
+    val rating: Int? = null,
 ) {
     /** The track to stream; a re-encoded file changes its duration, and with it the key it is kept under. */
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0, cacheKey = "$listenKey:$durationMs")

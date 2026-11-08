@@ -2376,6 +2376,7 @@ function buildPlayerTrackPayload(track, album = null) {
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
     year: String(album?.display_year || album?.year || track.year || '').trim(),
+    albumRating: typeof getAlbumCardRating === 'function' ? getAlbumCardRating(album) : null,
   };
 }
 

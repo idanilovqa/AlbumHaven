@@ -12093,6 +12093,8 @@ function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSecond
       queueGroup: queueWindow.groups[index],
       ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
       ...(albumDetails && androidNativeText(item.year) ? { year: androidNativeText(item.year).slice(0, 32) } : {}),
+      ...(albumDetails && Number.isInteger(item.albumRating) && item.albumRating >= 1 && item.albumRating <= 10
+        ? { rating: item.albumRating } : {}),
     })),
     currentIndex: queueWindow.currentIndex,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
@@ -37802,6 +37804,7 @@ function buildPlayerTrackPayload(track, album = null) {
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
     year: String(album?.display_year || album?.year || track.year || '').trim(),
+    albumRating: typeof getAlbumCardRating === 'function' ? getAlbumCardRating(album) : null,
   };
 }
 

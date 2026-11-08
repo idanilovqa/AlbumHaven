@@ -1,6 +1,7 @@
 """Metadata-only release candidates, independent of the loaded gallery page."""
 from collections.abc import Mapping
 import re
+import unicodedata
 
 
 _VERSION_WORD = re.compile(r"instrumental|remix|remaster|edition|special|deluxe|revisited|rerecord|version(?=\s*[)\]}])", re.I)
@@ -35,6 +36,36 @@ def normalize_release_base_title(value):
             break
         title = title[:suffix].strip()
     return ' '.join(title.split()).lower()
+
+
+def normalize_version_title(value):
+    """Mirror the client's normalizeVersionTitle: case, accents, punctuation and bracketed notes are ignored."""
+    text = unicodedata.normalize('NFKD', str(value or ''))
+    text = ''.join(char for char in text if not unicodedata.combining(char)).lower()
+    text = re.sub(r"[(\[][^)\]]*[)\]]", ' ', text)
+    return ' '.join(re.sub(r"[\W_]+", ' ', text).split())
+
+
+def tracklists_share_half(left_titles, right_titles):
+    """Versions share at least half of their tracks, counted against the shorter tracklist (client parity)."""
+    left = {title for title in map(normalize_version_title, left_titles) if title}
+    right = {title for title in map(normalize_version_title, right_titles) if title}
+    if not left or not right:
+        return False
+    return len(left & right) / min(len(left), len(right)) >= 0.5
+
+
+def _track_titles_by_album(connection, album_ids):
+    titles = {}
+    if not album_ids:
+        return titles
+    for row in connection.execute(
+        "select album_id, title from library.local_tracks where album_id = any(%(ids)s::bigint[])",
+        {'ids': sorted(album_ids)},
+    ).fetchall():
+        if isinstance(row, Mapping):
+            titles.setdefault(row.get('album_id'), []).append(row.get('title') or '')
+    return titles
 
 
 def _manual_family_keys(key, links):
@@ -72,6 +103,15 @@ def load_release_candidates(connection, album, support_state, *, resolved_releas
          'preview_only': True, 'tracks': []}
         for row in rows if isinstance(row, Mapping) and row.get('key')
     ]
+    # Owner (11-08): a same-name album is a version only when it shares at least half of its tracks
+    # (Helloween 1985 and 2021 share a title, not songs). Manual links still group regardless.
+    selected_id = album.get('album_id') or next(
+        (candidate['album_id'] for candidate in candidates if candidate['key'] == key), None)
+    titles = _track_titles_by_album(connection, {candidate['album_id'] for candidate in candidates if candidate['album_id']} | ({selected_id} if selected_id else set()))
+    for candidate in candidates:
+        candidate['shares_tracks'] = bool(selected_id) and (
+            candidate['album_id'] == selected_id
+            or tracklists_share_half(titles.get(selected_id, []), titles.get(candidate['album_id'], [])))
     candidate_keys = {candidate['key'] for candidate in candidates}
     return {
         'release_candidates': candidates,

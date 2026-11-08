@@ -1404,10 +1404,13 @@ function getAlbumReleaseSet(album) {
       }
     });
   }
+  // Owner (11-08): a same-name album is a version only when the server found it shares at least half of the
+  // tracks (shares_tracks); manual links above group regardless.
   sameArtistAlbums.forEach((item) => {
     if (
       normalizeAlbumBaseName(item.name) === targetBase
       && !ignoredVersionKeys.has(String(item.key || ''))
+      && item.shares_tracks !== false
     ) {
       grouped.push(item);
     }

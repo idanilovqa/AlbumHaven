@@ -5045,3 +5045,16 @@ test('Album Details names a tracklist section from album.track_sections on its f
   assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
   assert.doesNotMatch(markup, /Ignored without a first track/);
 });
+
+require('node:test')('same-name albums are versions only when the server found shared tracks (Helloween 1985 vs 2021)', () => {
+  const candidates = [
+    { key: 'helloween::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, shares_tracks: true },
+    { key: 'helloween::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, shares_tracks: false },
+    { key: 'helloween::2006', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: 2006, shares_tracks: true },
+  ];
+  const album = { ...candidates[0], release_candidates: candidates };
+  const context = loadHelper(candidates);
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key), ['helloween::1985', 'helloween::2006']);
+  context.state.view.manual_version_links = { 'helloween::2021': 'helloween::1985' };
+  assert.ok(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key).includes('helloween::2021'), 'a manual link still groups');
+});

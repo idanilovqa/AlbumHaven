@@ -4996,3 +4996,18 @@ test('details rule snapshot covers empty-shell opening until current rules arriv
   context.state.view.manual_version_links = {};
   assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
 });
+
+test('Album Details names a tracklist section from album.track_sections on its first track (MusicBrainz contract)', () => {
+  // Contract with MusicBrainz Delivery 3: album.track_sections = [{ first_track_path, title }].
+  const { context } = createTrackModalCoverContext();
+  const track = (number, title) => ({ path: `C:/Music/Wallet Box/CD6/${number}.flac`, title, disc_number: 6, track_number: number });
+  const markup = context.buildTrackListHtml([track(1, 'Introducción'), track(2, 'Tema'), track(11, 'Libertango')], {
+    track_sections: [
+      { first_track_path: 'C:/Music/Wallet Box/CD6/1.flac', title: 'Suite Punta Del Este' },
+      { first_track_path: '', title: 'Ignored without a first track' },
+    ],
+  });
+  assert.equal((markup.match(/album-track-table__section-title">Suite Punta Del Este</g) || []).length, 1);
+  assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
+  assert.doesNotMatch(markup, /Ignored without a first track/);
+});

@@ -200,6 +200,9 @@ test('playing spectra share the exact row outline path at opposite offsets and f
   assert.match(css, /--album-track-spectrum-offset:\s*0\.5turn/);
   assert.match(css, /\.album-track-table__total\s*\{[^}]*border-left:\s*0[^}]*border-top:\s*0/s);
   assert.match(css, /linear-gradient\(to left/);
+  // Stacked totals: square upper corner, and each bottom line longer than the one above.
+  assert.match(css, /__disc:has\(\+ \.album-track-table__total\) > \.album-track-table__total \{ min-width: min\(44%, 320px\); border-radius: 0; \}/);
+  assert.match(css, /__disc:has\(\+ \.album-track-table__total\) \+ \.album-track-table__total \{ min-width: min\(64%, 460px\); \}/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
 

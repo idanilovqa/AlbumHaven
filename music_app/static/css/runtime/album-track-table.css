@@ -193,6 +193,10 @@
   text-align: right;
   font-weight: 700;
 }
+/* Stacked totals (a disc's length, then the album total): the upper one keeps a square corner where the next
+   continues the edge, and each total's bottom line runs longer than the one above it. */
+.album-track-table__disc:has(+ .album-track-table__total) > .album-track-table__total { min-width: min(44%, 320px); border-radius: 0; }
+.album-track-table__disc:has(+ .album-track-table__total) + .album-track-table__total { min-width: min(64%, 460px); }
 /* A summary and its duration always stay on one line, on every screen width. */
 .album-track-table__total > div { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .album-track-table__total::before {

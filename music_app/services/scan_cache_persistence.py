@@ -1985,13 +1985,13 @@ def _upsert_local_tracks_and_retire_vacated_albums(
     track_rows: list[dict[str, object]],
 ) -> None:
     """Upsert scanned tracks, then retire album rows the moves emptied."""
-    retire_vacated_local_albums(connection, {
-        int(_row_mapping(row)["vacated_album_id"])
+    retire_vacated_local_albums(connection, [
+        (move["vacated_album_id"], move["successor_album_id"])
         for cursor in _execute_set_based_batches(
             connection, _upsert_local_track_sql(), track_rows
         )
-        for row in cursor.fetchall()
-    })
+        for move in map(_row_mapping, cursor.fetchall())
+    ])
 
 
 def _jsonb_compatible(value: object) -> object:
@@ -6124,7 +6124,9 @@ def _upsert_local_track_sql() -> str:
         )
         -- The outer read shares the statement snapshot, so it sees each
         -- updated track's album before this upsert moved it.
-        select distinct previous_track.album_id as vacated_album_id
+        select distinct
+          previous_track.album_id as vacated_album_id,
+          upserted_tracks.album_id as successor_album_id
         from upserted_tracks
         join library.local_tracks as previous_track
           on previous_track.id = upserted_tracks.id

@@ -3037,6 +3037,62 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   });
 });
 
+test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
+  const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';
+  const album = {
+    key: 'ддт::ремиксы::2000',
+    name: 'Ремиксы',
+    album_artist: 'ДДТ',
+    tracks: [{ path: trackPath, album: 'Ремиксы' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { album: 'Ремиксы 2' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        async json() {
+          return {
+            ok: false,
+            error: `Structural tag edit database commit failed and media compensation also failed: ${trackPath}: file is in use`,
+            save_task_id: 'failed-tag-save',
+            save_task_status: 'failed',
+            failure_stage: 'persistence',
+            edit_outcome: 'recovery_pending',
+            log_entry: { id: 'tag-edit-failure-43', action: 'Tag edit failed' },
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(
+    alerts.at(-1)[0],
+    'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.',
+  );
+  assert.doesNotMatch(alerts.at(-1)[0], /C:\Music/);
+});
+
 test('failed tag save does not replace a newer tag editor session', () => {
   const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
   const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };

@@ -3534,6 +3534,17 @@ def test_selected_postgres_structural_finalizer_uses_authoritative_album_finder(
     assert captured["find_albums_by_track_paths"] is authoritative_finder
 
 
+def _restore_writer(applied_repairs):
+    """A writer that changes a file once; re-applying the same values is a no-op."""
+    def write(path, repairs):
+        change = (path, dict(repairs))
+        changed = change not in applied_repairs
+        if changed:
+            applied_repairs.append(change)
+        return path, changed, list(repairs) if changed else []
+    return write
+
+
 def test_selected_postgres_year_compensation_restores_exact_release_date(monkeypatch):
     from types import SimpleNamespace
     from music_app.routes import api_wave_a_asgi_routes as routes
@@ -3544,7 +3555,7 @@ def test_selected_postgres_year_compensation_restores_exact_release_date(monkeyp
     monkeypatch.setattr(
         routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        _restore_writer(applied_repairs),
     )
     monkeypatch.setattr(
         routes,
@@ -3585,7 +3596,7 @@ def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
     monkeypatch.setattr(
         routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        _restore_writer(applied_repairs),
     )
     monkeypatch.setattr(
         routes,

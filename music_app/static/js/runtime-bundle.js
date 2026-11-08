@@ -35002,6 +35002,7 @@ async function confirmManualTagEdit() {
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
   let failedSavePreservesDraft = false;
+  let failedSaveKeptNewTags = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -35033,6 +35034,7 @@ async function confirmManualTagEdit() {
       }
       failedSavePreservesDraft = data.failure_stage === 'persistence'
         && data.edit_outcome === 'failed_rolled_back';
+      failedSaveKeptNewTags = data.edit_outcome === 'recovery_pending';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -35180,7 +35182,9 @@ async function confirmManualTagEdit() {
       }
     }
     showRepairAlert(
-      failedSaveTaskError || 'Failed to edit tags.',
+      failedSaveKeptNewTags
+        ? 'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.'
+        : failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {

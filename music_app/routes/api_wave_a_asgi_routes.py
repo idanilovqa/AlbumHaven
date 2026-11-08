@@ -114,6 +114,8 @@ from music_app.services.utility_rules import (
 from music_app.services.edit_workflows import (
     handle_edit_tags_request,
     handle_repair_album_request,
+    previous_tag_values,
+    restore_media_tag_values,
 )
 from music_app.services.edit_state import find_album_dicts_by_track_paths
 
@@ -1029,23 +1031,13 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
                 exception_rollbacks[path] = normalize_exception_value(
                     previous_entry.get("exception_type")
                 )
-            reverse_repairs = {
-                field: str(
-                    (
-                        previous_entry.get("release_date")
-                        or previous_entry.get("year")
-                    )
-                    if field == "year"
-                    else previous_entry.get(field)
-                    or ""
-                )
-                for field in path_field_names
-                if field in _MEDIA_TAG_EDIT_FIELDS
-            }
+            reverse_repairs = previous_tag_values(
+                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
+            )
             if not reverse_repairs:
                 continue
             try:
-                _apply_repairs_worker(path, reverse_repairs)
+                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
             except Exception as exc:
                 failures.append(f"{path}: {exc}")
         if exception_rollbacks:
@@ -1101,23 +1093,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
                 or previous_entry.get(field, "")
                 != updated_entry.get(field, "")
             }
-            reverse_repairs = {
-                field: str(
-                    (
-                        previous_entry.get("release_date")
-                        or previous_entry.get("year")
-                    )
-                    if field == "year"
-                    else previous_entry.get(field)
-                    or ""
-                )
-                for field in path_field_names
-                if field in _MEDIA_TAG_EDIT_FIELDS
-            }
+            reverse_repairs = previous_tag_values(
+                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
+            )
             if not reverse_repairs:
                 continue
             try:
-                _apply_repairs_worker(path, reverse_repairs)
+                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
             except Exception as exc:
                 failures.append(f"{path}: {exc}")
         if failures:

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
@@ -28,6 +28,45 @@ ProblematicAlbumMatcher = Callable[[TrackPathSet], JsonDict | None]
 AlbumStateRebuilder = Callable[[StateDict, FileCache, FileCache, TrackPathSet, set[str]], None]
 SetLoader = Callable[[ConfigDict], set[str]]
 SetSaver = Callable[[ConfigDict, set[str]], None]
+
+_RESTORE_ATTEMPTS = 5
+_RESTORE_RETRY_SECONDS = 0.2
+
+
+def restore_media_tag_values(
+    apply_repairs_worker: RepairWorker,
+    path: str,
+    previous_values: dict[str, str],
+) -> None:
+    """Write previous tag values back and prove the file holds them.
+
+    Re-applying the same values must change nothing; a watcher or player
+    holding the file briefly is retried before the restore counts as failed.
+    """
+    error: Exception
+    for attempt in range(_RESTORE_ATTEMPTS):
+        try:
+            apply_repairs_worker(path, previous_values)
+            _path, still_changed, _fields = apply_repairs_worker(path, previous_values)
+            if not still_changed:
+                return
+            error = RuntimeError(f"{path}: restored tag values did not persist")
+        except OSError as exc:
+            error = exc
+        if attempt + 1 < _RESTORE_ATTEMPTS:
+            sleep(_RESTORE_RETRY_SECONDS * (2 ** attempt))
+    raise error
+
+
+def previous_tag_values(entry: JsonDict, fields) -> dict[str, str]:
+    return {
+        field: str(
+            (entry.get("release_date") or entry.get("year"))
+            if field == "year"
+            else (entry.get(field) or "")
+        )
+        for field in fields
+    }
 ExceptionNormalizer = Callable[[object], str]
 AppEventLogger = Callable[..., None]
 LogHistoryAppender = Callable[[ConfigDict, JsonDict], None]
@@ -178,21 +217,13 @@ def _run_edit_jobs(
         for _job_index, raw_path, entry, repairs, changed_fields in sorted(
             completed_changes
         ):
-            reverse_repairs = {
-                field: str(
-                    (entry.get("release_date") or entry.get("year"))
-                    if field == "year"
-                    else (entry.get(field) or "")
-                )
-                for field in changed_fields
-                if field in repairs
-            }
-            if not reverse_repairs:
+            fields = set(changed_fields) & set(repairs)
+            if not fields:
                 continue
             try:
-                _reversed_path, reversed_changed, reversed_fields = apply_repairs_worker(raw_path, reverse_repairs)
-                if not reversed_changed or set(reversed_fields) != set(reverse_repairs):
-                    compensation_failures.append(f"{raw_path}: compensation did not verify every requested field")
+                restore_media_tag_values(
+                    apply_repairs_worker, raw_path, previous_tag_values(entry, fields),
+                )
             except Exception as exc:
                 compensation_failures.append(f"{raw_path}: {exc}")
 
@@ -778,21 +809,13 @@ def _handle_edit_tags_request_after_reservation(
             for path, item in changed_file_map.items()
         }
         for path, entry, repairs in repair_jobs:
-            reverse_repairs = {
-                field: str(
-                    (entry.get("release_date") or entry.get("year"))
-                    if field == "year"
-                    else (entry.get(field) or "")
-                )
-                for field in changed_fields_by_path.get(path, set())
-                if field in repairs
-            }
-            if not reverse_repairs:
+            fields = changed_fields_by_path.get(path, set()) & set(repairs)
+            if not fields:
                 continue
             try:
-                _reversed_path, reversed_changed, reversed_fields = apply_repairs_worker(path, reverse_repairs)
-                if not reversed_changed or set(reversed_fields) != set(reverse_repairs):
-                    compensation_failures.append(f"{path}: compensation did not verify every requested field")
+                restore_media_tag_values(
+                    apply_repairs_worker, path, previous_tag_values(entry, fields),
+                )
             except Exception as compensation_exc:
                 compensation_failures.append(f"{path}: {compensation_exc}")
         error_text = f"Failed to save track exceptions: {exc}"

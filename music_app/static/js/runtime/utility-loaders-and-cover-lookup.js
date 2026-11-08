@@ -2619,10 +2619,10 @@ function renderTagEditorArtwork(selectedPaths) {
   const canOpenFolder = Boolean(folderPath) && !(typeof window !== 'undefined' && window.AlbumHavenCapabilities
     && !window.AlbumHavenCapabilities.allows('library.files.open_location'));
   // Same ActionButton and open-location route as the Album Details folder action.
-  const openFolderButton = folderPath ? ButtonComponent.renderActionButton({
+  // UI-6 (owner, 11-08 evening): right-aligned, and not shown at all when this client cannot open folders.
+  const openFolderButton = canOpenFolder ? ButtonComponent.renderActionButton({
     ariaLabel: 'Open this folder in File Explorer',
     title: 'Open this folder in File Explorer',
-    disabled: !canOpenFolder,
     // UI-6 (owner): no outline; the bare action, like the Album Details header folder button.
     presentation: 'bare',
     className: 'tag-editor-open-folder',

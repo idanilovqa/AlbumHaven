@@ -22,6 +22,7 @@ export class TagEditor extends BasePage {
     this.artwork = this.overlay.locator('#tag-editor-artwork');
     this.artworkVisual = this.artwork.locator('img, .tag-editor-artwork-placeholder').first();
     this.folderPath = this.overlay.locator('.tag-editor-folder-path');
+    this.folderOpenButton = this.overlay.locator('.tag-editor-open-folder');
     this.folderLoadButton = this.artwork.getByRole('button', {
       name: 'Load all tracks from the folder',
       exact: true,

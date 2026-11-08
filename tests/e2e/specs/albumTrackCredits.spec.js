@@ -236,6 +236,15 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       expect(artworkBounds).not.toBeNull();
       expect(pathBounds).not.toBeNull();
       expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
+      // UI-6 (owner, 11-08 evening): the open-folder button sits at the right edge of the path row.
+      await expect(tagEditorActions.tagEditor.folderOpenButton).toBeVisible();
+      // parity-check: allow-read-only-measurement-evaluate -- right edge of the button against the row's content box
+      const folderRowRightGap = await tagEditorActions.tagEditor.folderOpenButton.evaluate((button) => {
+        const row = button.closest('#tag-editor-artwork');
+        const rowRight = row.getBoundingClientRect().right - parseFloat(getComputedStyle(row).paddingRight || '0');
+        return rowRight - button.getBoundingClientRect().right;
+      });
+      expect(Math.abs(folderRowRightGap)).toBeLessThanOrEqual(1);
       await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
 
       const pendingTitle = 'Pending folder expansion title';

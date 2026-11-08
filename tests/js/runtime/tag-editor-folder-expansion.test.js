@@ -78,11 +78,13 @@ test('tag editor shows folder path beside artwork with its open-folder action', 
   assert.match(artwork.innerHTML, /tag-editor-folder-path[^>]*>[^<]*<\/div><\/div><button[^>]*class="[^"]*action-button[^"]*tag-editor-open-folder"[^>]*aria-label="Open this folder in File Explorer"/);
   assert.match(artwork.innerHTML, /data-open-tag-editor-folder="C:\\Music\\Album\\02 - Two\.mp3"/);
   assert.doesNotMatch(artwork.innerHTML, / disabled/);
+  assert.match(artwork.innerHTML, /<button[^>]*class="[^"]*action-button--bare[^"]*tag-editor-open-folder/, 'UI-6: the folder button has no outline');
 
+  // UI-6 (owner, 11-08 evening): a client that cannot open folders sees the path without any folder button.
   context.window = { AlbumHavenCapabilities: { allows: () => false } };
   context.renderTagEditorArtwork(['C:\\Music\\Album\\01 - One.mp3']);
-  assert.match(artwork.innerHTML, /<button[^>]*tag-editor-open-folder[^>]* disabled/);
-  assert.match(artwork.innerHTML, /<button[^>]*class="[^"]*action-button--bare[^"]*tag-editor-open-folder/, 'UI-6: the folder button has no outline');
+  assert.match(artwork.innerHTML, /tag-editor-folder-path/);
+  assert.doesNotMatch(artwork.innerHTML, /tag-editor-open-folder|data-open-tag-editor-folder/);
 });
 
 test('the Edit Tags open-folder action opens the focused track folder through the shared location route', () => {

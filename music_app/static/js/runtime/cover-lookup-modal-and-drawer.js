@@ -345,20 +345,18 @@ function buildRemoteCoverLookupPreviewUrl(url) {
   return `/utilities/cover-lookup/remote-image?url=${encodeURIComponent(raw)}`;
 }
 
-function buildRemoteCoverLookupImageUrl(url, key = '', { preview = false } = {}) {
+function buildRemoteCoverLookupImageUrl(url, key = '') {
   const raw = String(url || '').trim();
   if (!raw) return '';
   const params = new URLSearchParams({ url: raw });
   if (key) params.set('key', String(key));
-  // Cards show a server-shrunk, cached preview; the lightbox keeps the full image.
-  if (preview) params.set('size', 'preview');
   return `/utilities/cover-lookup/remote-image?${params.toString()}`;
 }
 
-function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '', options = {}) {
+function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '') {
   const raw = String(preferredUrl || '').trim();
   if (!raw) return '';
-  return buildRemoteCoverLookupImageUrl(raw, key, options);
+  return buildRemoteCoverLookupImageUrl(raw, key);
 }
 
 function buildCoverLookupSearchQuery(album) {
@@ -2231,9 +2229,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
-    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '', { preview: true })
+    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
     : kind === 'saved-remote'
-      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`, { preview: true })
+      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', {

@@ -7,7 +7,6 @@ from dataclasses import replace
 from functools import partial
 from datetime import datetime, timezone
 import inspect
-from io import BytesIO
 from types import MethodType
 import os
 from pathlib import Path
@@ -444,62 +443,37 @@ def fetch_remote_cover_bytes(
     return result.payload, result.mime_type
 
 
-# Cover Look Up cards show remote candidates small; downloading each full image
-# from its provider on every open made the remote section slow to fill. Cards
-# ask for a shrunken preview, kept in a bounded in-process cache (provider
-# images are re-fetchable, so nothing is persisted).
-_REMOTE_PREVIEW_MAX_EDGE = 480
-_REMOTE_PREVIEW_CACHE_MAX_BYTES = 48 * 1024 * 1024
-_REMOTE_PREVIEW_CACHE: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
-_REMOTE_PREVIEW_CACHE_BYTES = 0
-_REMOTE_PREVIEW_CACHE_LOCK = Lock()
+# Every Cover Look Up open downloaded each remote card's image from its
+# provider again. The proxy keeps recent images in a bounded in-process cache
+# (provider images are re-fetchable, so nothing is persisted); failures are not
+# cached, so a retry still reaches the provider.
+_REMOTE_IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_REMOTE_IMAGE_CACHE: OrderedDict[str, tuple[bytes, str | None]] = OrderedDict()
+_REMOTE_IMAGE_CACHE_BYTES = 0
+_REMOTE_IMAGE_CACHE_LOCK = Lock()
 
 
-def _shrink_remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, str]:
-    from PIL import Image
-
-    try:
-        with Image.open(BytesIO(payload)) as image:
-            if max(image.size) <= _REMOTE_PREVIEW_MAX_EDGE:
-                return payload, mime_type or "image/jpeg"
-            image.draft("RGB", (_REMOTE_PREVIEW_MAX_EDGE * 2, _REMOTE_PREVIEW_MAX_EDGE * 2))
-            preview = image.convert("RGB")
-            preview.thumbnail((_REMOTE_PREVIEW_MAX_EDGE, _REMOTE_PREVIEW_MAX_EDGE))
-            output = BytesIO()
-            preview.save(output, "JPEG", quality=84, optimize=True)
-            return output.getvalue(), "image/jpeg"
-    except Exception:
-        # An image Pillow cannot read still displays as the provider sent it.
-        return payload, mime_type or "application/octet-stream"
-
-
-def fetch_remote_cover_preview(
-    image_url: str,
-    *,
-    config: Mapping[str, object] | None = None,
-    user_agent: str | None = None,
-) -> tuple[bytes | None, str | None]:
-    global _REMOTE_PREVIEW_CACHE_BYTES
+def cached_remote_cover_image(image_url: str) -> tuple[bytes, str | None] | None:
     key = normalize_remote_image_url(image_url)
-    with _REMOTE_PREVIEW_CACHE_LOCK:
-        cached = _REMOTE_PREVIEW_CACHE.get(key)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        cached = _REMOTE_IMAGE_CACHE.get(key)
         if cached is not None:
-            _REMOTE_PREVIEW_CACHE.move_to_end(key)
-            return cached
-    payload, mime_type = fetch_remote_cover_bytes(image_url, config=config, user_agent=user_agent)
-    if payload is None:
-        return None, None
-    preview = _shrink_remote_cover_preview(payload, mime_type)
-    with _REMOTE_PREVIEW_CACHE_LOCK:
-        previous = _REMOTE_PREVIEW_CACHE.pop(key, None)
+            _REMOTE_IMAGE_CACHE.move_to_end(key)
+        return cached
+
+
+def remember_remote_cover_image(image_url: str, payload: bytes, mime_type: str | None) -> None:
+    global _REMOTE_IMAGE_CACHE_BYTES
+    key = normalize_remote_image_url(image_url)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        previous = _REMOTE_IMAGE_CACHE.pop(key, None)
         if previous is not None:
-            _REMOTE_PREVIEW_CACHE_BYTES -= len(previous[0])
-        _REMOTE_PREVIEW_CACHE[key] = preview
-        _REMOTE_PREVIEW_CACHE_BYTES += len(preview[0])
-        while _REMOTE_PREVIEW_CACHE_BYTES > _REMOTE_PREVIEW_CACHE_MAX_BYTES and len(_REMOTE_PREVIEW_CACHE) > 1:
-            _evicted_key, evicted = _REMOTE_PREVIEW_CACHE.popitem(last=False)
-            _REMOTE_PREVIEW_CACHE_BYTES -= len(evicted[0])
-    return preview
+            _REMOTE_IMAGE_CACHE_BYTES -= len(previous[0])
+        _REMOTE_IMAGE_CACHE[key] = (payload, mime_type)
+        _REMOTE_IMAGE_CACHE_BYTES += len(payload)
+        while _REMOTE_IMAGE_CACHE_BYTES > _REMOTE_IMAGE_CACHE_MAX_BYTES and len(_REMOTE_IMAGE_CACHE) > 1:
+            _evicted_key, evicted = _REMOTE_IMAGE_CACHE.popitem(last=False)
+            _REMOTE_IMAGE_CACHE_BYTES -= len(evicted[0])
 
 
 def _callback_accepts_parameter(callback, parameter_name: str) -> bool:

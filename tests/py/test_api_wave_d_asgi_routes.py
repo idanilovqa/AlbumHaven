@@ -184,6 +184,16 @@ class _FilesystemCoverInventory:
         return roots.pop() if len(roots) == 1 else None
 
 
+
+@pytest.fixture(autouse=True)
+def _isolated_remote_image_cache(monkeypatch):
+    from collections import OrderedDict
+
+    from music_app.services import cover_lookup_runtime
+
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+
 def _make_wave_d_app(flask_app):
     from music_app.routes.api_wave_d_asgi_routes import router
     from music_app.services.local_cover_inventory import LocalCoverInventoryWorker

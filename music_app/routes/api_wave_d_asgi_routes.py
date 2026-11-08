@@ -40,11 +40,12 @@ from music_app.services.cover_state import (
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 from music_app.services.cover_lookup_runtime import (
     CoverLookupFinishingError,
+    cached_remote_cover_image,
     fetch_remote_cover_bytes,
-    fetch_remote_cover_preview,
     merge_lookup_matches,
     queue_cover_lookup_save_remote_task,
     queue_cover_lookup_task,
+    remember_remote_cover_image,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -2162,14 +2163,19 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     if not image_url:
         return _json_response(({"ok": False, "error": "Missing remote image URL"}, 400))
     config = _app_config(request)
-    payload, mime_type = await run_in_threadpool(
-        fetch_remote_cover_preview if request.query_params.get("size") == "preview" else fetch_remote_cover_bytes,
-        image_url,
-        config=config,
-        user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
-    )
-    if payload is None:
-        return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
+    cached = cached_remote_cover_image(image_url)
+    if cached is not None:
+        payload, mime_type = cached
+    else:
+        payload, mime_type = await run_in_threadpool(
+            fetch_remote_cover_bytes,
+            image_url,
+            config=config,
+            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        )
+        if payload is None:
+            return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
+        remember_remote_cover_image(image_url, payload, mime_type)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

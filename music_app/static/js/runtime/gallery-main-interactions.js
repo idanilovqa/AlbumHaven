@@ -405,7 +405,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
-    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null,
+    openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
@@ -593,8 +594,10 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const isSearch = Boolean(String(state.view.query || '').trim());
-  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
+  // A new search replaces the artist an open info panel describes; the panel stays open within its own search.
+  const activeSurface = galleryMainSurfaceController?.current?.();
+  if (activeSurface?.surface?.matches?.('.artist-info-overlay')
+      && (activeSurface.openingQuery ?? '') !== String(state.view.query || '').trim()) {
     closeGalleryMainSurface(false);
   }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
@@ -639,8 +642,7 @@ function updateGalleryMainChrome() {
   } else {
     name.textContent = context.artist;
     summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (isSearch) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);

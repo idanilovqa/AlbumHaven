@@ -152,13 +152,14 @@ function requireContract(context, name) {
   return context[name];
 }
 
-test('search gallery retains artist information and dividers in artist section headings', () => {
+test('search gallery shows artist information in the header and in artist section headings', () => {
   const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
   const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
   const galleryBar = context.buildGalleryBarHtml(config);
   const artistHeading = context.buildFamilyArtistHeaderHtml(config);
 
-  assert.doesNotMatch(galleryBar, /data-artist-info-trigger/);
+  // Owner (11-08): the header names one artist during a search too, so its info icon shows there.
+  assert.match(galleryBar, /data-artist-info-trigger="1" data-artist="Neal Morse"/);
   assert.match(
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,

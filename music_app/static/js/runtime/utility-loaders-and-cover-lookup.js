@@ -2566,6 +2566,8 @@ function renderTagEditorArtwork(selectedPaths) {
     ariaLabel: 'Open this folder in File Explorer',
     title: 'Open this folder in File Explorer',
     disabled: !canOpenFolder,
+    // UI-6 (owner): no outline; the bare action, like the Album Details header folder button.
+    presentation: 'bare',
     className: 'tag-editor-open-folder',
     iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
     attributes: { 'data-open-tag-editor-folder': focusedPath },

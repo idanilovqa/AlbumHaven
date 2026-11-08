@@ -82,6 +82,7 @@ test('tag editor shows folder path beside artwork with its open-folder action', 
   context.window = { AlbumHavenCapabilities: { allows: () => false } };
   context.renderTagEditorArtwork(['C:\\Music\\Album\\01 - One.mp3']);
   assert.match(artwork.innerHTML, /<button[^>]*tag-editor-open-folder[^>]* disabled/);
+  assert.match(artwork.innerHTML, /<button[^>]*class="[^"]*action-button--bare[^"]*tag-editor-open-folder/, 'UI-6: the folder button has no outline');
 });
 
 test('the Edit Tags open-folder action opens the focused track folder through the shared location route', () => {

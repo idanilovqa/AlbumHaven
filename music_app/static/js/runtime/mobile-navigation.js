@@ -9,6 +9,7 @@ function isMobileClient() {
       platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
+function currentClientProfile() { return window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop'); }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
@@ -664,7 +665,7 @@ function initMobileNavigation() {
   form?.before(placeholder);
   const syncLayout = () => {
     const mobile = usesMobilePageLayout();
-    document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
+    document.documentElement.dataset.clientProfile = currentClientProfile();
     if (form) {
       if (mobile) document.querySelector('.app-bar-brand')?.after(form);
       else {
@@ -702,7 +703,7 @@ function initMobileNavigation() {
     if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
   }) : null;
   if (form) searchResize?.observe(form);
-  window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+  const applyLayoutProfileChange = () => {
     if (galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) closeGalleryMainSurface(false);
     const saved = window.AlbumHavenDevicePreferences?.read('galleryDisplayPreferences', null);
     if (saved) {
@@ -717,7 +718,18 @@ function initMobileNavigation() {
     restorePlayerAppearance();
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
-  });
+  };
+  window.matchMedia('(max-width: 900px)').addEventListener('change', applyLayoutProfileChange);
+  // The profile also depends on touch input and the user agent, which Chrome's device toolbar can switch
+  // after the width has already crossed 900px; re-apply whenever a resize leaves the shown profile stale.
+  let layoutProfileFrame = 0;
+  window.addEventListener('resize', () => {
+    if (layoutProfileFrame) return;
+    layoutProfileFrame = requestAnimationFrame(() => {
+      layoutProfileFrame = 0;
+      if (currentClientProfile() !== document.documentElement.dataset.clientProfile) applyLayoutProfileChange();
+    });
+  }, { passive: true });
   document.addEventListener('click', handleMobileSearchOutsideClick, true);
   document.addEventListener('click', (event) => {
     if (handleMobileSettingsClick(event)) return;

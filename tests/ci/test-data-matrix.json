@@ -2651,6 +2651,26 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/responsiveGallery.spec.js",
+    "case": "FTC-MOBILE-WEB-008 switching Chrome device emulation from phone back to web restores the full web layout and mouse input",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:responsive-rated-cards"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool"
+    ],
+    "expectedContracts": [
+      "device-emulation-restores-web-layout",
+      "mouse-input-after-touch-emulation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
     "case": "FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload",
     "profile": "functional-core",

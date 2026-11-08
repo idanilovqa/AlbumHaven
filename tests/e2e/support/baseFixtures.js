@@ -60,7 +60,7 @@ import { createAppearancePreferenceIsolation } from '../helpers/appearancePrefer
 import { withArtistTreePreference } from './artistTreeStorageState.js';
 import { createLayoutPreferenceIsolation, restoreLayoutPreferencesAfterTest } from '../helpers/layoutPreferenceIsolation.js';
 
-const PHONE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
+export const PHONE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
 
 const ANSI = {
   cyan: '\u001b[36m',

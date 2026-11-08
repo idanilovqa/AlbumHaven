@@ -6463,6 +6463,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/navigationTreeStickyHeader.spec.js",
+    "case": "the navigation-tree header stays at the top of the side panel while the tree scrolls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the navigation-tree header stays at the top of the side panel while the tree scrolls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

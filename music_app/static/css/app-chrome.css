@@ -162,6 +162,16 @@
   border: 0;
 }
 .shell-navigation-rail { height: 100%; padding: 20px 14px; }
+/* The navigation-tree header stays visible while the tree scrolls: it sticks to the rail's top edge over the
+   rail padding, on the rail's own surface. Its margins become padding, so the tree does not move. The mobile
+   drawer already keeps its header fixed above a scrolling list. */
+@media (min-width: 901px) {
+  #artist-tree-expanded > .shell-navigation-rail-header {
+    position: sticky; top: -20px; z-index: 3;
+    margin: -20px -14px 0; padding: 20px 14px 12px;
+    background: var(--app-chrome);
+  }
+}
 .shell-navigation-rail.is-transitioning { overflow-y: hidden; }
 .shell-navigation-rail.is-expanding { position: relative; }
 .shell-navigation-rail.is-expanding #artist-tree-expanded {

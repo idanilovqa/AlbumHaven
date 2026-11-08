@@ -242,11 +242,25 @@ class PostgresScanCacheAdapter:
         self._connect = connect or _connect
         self._build_albums = build_albums
 
+    def _root_identity_matches(self, stored: object, root_identity: object) -> bool:
+        stored_identity = str(stored or "")
+        if stored_identity == str(root_identity):
+            return True
+        # A snapshot of the same roots published by a build that still hashed
+        # the corrections setting (see library_root_cache_identities).
+        from music_app.services.library_roots import library_root_cache_identities, library_root_cache_identity
+        try:
+            if str(root_identity) != library_root_cache_identity(self._config):
+                return False
+            return stored_identity in library_root_cache_identities(self._config)
+        except Exception:
+            return False
+
     def load_last_scan(self, root_identity: object) -> float:
         with self._connect_to_database() as connection:
             row = _first_row(connection.execute(_load_scan_snapshot_sql(metadata_only=True)))
         payload = _row_mapping(row) if row is not None else {}
-        if str(payload.get("library_root_identity") or "") != str(root_identity):
+        if not self._root_identity_matches(payload.get("library_root_identity"), root_identity):
             return 0.0
         return _float_or_zero(payload.get("last_scan"))
 
@@ -831,7 +845,7 @@ class PostgresScanCacheAdapter:
             snapshot_payload = _row_mapping(snapshot_row).get("scan_cache") if snapshot_row is not None else None
             if not isinstance(snapshot_payload, dict):
                 return {}, 0.0, {}, 0.0, None
-            if str(snapshot_payload.get("library_root_identity") or "") != str(root_identity):
+            if not self._root_identity_matches(snapshot_payload.get("library_root_identity"), root_identity):
                 return {}, 0.0, {}, 0.0, None
             file_rows = list(connection.execute(_load_file_entries_sql(), {"source": _SOURCE}).fetchall())
 

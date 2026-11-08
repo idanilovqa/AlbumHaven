@@ -548,3 +548,10 @@ def test_library_data_corrections_mode_leaves_the_scan_cache_identity_unchanged(
     stored["settings"] = {**roots, "metadata_corrections": mode}
 
     assert library_roots.library_root_cache_identity(config) == without_setting
+    # A slot on an older build still hashes the setting and publishes that form;
+    # browse slots must accept it or they find no snapshot and cannot start.
+    import hashlib
+    import json
+    legacy = hashlib.sha256(json.dumps(library_roots.load_library_root_settings(config), sort_keys=True,
+                                       separators=(",", ":")).encode("utf-8")).hexdigest()
+    assert library_roots.library_root_cache_identities(config) == {without_setting, legacy}

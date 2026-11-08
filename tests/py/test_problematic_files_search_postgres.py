@@ -64,3 +64,29 @@ def test_search_finds_a_problematic_album_beyond_the_first_page():
     complete = repository.build_problematic_files_payload()
     assert [item["key"] for item in complete["items"] if "Needle Track" in item.get("search_text", "")] \
         == [item["key"] for item in by_track["items"]]
+
+
+def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
+    """Migration 0118 keeps the last complete list; a cold process reads it
+    instead of the ~5 s whole-library candidate pass."""
+    import json
+
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = _seed_problematic_albums(8)
+    writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    complete = writer.build_problematic_files_payload()
+    writer._store_problematic_files_snapshot(json.dumps(
+        {key: value for key, value in complete.items() if key != "projection_cache_status"}, default=str))
+    cache_key = (database_url, "problematic-files")
+    # A "restart": nothing in memory for this database.
+    for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
+        registry.pop(cache_key, None)
+    browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
+
+    page = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url}) \
+        .build_problematic_files_page(limit=5)
+
+    assert page["projection_cache_status"] == "stale"
+    assert [item["key"] for item in page["items"]] == [item["key"] for item in complete["items"][:5]]
+    browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)

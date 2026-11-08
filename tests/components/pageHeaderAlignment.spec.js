@@ -33,6 +33,8 @@ async function measure(page) {
     const titleText = textBox(text);
     const summaryText = textBox(summary);
     return {
+      height: Math.round(header.getBoundingClientRect().height),
+      titleTop: Math.round(titleText.top - header.getBoundingClientRect().top),
       gap: Math.round(summaryText.top - titleText.bottom),
       titleSize: getComputedStyle(text).fontSize,
       summarySize: getComputedStyle(summary).fontSize,
@@ -54,6 +56,8 @@ for (const viewport of [{ name: 'desktop', width: 1280, height: 700 }, { name: '
       expect(header.summarySize).toBe(gallery.summarySize);
       expect(Math.abs(header.gap - gallery.gap), JSON.stringify({ gallery, header })).toBeLessThanOrEqual(1);
       expect(header.textLeftAligned).toBe(true);
+      expect(header.height, 'same header height').toBe(gallery.height);
+      expect(header.titleTop, 'same title position').toBe(gallery.titleTop);
     }
   });
 }

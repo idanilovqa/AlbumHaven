@@ -659,6 +659,11 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) > .gallery-bar__actions { grid-row: 1; margin-top: -8px; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+  /* UI-9 (owner): page headers match the Gallery header exactly: same title row, buttons on it, subtitle under
+     it. Page titles are short; one that does not fit wraps inside its own column. */
+  .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] { grid-template-rows: minmax(32px, auto) auto; }
+  .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-column: 2; }
+  .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions { grid-row: 1; margin-top: -8px; }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;
     color: inherit;

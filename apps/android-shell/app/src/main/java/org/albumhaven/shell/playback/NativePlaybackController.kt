@@ -281,6 +281,9 @@ class NativePlaybackController(
     /** Accepted frame where a queued successor took over; [advanced] has not applied it yet. */
     private var boundaryFrame: Long? = null
 
+    /** A skip promotes the prepared successor itself; its boundary is not a natural advance. */
+    private var skippingToPrepared = false
+
     /**
      * While a started item waits for its first frame as the owner: since when, and whether it was
      * already reopened once. A start the server never feeds is retried once, then fails readably.
@@ -702,7 +705,7 @@ class NativePlaybackController(
         val newSink = sinks(rate)
         // Android opens rates the PCM socket refuses; such an output is let go before it is ever used.
         val created = try {
-            NativePcmEngine(PcmEngineConfig(rate), newSink, sender, lastGeneration, ::onEngineEvent)
+            NativePcmEngine(PcmEngineConfig(rate), newSink, sender, lastGeneration, clock, ::onEngineEvent)
         } catch (refused: RuntimeException) {
             newSink.release()
             throw refused
@@ -727,7 +730,8 @@ class NativePlaybackController(
             is PcmEngineEvent.Buffering ->
                 if (wantPlay) setState(if (event.active) NativePlaybackState.BUFFERING else NativePlaybackState.PLAYING)
             is PcmEngineEvent.Boundary -> when (event.kind) {
-                PcmBoundaryKind.QUEUED_NEXT -> {
+                // A skip to the prepared successor moves to it itself.
+                PcmBoundaryKind.QUEUED_NEXT -> if (!skippingToPrepared) {
                     // Nothing of the successor is written yet, so this frame splits the two listens.
                     boundaryFrame = sink?.let(::acceptedFrames)
                     post { advanced() }
@@ -937,6 +941,7 @@ class NativePlaybackController(
         val target = index + direction
         val reason = if (direction > 0) CurrentItemReason.NEXT else CurrentItemReason.PREVIOUS
         if (target !in queue.indices || index !in queue.indices || queue[target].queueGroup != queue[index].queueGroup) return
+        if (direction > 0 && skipToPrepared()) return
         measureListening()
         val outgoing = queue.getOrNull(index)
         val outgoingPositionMs = positionMs()
@@ -951,6 +956,39 @@ class NativePlaybackController(
         emit { NativePlaybackEvent.CurrentItem(it, reason, source = source) }
         wantPlay = false
         requestPlay(start)
+    }
+
+    /**
+     * Next while playing with the successor already prepared: it is heard at once, on the same
+     * stream and claim, instead of after a new stream opens and fills.
+     */
+    private fun skipToPrepared(): Boolean {
+        val current = engine?.takeIf { loaded && wantPlay && claims.owned && state == NativePlaybackState.PLAYING } ?: return false
+        val outgoing = queue[index]
+        if (current.preparedSuccessor != queue[index + 1].pcmTrack()) return false
+        val outgoingPositionMs = positionMs()
+        measureListening()
+        skippingToPrepared = true
+        val skipped = try {
+            current.skipToPrepared()
+        } finally {
+            skippingToPrepared = false
+        }
+        if (!skipped) return false
+        index += 1
+        heldPositionMs = 0
+        resetItemMeasurement()
+        // Everything written from here on is the successor's.
+        sink?.let {
+            measuring = true
+            itemMarker = acceptedFrames(it)
+        }
+        recoveryAttempted = false
+        changeListenTrack(outgoing, outgoingPositionMs)
+        queue[index].let { claims.updateTrack(it.claimTrack()) }
+        queue.getOrNull(index + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
+        emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.NEXT, source = source) }
+        return true
     }
 
     private fun applyLoop(range: LoopRange48k?) {

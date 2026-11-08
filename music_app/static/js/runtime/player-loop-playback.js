@@ -1187,6 +1187,12 @@ function attachPlayerEvents() {
   els.albumLink?.addEventListener('click', () => {
     void openPlayerTrackAlbum(state.player.current);
   });
+  // On a phone the artist and title rows are most of the player, so a tap there opens the album too.
+  els.title?.closest('.player-track-meta')?.addEventListener('click', (event) => {
+    if (event.target?.closest?.('#player-album-link') || !state.player.current) return;
+    if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
+    void openPlayerTrackAlbum(state.player.current);
+  });
   els.coverButton?.addEventListener('click', () => {
     void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
   });

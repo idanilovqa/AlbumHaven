@@ -28,13 +28,18 @@ data class PcmEngineConfig(
     companion object {
         const val MAX_CREDIT_SECONDS = 1.0
         const val CREDIT_LOW_WATER_SECONDS = 0.25
-        /** A start is heard once this much PCM is in; the server keeps decoding ahead faster than playback. */
-        const val START_PLAYBACK_SECONDS = 0.25
+        /** A start or seek may be heard from this much PCM, if the rest arrives fast enough. */
+        const val START_PLAYBACK_SECONDS = 0.5
 
-        /** After an underrun the stream waits for this much, so a slow network does not stutter. */
+        /** How many times faster than playback the PCM after the first must arrive for a short start. */
+        const val PLAY_THROUGH_ARRIVAL_RATE = 2
+
+        /** Otherwise, and after an underrun, the stream waits for this much, so a slow network does not stutter. */
         const val REBUFFER_CUSHION_SECONDS = 2.0
         const val QUEUED_NEXT_PREPARE_SECONDS = 3.0
-        const val SEEK_PREPARE_SECONDS = 0.25
+
+        /** A seek prepares up to the cushion while the old place keeps playing; it may cut over sooner. */
+        const val SEEK_PREPARE_SECONDS = REBUFFER_CUSHION_SECONDS
         const val QUEUED_NEXT_CURRENT_CUSHION_SECONDS = 1.0
 
         /** `dispatchActiveStreamingLoop`: a loop of at most five seconds is a `short-loop`. */
@@ -56,7 +61,7 @@ sealed interface PcmEngineEvent {
     /** The server accepted the open of a [NativePcmEngine.start] stream: its decoder runs. */
     data class StartAccepted(val streamId: Long) : PcmEngineEvent
 
-    /** The first PCM of a [NativePcmEngine.start] stream arrived; [FirstFrame] follows once a quarter second is buffered. */
+    /** The first PCM of a [NativePcmEngine.start] stream arrived; [FirstFrame] follows once it can play through. */
     data class StartPcmReceived(val streamId: Long) : PcmEngineEvent
     data class FirstFrame(val streamId: Long, val timelineFrame: Long) : PcmEngineEvent
     data class Boundary(
@@ -87,6 +92,8 @@ class NativePcmEngine(
     private val controls: PcmControlSender,
     /** Generations stay unique on a shared socket when a rate change replaces the engine. */
     lastGeneration: Long = 0,
+    /** Milliseconds on a monotonic clock. */
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -112,6 +119,8 @@ class NativePcmEngine(
         var deferredCreditFrames = 0
         var initialCreditDeferred = false
         var receivedFrames = 0L
+        /** When this stream's first PCM arrived, on the engine's clock; how fast the rest follows decides when it may be heard. */
+        var firstPcmAtMs: Long? = null
         var eosReceived = false
         var acceptsPromotedContinuityWireRole = false
         var firstFrameRendered = false
@@ -313,6 +322,25 @@ class NativePcmEngine(
     /** The successor a continuity decoder is preparing, if any. */
     val preparedSuccessor: PcmTrack? get() = continuity?.takeIf { it.kind == StreamKind.QUEUED_NEXT }?.track
 
+    /**
+     * Next, while the successor is prepared: the current track is silenced at once, its unplayed
+     * PCM goes, and the successor is heard from the next write. Nothing reopens, so the skip waits
+     * on no server. Returns false when nothing is ready to skip to.
+     */
+    fun skipToPrepared(): Boolean {
+        val next = continuity
+        if (failed || !playing || current == null || next?.kind != StreamKind.QUEUED_NEXT ||
+            continuityRing.bufferedFrames <= 0 || pendingSeek != null || pendingPromotion != null || loop != null
+        ) {
+            return false
+        }
+        sink.pause()
+        sink.flush()
+        promote(PcmBoundaryKind.QUEUED_NEXT, next.startFrame)
+        sink.play()
+        return true
+    }
+
     /** The worklet's `set-loop` with `active: false`: a replay in progress resumes the track after the loop. */
     private fun releaseLoop() {
         val range = loop ?: return
@@ -419,7 +447,10 @@ class NativePcmEngine(
         }
         ring.appendLittleEndian(frame.bytes, frame.payloadOffset, frame.frameCount)
         retainShortLoopPcm(stream, ring, frame.frameCount)
-        if (stream.kind == StreamKind.START && stream.receivedFrames == 0L) events(PcmEngineEvent.StartPcmReceived(stream.streamId))
+        if (stream.receivedFrames == 0L) {
+            stream.firstPcmAtMs = clockMs()
+            if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartPcmReceived(stream.streamId))
+        }
         stream.nextSequence += 1
         stream.receivedFrames += frame.frameCount
         stream.inFlightFrames -= frame.frameCount
@@ -455,11 +486,9 @@ class NativePcmEngine(
         val head = current ?: return 0
         if (pausing) pausing = !sink.fadeOutSettled()
         if (!playing) return 0
-        val capacity = committedCapacityFrames(PcmRole.CURRENT)
-        val startFrames = minOf(config.frames(PcmEngineConfig.START_PLAYBACK_SECONDS), capacity)
-        if (!head.firstFrameRendered && !head.eosReceived && currentRing.bufferedFrames < startFrames) return 0
+        if (!head.firstFrameRendered && !playsThrough(head, currentRing, committedCapacityFrames(PcmRole.CURRENT))) return 0
         if (rebuffering) {
-            val cushion = minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), capacity)
+            val cushion = minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), committedCapacityFrames(PcmRole.CURRENT))
             if (currentRing.bufferedFrames < cushion && !head.eosReceived) return 0
             rebuffering = false
             events(PcmEngineEvent.Buffering(false, head.streamId))
@@ -763,9 +792,12 @@ class NativePcmEngine(
             grantCredit(stream, missing)
             return
         }
-        val lowWater = config.frames(PcmEngineConfig.CREDIT_LOW_WATER_SECONDS)
-        if (missing < config.maxCreditFrames || stream.inFlightFrames > lowWater) return
-        grantCredit(stream, config.maxCreditFrames - stream.inFlightFrames)
+        // The credit window is topped up in quarter seconds as PCM arrives, so it never drains
+        // to a round trip's wait: on a slow link that wait is what starves playback.
+        val chunk = config.frames(PcmEngineConfig.CREDIT_LOW_WATER_SECONDS)
+        val free = config.maxCreditFrames - stream.inFlightFrames
+        if (missing < chunk || free < chunk) return
+        grantCredit(stream, minOf(missing, free))
     }
 
     private fun grantCredit(stream: Stream, requestedFrames: Int): Int {
@@ -784,11 +816,26 @@ class NativePcmEngine(
         return frames
     }
 
+    /** The old place keeps playing until the new one can play through without stopping. */
     private fun prepareSeekWhenBuffered(stream: Stream) {
         val seek = pendingSeek ?: return
         if (seek.streamId != stream.streamId || stream !== continuity || seek.ready) return
-        val buffered = continuityRing.bufferedFrames
-        if (buffered > 0 && (stream.eosReceived || buffered >= stream.targetBufferFrames)) seek.ready = true
+        if (continuityRing.bufferedFrames > 0 && playsThrough(stream, continuityRing, stream.targetBufferFrames)) seek.ready = true
+    }
+
+    /**
+     * Whether [stream] can be heard from now without running dry: all of it is in, the
+     * [PcmEngineConfig.REBUFFER_CUSHION_SECONDS] cushion (at most [cushionLimit]) is, or a short
+     * start is and the rest arrives at least twice as fast as it plays.
+     */
+    private fun playsThrough(stream: Stream, ring: PcmRing, cushionLimit: Int): Boolean {
+        val buffered = ring.bufferedFrames
+        if (stream.eosReceived) return true
+        if (buffered >= minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), cushionLimit)) return true
+        if (buffered < config.frames(PcmEngineConfig.START_PLAYBACK_SECONDS)) return false
+        val since = stream.firstPcmAtMs ?: return false
+        val elapsedFrames = (clockMs() - since) * config.sampleRate / 1000
+        return stream.receivedFrames >= PcmEngineConfig.PLAY_THROUGH_ARRIVAL_RATE * elapsedFrames
     }
 
     private fun capacityFrames(role: PcmRole): Int {

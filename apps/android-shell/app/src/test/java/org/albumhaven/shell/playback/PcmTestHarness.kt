@@ -384,7 +384,9 @@ class PcmHarness(
 ) {
     val server = FakeAhpcServer(tracks.toList(), chunkFrames)
     val events = mutableListOf<PcmEngineEvent>()
-    val engine = NativePcmEngine(config, sink, server) { events += it }
+    /** The engine's clock; it stands still unless a test moves it, so arrival counts as instant. */
+    var nowMs = 0L
+    val engine = NativePcmEngine(config, sink, server, clockMs = { nowMs }) { events += it }
 
     fun deliver() {
         while (server.outbox.isNotEmpty()) {

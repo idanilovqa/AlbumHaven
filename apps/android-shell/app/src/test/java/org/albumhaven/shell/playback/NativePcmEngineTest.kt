@@ -1,6 +1,7 @@
 package org.albumhaven.shell.playback
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -159,14 +160,14 @@ class NativePcmEngineTest {
     }
 
     @Test
-    fun startupIsHeardAfterAQuarterSecondNotACushion() {
+    fun aFastStreamIsHeardAfterHalfASecond() {
         val harness = started()
         metadata(harness)
-        // Interleaved stereo: RATE / 2 samples are a quarter second of frames, minus one frame short.
-        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 0, FloatArray(RATE / 2 - 2)))
+        // Interleaved stereo: RATE samples are half a second of frames; one frame short waits.
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 0, FloatArray(RATE - 2)))
         assertEquals(0, harness.engine.render(1_024))
         harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 1, FloatArray(2)))
-        assertEquals(RATE / 4, harness.engine.bufferedFrames(PcmRole.CURRENT))
+        assertEquals(RATE / 2, harness.engine.bufferedFrames(PcmRole.CURRENT))
         assertEquals(1_024, harness.engine.render(1_024))
 
         val ready = PcmHarness(first)
@@ -174,6 +175,43 @@ class NativePcmEngineTest {
         ready.deliver()
         assertEquals(1_024, ready.engine.render(1_024))
         assertEquals(listOf(PcmEngineEvent.FirstFrame(1, 0)), ready.emitted<PcmEngineEvent.FirstFrame>())
+    }
+
+    @Test
+    fun aStreamArrivingBarelyFasterThanItPlaysWaitsForTheCushionSoItNeverStutters() {
+        val harness = started()
+        metadata(harness)
+        // A second of PCM over 0.8 s: faster than playback, but not twice as fast.
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 0, FloatArray(2)))
+        harness.nowMs = 800
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 1, FloatArray(2 * RATE - 2)))
+        assertEquals(0, harness.engine.render(1_024))
+
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 2, FloatArray(2 * RATE)))
+        assertEquals(2 * RATE, harness.engine.bufferedFrames(PcmRole.CURRENT))
+        assertEquals(1_024, harness.engine.render(1_024))
+    }
+
+    @Test
+    fun aSeekKeepsTheOldPlacePlayingUntilTheNewOneCanPlayThrough() {
+        val long = SyntheticTrack(tag = 6, frames = 30L * RATE)
+        val harness = PcmHarness(long)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.emitted<PcmEngineEvent.FirstFrame>().isNotEmpty() }
+        harness.server.decoding = false
+        harness.engine.seek(20L * RATE)
+        harness.deliver()
+        // A second of the new place over 0.8 s is not enough to play through: the old place sounds on.
+        harness.engine.onBinary(pcmFrame(PcmRole.CONTINUITY, 1, 2, 0, FloatArray(2)))
+        harness.nowMs = 800
+        harness.engine.onBinary(pcmFrame(PcmRole.CONTINUITY, 1, 2, 1, FloatArray(2 * RATE - 2)))
+        assertEquals(1_024, harness.engine.render(1_024))
+        assertTrue(harness.engine.seekPending)
+
+        harness.engine.onBinary(pcmFrame(PcmRole.CONTINUITY, 1, 2, 2, FloatArray(2 * RATE)))
+        assertEquals(1_024, harness.engine.render(1_024))
+        assertFalse(harness.engine.seekPending)
+        assertEquals(0, harness.emitted<PcmEngineEvent.Underrun>().size)
     }
 
     @Test

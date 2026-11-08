@@ -857,18 +857,27 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aSystemSkipWhilePlayingSilencesTheOutgoingTrackAtOnceAndNamesTheNewOne() {
+    fun aSystemSkipToThePreparedSuccessorSilencesTheOutgoingTrackAndPlaysOnWithoutReopening() {
         val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
         val harness = ControllerHarness(long, second, realTime = true)
         harness.load(1, long, second)
         harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
         val heard = harness.sinks.last().writtenFrames.toLong()
+        val opens = harness.server.controls.filterIsInstance<PcmClientControl.Open>().size
         harness.server.decoding = false
 
-        val (operations, snapshot) = harness.applyNow { harness.controller.next(1, CommandSource.SYSTEM) }
+        val before = harness.sinks.last().operations.size
+        harness.controller.next(1, CommandSource.SYSTEM)
+        harness.controller.runOnce()
+        val operations = harness.sinks.last().operations.drop(before)
+        val snapshot = harness.controller.snapshot
         assertEquals(listOf("pause", "flush"), operations.take(2))
         assertEquals(1, snapshot.currentIndex)
-        assertTrue(snapshot.state != NativePlaybackState.PLAYING)
+        // The successor was prepared, so it plays on at once from the same stream: nothing reopens,
+        // and what that pass wrote is the successor's, from its first frame.
+        assertEquals(Run(2, 0, harness.sinks.last().writtenFrames - heard), harness.sinks.last().runs().last())
+        assertEquals(NativePlaybackState.PLAYING, snapshot.state)
+        assertEquals(opens, harness.server.controls.filterIsInstance<PcmClientControl.Open>().size)
         val step = harness.events.filterIsInstance<NativePlaybackEvent.CurrentItem>().last()
         assertEquals(CurrentItemReason.NEXT to 1, step.reason to step.snapshot.currentIndex)
 

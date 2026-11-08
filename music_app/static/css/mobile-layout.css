@@ -334,6 +334,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview { grid-template-columns: 32px minmax(0, 1fr) 32px; }
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: start; justify-self: end; flex-direction: column; }
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity { grid-column: 1 / -1; grid-row: 2; text-align: center; }
+  /* The title row is a flex row for its quality alert; it centers under the cover with the line above it. */
+  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity .album-details-header__primary-row { justify-content: center; }
   .is-mobile-page .appearance-album-layout-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
   .is-mobile-page .appearance-album-page__controls > .appearance-subsection-heading { display: block; }
   /* Same range and audio clock. Three-pixel visual track, 24px touch/keyboard target. */

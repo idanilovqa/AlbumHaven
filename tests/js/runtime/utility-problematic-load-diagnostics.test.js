@@ -557,6 +557,15 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(completeLoadSettled, false);
   assert.ok(calls.renders >= 2, 'the bounded response must paint before completion');
 
+  // Rules -> Problematic Files while the complete list loads: the tab shell
+  // painted "Loading..."; the first page it already has must repaint at once
+  // (the real library otherwise showed "Loading..." for 32 s).
+  context.state.utility.activeTab = 'problematic-files';
+  const rendersBeforeReturn = calls.renders;
+  const returned = context.loadProblematicFiles(false, { render: false, renderInitialPage: true });
+  assert.equal(calls.renders, rendersBeforeReturn + 1);
+  assert.equal(requestedUrls.length, 2, 'returning to the tab must not request the list again');
+
   context.state.utility.selectedProblematicKey = 'first';
   fullResponse.resolve({
     ok: true,
@@ -580,6 +589,7 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
     },
   });
   const result = await load;
+  assert.equal(await returned, result);
 
   assert.deepEqual(Array.from(result, (item) => item.key), ['first', 'second']);
   assert.equal(context.state.utility.problematicFiles[0].name, 'First canonical detail');

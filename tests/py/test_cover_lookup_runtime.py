@@ -4408,3 +4408,27 @@ def test_remote_cover_images_are_remembered_and_the_oldest_leave_first(monkeypat
     assert runtime.cached_remote_cover_image("https://images.example/a.jpg") is None
     assert runtime.cached_remote_cover_image("https://images.example/b.jpg") == (b"bbbbbb", "image/png")
     assert runtime._REMOTE_IMAGE_CACHE_BYTES == 6
+
+
+def test_probe_measurement_is_remembered_by_image_content(monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.services import cover_provider_runtime
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buffer, "PNG")
+    payload = buffer.getvalue()
+    decodes = []
+    real_decode = cover_provider_runtime.decode_image_bytes
+    monkeypatch.setattr(cover_provider_runtime, "decode_image_bytes", lambda raw: decodes.append(1) or real_decode(raw))
+    monkeypatch.setattr(cover_provider_runtime, "http_get_bytes", lambda *_args, **_kwargs: payload)
+    monkeypatch.setattr(cover_provider_runtime, "_PROBE_MEASUREMENTS", type(cover_provider_runtime._PROBE_MEASUREMENTS)())
+
+    first = cover_provider_runtime.probe_candidate_metrics("https://a.example/1.png", user_agent="t", service="s", context="c")
+    second = cover_provider_runtime.probe_candidate_metrics("https://a.example/1.png?n=2", user_agent="t", service="s", context="c")
+
+    assert len(decodes) == 1
+    assert {k: first[k] for k in ("width", "height", "sharpness")} == {k: second[k] for k in ("width", "height", "sharpness")}
+    assert second["raw_bytes"] == payload

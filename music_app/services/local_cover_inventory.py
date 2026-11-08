@@ -313,6 +313,11 @@ def discover_local_cover_inventory(root, config, *, cancel_requested=None):
     from music_app.services.cover_state import _file_sha256, iter_local_cover_candidates
     from music_app.services.covers import image_dimensions
 
+    # Roots are stored by case-folded key; scan from the folder's real spelling so listed paths match the
+    # album's own paths. realpath also follows junctions, so it is used only when it names the same folder.
+    real_root = os.path.realpath(str(root))
+    if root_key(real_root) == root_key(root):
+        root = real_root
     candidates = iter_local_cover_candidates(
         Path(root), image_extensions=set(config["IMAGE_EXTENSIONS"]),
         image_dimensions=image_dimensions,

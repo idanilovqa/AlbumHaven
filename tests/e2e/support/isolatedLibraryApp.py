@@ -4489,6 +4489,13 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.cover_lookup_later_provider_gate.set()
 
     def hold_cover_lookup_candidate_images(self) -> None:
+        # A held provider is a slow provider: images the app's remote-image cache kept from earlier views would
+        # otherwise never reach the gate. The app runs in this process, so its cache starts empty for the hold.
+        from music_app.services import cover_lookup_runtime
+
+        with cover_lookup_runtime._REMOTE_IMAGE_CACHE_LOCK:
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE.clear()
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE_BYTES = 0
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence["candidate_image_requests"] = 0
         self.cover_lookup_candidate_image_gate.clear()

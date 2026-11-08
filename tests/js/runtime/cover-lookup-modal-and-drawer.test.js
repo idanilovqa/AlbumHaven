@@ -3646,6 +3646,22 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
+require('node:test')('clicking the current cover enables Save only when the app applied it automatically', () => {
+  const coverPath = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
+  for (const [origin, expected] of [['automatic', true], ['user', false]]) {
+    const context = loadHelper({ document: { getElementById: () => ({ hidden: true }) } });
+    context.state.coverLookup.modal = {
+      album: { cover_path: coverPath, cover_selection_origin: origin },
+      activeLocalSelectionPath: coverPath,
+      pendingLocalPath: '',
+      pendingPastedImageId: '',
+      selectedRemoteId: '',
+    };
+    context.selectLocalCoverFromLookup(coverPath);
+    assert.equal(context.hasPendingLocalCoverSelection(), expected, origin);
+  }
+});
+
 require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
   const album = {
     key: 'artist::album::2001',
@@ -3785,6 +3801,33 @@ require('node:test')('rejected remote save restores the cover replaced before se
   assert.strictEqual(context.state.coverLookup.optimisticAlbumCovers.album, previousCover);
   assert.deepEqual(restoredAlbum, album);
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-1');
+});
+
+require('node:test')('remote save sends the running search task id, not its candidate generation (FTC-COVERS-013)', async () => {
+  const album = { key: 'artist::album::2001', tracks: [{ path: 'C:/music/Remote/01.flac' }] };
+  const generation = '0f8d2a1e-3b4c-4d5e-8f90-a1b2c3d4e5f6';
+  let requestBody = null;
+  const context = loadHelper({ deepCloneJson: (value) => JSON.parse(JSON.stringify(value)), showToast: () => {} });
+  context.state.coverLookup.tasks = [{ id: 'running-search-task', status: 'running', search_generation: generation }];
+  context.state.coverLookup.modal = {
+    album,
+    taskId: '',
+    selectedRemoteId: 'candidate-1',
+    remoteSelectionOverrideGeneration: generation,
+    possibleMatches: [{ id: 'candidate-1', url: 'https://images.example/remote-cover.jpg', display_only: false }],
+  };
+  context.applyOptimisticRemoteCoverSelection = () => album;
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.fetch = async (url, options) => {
+    requestBody = JSON.parse(options.body);
+    return { ok: false, json: async () => ({ ok: false, error: 'stop here' }) };
+  };
+
+  await context.saveRemoteCoverFromLookup();
+
+  assert.equal(requestBody.task_id, 'running-search-task');
+  assert.equal(requestBody.snapshot_generation, generation);
 });
 
 require('node:test')('remote save closes on click, runs once in the background, and alerts a readable failure', async () => {

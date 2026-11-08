@@ -1237,8 +1237,9 @@ export class CoverLookupActions {
     await expect(this.coverLookup.mobileSheet).toBeVisible();
     await expect(this.coverLookup.mobilePage).toHaveCount(0);
     await expect(this.coverLookup.drawer).toBeVisible();
+    // INT-023: the sheet slides up over 320 ms; measure where it settles.
+    await expect.poll(async () => (await this.coverLookup.readMobileSheetStacking()).bottomGap).toBeLessThanOrEqual(1);
     const stacking = await this.coverLookup.readMobileSheetStacking();
-    expect(stacking.bottomGap).toBeLessThanOrEqual(1);
     expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
   }
 

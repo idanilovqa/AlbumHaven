@@ -31915,8 +31915,12 @@ function buildTrackModalCoverSourceBadge(source) {
 }
 
 function hasPendingLocalCoverSelection() {
-  const pendingPath = String(state.coverLookup.modal.pendingLocalPath || '');
-  return Boolean(pendingPath && pendingPath !== getCoverLookupActiveLocalPath());
+  const modal = state.coverLookup.modal;
+  const pendingPath = String(modal.pendingLocalPath || '');
+  if (!pendingPath) return false;
+  if (pendingPath !== getCoverLookupActiveLocalPath()) return true;
+  // Clicking a cover the app applied automatically confirms it as the user's own choice.
+  return !modal.artboxSlot && modal.album?.cover_selection_origin === 'automatic';
 }
 
 function hasPendingPastedCoverSelection() {
@@ -34965,7 +34969,13 @@ async function saveRemoteCoverFromLookup() {
   const selectionOwnerGeneration = String(
     state.coverLookup.modal.remoteSelectionOverrideGeneration || '',
   ).trim();
-  const taskId = selectionOwnerGeneration || state.coverLookup.modal.taskId;
+  // A search's generation is not its task id. Send the owning task's id so the server saves on that task and
+  // stops its remaining provider work instead of opening a second task (FTC-COVERS-013).
+  const generationOwnerTask = selectionOwnerGeneration
+    ? (state.coverLookup.tasks || []).find((task) => coverLookupCandidateGenerationKey(task?.search_generation || task?.id)
+      === coverLookupCandidateGenerationKey(selectionOwnerGeneration))
+    : null;
+  const taskId = String(generationOwnerTask?.id || selectionOwnerGeneration || state.coverLookup.modal.taskId || '');
   const snapshotGeneration = selectionOwnerGeneration || String(
     state.coverLookup.modal.candidateSnapshot?.search_generation || '',
   ).trim();

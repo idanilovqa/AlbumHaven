@@ -564,7 +564,8 @@ export class CoverLookup extends BasePage {
           .some((element) => element.textContent.includes('No local cover art'));
         observation.samples.push({
           empty,
-          wrongPlaceholderCount: placeholders > 0 && placeholders !== expected,
+          // INT-028: while LOCAL lists, only covers already known (the album's own) show as placeholders.
+          wrongPlaceholderCount: placeholders > expected,
           lostKnownCards: observation.sawKnownCards && count !== expected,
         });
         if (count === expected) observation.sawKnownCards = true;

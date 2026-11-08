@@ -26,6 +26,19 @@ def test_discovery_persists_dimensions_and_hashes_without_generated_previews(tmp
     assert all(item["sha256"] == _file_sha256(Path(item["path"])) for item in candidates)
 
 
+@pytest.mark.skipif(not __import__("os").path.normcase("A") == "a", reason="case-folded keys exist only on Windows")
+def test_discovery_lists_paths_in_the_folder_real_spelling(tmp_path):
+    from PIL import Image
+
+    album = tmp_path / "Mastodon" / "Crack The Skye"
+    album.mkdir(parents=True)
+    Image.new("RGB", (64, 64)).save(album / "cover.jpg")
+
+    candidates = inventory.discover_local_cover_inventory(inventory.root_key(album), {"IMAGE_EXTENSIONS": {".jpg"}})
+
+    assert [item["path"] for item in candidates] == [str(album / "cover.jpg")]
+
+
 def test_discovery_cancellation_does_not_return_partial_inventory(tmp_path):
     (tmp_path / "cover.jpg").write_bytes(b"image")
     with pytest.raises(InterruptedError, match="cancelled"):

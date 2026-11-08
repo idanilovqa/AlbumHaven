@@ -983,8 +983,8 @@ def test_relation_alias_query_distinguishes_missing_snapshot_from_malformed_proj
     sql = " ".join(_relation_alias_maps_sql().lower().split())
 
     assert "as projection_snapshot_missing" in sql
-    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_views' )" in sql
-    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_projection' )" in sql
+    assert "jsonb_path_exists( relation_snapshot.metadata, '$.scan_cache.relation_views' )" in sql
+    assert "jsonb_path_exists( relation_snapshot.metadata, '$.scan_cache.relation_projection' )" in sql
 
 
 def test_family_preview_reuses_membership_snapshots_without_changing_results(monkeypatch):
@@ -4011,15 +4011,18 @@ def test_relation_alias_loader_reports_persisted_projection_authority(
     }
     assert len(sql_calls) == 2
     normalized_sql = " ".join(sql_calls[1][0].split()).lower()
-    assert "'{scan_cache,relation_views}'" not in normalized_sql
-    assert normalized_sql.count("'{scan_cache,relation_views,alias_to_canonical}'") == 2
-    assert normalized_sql.count("'{scan_cache,relation_views,canonical_to_aliases}'") == 2
+    # Relation views come from the normalized projection, built once per query.
+    assert "'{scan_cache,relation_views" not in normalized_sql
+    assert normalized_sql.count("library.local_relation_views(") == 1
+    assert "relation_snapshot as materialized" in normalized_sql
+    assert normalized_sql.count("relation_snapshot.relation_views -> 'alias_to_canonical'") == 2
+    assert normalized_sql.count("relation_snapshot.relation_views -> 'canonical_to_aliases'") == 2
     assert normalized_sql.count("'{scan_cache,relation_projection}'") == 2
     assert "projection_structure_complete" in normalized_sql
     assert "as alias_to_canonical" in normalized_sql
     assert "as canonical_to_aliases" in normalized_sql
     assert "metadata -> 'scan_cache'" not in normalized_sql
-    assert "as relation_views" not in normalized_sql
+    assert normalized_sql.count("as relation_views") == 1
     assert "as relation_projection" in normalized_sql
 
 
@@ -7357,7 +7360,7 @@ def test_artist_search_projection_authority_uses_current_database_metadata():
         connection=Connection()
     ) is True
     sql, params = executed[0]
-    assert "to_regclass('library.local_artist_search_projection')" in sql
+    assert "to_regclass('library.local_artist_search_projection_current')" in sql
     assert "relation_projection" in sql
     assert "source_fingerprint" in sql
     assert "built_from_fingerprint" in sql
@@ -13701,8 +13704,10 @@ def test_load_selected_artist_family_projection_sql_selects_target_artist_name()
     assert "select library.local_artists.id, library.local_artists.name, library.local_artists.artist_key from library.local_artists" in sql
     assert "target_artist.name as selected_artist_name" in sql
     assert "and library.local_artist_family_links.source_family = %(relationship_source)s" not in sql
-    assert "local_artist_family_links.library_id = (select library_id from bootstrap_context)" in sql
-    assert "case when library.local_artist_family_links.source_family = %(relationship_source)s then 0 else 1 end" in sql
+    assert "select * from library.local_artist_family_links_current" in sql
+    assert "select * from library.local_artist_family_links where source_family <> 'folder_derived_runtime'" in sql
+    assert "family_links.library_id = (select library_id from bootstrap_context)" in sql
+    assert "case when family_links.source_family = %(relationship_source)s then 0 else 1 end" in sql
 
 
 def _normal_problematic_product_row(*, album_key="product-album", album_title="Product Album"):

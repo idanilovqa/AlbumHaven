@@ -22,7 +22,7 @@ test('mobile artist info sits at the bottom without an anchored trigger outline'
   const slide = await sheet.evaluate((node) => node.getAnimations().map((animation) => ({
     name: animation.animationName, duration: animation.effect.getTiming().duration,
   })));
-  expect(slide).toEqual([{ name: 'bottom-sheet-enter', duration: 240 }]);
+  expect(slide).toEqual([{ name: 'bottom-sheet-enter', duration: 320 }]);
   await sheet.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const box = await sheet.boundingBox();
   expect(box).not.toBeNull();

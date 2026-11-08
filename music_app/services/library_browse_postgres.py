@@ -423,6 +423,7 @@ class PostgresLibraryBrowseRepository:
         source_rows: Iterable[object] = (),
         connection: Any | None = None,
         ensure_gallery_summary: bool = False,
+        include_disc_ratings: bool = False,
     ) -> None:
         albums_by_key: dict[str, list[dict[str, object]]] = {}
         for album in albums:
@@ -457,6 +458,14 @@ class PostgresLibraryBrowseRepository:
             if connection is not None
             else self._album_ratings_service.load_album_ratings(albums_by_key)
         )
+        disc_ratings_by_key = (
+            self._album_ratings_service.load_album_disc_ratings(
+                albums_by_key,
+                connection=connection,
+            )
+            if include_disc_ratings
+            else {}
+        )
         for album_key, matching_albums in albums_by_key.items():
             rating_row = rating_rows.get(album_key)
             for album in matching_albums:
@@ -471,6 +480,8 @@ class PostgresLibraryBrowseRepository:
                     overlay["rating"] = rating_row.get("rating")
                     overlay["provenance"] = rating_row.get("provenance")
                     overlay["can_edit"] = True
+                if album_key in disc_ratings_by_key:
+                    overlay["disc_ratings"] = disc_ratings_by_key[album_key]
                 apply_album_preference_overlay(
                     album,
                     overlay,
@@ -1842,6 +1853,7 @@ class PostgresLibraryBrowseRepository:
             [detail_album],
             source_rows=rows,
             connection=connection,
+            include_disc_ratings=True,
         )
         _annotate_album_payload_problematic_tracks([detail_album], rows)
         detail_album["poor_art_quality"] = (

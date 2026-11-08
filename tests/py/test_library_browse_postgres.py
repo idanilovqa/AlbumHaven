@@ -103,6 +103,10 @@ class _EmptyAlbumRatingsService:
         del connection
         return {}
 
+    def load_album_disc_ratings(self, _album_keys, *, connection=None):
+        del connection
+        return {}
+
 
 class _NoopSearchSnapshotConnection:
     def __init__(self, inventory_state=None):
@@ -16094,6 +16098,7 @@ class _RecordingAlbumRatingsService:
         self.config = config
         self.connect = connect
         self.load_calls: list[list[str]] = []
+        self.disc_load_calls: list[list[str]] = []
         self.__class__.instances.append(self)
 
     def load_album_ratings(self, album_keys, *, connection=None):
@@ -16104,6 +16109,11 @@ class _RecordingAlbumRatingsService:
             "numeric-album": {"rating": 8, "provenance": "explicit_import"},
             "cleared-album": {"rating": None, "provenance": "explicit_clear"},
         }
+
+    def load_album_disc_ratings(self, album_keys, *, connection=None):
+        del connection
+        self.disc_load_calls.append([str(album_key) for album_key in album_keys])
+        return {"numeric-album": [{"disc_key": "bonus disc", "rating": 5}]}
 
 
 def _rating_overlay_test_rows() -> list[dict[str, object]]:
@@ -16647,6 +16657,8 @@ def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(m
     assert payload["tag_album_rating_source"] == "file_tag"
     assert len(_RecordingAlbumRatingsService.instances) == 1
     assert _RecordingAlbumRatingsService.instances[0].load_calls == [["numeric-album"]]
+    assert payload["album_preference"]["disc_ratings"] == [{"disc_key": "bonus disc", "rating": 5}]
+    assert _RecordingAlbumRatingsService.instances[0].disc_load_calls == [["numeric-album"]]
 
 
 def test_root_startup_gallery_and_search_sql_exclude_supported_non_album_exceptions_before_rollups():

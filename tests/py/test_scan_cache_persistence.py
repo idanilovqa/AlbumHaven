@@ -3689,6 +3689,19 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         "seed_missing_album_ratings_in_transaction",
         lambda _self, *args, **kwargs: seed_missing(*args, **kwargs),
     )
+
+    def seed_missing_discs(active_connection, candidates, *, source):
+        assert active_connection is connection
+        assert connection.commit_calls == 0
+        events.append("disc_rating_seed")
+        assert candidates == []
+        assert source == "file_tag_scan"
+
+    monkeypatch.setattr(
+        scan_cache_persistence.PostgresAlbumRatingsService,
+        "seed_missing_album_disc_ratings_in_transaction",
+        lambda _self, *args, **kwargs: seed_missing_discs(*args, **kwargs),
+    )
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: connection,
@@ -3722,6 +3735,7 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         "scan_snapshot",
         "seed_guard_enter",
         "rating_seed",
+        "disc_rating_seed",
         "seed_guard_exit",
     ]
 

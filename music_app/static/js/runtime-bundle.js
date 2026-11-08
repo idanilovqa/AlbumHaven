@@ -4497,7 +4497,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const className = ['rating-row', config.className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(className)}" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {
@@ -18424,6 +18425,24 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
+function isValidAlbumRating(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 10;
+}
+
+// A bonus disc shows its own rating only when it and the album are both
+// rated and the two ratings differ; main album discs never do.
+function buildBonusDiscRatingHtml(group, albumRating) {
+  const discRating = group?.discRating;
+  if (!group?.isBonus || !isValidAlbumRating(discRating) || !isValidAlbumRating(albumRating)) return '';
+  if (discRating === albumRating) return '';
+  return buildGalleryRatingHtml({
+    value: discRating,
+    maximum: 10,
+    label: `Bonus disc rating ${discRating}/10`,
+    className: 'album-track-table__disc-rating',
+  });
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -18461,11 +18480,14 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
+    const headingContent = showLabel
+      ? `${escapeHtml(label)}${buildBonusDiscRatingHtml(group, config.albumRating)}`
+      : '';
     if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}</details>`;
     }
     const heading = showLabel
-      ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
+      ? `<h4 class="album-track-table__disc-heading">${headingContent}</h4>`
       : '';
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
@@ -33313,6 +33335,16 @@ function getTrackDiscLabel(track) {
   return '';
 }
 
+// Matches album_disc_key() in album_ratings_postgres.py, the identity of
+// app-owned disc ratings.
+function getTrackDiscRatingKey(track) {
+  const raw = String((track && track.disc_number_raw) || '').split('/')[0].trim().replace(/\s+/g, ' ').toLowerCase();
+  if (/^\d+$/.test(raw)) return String(Number(raw));
+  if (raw) return raw;
+  const numeric = Number(track && track.disc_number);
+  return Number.isInteger(numeric) && numeric >= 1 ? String(numeric) : '';
+}
+
 function isBonusDiscTrack(track) {
   const rawDisc = String((track && track.disc_number_raw) || '').trim();
   if (!rawDisc) return false;
@@ -33409,6 +33441,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const albumPreference = album?.album_preference || {};
+  const discRatingByKey = new Map(
+    (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
+      .map((discRating) => [discRating?.disc_key, discRating?.rating])
+  );
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -33457,6 +33494,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discNumber: group.discNumber,
       discLabel,
       isBonus: Boolean(group.isBonus),
+      discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,
     };
   });
@@ -33473,6 +33511,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+    albumRating: albumPreference.rating ?? null,
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),

@@ -7556,6 +7556,7 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
         "to_listen": False,
         "is_relisten": False,
         "can_toggle_to_listen": False,
+        "disc_ratings": [{"disc_key": "bonus disc", "rating": 8}],
     }
     private_payload = {
         "key": "rated-album",
@@ -7575,6 +7576,7 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
 
     assert public_payload["album_preference"]["rating"] is None
     assert public_payload["album_preference"]["can_edit"] is False
+    assert "disc_ratings" not in public_payload["album_preference"]
     assert public_payload["gallery_list_block"]["summary"]["album_preference"] == public_payload[
         "album_preference"
     ]

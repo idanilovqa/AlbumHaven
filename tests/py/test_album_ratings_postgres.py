@@ -42,7 +42,11 @@ class FakeConnection:
         context_rows: Iterable[object] = ({"account_id": 11, "library_id": 22},),
         load_rows: Iterable[object] = (),
         write_results: Iterable[Iterable[object]] = (),
+        disc_load_rows: Iterable[object] = (),
+        disc_write_results: Iterable[Iterable[object]] = (),
     ) -> None:
+        self.disc_load_rows = list(disc_load_rows)
+        self.disc_write_results = [list(rows) for rows in disc_write_results]
         self.context_rows = list(context_rows)
         self.load_rows = list(load_rows)
         self.write_results = [list(rows) for rows in write_results]
@@ -69,6 +73,11 @@ class FakeConnection:
         if "insert into app.album_ratings" in normalized_sql:
             rows = self.write_results.pop(0) if self.write_results else []
             return FakeCursor(rows)
+        if "insert into app.album_disc_ratings" in normalized_sql:
+            rows = self.disc_write_results.pop(0) if self.disc_write_results else []
+            return FakeCursor(rows)
+        if "from app.album_disc_ratings" in normalized_sql:
+            return FakeCursor(self.disc_load_rows)
         return FakeCursor()
 
 
@@ -232,12 +241,18 @@ def test_explicit_import_reads_persisted_tag_ratings_and_reports_exact_counts(
     connection = FakeConnection(
         write_results=[
             [{"created": 2, "authority_skipped": 1, "failed": 3}]
-        ]
+        ],
+        disc_write_results=[[{"created": 4, "authority_skipped": 5}]],
     )
 
     result = _service(ratings_module, connection).import_missing_tag_ratings()
 
-    assert result == {"created": 2, "authority_skipped": 1, "failed": 3}
+    assert result == {
+        "created": 2,
+        "authority_skipped": 1,
+        "failed": 3,
+        "disc_ratings": {"created": 4, "authority_skipped": 5},
+    }
     assert connection.transaction_entries == 1
     assert connection.transaction_exits == 1
     [(sql, params)] = _write_operations(connection)
@@ -408,3 +423,162 @@ def test_seed_sql_types_source_parameters_for_postgres_parameter_inference(
     [(sql, params)] = _write_operations(connection)
     assert "eligible.rating, %s::text, jsonb_build_object('source', %s::text)" in sql
     assert params == (["typed-source"], [8], "file_tag_scan", "file_tag_scan")
+
+
+def _disc_write_operations(connection: FakeConnection) -> list[tuple[str, object]]:
+    return [
+        (sql, params)
+        for sql, params in _normalized_operations(connection)
+        if "insert into app.album_disc_ratings" in sql
+    ]
+
+
+def test_explicit_import_seeds_disc_ratings_in_the_album_rating_transaction(ratings_module):
+    connection = FakeConnection(
+        write_results=[[{"created": 0, "authority_skipped": 0, "failed": 0}]],
+        disc_write_results=[[{"created": 1, "authority_skipped": 0}]],
+    )
+
+    _service(ratings_module, connection).import_missing_tag_ratings()
+
+    assert connection.transaction_entries == 1
+    [(sql, params)] = _disc_write_operations(connection)
+    assert params is None
+    assert "join bootstrap_context" in sql or "from bootstrap_context" in sql
+    assert "app.bootstrap_owners" in sql
+    assert "library.local_track_files.scan_cache_stale is false" in sql
+    assert "#> '{scan_cache,file_entry,album_rating}'" in sql
+    assert "#>> '{scan_cache,file_entry,disc_number_raw}'" in sql
+    assert "disc_key <> ''" in sql
+    assert "metadata -> 'tag_album_rating'" in sql
+    assert "min(track_rating) = max(track_rating)" in sql
+    assert "album_disc_count > 1" in sql
+    assert "rating <> album_rating" in sql
+    assert "on conflict (account_id, library_id, album_key, disc_key) do nothing" in sql
+    assert "'explicit_import'" in sql
+    assert "update app." not in sql
+
+
+def _album(key, album_rating, discs):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        key=key,
+        album_rating=album_rating,
+        tracks=[
+            SimpleNamespace(
+                disc_number=disc if isinstance(disc, int) else None,
+                disc_number_raw=disc if isinstance(disc, str) else None,
+                album_rating=rating,
+            )
+            for disc, ratings in discs.items()
+            for rating in ratings
+        ],
+    )
+
+
+def test_tag_disc_rating_candidates_take_only_consistent_differing_discs(ratings_module):
+    albums = [
+        _album("all the wars", 5, {1: [5, 5], 2: [8, 8]}),
+        _album("worded bonus", 6, {"1/2": [6], " Bonus  Disc ": [9]}),
+        _album("untagged main disc", 6, {None: [6], "Extras": [4]}),
+        _album("same rating", 7, {1: [7], 2: [7]}),
+        _album("mixed disc", 5, {1: [5], 2: [8, 9]}),
+        _album("partly tagged disc", 5, {1: [5], 2: [8, None]}),
+        _album("invalid disc tag", 5, {1: [5], 2: [11, 11]}),
+        _album("unrated album", None, {1: [None], 2: [8]}),
+        _album("single disc", 5, {1: [8, 8]}),
+        _album("", 5, {1: [5], 2: [8]}),
+    ]
+
+    assert ratings_module.tag_disc_rating_candidates(albums) == [
+        {"album_key": "all the wars", "disc_key": "2", "rating": 8},
+        {"album_key": "worded bonus", "disc_key": "bonus disc", "rating": 9},
+        {"album_key": "untagged main disc", "disc_key": "extras", "rating": 4},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw", "number", "expected"),
+    [("02/03", 2, "2"), ("  Bonus   DISC ", None, "bonus disc"), (None, 3, "3"), ("", None, ""), ("²", None, "²")],
+)
+def test_album_disc_key_normalizes_the_disc_tag(ratings_module, raw, number, expected):
+    assert ratings_module.album_disc_key(raw, number) == expected
+
+
+def test_scan_disc_seed_reuses_callers_transaction_and_never_overwrites(ratings_module):
+    connection = FakeConnection(
+        disc_write_results=[[{"created": 1, "authority_skipped": 1, "failed": 0}]],
+    )
+    service = ratings_module.PostgresAlbumRatingsService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL},
+        connect=lambda _url: pytest.fail("scan seeding must reuse the caller's connection"),
+    )
+
+    result = service.seed_missing_album_disc_ratings_in_transaction(
+        connection,
+        [
+            {"album_key": "all the wars", "disc_key": "2", "rating": 8},
+            {"album_key": "already rated", "disc_key": "bonus disc", "rating": 6},
+        ],
+        source="file_tag_scan",
+    )
+
+    assert result == {"created": 1, "authority_skipped": 1, "failed": 0}
+    assert connection.transaction_entries == 0
+    [(sql, params)] = _disc_write_operations(connection)
+    assert params == (
+        ["all the wars", "already rated"],
+        ["2", "bonus disc"],
+        [8, 6],
+        "file_tag_scan",
+        "file_tag_scan",
+    )
+    assert "app.bootstrap_owners" in sql
+    assert "on conflict (account_id, library_id, album_key, disc_key) do nothing" in sql
+    assert "do update" not in sql
+
+
+def test_scan_disc_seed_skips_the_database_without_candidates_and_rejects_unknown_sources(
+    ratings_module,
+):
+    connection = FakeConnection()
+    service = _service(ratings_module, connection)
+
+    assert service.seed_missing_album_disc_ratings_in_transaction(
+        connection, [], source="file_tag_scan"
+    ) == {"created": 0, "authority_skipped": 0, "failed": 0}
+    assert connection.operations == []
+    with pytest.raises(ValueError):
+        service.seed_missing_album_disc_ratings_in_transaction(
+            connection,
+            [{"album_key": "a", "disc_key": "2", "rating": 8}],
+            source="manual",
+        )
+
+
+def test_disc_rating_load_is_scoped_to_the_bootstrap_owner_and_groups_by_album(ratings_module):
+    connection = FakeConnection(
+        disc_load_rows=[
+            {"album_key": "all the wars", "disc_key": "2", "rating": 8},
+            {"album_key": "all the wars", "disc_key": "bonus disc", "rating": None},
+        ]
+    )
+
+    result = _service(ratings_module, connection).load_album_disc_ratings(
+        ["all the wars", " all the wars ", ""]
+    )
+
+    assert result == {
+        "all the wars": [
+            {"disc_key": "2", "rating": 8},
+            {"disc_key": "bonus disc", "rating": None},
+        ]
+    }
+    [(sql, params)] = [
+        operation
+        for operation in _normalized_operations(connection)
+        if "from app.album_disc_ratings" in operation[0]
+    ]
+    assert params == (["all the wars"],)
+    assert "app.album_disc_ratings.account_id = bootstrap_context.account_id" in sql

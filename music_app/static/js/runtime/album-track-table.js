@@ -45,6 +45,24 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
+function isValidAlbumRating(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 10;
+}
+
+// A bonus disc shows its own rating only when it and the album are both
+// rated and the two ratings differ; main album discs never do.
+function buildBonusDiscRatingHtml(group, albumRating) {
+  const discRating = group?.discRating;
+  if (!group?.isBonus || !isValidAlbumRating(discRating) || !isValidAlbumRating(albumRating)) return '';
+  if (discRating === albumRating) return '';
+  return buildGalleryRatingHtml({
+    value: discRating,
+    maximum: 10,
+    label: `Bonus disc rating ${discRating}/10`,
+    className: 'album-track-table__disc-rating',
+  });
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -85,9 +103,13 @@ function buildAlbumTrackTableHtml(config = {}) {
     if (collapsibleGroups && showLabel) {
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
     }
-    const heading = showLabel
+    const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
+    const ratingHtml = showLabel ? buildBonusDiscRatingHtml(group, config.albumRating) : '';
+    const heading = ratingHtml
+      ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
+      : headingHtml;
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();

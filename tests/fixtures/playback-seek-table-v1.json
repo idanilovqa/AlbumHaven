@@ -1,0 +1,330 @@
+{
+ "description": "Seek-table lookups every client must answer exactly as music_app/services/playback_seek_table.lookup does. Generated from it; tests/py/test_playback_seek_table.py keeps them equal.",
+ "table": {
+  "prefixBytes": 0,
+  "prerollFrames": 9216,
+  "offsets": [
+   0,
+   800,
+   1600,
+   2400,
+   3200,
+   4000,
+   4800,
+   5600,
+   6400,
+   7200,
+   8000,
+   8800,
+   9600,
+   10400,
+   11200,
+   12000,
+   12800,
+   13600,
+   14400,
+   15200,
+   16000,
+   16800,
+   17600,
+   18400,
+   19200,
+   20000,
+   20800,
+   21600,
+   22400,
+   23200,
+   24000,
+   24800,
+   25600,
+   26400,
+   27200,
+   28000,
+   28800,
+   29600,
+   30400,
+   31200,
+   32000,
+   32800,
+   33600,
+   34400,
+   35200,
+   36000,
+   36800,
+   37600,
+   38400,
+   39200,
+   40000,
+   40800,
+   41600,
+   42400,
+   43200,
+   44000,
+   44800,
+   45600,
+   46400,
+   47200,
+   48000
+  ],
+  "samples": [
+   0,
+   2304,
+   4608,
+   6912,
+   9216,
+   11520,
+   13824,
+   16128,
+   18432,
+   20736,
+   23040,
+   25344,
+   27648,
+   29952,
+   32256,
+   34560,
+   36864,
+   39168,
+   41472,
+   43776,
+   46080,
+   48384,
+   50688,
+   52992,
+   55296,
+   57600,
+   59904,
+   62208,
+   64512,
+   66816,
+   69120,
+   71424,
+   73728,
+   76032,
+   78336,
+   80640,
+   82944,
+   85248,
+   87552,
+   89856,
+   92160,
+   94464,
+   96768,
+   99072,
+   101376,
+   103680,
+   105984,
+   108288,
+   110592,
+   112896,
+   115200,
+   117504,
+   119808,
+   122112,
+   124416,
+   126720,
+   129024,
+   131328,
+   133632,
+   135936,
+   138240
+  ]
+ },
+ "initialSkip": 2257,
+ "initialTotal": 135483,
+ "streamStart": 0,
+ "cases": [
+  {
+   "target": 0,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 0,
+    "skipFrames": 2257,
+    "totalFrames": 135483
+   }
+  },
+  {
+   "target": 1,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 0,
+    "skipFrames": 2258,
+    "totalFrames": 135482
+   }
+  },
+  {
+   "target": 5000,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 0,
+    "skipFrames": 7257,
+    "totalFrames": 130483
+   }
+  },
+  {
+   "target": 9215,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 0,
+    "skipFrames": 11472,
+    "totalFrames": 126268
+   }
+  },
+  {
+   "target": 9216,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 0,
+    "skipFrames": 11473,
+    "totalFrames": 126267
+   }
+  },
+  {
+   "target": 60000,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 18400,
+    "skipFrames": 9265,
+    "totalFrames": 75483
+   }
+  },
+  {
+   "target": 60000,
+   "receivedBytes": 8000,
+   "ended": false,
+   "window": null
+  },
+  {
+   "target": 60000,
+   "receivedBytes": 8000,
+   "ended": true,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 18400,
+    "skipFrames": 9265,
+    "totalFrames": 75483
+   }
+  },
+  {
+   "target": 135482,
+   "receivedBytes": 1000000,
+   "ended": false,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 44000,
+    "skipFrames": 11019,
+    "totalFrames": 1
+   }
+  },
+  {
+   "target": 135482,
+   "receivedBytes": 48000,
+   "ended": true,
+   "window": {
+    "prefixBytes": 0,
+    "byteOffset": 44000,
+    "skipFrames": 11019,
+    "totalFrames": 1
+   }
+  },
+  {
+   "target": 135483,
+   "receivedBytes": 1000000,
+   "ended": true,
+   "window": null
+  },
+  {
+   "target": -1,
+   "receivedBytes": 1000000,
+   "ended": true,
+   "window": null
+  }
+ ],
+ "flac": {
+  "table": {
+   "prefixBytes": 42,
+   "prerollFrames": 0,
+   "offsets": [
+    42,
+    9000,
+    18000,
+    27000,
+    36000
+   ],
+   "samples": [
+    0,
+    4096,
+    8192,
+    12288,
+    16000
+   ]
+  },
+  "initialSkip": 0,
+  "initialTotal": 16000,
+  "streamStart": 0,
+  "cases": [
+   {
+    "target": 0,
+    "receivedBytes": 40000,
+    "ended": false,
+    "window": {
+     "prefixBytes": 42,
+     "byteOffset": 42,
+     "skipFrames": 0,
+     "totalFrames": 16000
+    }
+   },
+   {
+    "target": 5000,
+    "receivedBytes": 40000,
+    "ended": false,
+    "window": {
+     "prefixBytes": 42,
+     "byteOffset": 9000,
+     "skipFrames": 904,
+     "totalFrames": 11000
+    }
+   },
+   {
+    "target": 12288,
+    "receivedBytes": 40000,
+    "ended": false,
+    "window": {
+     "prefixBytes": 42,
+     "byteOffset": 27000,
+     "skipFrames": 0,
+     "totalFrames": 3712
+    }
+   },
+   {
+    "target": 15999,
+    "receivedBytes": 30000,
+    "ended": false,
+    "window": null
+   },
+   {
+    "target": 15999,
+    "receivedBytes": 30000,
+    "ended": true,
+    "window": {
+     "prefixBytes": 42,
+     "byteOffset": 27000,
+     "skipFrames": 3711,
+     "totalFrames": 1
+    }
+   }
+  ]
+ }
+}

@@ -3266,3 +3266,81 @@ def _authorize_loop_fixture(monkeypatch):
         library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
     async def resolve_actor(_request): return actor
     monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)
+
+
+def _generated_mp3(playback_app, seconds: int = 4) -> Path:
+    import shutil
+    import subprocess
+
+    from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
+
+    ffmpeg = resolve_ffmpeg_executable() or shutil.which("ffmpeg")
+    assert ffmpeg, "the seek-table socket tests generate an MP3 with ffmpeg"
+    path = Path(playback_app.state.config["MUSIC_DIR"]) / "Artist" / "Album" / "seekable.mp3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"sine=frequency=440:duration={seconds}:sample_rate=44100", "-ac", "2",
+         "-c:a", "libmp3lame", "-b:a", "128k", str(path)],
+        check=True,
+    )
+    return path.resolve()
+
+
+async def _texts_until_eos(socket) -> list[dict[str, object]]:
+    texts = []
+    while True:
+        message = await socket.receive_message()
+        if "text" in message:
+            texts.append(json.loads(message["text"]))
+            if texts[-1]["type"] == "eos":
+                return texts
+        else:
+            # Each encoded frame is credited again so the whole short track arrives.
+            await socket.send_json({"type": "credit", "generation": 1, "streamId": 1, "frames": 65_536})
+
+
+@pytest.mark.parametrize("asked", [True, False])
+def test_an_encoded_stream_carries_its_seek_table_only_when_the_client_asks(playback_app, asked):
+    path = _generated_mp3(playback_app)
+
+    async def scenario() -> list[dict[str, object]]:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(
+                path, sampleRate=44_100, durationSeconds=4, codecs=["mp3"],
+                **({"seekTable": True} if asked else {}),
+            ))
+            return await _texts_until_eos(socket)
+
+    texts = asyncio.run(scenario())
+    assert texts[0]["type"] == "metadata" and texts[0]["codec"] == "mp3"
+    tables = [text for text in texts if text["type"] == "seek-table"]
+    if not asked:
+        assert tables == []
+        return
+    (table,) = tables
+    assert (table["generation"], table["streamId"], table["prefixBytes"]) == (1, 1, 0)
+    assert table["prerollFrames"] == 8 * 1152
+    assert table["offsets"][0] == 0 and table["samples"][0] == 0
+    assert len(table["offsets"]) == len(table["samples"]) > 100
+
+
+def test_a_keepalive_keeps_the_socket_and_any_other_field_is_refused(playback_app, media_path):
+    async def scenario() -> int:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json({"type": "keepalive"})
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            assert (await socket.receive_json())["type"] == "probe-result"
+            await socket.send_json({"type": "keepalive", "path": "C:/x"})
+            return await socket.receive_close()
+
+    assert asyncio.run(scenario()) == 4400
+
+
+def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decoder_factory):
+    async def scenario() -> int:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(media_path, seekTable="yes"))
+            return await socket.receive_close()
+
+    assert asyncio.run(scenario()) == 4400

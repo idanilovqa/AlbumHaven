@@ -1,7 +1,9 @@
 """Authenticated, bounded playback references and ownership contracts."""
 
+import asyncio
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,6 +26,7 @@ from music_app.services.listen_history import (
     is_meaningful_listen_session,
     update_listen_history_entry,
 )
+from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
@@ -104,8 +107,30 @@ async def playback_refs(request: Request) -> JSONResponse:
         if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
             raise HTTPException(400, "Invalid playback reference batch.")
         timing["tracks"] = len(tracks)
-        result = await reference_call(request, lambda service: service.issue_batch(request.state.current_actor, tracks))
+        media: list[Path] = []
+        result = await reference_call(request, lambda service: service.issue_batch(
+            request.state.current_actor, tracks, on_media=media.append))
+    # The queue's tracks are what plays next: their MP3 maps are read now, in the background, so a
+    # start or a jump to any of them streams at once instead of scanning the file first.
+    _prepare_streams(media)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+_preparing: set[asyncio.Task[None]] = set()
+
+
+def _prepare_streams(paths: list[Path]) -> None:
+    mp3_paths = [path for path in paths if path.suffix.lower() == ".mp3"]
+    if not mp3_paths:
+        return
+
+    async def prepare() -> None:
+        for path in mp3_paths:
+            await asyncio.to_thread(mp3_stream_map, path)
+
+    task = asyncio.create_task(prepare())
+    _preparing.add(task)
+    task.add_done_callback(_preparing.discard)
 
 
 @router.post("/playback/refs/resume")

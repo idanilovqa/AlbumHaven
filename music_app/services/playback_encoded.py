@@ -12,6 +12,8 @@ from music_app.services.ffmpeg_runtime import (
     resolve_ffmpeg_executable,
 )
 from music_app.services.mp3_stream_map import mp3_stream_map
+from music_app.services.playback_io import run_playback_io
+from music_app.services.playback_seek_table import SeekTable, mp3_seek_table
 from music_app.services.playback_pcm import (
     PcmChunk,
     PcmOpenCommand,
@@ -27,6 +29,8 @@ MAX_ENCODED_CHUNK_BYTES = 16 * 1024
 # Sent with no request, so starts and seeks do not wait a round trip for first audio.
 INITIAL_ENCODED_CREDIT_BYTES = 64 * 1024
 MAX_ENCODED_CREDIT_BYTES = 1024 * 1024
+# One disk read serves many frames: a slow library drive is read in large steps.
+READ_AHEAD_BYTES = 256 * 1024
 _LAME_ENCODER_START_SAMPLES = 1105
 _MP3_MAX_SAMPLE_RATE = 48_000
 _FLAC_MAGIC = b"fLaC"
@@ -57,6 +61,10 @@ class EncodedStream:
         self.codec = codec
         self.skip_frames = skip_frames
         self.total_frames = total_frames
+        # Where a client may seek inside the bytes it received: known at once for MP3, scanned
+        # in the background from ``flac_layout`` (path, first audio byte, end byte) for FLAC.
+        self.seek_table: SeekTable | None = None
+        self.flac_layout: tuple[Path, int, int] | None = None
         self.outstanding_credit_frames = 0
         self.metadata = PcmStreamMetadata(
             generation=command.generation,
@@ -115,6 +123,8 @@ class _FileByteStream(EncodedStream):
         self._position = start_byte
         self._end_byte = end_byte
         self._file: BinaryIO | None = None
+        # Bytes read ahead of what was sent, so most frames leave without a disk read.
+        self._buffered = b""
 
     def _read_file(self, byte_count: int) -> bytes:
         # Library drives can be slow, so even opening stays off the event loop.
@@ -126,8 +136,10 @@ class _FileByteStream(EncodedStream):
         if self._prefix:
             data, self._prefix = self._prefix[:byte_count], self._prefix[byte_count:]
             return data
-        data = await asyncio.to_thread(self._read_file, byte_count)
-        self._position += len(data)
+        if not self._buffered:
+            self._buffered = await run_playback_io(self._read_file, READ_AHEAD_BYTES)
+            self._position += len(self._buffered)
+        data, self._buffered = self._buffered[:byte_count], self._buffered[byte_count:]
         return data
 
     async def finish(self) -> PcmStreamMetadata:
@@ -217,7 +229,7 @@ async def _start_process(executable: str, *arguments: str) -> asyncio.subprocess
 
 
 async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream | None:
-    layout = await asyncio.to_thread(read_flac_layout, command.path)
+    layout = await run_playback_io(read_flac_layout, command.path)
     if layout is None:
         return None
     header, first_audio_byte, end_byte, native_rate, native_samples = layout
@@ -247,7 +259,7 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
         raise SampleRateMismatch(native_rate)
     total_frames = native_samples - command.start_frame
     if command.start_frame == 0:
-        return _FileByteStream(
+        stream = _FileByteStream(
             command,
             prefix=header,
             start_byte=first_audio_byte,
@@ -256,6 +268,8 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
             skip_frames=0,
             total_frames=total_frames,
         )
+        stream.flac_layout = (command.path, first_audio_byte, end_byte)
+        return stream
     # FLAC is lossless, so re-framing from the exact sample keeps every source sample.
     process = await _start_process(
         executable,
@@ -284,13 +298,13 @@ async def open_encoded_stream(
         return await _open_flac(command, quality)
     if suffix != ".mp3" or "mp3" not in codecs:
         return None
-    stream_map = await asyncio.to_thread(mp3_stream_map, command.path)
+    stream_map = await run_playback_io(mp3_stream_map, command.path)
     if stream_map is None:
         return None
     if command.sample_rate != stream_map.sample_rate:
         raise SampleRateMismatch(stream_map.sample_rate)
     window = stream_map.window(command.start_frame)
-    return _FileByteStream(
+    stream = _FileByteStream(
         command,
         start_byte=window.start_byte,
         end_byte=window.end_byte,
@@ -298,3 +312,5 @@ async def open_encoded_stream(
         skip_frames=window.skip_frames,
         total_frames=window.total_frames,
     )
+    stream.seek_table = mp3_seek_table(stream_map, window)
+    return stream

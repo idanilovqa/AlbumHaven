@@ -19,6 +19,8 @@ from starlette.websockets import WebSocketDisconnect
 from music_app.routes.playback_control_asgi import playback_config
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.playback_io import run_playback_io
+from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
     INITIAL_ENCODED_CREDIT_BYTES,
     EncodedStream,
@@ -571,6 +573,10 @@ class _PlaybackPcmConnection:
             return await self._log_decoder_fallback(control)
         if command_type == "output-report":
             return await self._log_audio_output(control)
+        # A paused client's socket carries nothing; proxies close an idle WebSocket after about
+        # 100 seconds, so clients that cannot send WebSocket pings send this instead.
+        if command_type == "keepalive" and set(control) == {"type"}:
+            return True
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
 
@@ -672,8 +678,8 @@ class _PlaybackPcmConnection:
             return False
         size_bytes = 0
         try:
-            sample_rate = await asyncio.to_thread(read_native_sample_rate, resolved_path)
-            size_bytes = await asyncio.to_thread(lambda: resolved_path.stat().st_size)
+            sample_rate = await run_playback_io(read_native_sample_rate, resolved_path)
+            size_bytes = await run_playback_io(lambda: resolved_path.stat().st_size)
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             _LOGGER.warning("Playback sample rate probe failed: %s", type(error).__name__)
             sample_rate = 0
@@ -721,8 +727,11 @@ class _PlaybackPcmConnection:
             codec in ("mp3", "flac") for codec in raw_codecs
         )
         quality = control.get("quality", "original")
+        # Clients that seek inside received bytes ask for the stream's seek table.
+        wants_seek_table = control.get("seekTable", False)
         if (
-            not codecs_valid
+            not isinstance(wants_seek_table, bool)
+            or not codecs_valid
             or quality not in ("original", "320")
             or generation is None
             or stream_id is None
@@ -743,7 +752,7 @@ class _PlaybackPcmConnection:
         if "playbackRef" in control:
             try:
                 service = PlaybackReferenceService(playback_config(self._websocket))
-                resolved_path = await asyncio.to_thread(service.resolve,
+                resolved_path = await run_playback_io(service.resolve,
                     self._websocket.state.current_actor, control["playbackRef"])
             except PlaybackContractError:
                 return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
@@ -843,7 +852,23 @@ class _PlaybackPcmConnection:
         )
         if isinstance(decoder, EncodedStream):
             self._grant_credit(stream, INITIAL_ENCODED_CREDIT_BYTES)
+            if wants_seek_table:
+                self._send_seek_table(stream, decoder)
         return True
+
+    def _send_seek_table(self, stream: _PlaybackStream, decoder: EncodedStream) -> None:
+        """Sends the stream's seek table: at once for MP3, once its frames are scanned for FLAC."""
+        async def send() -> None:
+            table = decoder.seek_table
+            if table is None and decoder.flac_layout is not None:
+                table = await asyncio.to_thread(flac_seek_table, *decoder.flac_layout)
+            if table is None or self._closed or self._streams_by_id.get(stream.stream_id) is not stream:
+                return
+            await self._send_json(table.event(generation=stream.generation, stream_id=stream.stream_id))
+
+        task = asyncio.create_task(send())
+        self._pending_credit_tasks.add(task)
+        task.add_done_callback(self._pending_credit_tasks.discard)
 
     async def _reject_open(self, code: int) -> bool:
         if self._closed:

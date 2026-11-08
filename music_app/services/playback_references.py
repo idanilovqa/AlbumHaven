@@ -102,7 +102,8 @@ class PlaybackReferenceService:
         row["media_path"] = Path(resolved)
         return row
 
-    def issue_batch(self, actor, tracks):
+    def issue_batch(self, actor, tracks, *, on_media=None):
+        """References for [tracks]; [on_media] hears each track's media path, to prepare its stream."""
         if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
             raise PlaybackContractError()
         for track in tracks:
@@ -117,6 +118,8 @@ class PlaybackReferenceService:
             account_id, library_id = require_playback_membership(connection, actor)
             for track in tracks:
                 row = self._file(connection, library_id, path=track["path"])
+                if on_media is not None:
+                    on_media(row["media_path"])
                 results.append({"clientKey": track["clientKey"],
                     "playbackRef": self._reference(library_id, row["id"], expires),
                     "resumeToken": self._sign(_RESUME_DOMAIN, [1, self._version, account_id, library_id, row["id"]])})

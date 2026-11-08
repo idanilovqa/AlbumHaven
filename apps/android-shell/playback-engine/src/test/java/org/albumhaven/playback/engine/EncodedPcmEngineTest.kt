@@ -159,4 +159,27 @@ class EncodedPcmEngineTest {
         assertEquals(listOf(0L, 10_000L), harness.sent<PcmClientControl.Open>().map { it.startFrame })
         assertEquals(Run(1, 10_000, first.frames - 10_000), harness.sink.runs().last())
     }
+
+    @Test
+    fun anEarlySkipToACachedSuccessorClosesTheServerStreamItLeaves() {
+        val cache = MemoryTrackCache()
+        PcmHarness(second, encoded = true, cache = cache).apply {
+            engine.start(second.pcm)
+            playToEnd()
+        }
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 60)
+        val harness = PcmHarness(long, second, encoded = true, cache = cache)
+        harness.engine.start(long.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playUntil { harness.sink.writtenFrames > 48_000 }
+
+        assertTrue(harness.engine.skipToPrepared())
+        harness.playToEnd()
+
+        val close = harness.sent<PcmClientControl.Close>().single()
+        assertEquals("replaced-by-cache", close.reason)
+        assertEquals(harness.sent<PcmClientControl.Open>().single().streamId, close.streamId)
+        assertEquals(Run(2, 0, second.frames), harness.sink.runs().last())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
 }

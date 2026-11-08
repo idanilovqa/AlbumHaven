@@ -232,7 +232,7 @@ class NativePcmEngine(
 
     private companion object {
         /** A longer file is streamed every time rather than held in memory to be kept. */
-        const val MAX_CACHED_TRACK_BYTES = 256 * 1024 * 1024
+        const val MAX_CACHED_TRACK_BYTES = 64 * 1024 * 1024
     }
 
     private data class LoopRange(val startFrame: Long, val endFrame: Long, val short: Boolean) {
@@ -841,9 +841,15 @@ class NativePcmEngine(
             }
             PcmBoundaryKind.LOOP -> Unit
         }
-        // A cached stream promotes on the device alone; the server's current, if any, ends with its EOS.
-        if (incoming.local) pendingPromotion = null
-        else if (!send(PcmClientControl.Promote(incoming.generation, incoming.streamId))) return
+        if (incoming.local) {
+            // A cached stream promotes on the device alone; a server stream it replaces early is closed.
+            pendingPromotion = null
+            if (!outgoing.local && !outgoing.eosReceived) {
+                send(PcmClientControl.Close(outgoing.generation, outgoing.streamId, "replaced-by-cache"))
+            }
+        } else if (!send(PcmClientControl.Promote(incoming.generation, incoming.streamId))) {
+            return
+        }
         if (kind == PcmBoundaryKind.SEEK && !incoming.eosReceived) {
             grantCredit(incoming, capacityFrames(PcmRole.CURRENT))
         }

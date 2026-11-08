@@ -11085,7 +11085,7 @@ def _problematic_files_sql(
     duplicate_sources_only: bool = False,
     path_columns: bool = False,
 ) -> str:
-    spotify_quota_cte = "" if duplicate_sources_only else f"""
+    album_flag_ctes = "" if duplicate_sources_only else f"""
         spotify_quota_albums as materialized (
           select tasks.task_key
           from ops.cover_lookup_tasks tasks
@@ -11595,7 +11595,7 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
-            {spotify_quota_cte}
+            {album_flag_ctes}
             {physical_file_ctes}
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
@@ -11616,7 +11616,7 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
-            {spotify_quota_cte}
+            {album_flag_ctes}
             {physical_file_ctes}
             {candidate_ctes_sql}
             select library.local_albums.id as album_id
@@ -12004,7 +12004,7 @@ def _problematic_files_sql(
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        {spotify_quota_cte}
+        {album_flag_ctes}
         {physical_file_ctes if inventory_physical_context else ''}
         {candidate_ctes}
         {initial_selection_name} as (

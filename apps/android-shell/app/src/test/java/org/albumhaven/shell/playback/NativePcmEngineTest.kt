@@ -159,12 +159,15 @@ class NativePcmEngineTest {
     }
 
     @Test
-    fun startupWaitsForTheTwoSecondCushion() {
+    fun startupIsHeardAfterAQuarterSecondNotACushion() {
         val harness = started()
         metadata(harness)
-        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 0, FloatArray(2 * RATE)))
-        assertEquals(RATE, harness.engine.bufferedFrames(PcmRole.CURRENT))
+        // Interleaved stereo: RATE / 2 samples are a quarter second of frames, minus one frame short.
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 0, FloatArray(RATE / 2 - 2)))
         assertEquals(0, harness.engine.render(1_024))
+        harness.engine.onBinary(pcmFrame(PcmRole.CURRENT, 1, 1, 1, FloatArray(2)))
+        assertEquals(RATE / 4, harness.engine.bufferedFrames(PcmRole.CURRENT))
+        assertEquals(1_024, harness.engine.render(1_024))
 
         val ready = PcmHarness(first)
         ready.engine.start(first.pcm)

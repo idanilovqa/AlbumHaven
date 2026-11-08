@@ -66,6 +66,9 @@ class RecoveryPanel(private val root: View) {
     /** Whether the sandbox chooser is up, which a loading page must not replace. */
     val choosingSandbox: Boolean get() = root.isVisible && choice.isVisible
 
+    /** Whether any native screen covers the page. */
+    val showing: Boolean get() = root.isVisible
+
     fun showLoading(originHost: String, onSwitchSandbox: (() -> Unit)?) {
         show(loading)
         loadingDetail.text = root.context.getString(R.string.recovery_loading_detail, originHost)

@@ -28,7 +28,11 @@ data class PcmEngineConfig(
     companion object {
         const val MAX_CREDIT_SECONDS = 1.0
         const val CREDIT_LOW_WATER_SECONDS = 0.25
-        const val INITIAL_PLAYBACK_CUSHION_SECONDS = 2.0
+        /** A start is heard once this much PCM is in; the server keeps decoding ahead faster than playback. */
+        const val START_PLAYBACK_SECONDS = 0.25
+
+        /** After an underrun the stream waits for this much, so a slow network does not stutter. */
+        const val REBUFFER_CUSHION_SECONDS = 2.0
         const val QUEUED_NEXT_PREPARE_SECONDS = 3.0
         const val SEEK_PREPARE_SECONDS = 0.25
         const val QUEUED_NEXT_CURRENT_CUSHION_SECONDS = 1.0
@@ -52,7 +56,7 @@ sealed interface PcmEngineEvent {
     /** The server accepted the open of a [NativePcmEngine.start] stream: its decoder runs. */
     data class StartAccepted(val streamId: Long) : PcmEngineEvent
 
-    /** The first PCM of a [NativePcmEngine.start] stream arrived; [FirstFrame] follows once the cushion is buffered. */
+    /** The first PCM of a [NativePcmEngine.start] stream arrived; [FirstFrame] follows once a quarter second is buffered. */
     data class StartPcmReceived(val streamId: Long) : PcmEngineEvent
     data class FirstFrame(val streamId: Long, val timelineFrame: Long) : PcmEngineEvent
     data class Boundary(
@@ -451,13 +455,12 @@ class NativePcmEngine(
         val head = current ?: return 0
         if (pausing) pausing = !sink.fadeOutSettled()
         if (!playing) return 0
-        val startupFrames = minOf(
-            config.frames(PcmEngineConfig.INITIAL_PLAYBACK_CUSHION_SECONDS),
-            committedCapacityFrames(PcmRole.CURRENT),
-        )
-        if (!head.firstFrameRendered && !head.eosReceived && currentRing.bufferedFrames < startupFrames) return 0
+        val capacity = committedCapacityFrames(PcmRole.CURRENT)
+        val startFrames = minOf(config.frames(PcmEngineConfig.START_PLAYBACK_SECONDS), capacity)
+        if (!head.firstFrameRendered && !head.eosReceived && currentRing.bufferedFrames < startFrames) return 0
         if (rebuffering) {
-            if (currentRing.bufferedFrames < startupFrames && !head.eosReceived) return 0
+            val cushion = minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), capacity)
+            if (currentRing.bufferedFrames < cushion && !head.eosReceived) return 0
             rebuffering = false
             events(PcmEngineEvent.Buffering(false, head.streamId))
         }

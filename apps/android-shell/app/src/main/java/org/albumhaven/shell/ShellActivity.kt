@@ -32,6 +32,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
@@ -112,6 +113,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
     private lateinit var webView: WebView
     private lateinit var recovery: RecoveryPanel
+    private lateinit var lastScreen: LastScreen
+    private lateinit var lastScreenView: ImageView
     private lateinit var sandboxWarning: View
     private val handshakes = HandshakeWatch(originPolicy.channel)
     private val handshakeTimeout = Runnable {
@@ -149,6 +152,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         // Before a sandbox is chosen there is no origin to check.
         if (origin != null) updater?.passiveCheckIfDue()
         recovery = RecoveryPanel(findViewById(R.id.recovery_root))
+        lastScreen = LastScreen(cacheDir, ioExecutor)
+        lastScreenView = findViewById(R.id.last_screen)
         webView = findViewById(R.id.shell_web_view)
         sandboxWarning = findViewById(R.id.sandbox_warning)
         findViewById<View>(R.id.sandbox_warning_switch).setOnClickListener { showSandboxChoice() }
@@ -169,7 +174,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         Log.i(TAG, "create saved_state=${savedInstanceState != null} saved_page=${page.url != null} has_origin=${origin != null}")
         logProcessExitReasons()
         // The page loads while the playback service binds; the bridge answers it once bound.
-        if (startUrl != null) open(startUrl) else showSandboxChoice()
+        // Only a page Android ended in the background comes back as it was; a full restart opens Home.
+        if (startUrl != null) open(startUrl, asLeft = page.url != null) else showSandboxChoice()
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -199,7 +205,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     override fun onStart() {
         super.onStart()
-        if (::siteOrigin.isInitialized) page.onStart(siteOrigin)?.let(::open)
+        if (::siteOrigin.isInitialized) page.onStart(siteOrigin)?.let { open(it, asLeft = true) }
     }
 
     override fun onResume() {
@@ -211,6 +217,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     override fun onPause() {
         super.onPause()
         CookieManager.getInstance().flush()
+        // Only a page the user actually sees is pictured; never a native screen or an older picture.
+        val url = page.url
+        if (url != null && ::siteOrigin.isInitialized && !recovery.showing && !lastScreenView.isVisible) {
+            lastScreen.capture(this, webView, siteOrigin, url)
+        }
     }
 
     override fun onDestroy() {
@@ -321,12 +332,35 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         false
     }
 
-    /** Covers the page with the Connecting screen until [url] first draws. */
-    private fun open(url: String) {
+    /**
+     * Covers the page until [url] first draws: with the picture of it [asLeft] by the user when there
+     * is one, else with the Connecting screen, which also replaces a picture that waits too long.
+     */
+    private fun open(url: String, asLeft: Boolean = false) {
         mainFrameFailed = false
-        recovery.showLoading(originHost(), switchSandbox)
+        val picture = if (asLeft) lastScreen.load(siteOrigin, url, resources.configuration.orientation) else null
+        hideLastScreen()
+        if (picture != null) {
+            recovery.hide()
+            lastScreenView.setImageBitmap(picture)
+            lastScreenView.isVisible = true
+            mainHandler.postDelayed(lastScreenTimeout, LAST_SCREEN_MAX_MS)
+        } else {
+            recovery.showLoading(originHost(), switchSandbox)
+        }
         webView.visibility = View.VISIBLE
         webView.loadUrl(url)
+    }
+
+    private val lastScreenTimeout = Runnable {
+        hideLastScreen()
+        if (!recovery.showing) recovery.showLoading(originHost(), switchSandbox)
+    }
+
+    private fun hideLastScreen() {
+        mainHandler.removeCallbacks(lastScreenTimeout)
+        lastScreenView.isVisible = false
+        lastScreenView.setImageDrawable(null)
     }
 
     /**
@@ -465,6 +499,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         mainFrameFailed = true
         page.failed(url, siteOrigin)
         webView.visibility = View.INVISIBLE
+        hideLastScreen()
         if (recovery.choosingSandbox) return
         recovery.showError({ open(page.retryUrl(siteOrigin)) }, switchSandbox)
     }
@@ -490,6 +525,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {
+            hideLastScreen()
             if (!mainFrameFailed && !incompatibleWeb && !recovery.choosingSandbox) recovery.hide()
         }
 
@@ -526,7 +562,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             Log.w(TAG, "renderer_gone crashed=${detail.didCrash()} priority=${detail.rendererPriorityAtExit()} started=$started")
             replaceWebView()
             // A page lost under the chooser is not needed: the chosen sandbox loads its own.
-            if (!recovery.choosingSandbox) page.rendererGone(started, siteOrigin)?.let(::open)
+            if (!recovery.choosingSandbox) page.rendererGone(started, siteOrigin)?.let { open(it, asLeft = true) }
             return true
         }
     }
@@ -562,5 +598,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         /** As long as the page's own bridge commands, its handshake among them, wait for the shell. */
         const val BRIDGE_TIMEOUT_MS = 15_000L
+
+        /** A page still not drawn after this long shows the Connecting screen, so a picture never looks frozen. */
+        const val LAST_SCREEN_MAX_MS = 6_000L
     }
 }

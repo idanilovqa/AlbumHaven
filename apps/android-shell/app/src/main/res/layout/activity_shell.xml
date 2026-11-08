@@ -11,6 +11,17 @@
         android:layout_height="match_parent"
         android:background="@color/canvas" />
 
+    <!-- The page as the user left it, while it loads again; taps wait for the page. -->
+    <ImageView
+        android:id="@+id/last_screen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/canvas"
+        android:clickable="true"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:visibility="gone" />
+
     <!-- Non-blocking: the page stays usable around it. -->
     <LinearLayout
         android:id="@+id/sandbox_warning"

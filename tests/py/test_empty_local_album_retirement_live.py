@@ -91,8 +91,6 @@ def test_live_missing_album_with_stale_tracks_is_not_retired(watcher_repair_inve
     assert (album["id"], album["track_count"]) == (source["id"], 2)
 
 
-_RATING_SQL = """insert into app.album_ratings (account_id, library_id, album_key, rating, provenance)
-    select account_id, %(library_id)s, %(album_key)s, 8, '{provenance}' from app.bootstrap_owners"""
 _USER_STATE = {
     "cover_origin": """update library.local_albums set metadata = metadata
         || '{"cover_selection_origin": "user"}' where id = %(album_id)s""",
@@ -105,7 +103,6 @@ _USER_STATE = {
     "mbid_assertion": """insert into library.local_mbid_assertions (
         library_id, album_id, target_kind, target_key, evidence_source, mbid_assertion_state)
         values (%(library_id)s, %(album_id)s, 'album', %(album_key)s, 'owner', 'asserted')""",
-    "imported_rating": _RATING_SQL.format(provenance="explicit_import"),
     "manual_version": """insert into library.manual_versions (library_id, child_key, parent_key)
         values (%(library_id)s, %(album_key)s, 'owner::parent')""",
     "ignored_version": """insert into library.ignored_versions (library_id, version_key)
@@ -138,14 +135,83 @@ def test_live_emptied_album_with_user_state_is_kept(watcher_repair_inventory, st
     _assert_moved_to_new_row(fixture, source, source_kept=True)
 
 
-def test_live_file_tag_rating_does_not_keep_emptied_album(watcher_repair_inventory):
+def _rate(fixture, album_key, rating, provenance):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""
+            insert into app.album_ratings (account_id, library_id, album_key, rating, provenance)
+            select owner.account_id, album.library_id, album.album_key, %s, %s
+            from app.bootstrap_owners as owner, library.local_albums as album
+            where album.album_key = %s
+        """, (rating, provenance, album_key))
+
+
+def _ratings(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return sorted(
+            (row["album_key"], row["rating"], row["provenance"])
+            for row in connection.execute(
+                "select album_key, rating, provenance from app.album_ratings"
+            ).fetchall()
+        )
+
+
+def _successor_key(fixture, source):
+    (successor,) = [album for album in _albums(fixture) if album["id"] != source["id"]]
+    return successor["album_key"]
+
+
+@pytest.mark.parametrize("provenance", ["file_tag_scan", "explicit_import"])
+def test_live_move_carries_rating_to_successor_before_retiring(watcher_repair_inventory, provenance):
     fixture = watcher_repair_inventory
     source = _seed_edition_album(fixture)
-    _apply_state(fixture, source, _RATING_SQL.format(provenance="file_tag_scan"))
+    _rate(fixture, source["album_key"], 8, provenance)
 
     fixture.seed(*_edition_entries(fixture, ""))
 
     _assert_moved_to_new_row(fixture, source, source_kept=False)
+    assert _ratings(fixture) == [(_successor_key(fixture, source), 8, provenance)]
+
+
+def test_live_conflicting_successor_rating_keeps_emptied_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    first, second = _edition_entries(fixture, "")
+    fixture.seed(*_edition_entries(fixture, "Bonus EP")[:1], second)
+    successor_key = _successor_key(fixture, source)
+    _rate(fixture, source["album_key"], 8, "file_tag_scan")
+    _rate(fixture, successor_key, 3, "explicit_import")
+
+    fixture.seed(first, second)
+
+    by_id = {album["id"]: album for album in _albums(fixture)}
+    assert by_id[source["id"]]["track_count"] == 0
+    assert _ratings(fixture) == sorted([
+        (source["album_key"], 8, "file_tag_scan"), (successor_key, 3, "explicit_import"),
+    ])
+
+
+def test_live_split_move_keeps_rated_emptied_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    _rate(fixture, source["album_key"], 8, "file_tag_scan")
+    first, second = _edition_entries(fixture, "")
+
+    fixture.seed(first, {**second, "edition": "Live"})
+
+    by_id = {album["id"]: album for album in _albums(fixture)}
+    assert by_id[source["id"]]["track_count"] == 0
+    assert sorted(album["track_count"] for album in by_id.values()) == [0, 1, 1]
+    assert _ratings(fixture) == [(source["album_key"], 8, "file_tag_scan")]
+
+
+def test_live_split_move_without_user_state_retires_emptied_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    first, second = _edition_entries(fixture, "")
+
+    fixture.seed(first, {**second, "edition": "Live"})
+
+    assert source["id"] not in {album["id"] for album in _albums(fixture)}
 
 
 def test_live_every_album_child_table_is_classified(watcher_repair_inventory):

@@ -43,15 +43,11 @@ _LOCAL_LIBRARY_ID_SQL = """
       and owned_library.name = 'Local Library'
       and owned_library.library_kind = 'local'
 """
-# Rows that deleting a retirable album cascades; the guards leave only
-# scan-derived ones (ratings are all seeded from file tags).
+# Scan-derived rows that deleting a retirable album cascades. Any rating
+# keeps its album: an orphan's successor is unknown, so nothing is carried.
 _CASCADED_CHILD_ROWS = {
     "featured_artists": "select * from library.local_album_featured_artists where album_id = any(%(ids)s)",
     "cover_candidate_snapshots": "select * from library.local_album_cover_candidate_snapshots where album_id = any(%(ids)s)",
-    "album_ratings": """select rating.* from app.album_ratings as rating
-        join library.local_albums as album
-          on album.library_id = rating.library_id and album.album_key = rating.album_key
-        where album.id = any(%(ids)s)""",
 }
 
 

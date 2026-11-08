@@ -54,7 +54,7 @@ def _album_ids(fixture):
 
 def _retire(fixture, tmp_path, **overrides):
     arguments = {
-        "expected_count": 2,
+        "expected_count": 1,
         "backup_path": tmp_path / "backup.json",
         "confirm_database": fixture.database,
         **overrides,
@@ -71,9 +71,10 @@ def test_live_dry_run_classifies_empty_albums_without_writing(empty_albums):
             connection.execute("set transaction read only")
             report = script.classify(connection)
 
-    assert (report["album_count"], report["empty_album_count"], report["retirable_count"]) == (5, 4, 2)
-    assert [row["id"] for row in report["retirable"]] == fixture.clean_ids
+    assert (report["album_count"], report["empty_album_count"], report["retirable_count"]) == (5, 4, 1)
+    assert [row["id"] for row in report["retirable"]] == fixture.clean_ids[1:]
     assert {row["id"]: row["kept_by"] for row in report["kept"]} == {
+        fixture.clean_ids[0]: ["rating"],
         fixture.cover_id: ["cover_selection"],
         fixture.probe_id: ["unclassified:library.retirement_probe"],
     }
@@ -82,7 +83,7 @@ def test_live_dry_run_classifies_empty_albums_without_writing(empty_albums):
 
 
 @pytest.mark.parametrize("overrides, message", [
-    ({"expected_count": 3}, "Expected 3 retirable rows but found 2"),
+    ({"expected_count": 2}, "Expected 2 retirable rows but found 1"),
     ({"confirm_database": "album_haven_other"}, "--confirm-database must be"),
 ])
 def test_live_apply_refuses_mismatched_guards_and_writes_nothing(empty_albums, tmp_path, overrides, message):
@@ -122,13 +123,14 @@ def test_live_apply_retires_only_unowned_empty_rows_after_backup(empty_albums, t
 
     result = _retire(fixture, tmp_path)
 
-    assert result["retired_count"] == 2
-    assert _album_ids(fixture) == before - set(fixture.clean_ids)
+    assert result["retired_count"] == 1
+    assert _album_ids(fixture) == before - set(fixture.clean_ids[1:])
     backup = json.loads((tmp_path / "backup.json").read_text(encoding="utf-8"))
-    assert [album["id"] for album in backup["albums"]] == fixture.clean_ids
-    assert [rating["album_key"] for rating in backup["album_ratings"]] == ["owner::clean one"]
+    assert [album["id"] for album in backup["albums"]] == fixture.clean_ids[1:]
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        assert connection.execute("select count(*) as n from app.album_ratings").fetchone()["n"] == 0
+        assert connection.execute("select album_key from app.album_ratings").fetchall() == [
+            {"album_key": "owner::clean one"}
+        ]
         new_revision = connection.execute(
             "select metadata ->> 'inventory_mutation_revision' as value from library.libraries "
             "where library_kind = 'local'"

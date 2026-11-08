@@ -718,7 +718,8 @@ function transitionGalleryMain(action) {
 }
 
 function openGalleryArtistInfo(anchor) {
-  if (String(state.view.query || '').trim()) return;
+  // Owner (11-08): the header shows the "i" during a search, so it opens there too.
+  if (!anchor) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');

@@ -104,10 +104,23 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await ui.cards.first().hover();
     await expect(ui.yearWithin(ui.cards.first())).not.toBeVisible();
   });
-  await stepLogger.step('Search hides toolbar artist information but retains result-heading information; explicit navigation restores it',async()=>{
-    await expect(ui.toolbarInfo).not.toBeVisible();
-    await expect(ui.headingInfo).toBeVisible();
+  // Owner (11-08, UI-SEARCH-INFO): the header "i" shows during a search and must open the artist information when clicked.
+  await stepLogger.step('During a search the header and result-heading info buttons both open the artist information',async()=>{
+    await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('Neal Morse');
     await expect(ui.infoPanel).not.toBeVisible();
+    for (const trigger of [ui.toolbarInfo, ui.headingInfo]) {
+      await expect(trigger).toBeVisible();
+      await trigger.click();
+      await expect(ui.infoPanel).toBeVisible();
+      await expect(trigger).toHaveAttribute('aria-expanded','true');
+      await expect(ui.infoPanel.getByRole('heading',{name:'Neal Morse',exact:true})).toBeVisible();
+      await expect(ui.infoSummary).toBeVisible();
+      await expect(ui.infoSummary).not.toHaveText('');
+      await page.keyboard.press('Escape');
+      await expect(ui.infoPanel).not.toBeVisible();
+    }
+    await searchToolbarActions.waitForQuery('Neal Morse');
     await searchToolbarActions.clearSearch({submitWithEnter:true});
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForGalleryReady();

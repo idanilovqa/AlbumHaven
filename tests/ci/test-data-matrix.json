@@ -6379,6 +6379,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

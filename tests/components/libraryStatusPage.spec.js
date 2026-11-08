@@ -152,3 +152,40 @@ for (const outcome of ['failed', 'cancelled']) {
     }
   });
 }
+
+// Owner (11-07): the gallery's Searching screen was black in the blue palette. It must use the main surface of
+// the viewer's palette, on desktop and mobile, in every palette.
+const { palettes } = require('../../music_app/static/js/appearance-palettes.js');
+const paletteList = Array.isArray(palettes) ? palettes : Object.entries(palettes).map(([id, palette]) => ({ id, ...palette }));
+for (const viewport of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'mobile', width: 390, height: 844 }]) {
+  test(`gallery Searching and Nothing found states sit on the palette's main surface (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mountStatusComponent(page, { scan_in_progress: false, covers_in_progress: false, relations_in_progress: false });
+    await page.addStyleTag({ path: path.join(root, 'music_app/static/css/appearance-backgrounds.css') });
+    const toRgb = (hex) => {
+      const value = hex.replace('#', '');
+      return `rgb(${[0, 2, 4].map((offset) => parseInt(value.slice(offset, offset + 2), 16)).join(', ')})`;
+    };
+    for (const palette of paletteList) {
+      const backgrounds = await page.evaluate(({ id, main }) => {
+        document.documentElement.dataset.appearancePalette = id;
+        document.documentElement.style.setProperty('--appearance-main-surface', main);
+        state.view.query = 'hans';
+        state.ui.pendingViewTransition = true;
+        state.ui.pendingGallerySearch = true;
+        renderLibraryLoader({ transition_in_progress: true }, { scanPageVisible: false });
+        const loaderEl = document.getElementById('library-loader');
+        const searching = { cls: loaderEl.classList.contains('is-searching'), bg: getComputedStyle(loaderEl).backgroundColor, title: loaderEl.textContent };
+        state.ui.pendingViewTransition = false;
+        state.ui.pendingGallerySearch = false;
+        renderLibraryLoader({ transition_in_progress: false }, { scanPageVisible: false });
+        return { searching, nothingFound: getComputedStyle(loaderEl).backgroundColor };
+      }, palette);
+      expect(backgrounds.searching.cls, palette.id).toBe(true);
+      expect(backgrounds.searching.title, palette.id).toContain('Searching');
+      expect(backgrounds.searching.bg, `${palette.id} Searching surface`).toBe(toRgb(palette.main));
+      // The settled state is transparent over the gallery's main surface; it never paints its own black.
+      expect(['rgba(0, 0, 0, 0)', toRgb(palette.main)], `${palette.id} Nothing found surface`).toContain(backgrounds.nothingFound);
+    }
+  });
+}

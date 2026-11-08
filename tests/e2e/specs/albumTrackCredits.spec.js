@@ -390,7 +390,7 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
 
   await stepLogger.step('Show the exact main-album and bonus-disc durations', async () => {
     const groups = await trackModalActions.readDiscGroupPresentation();
-    expect(groups.headers).toEqual(['Bonus Disc']);
+    expect(groups.headers).toEqual(['CD 1', 'Bonus Disc']);
     expect(groups.totals).toEqual([
       'Total Length: 25m 30s',
       'Total Main Album Length: 3:00',

@@ -112,7 +112,7 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
   assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
 });
 
-test('AlbumTrackTable splits a main disc and bonus disc into separate tables without a CD 1 label', () => {
+test('AlbumTrackTable splits a main disc and bonus disc into separate tables and heads both', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({
     groups: [
@@ -123,8 +123,7 @@ test('AlbumTrackTable splits a main disc and bonus disc into separate tables wit
   });
   assert.equal((html.match(/class="compact-data-table"/g) || []).length, 2);
   assert.equal((html.match(/class="compact-data-table-header"/g) || []).length, 1);
-  assert.doesNotMatch(html, /album-track-table__disc-heading[^>]*>CD 1/);
-  assert.match(html, /<section class="album-track-table__disc">[\s\S]*One[\s\S]*<\/section><section class="album-track-table__disc">[\s\S]*album-track-table__disc-heading[^>]*>Bonus Disc<\/h4>[\s\S]*Two[\s\S]*<\/section>/);
+  assert.match(html, /<section class="album-track-table__disc"><h4 class="album-track-table__disc-heading">CD 1<\/h4>[\s\S]*One[\s\S]*<\/section><section class="album-track-table__disc">[\s\S]*album-track-table__disc-heading[^>]*>Bonus Disc<\/h4>[\s\S]*Two[\s\S]*<\/section>/);
   assert.match(html, /data-cdt-headers="visible"[\s\S]*data-cdt-headers="absent"/);
   assert.match(html, /album-track-table__row--search-match/);
 });
@@ -141,7 +140,7 @@ test('AlbumTrackTable retains aggregate and explicit main and bonus duration sum
   assert.match(html, /class="album-track-table__main-total">Total Main Album Length: 3:00<\/div>/);
   assert.match(html, /class="album-track-table__bonus-total">Bonus Disc Length: 22:30<\/div>/);
   assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.doesNotMatch(html, /album-track-table__disc-heading[^>]*>CD 1/);
+  assert.match(html, /album-track-table__disc-heading[^>]*>CD 1/);
   assert.equal((html.match(/class="compact-data-table-header"/g) || []).length, 1);
 });
 

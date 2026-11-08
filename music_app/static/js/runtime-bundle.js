@@ -19840,13 +19840,14 @@ function buildAlbumTrackTableHtml(config = {}) {
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
-  const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+    // With more than one disc every disc is headed, main or bonus.
     const showLabel = Boolean(label) && (
       forceGroupLabels
-      || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
+      || groups.length > 1
+      || (multiDisc && Boolean(group?.isBonus))
     );
     const columnsConfig = [
       { key: 'number', label: '#' },

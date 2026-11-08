@@ -45,7 +45,7 @@ ACTION_SELECTORS = MappingProxyType({
         '[data-album-card-action="open-explorer"]',
     ),
     "library.versions.manage": (
-        '[data-album-card-action="mark-version"]', '[data-album-card-action="unmark-version"]',
+        '[data-album-card-action="mark-version"]',
         "#version-picker-modal", '[data-save-version-picker="1"]',
     ),
     "library.logs.read": ("[data-open-log-history-alert]",),

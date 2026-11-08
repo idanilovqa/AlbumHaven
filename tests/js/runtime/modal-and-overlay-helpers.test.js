@@ -2243,6 +2243,56 @@ test('Mark As A Version offers only same-name albums sharing half their tracks, 
   assert.equal(listeners.click, undefined);
 });
 
+test('Mark As A Version starts with linked albums selected, and deselecting one unlinks it on Save', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
+  const run = async (links, sourceKey) => {
+    const calls = [];
+    const context = vm.createContext({
+      state: { view: { manual_version_links: links } },
+      escapeHtml: (value) => String(value ?? ''),
+      compareAlbumVariants: () => 0,
+      // INT-007 (owner): a linked album is listed even when its name or tracklist would not be offered.
+      flattenVisibleAlbums: () => [
+        { key: 'a', name: 'Hilda: Season 2', album_artist: 'Ryan Carlson' },
+        { key: 'z', name: 'Hilda Season Two Score', album_artist: 'Ryan Carlson' },
+      ],
+      fetchTrackModalAlbumDetails: async () => ({ tracks: [] }),
+      markAlbumVersion: async (...args) => { calls.push(['mark', ...args]); },
+      unmarkAlbumVersion: async (key) => { calls.push(['unmark', key]); },
+      showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
+    });
+    useNavigationTree(context);
+    vm.runInContext(source, context);
+    const album = { key: sourceKey, name: sourceKey === 'a' ? 'Hilda: Season 2' : 'Hilda Season Two Score', album_artist: 'Ryan Carlson' };
+    await context.openVersionPickerModal(album);
+    const options = calls[0][1];
+    let enabled = null;
+    const listeners = {};
+    const linkedKey = sourceKey === 'a' ? 'z' : 'a';
+    const selections = [];
+    const option = { getAttribute: () => linkedKey, classList: { toggle() {}, contains: () => true }, setAttribute() {}, removeAttribute() {} };
+    const list = { innerHTML: '', removeAttribute() {} };
+    const content = {
+      addEventListener: (name, handler) => { listeners[name] = handler; },
+      removeEventListener() {},
+      querySelector: () => list,
+      querySelectorAll: () => [option],
+    };
+    context.window.NavigationTree.setItemSelected = (node, value) => selections.push(value);
+    options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.match(list.innerHTML, new RegExp(`data-version-picker-target="${linkedKey}"`), 'the linked album is listed');
+    assert.match(list.innerHTML, new RegExp(`class="[^"]* is-selected[^"]*"[^>]*data-version-picker-target="${linkedKey}" aria-current="true"`), 'and starts selected');
+    listeners.click({ target: { closest: () => option } });
+    assert.deepEqual(selections, [false], 'clicking the selected album deselects it');
+    assert.equal(enabled, true, 'Save turns on for the change');
+    await options.onSubmit();
+    return calls.slice(1);
+  };
+  assert.deepEqual(await run({ a: 'z' }, 'a'), [['unmark', 'a']], 'this album is the linked version');
+  assert.deepEqual(await run({ a: 'z' }, 'z'), [['unmark', 'a']], 'the other album is the linked version');
+});
+
 test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {
   const { context } = loadHelper();
   const heading = new FakeElement('navigation-tree-heading');

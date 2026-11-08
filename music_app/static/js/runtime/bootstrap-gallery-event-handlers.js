@@ -156,11 +156,6 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
     return;
   }
 

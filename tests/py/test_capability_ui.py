@@ -112,7 +112,6 @@ def test_gallery_actions_follow_folder_and_version_permissions():
     selectors = {
         '[data-album-card-action="open-explorer"]',
         '[data-album-card-action="mark-version"]',
-        '[data-album-card-action="unmark-version"]',
     }
     assert selectors <= set(projection(["viewer"])["denied_selectors"])
     assert not selectors.intersection(projection(["owner"])["denied_selectors"])

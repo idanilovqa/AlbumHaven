@@ -50,9 +50,10 @@ function showAlbumCardContextMenu(x, y, album) {
     ...moveActions.map((item) => (
       `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
     )),
-    isMarkedVersion
-      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : (getVersionPickerCandidates(album).length ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>' : ''),
+    // INT-007 (owner): an existing link is undone in the same dialog, by deselecting its album.
+    getVersionPickerCandidates(album).length || getLinkedVersionKeys(albumKey).size
+      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>'
+      : '',
     ...separateItems,
   ].join('');
   menu.hidden = false;
@@ -185,6 +186,8 @@ function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
 }
 
 // Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
+// INT-007 (owner, 11-08 evening): albums already linked as versions start selected (even when their name or
+// tracklist would not be offered); clicking a selected album deselects it, and Save then unlinks it.
 function openVersionPickerModal(album) {
   if (!album) return Promise.resolve(null);
   let selectedKey = '';
@@ -198,11 +201,17 @@ function openVersionPickerModal(album) {
     contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></nav>',
     onMount(content, controls) {
       // Only same-name albums that share at least half of their tracks are offered.
-      void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((candidates) => {
+      const linked = getLinkedVersionKeys(album.key);
+      void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((matches) => {
         const list = content.querySelector?.('[data-version-picker-list]');
         if (!list) return;
         list.removeAttribute('aria-busy');
-        const linked = getLinkedVersionKeys(album.key);
+        const byKey = new Map(matches.map((item) => [String(item.key || ''), item]));
+        flattenVisibleAlbums().forEach((item) => {
+          const key = String(item?.key || '');
+          if (linked.has(key) && !byKey.has(key)) byKey.set(key, item);
+        });
+        const candidates = [...byKey.values()];
         list.innerHTML = buildVersionPickerListHtml(candidates, linked);
         // The saved link is the starting selection; Save turns on only for a different choice.
         savedKey = candidates.map((item) => String(item.key || '')).find((key) => linked.has(key)) || '';
@@ -211,15 +220,21 @@ function openVersionPickerModal(album) {
       onPick = (event) => {
         const option = event.target.closest?.('[data-version-picker-target]');
         if (!option) return;
-        selectedKey = option.getAttribute('data-version-picker-target') || '';
+        const key = option.getAttribute('data-version-picker-target') || '';
+        selectedKey = key === selectedKey ? '' : key;
         content.querySelectorAll('[data-version-picker-target]')
-          .forEach((node) => window.NavigationTree.setItemSelected(node, node === option));
-        controls.setSubmitEnabled(Boolean(selectedKey) && selectedKey !== savedKey);
+          .forEach((node) => window.NavigationTree.setItemSelected(node, Boolean(selectedKey) && node === option));
+        controls.setSubmitEnabled(selectedKey !== savedKey);
       };
       content.addEventListener('click', onPick);
     },
     onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
-    onSubmit: () => markAlbumVersion(album.key || '', selectedKey),
+    onSubmit: () => {
+      if (selectedKey) return markAlbumVersion(album.key || '', selectedKey);
+      // Deselected: undo the saved link from whichever side holds it.
+      const links = state.view?.manual_version_links || {};
+      return unmarkAlbumVersion(links[String(album.key || '')] ? album.key : savedKey);
+    },
   });
 }
 

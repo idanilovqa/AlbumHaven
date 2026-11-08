@@ -270,6 +270,29 @@ def database(monkeypatch):
     try:
         with isolatedPostgres._connect(setup_url) as connection:
             owner = connection.execute("select account_id from app.bootstrap_owners").fetchone()["account_id"]
+            # What signing in creates (auth_bootstrap_postgres): the owner's local library and its
+            # owner membership, which an active actor's library context requires.
+            connection.execute(
+                """
+                insert into library.libraries (owner_account_id, name, library_kind, metadata)
+                select %(owner)s, 'Download Links Library', 'local', '{}'::jsonb
+                where not exists (
+                  select 1 from library.libraries
+                  where owner_account_id = %(owner)s and library_kind = 'local'
+                )
+                """,
+                {"owner": owner},
+            )
+            connection.execute(
+                """
+                insert into library.library_memberships (library_id, account_id, membership_role)
+                select id, %(owner)s, 'owner' from library.libraries
+                where owner_account_id = %(owner)s and library_kind = 'local'
+                order by id limit 1
+                on conflict (library_id, account_id) do nothing
+                """,
+                {"owner": owner},
+            )
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, owner=owner)
     finally:
         isolatedPostgres.reset_application_tables(setup_url)

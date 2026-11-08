@@ -42,6 +42,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/client-preferences-helpers.js',
   'js/runtime/gallery-display-preference-helpers.js',
   'js/runtime/android-bridge-client.js',
+  'js/runtime/playback-engine.js',
   'js/runtime/playback-ownership-helpers.js',
   'js/runtime/modal-and-overlay-helpers.js',
   'js/runtime/track-modal-lightbox-helpers.js',

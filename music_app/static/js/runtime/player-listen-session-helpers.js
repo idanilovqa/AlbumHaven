@@ -165,9 +165,9 @@ function buildPlaybackRequestOrigin() {
   };
 }
 
-// Inside a native-playback APK, Android builds and sends every listen write itself.
+// An engine that records listens itself, as Android's does, builds and sends every listen write.
 function isListenRecordedNatively() {
-  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
+  return typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().recordsListens;
 }
 
 function listenWriteClockMs() {

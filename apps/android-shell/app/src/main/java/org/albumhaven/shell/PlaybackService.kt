@@ -35,7 +35,7 @@ import org.albumhaven.playback.decode.DecoderSelfCheck
 import org.albumhaven.playback.decode.ThreadedEncodedDecoders
 import org.albumhaven.shell.net.ShellSession
 import org.albumhaven.shell.playback.AudioFocusPolicy
-import org.albumhaven.shell.playback.AudioTrackPcmSink
+import org.albumhaven.playback.engine.AudioTrackPcmSink
 import org.albumhaven.shell.playback.CommandResult
 import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.ControllerPlaybackPort

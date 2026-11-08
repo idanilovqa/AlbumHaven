@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals

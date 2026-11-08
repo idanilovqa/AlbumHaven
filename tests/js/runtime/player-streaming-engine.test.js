@@ -340,6 +340,9 @@ function createEngineHarness(options = {}) {
   window.window = window;
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(enginePath, 'utf8'), context, { filename: enginePath });
+  // The player reaches the engine through its contract.
+  const contractPath = path.join(path.dirname(enginePath), 'playback-engine.js');
+  vm.runInContext(fs.readFileSync(contractPath, 'utf8'), context, { filename: contractPath });
   if (options.measuredListening) {
     Object.assign(context, { crypto: require('node:crypto'), isoNow: () => new Date().toISOString(), unixNowSeconds: () => Math.floor(Date.now()/1000), getPlayerPlaybackSnapshot: () => context.state.player.streaming.snapshot });
     vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/player-listen-session-helpers.js'), 'utf8'), context);

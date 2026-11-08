@@ -1665,7 +1665,7 @@ test('a restore inside the APK re-attaches to the native queue instead of starti
       state: { player: { current: null, lastKnownWasPlaying: false, lastPersistedSnapshot: '', restoredFromStorage: false } },
       getLocalStorageItem: () => persisted,
       startStreamingTrack: (track, options) => { starts.push([track.path, options.startSeconds]); return Promise.resolve(null); },
-      attachAndroidNativePlayback: (state) => { attachments.push(state.track.path); return attached; },
+      adoptEnginePlayback: (state) => { attachments.push(state.track.path); return attached; },
     });
     context.restorePlayerState();
     await new Promise((resolve) => setImmediate(resolve));

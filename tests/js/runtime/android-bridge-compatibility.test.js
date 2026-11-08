@@ -16,7 +16,7 @@ const fixtureDir = path.join(repoRoot, 'tests', 'fixtures', 'android-bridge');
 const readJson = file => JSON.parse(fs.readFileSync(path.join(fixtureDir, file), 'utf8'));
 const stableShells = readJson('stable-shells.json');
 const SUPPORTED = ['latest', 'previous'];
-const RUNTIME_FILES = ['player-streaming-engine.js', 'android-bridge-client.js', 'player-listen-session-helpers.js',
+const RUNTIME_FILES = ['player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
   'playback-ownership-helpers.js', 'android-settings.js'];
 const AUDIO_CAPABILITIES = ['playback.native.v1', 'playback.webview.v1'];
 

@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 import android.media.AudioAttributes
 import android.media.AudioFormat

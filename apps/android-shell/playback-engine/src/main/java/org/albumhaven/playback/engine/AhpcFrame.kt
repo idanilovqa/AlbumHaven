@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 /** Server-side decoder role; codes match `_ROLE_CODES` in music_app/services/playback_pcm.py. */
 enum class PcmRole(val code: Int, val wire: String) {

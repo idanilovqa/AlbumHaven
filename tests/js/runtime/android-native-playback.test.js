@@ -88,7 +88,7 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
   vm.createContext(context);
   loadCapabilityUi(context);
   // The listen helpers name the track identity a queue item's listen key is derived from.
-  const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'player-listen-session-helpers.js',
+  const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
     ...(listen ? ['playback-ownership-helpers.js'] : [])];
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });

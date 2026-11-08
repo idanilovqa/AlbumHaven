@@ -7650,11 +7650,6 @@ function streamingEngineState() {
   return state.player.streaming;
 }
 
-// Android native output replaces AudioWorklet output; the two never run together.
-function isNativeStreamingPlayback() {
-  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
-}
-
 function streamingFrames(seconds) {
   return Math.round(seconds * streamingEngineState().sampleRate);
 }
@@ -7955,12 +7950,7 @@ function setStreamingError(source, event) {
   engine.diagnostics.lastError = { source, message: String(detail) };
 }
 
-function failStreamingEngine(source, event, reason) {
-  if (isNativeStreamingPlayback()) {
-    failAndroidNativePlayback(source, event?.error?.message || event?.message);
-    void stopAndroidNativePlayback(reason, { preserveError: true }).catch(() => {});
-    return;
-  }
+function failBrowserStreaming(source, event, reason) {
   setStreamingError(source, event);
   const cleanup = beginStreamingCleanup(reason, { preserveError: true });
   void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
@@ -9777,15 +9767,13 @@ function probeStreamingTrackWaveform(track) {
   }
 }
 
-async function startStreamingTrack(track, {
+async function startBrowserStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
   transportRecoveryAttempt = null,
 } = {}) {
-  const nativeRoute = typeof androidNativePlaybackRoute === 'function' ? androidNativePlaybackRoute() : null;
-  if (nativeRoute && await nativeRoute) return startAndroidNativePlaybackTrack(track, { startSeconds, autoplay });
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
@@ -10037,8 +10025,7 @@ async function startStreamingTrack(track, {
   return current;
 }
 
-async function pauseStreamingPlayback() {
-  if (isNativeStreamingPlayback()) return pauseAndroidNativePlayback();
+async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
@@ -10057,12 +10044,11 @@ async function pauseStreamingPlayback() {
   if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
-async function resumeStreamingPlayback(
+async function resumeBrowserStreaming(
   expectedStartRequestId = null,
   onPlaybackStarted = null,
   expectedCurrentRole = null,
 ) {
-  if (isNativeStreamingPlayback()) return resumeAndroidNativePlayback(onPlaybackStarted);
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
     ?? (Number(engine.startRequestId) || 0);
@@ -10117,8 +10103,7 @@ async function resumeStreamingPlayback(
   if (typeof onPlaybackStarted === 'function') onPlaybackStarted();
   return true;
 }
-async function seekStreamingPlayback(seconds) {
-  if (isNativeStreamingPlayback()) return seekAndroidNativePlayback(seconds);
+async function seekBrowserStreaming(seconds) {
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
   const currentTrack = engine.roles.current?.track;
@@ -10249,8 +10234,7 @@ async function seekStreamingPlayback(seconds) {
   return replacement;
 }
 
-async function scheduleStreamingContinuity(track, options = {}) {
-  if (isNativeStreamingPlayback()) return scheduleAndroidNativeContinuity(track, options);
+async function scheduleBrowserStreamingContinuity(track, options = {}) {
   const engine = streamingEngineState();
   if (!engine.roles.current) return null;
   const normalized = normalizeStreamingContinuityOptions(options);
@@ -10326,8 +10310,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
   return continuity;
 }
 
-function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
-  if (isNativeStreamingPlayback()) return setAndroidNativeLoop(active);
+function setBrowserStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
   const engine = streamingEngineState();
   if (!engine.node) return;
   const loop = engine.loopContinuity;
@@ -10482,13 +10465,11 @@ function beginStreamingCleanup(reason, options = {}) {
   return cleanup;
 }
 
-async function stopStreamingPlayback(reason = 'stopped', options = {}) {
-  if (isNativeStreamingPlayback()) return stopAndroidNativePlayback(reason, options);
+async function stopBrowserStreaming(reason = 'stopped', options = {}) {
   streamingEngineState().pendingTransportRecovery = null;
   return beginStreamingCleanup(reason, options);
 }
-function getStreamingPlaybackSnapshot() {
-  if (isNativeStreamingPlayback()) return getAndroidNativePlaybackSnapshot();
+function getBrowserStreamingSnapshot() {
   const engine = streamingEngineState();
   return {
     ...engine.snapshot,
@@ -10532,9 +10513,10 @@ function getStreamingPlaybackSnapshot() {
   };
 }
 
+// The contract (playback-engine.js) loads after this file and answers for whichever engine plays.
 Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
   configurable: true,
-  get: getStreamingPlaybackSnapshot,
+  get: () => getStreamingPlaybackSnapshot(),
 });
 
 // END js/runtime/player-streaming-engine.js
@@ -12458,6 +12440,12 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   await stopped;
 }
 
+// The native engine's side of the player's `fail`: the queue stops and keeps the error to show.
+function failAndroidNativeEngine(source, event, reason) {
+  failAndroidNativePlayback(source, event?.error?.message || event?.message);
+  void stopAndroidNativePlayback(reason, { preserveError: true }).catch(() => {});
+}
+
 function failAndroidNativePlayback(source, message) {
   const native = androidNativePlayback;
   native.mode = 'error';
@@ -12730,6 +12718,117 @@ function registerAndroidNativePlaybackEvents() {
 
 // END js/runtime/android-bridge-client.js
 
+// BEGIN js/runtime/playback-engine.js
+
+// The player's one playback-engine contract. Two engines implement it: the browser's
+// AudioWorklet engine (player-streaming-engine.js) and Android's native engine behind the shell
+// bridge (android-bridge-client.js). Player code calls only the functions below; nothing else asks
+// which platform it runs on.
+//
+// Each engine also answers two policy questions for the ownership and listen helpers:
+// `holdsOwnClaim` (it acquires, renews and releases the server playback claim itself) and
+// `recordsListens` (it sends every listen write itself).
+
+const BROWSER_PLAYBACK_ENGINE = Object.freeze({
+  id: 'browser',
+  holdsOwnClaim: false,
+  recordsListens: false,
+  claimClientId: () => '',
+  ownsPlayback: () => false,
+  adopt: () => null,
+  start: (track, options) => startBrowserStreamingTrack(track, options),
+  pause: () => pauseBrowserStreaming(),
+  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole) =>
+    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole),
+  seek: seconds => seekBrowserStreaming(seconds),
+  continuity: (track, options) => scheduleBrowserStreamingContinuity(track, options),
+  setLoop: (active, startSeconds, endSeconds) => setBrowserStreamingLoop(active, startSeconds, endSeconds),
+  stop: (reason, options) => stopBrowserStreaming(reason, options),
+  snapshot: () => getBrowserStreamingSnapshot(),
+  fail: (source, event, reason) => failBrowserStreaming(source, event, reason),
+});
+
+const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
+  id: 'android-native',
+  holdsOwnClaim: true,
+  recordsListens: true,
+  claimClientId: () => getAndroidNativePlaybackClientId(),
+  ownsPlayback: () => isAndroidNativePlaybackOwner(),
+  adopt: persistedState => attachAndroidNativePlayback(persistedState),
+  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  pause: () => pauseAndroidNativePlayback(),
+  resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
+  seek: seconds => seekAndroidNativePlayback(seconds),
+  continuity: (track, options) => scheduleAndroidNativeContinuity(track, options),
+  setLoop: active => setAndroidNativeLoop(active),
+  stop: (reason, options) => stopAndroidNativePlayback(reason, options),
+  snapshot: () => getAndroidNativePlaybackSnapshot(),
+  fail: (source, event, reason) => failAndroidNativeEngine(source, event, reason),
+});
+
+function isInsideAndroidShell() {
+  return typeof isAndroidShell === 'function' && isAndroidShell();
+}
+
+// The engine playing now: Android's once its handshake negotiated native playback.
+function currentPlaybackEngine() {
+  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()
+    ? ANDROID_NATIVE_PLAYBACK_ENGINE : BROWSER_PLAYBACK_ENGINE;
+}
+
+// Inside the APK only the bridge handshake says which engine plays: the promise to wait for it, or
+// null elsewhere, so a browser never waits a turn it did not need.
+function playbackEngineHandshake() {
+  return isInsideAndroidShell() ? connectAndroidBridge() : null;
+}
+
+// A reloaded document re-attaches to playback its engine kept going; null when there is none.
+function adoptEnginePlayback(persistedState) {
+  return isInsideAndroidShell() ? ANDROID_NATIVE_PLAYBACK_ENGINE.adopt(persistedState) : null;
+}
+
+// A new start decides its engine, waiting for the handshake only inside the APK.
+async function startStreamingTrack(track, options = {}) {
+  const nativeRoute = typeof androidNativePlaybackRoute === 'function' ? androidNativePlaybackRoute() : null;
+  const engine = nativeRoute && await nativeRoute ? ANDROID_NATIVE_PLAYBACK_ENGINE : BROWSER_PLAYBACK_ENGINE;
+  return engine.start(track, options);
+}
+
+function pauseStreamingPlayback() {
+  return currentPlaybackEngine().pause();
+}
+
+function resumeStreamingPlayback(expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null) {
+  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole);
+}
+
+function seekStreamingPlayback(seconds) {
+  return currentPlaybackEngine().seek(seconds);
+}
+
+function scheduleStreamingContinuity(track, options = {}) {
+  return currentPlaybackEngine().continuity(track, options);
+}
+
+function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
+  return currentPlaybackEngine().setLoop(active, startSeconds, endSeconds);
+}
+
+function stopStreamingPlayback(reason = 'stopped', options = {}) {
+  return currentPlaybackEngine().stop(reason, options);
+}
+
+function getStreamingPlaybackSnapshot() {
+  return currentPlaybackEngine().snapshot();
+}
+
+function failStreamingEngine(source, event, reason) {
+  return currentPlaybackEngine().fail(source, event, reason);
+}
+
+// END js/runtime/playback-engine.js
+
 // BEGIN js/runtime/playback-ownership-helpers.js
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
@@ -12792,11 +12891,20 @@ function createPlaybackOwnershipTabId() {
   return typeof newMeasuredPlaybackId === 'function' ? newMeasuredPlaybackId() : '';
 }
 
+// The playing engine's claim policy from the playback-engine contract; without it, the browser's.
+function playingEngine() {
+  return typeof currentPlaybackEngine === 'function' ? currentPlaybackEngine() : null;
+}
+
+// Inside the APK the bridge handshake decides the engine: the promise to wait for, or null.
+function playingEngineHandshake() {
+  return typeof playbackEngineHandshake === 'function' ? playbackEngineHandshake() : null;
+}
+
 function getPlaybackOwnershipTabId() {
-  // Inside a native-playback APK the server claim belongs to the Android client.
-  const nativeClientId = typeof getAndroidNativePlaybackClientId === 'function'
-    ? getAndroidNativePlaybackClientId() : '';
-  if (nativeClientId) return nativeClientId;
+  // An engine that holds its own claim, as Android's does, names the client the claim belongs to.
+  const engineClientId = playingEngine()?.claimClientId() || '';
+  if (engineClientId) return engineClientId;
   const ownership = getPlaybackOwnershipState();
   return ownership.tabId ||= createPlaybackOwnershipTabId();
 }
@@ -12878,7 +12986,8 @@ async function handlePlaybackOwnershipEvent() {
   try {
     // Inside the APK the native client may already own playback a reloaded document re-attaches to;
     // only the handshake names it, so asking before it would report this app's own playback as elsewhere.
-    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
     const snapshot = await playbackOwnershipRequest('GET',
       `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
     if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);
@@ -13071,11 +13180,12 @@ async function claimPlaybackOwnership(track, options = {}) {
   const operation = (async () => {
     await previousOperation;
     // Inside the APK only the handshake says whether Android plays natively or at all.
-    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
-    // Android acquires, heartbeats and releases its own claim before any native output.
-    if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return true;
+    // An engine that holds its own claim acquires, heartbeats and releases it before any output.
+    if (playingEngine()?.holdsOwnClaim) return true;
     try {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
@@ -13105,8 +13215,8 @@ async function claimPlaybackOwnership(track, options = {}) {
 }
 
 async function releasePlaybackOwnership() {
-  // Android releases its own claim once its listen writes drain.
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return false;
+  // An engine that holds its own claim releases it once its listen writes drain.
+  if (playingEngine()?.holdsOwnClaim) return false;
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   const claim = ownership.activeClaim;
@@ -13179,11 +13289,9 @@ function isActivePlaybackOwner() {
 }
 
 function canEmitPlaybackSessionSideEffects() {
-  // Inside a native-playback APK only Android's claim authorizes listen writes.
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
-    return isAndroidNativePlaybackOwner();
-  }
-  return isActivePlaybackOwner();
+  // An engine that holds its own claim authorizes listen writes by it.
+  const engine = playingEngine();
+  return engine?.holdsOwnClaim ? engine.ownsPlayback() : isActivePlaybackOwner();
 }
 
 /** The held claim's last answer says this account's listens cannot reach Last.fm. */
@@ -38281,10 +38389,9 @@ function restorePlayerState() {
   const ownershipResult = !savedPaused
     && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
-    // Inside the APK a reloaded document re-attaches to the queue Android kept playing.
-    const nativeAttachment = typeof attachAndroidNativePlayback === 'function'
-      ? attachAndroidNativePlayback(parsed) : null;
-    if (nativeAttachment && await nativeAttachment) return;
+    // A reloaded document re-attaches to the queue its engine kept playing, as Android's does.
+    const adopted = typeof adoptEnginePlayback === 'function' ? adoptEnginePlayback(parsed) : null;
+    if (adopted && await adopted) return;
     let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);
@@ -38565,9 +38672,9 @@ function buildPlaybackRequestOrigin() {
   };
 }
 
-// Inside a native-playback APK, Android builds and sends every listen write itself.
+// An engine that records listens itself, as Android's does, builds and sends every listen write.
 function isListenRecordedNatively() {
-  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback();
+  return typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().recordsListens;
 }
 
 function listenWriteClockMs() {

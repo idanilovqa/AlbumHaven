@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 /** Callbacks of one `/playback/pcm` socket; they arrive on a transport thread. */
 interface PcmTransportListener {

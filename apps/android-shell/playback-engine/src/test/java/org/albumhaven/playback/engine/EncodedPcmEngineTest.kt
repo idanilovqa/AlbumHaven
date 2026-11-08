@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 import org.albumhaven.playback.decode.AudioCodec
 import org.junit.Assert.assertEquals

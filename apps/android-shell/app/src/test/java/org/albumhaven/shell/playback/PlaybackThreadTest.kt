@@ -1,5 +1,9 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.playback.engine.RATE
+import org.albumhaven.playback.engine.Run
+import org.albumhaven.playback.engine.SyntheticTrack
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

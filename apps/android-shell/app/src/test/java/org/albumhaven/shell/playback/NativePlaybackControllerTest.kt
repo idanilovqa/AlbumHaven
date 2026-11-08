@@ -1,5 +1,17 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.playback.engine.PcmCloseCodes
+import org.albumhaven.playback.engine.PcmTransport
+import org.albumhaven.playback.engine.PcmTransportListener
+
+import org.albumhaven.playback.engine.FakeAhpcServer
+import org.albumhaven.playback.engine.FakeDecoders
+import org.albumhaven.playback.engine.PcmClientControl
+import org.albumhaven.playback.engine.RATE
+import org.albumhaven.playback.engine.RecordingSink
+import org.albumhaven.playback.engine.Run
+import org.albumhaven.playback.engine.SyntheticTrack
+
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

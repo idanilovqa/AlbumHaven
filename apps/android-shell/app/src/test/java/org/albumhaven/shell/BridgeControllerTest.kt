@@ -5,8 +5,8 @@ import org.albumhaven.shell.playback.ControllerHarness
 import org.albumhaven.shell.playback.ControllerPlaybackPort
 import org.albumhaven.shell.playback.CurrentItemReason
 import org.albumhaven.shell.playback.QueueItem
-import org.albumhaven.shell.playback.RATE
-import org.albumhaven.shell.playback.SyntheticTrack
+import org.albumhaven.playback.engine.RATE
+import org.albumhaven.playback.engine.SyntheticTrack
 import org.albumhaven.shell.playback.NativePlaybackEvent
 import org.albumhaven.shell.playback.NativePlaybackSnapshot
 import org.albumhaven.shell.playback.NativePlaybackState

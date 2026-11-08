@@ -105,6 +105,7 @@ dependencies {
     implementation(libs.okhttp)
 
     testImplementation(libs.junit)
+    testImplementation(testFixtures(project(":playback-engine")))
     testImplementation(libs.json)
     testImplementation(libs.okhttp.mockwebserver)
 

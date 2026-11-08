@@ -1248,8 +1248,8 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   const nativeClientId = '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70';
   const requests = [];
   const { context } = loadHelper({
-    isAndroidNativePlayback: () => true,
-    getAndroidNativePlaybackClientId: () => nativeClientId,
+    // The native engine holds its own claim, under its own client id.
+    currentPlaybackEngine: () => ({ holdsOwnClaim: true, claimClientId: () => nativeClientId, ownsPlayback: () => false }),
     fetch: async (url, init = {}) => {
       requests.push({ url, method: init.method || 'GET' });
       return jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });

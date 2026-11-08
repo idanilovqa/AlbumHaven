@@ -1777,7 +1777,7 @@ function measuredProcessorReceiver(fixture, initialSeconds) {
   const c={window:{},console,AbortController,setTimeout,clearTimeout,crypto:require('node:crypto'),state:{player:{current:track}},isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,getPlayerPlaybackSnapshot:()=>engine.snapshot,
     fetch:async(_url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({ok:true})};}};
   vm.createContext(c);
-  for(const name of ['player-streaming-engine.js','player-listen-session-helpers.js'])vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);
+  for(const name of ['player-streaming-engine.js','playback-engine.js','player-listen-session-helpers.js'])vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);
   c.streamingEngineState=()=>engine;c.streamingRoleForId=id=>id===41?role:null;
   c.streamingRoleCapacityFrames=()=>512;c.recordStreamingRenderedPcmEvidence=()=>{};c.maybeNotifyStreamingWaveformReady=()=>{};
   c.streamingAbsoluteTimelineFrame=(_role,frame)=>frame;c.observeStreamingFacadeCallback=promise=>completions.push(promise);

@@ -30,10 +30,20 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // The fake server, sinks and decoders the engine's tests and the app's controller tests share.
+    testFixtures {
+        enable = true
+    }
 }
 
 dependencies {
+    compileOnly(libs.androidx.annotation)
     testImplementation(libs.junit)
+    // Unit tests run on the JVM, where Android's org.json is only a stub.
+    testImplementation(libs.json)
+    testFixturesImplementation(libs.junit)
+    testFixturesImplementation(libs.json)
 
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.androidx.test.runner)

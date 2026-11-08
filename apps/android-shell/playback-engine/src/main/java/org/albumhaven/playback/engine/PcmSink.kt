@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 /**
  * The one audible output. Production uses [AudioTrackPcmSink]; JVM tests record writes.

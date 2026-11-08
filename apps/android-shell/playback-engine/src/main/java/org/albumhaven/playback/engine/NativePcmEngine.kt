@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 import androidx.annotation.VisibleForTesting
 import kotlin.math.roundToLong

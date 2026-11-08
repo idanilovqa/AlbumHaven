@@ -1,4 +1,4 @@
-package org.albumhaven.shell.playback
+package org.albumhaven.playback.engine
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

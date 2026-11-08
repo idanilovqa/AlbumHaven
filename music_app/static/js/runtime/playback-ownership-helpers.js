@@ -58,11 +58,20 @@ function createPlaybackOwnershipTabId() {
   return typeof newMeasuredPlaybackId === 'function' ? newMeasuredPlaybackId() : '';
 }
 
+// The playing engine's claim policy from the playback-engine contract; without it, the browser's.
+function playingEngine() {
+  return typeof currentPlaybackEngine === 'function' ? currentPlaybackEngine() : null;
+}
+
+// Inside the APK the bridge handshake decides the engine: the promise to wait for, or null.
+function playingEngineHandshake() {
+  return typeof playbackEngineHandshake === 'function' ? playbackEngineHandshake() : null;
+}
+
 function getPlaybackOwnershipTabId() {
-  // Inside a native-playback APK the server claim belongs to the Android client.
-  const nativeClientId = typeof getAndroidNativePlaybackClientId === 'function'
-    ? getAndroidNativePlaybackClientId() : '';
-  if (nativeClientId) return nativeClientId;
+  // An engine that holds its own claim, as Android's does, names the client the claim belongs to.
+  const engineClientId = playingEngine()?.claimClientId() || '';
+  if (engineClientId) return engineClientId;
   const ownership = getPlaybackOwnershipState();
   return ownership.tabId ||= createPlaybackOwnershipTabId();
 }
@@ -144,7 +153,8 @@ async function handlePlaybackOwnershipEvent() {
   try {
     // Inside the APK the native client may already own playback a reloaded document re-attaches to;
     // only the handshake names it, so asking before it would report this app's own playback as elsewhere.
-    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
     const snapshot = await playbackOwnershipRequest('GET',
       `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
     if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);
@@ -337,11 +347,12 @@ async function claimPlaybackOwnership(track, options = {}) {
   const operation = (async () => {
     await previousOperation;
     // Inside the APK only the handshake says whether Android plays natively or at all.
-    if (typeof isAndroidShell === 'function' && isAndroidShell()) await connectAndroidBridge();
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
     if (version !== ownership.requestVersion) return false;
     const claim = ownership.activeClaim;
-    // Android acquires, heartbeats and releases its own claim before any native output.
-    if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return true;
+    // An engine that holds its own claim acquires, heartbeats and releases it before any output.
+    if (playingEngine()?.holdsOwnClaim) return true;
     try {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
@@ -371,8 +382,8 @@ async function claimPlaybackOwnership(track, options = {}) {
 }
 
 async function releasePlaybackOwnership() {
-  // Android releases its own claim once its listen writes drain.
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) return false;
+  // An engine that holds its own claim releases it once its listen writes drain.
+  if (playingEngine()?.holdsOwnClaim) return false;
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   const claim = ownership.activeClaim;
@@ -445,11 +456,9 @@ function isActivePlaybackOwner() {
 }
 
 function canEmitPlaybackSessionSideEffects() {
-  // Inside a native-playback APK only Android's claim authorizes listen writes.
-  if (typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()) {
-    return isAndroidNativePlaybackOwner();
-  }
-  return isActivePlaybackOwner();
+  // An engine that holds its own claim authorizes listen writes by it.
+  const engine = playingEngine();
+  return engine?.holdsOwnClaim ? engine.ownsPlayback() : isActivePlaybackOwner();
 }
 
 /** The held claim's last answer says this account's listens cannot reach Last.fm. */

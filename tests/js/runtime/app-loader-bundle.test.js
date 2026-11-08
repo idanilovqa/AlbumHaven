@@ -73,6 +73,7 @@ const expectedRuntimeOrder = [
   'client-preferences-helpers.js',
   'gallery-display-preference-helpers.js',
   'android-bridge-client.js',
+  'playback-engine.js',
   'playback-ownership-helpers.js',
   'modal-and-overlay-helpers.js',
   'track-modal-lightbox-helpers.js',

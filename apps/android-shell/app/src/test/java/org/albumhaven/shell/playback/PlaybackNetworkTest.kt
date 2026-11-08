@@ -1,5 +1,8 @@
 package org.albumhaven.shell.playback
 
+import org.albumhaven.playback.engine.PcmCloseCodes
+import org.albumhaven.playback.engine.PcmTransportListener
+
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient

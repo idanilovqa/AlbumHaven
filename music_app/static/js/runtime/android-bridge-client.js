@@ -757,6 +757,12 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   await stopped;
 }
 
+// The native engine's side of the player's `fail`: the queue stops and keeps the error to show.
+function failAndroidNativeEngine(source, event, reason) {
+  failAndroidNativePlayback(source, event?.error?.message || event?.message);
+  void stopAndroidNativePlayback(reason, { preserveError: true }).catch(() => {});
+}
+
 function failAndroidNativePlayback(source, message) {
   const native = androidNativePlayback;
   native.mode = 'error';

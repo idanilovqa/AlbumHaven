@@ -18,6 +18,25 @@ class SyntheticTrack(val tag: Int, val frames: Long, val sampleRate: Int = RATE)
     val pcm = PcmTrack("ref-$tag", frames.toDouble() / sampleRate, cacheKey = "key-$tag")
 }
 
+/**
+ * The fake codec's seek index: every frame is eight bytes, so a window starts [PREROLL] frames
+ * before the target, as an MP3 window starts frames early, once the target's bytes have arrived.
+ */
+class FakeSeekIndex(private val firstSample: Long, private val totalFrames: Long) : EncodedSeekIndex {
+    override fun update(store: ByteStore) = Unit
+
+    override fun window(store: ByteStore, targetFrame: Long): LocalSeekWindow? {
+        val kept = firstSample + targetFrame
+        val firstSent = maxOf(0L, kept - PREROLL)
+        if ((kept + 1) * AhpcFrameCodec.BYTES_PER_FRAME > store.size || targetFrame >= totalFrames) return null
+        return LocalSeekWindow(ByteArray(0), (firstSent * AhpcFrameCodec.BYTES_PER_FRAME).toInt(), kept - firstSent, totalFrames - targetFrame)
+    }
+
+    companion object {
+        const val PREROLL = 37L
+    }
+}
+
 /** A [TrackCache] in memory, recording what it was asked. */
 class MemoryTrackCache : TrackCache {
     val tracks = mutableMapOf<String, CachedTrack>()
@@ -548,6 +567,7 @@ class PcmHarness(
         decoders = decoders.takeIf { encoded },
         codecs = { setOf(AudioCodec.MP3) },
         cache = cache,
+        seekIndexes = { _, firstSample, totalFrames -> FakeSeekIndex(firstSample, totalFrames) },
     ) { events += it }
 
     fun deliver() {

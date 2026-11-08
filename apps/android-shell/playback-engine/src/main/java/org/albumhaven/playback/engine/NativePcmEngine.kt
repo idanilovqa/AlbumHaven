@@ -6,6 +6,7 @@ import org.albumhaven.playback.decode.AudioCodec
 import org.albumhaven.playback.decode.DecodedAudio
 import org.albumhaven.playback.decode.EncodedDecodeListener
 import org.albumhaven.playback.decode.EncodedDecoders
+import org.albumhaven.playback.decode.EncodedDecoding
 
 /**
  * Buffer and credit limits of the web streaming engine
@@ -122,6 +123,8 @@ class NativePcmEngine(
     private val quality: () -> String? = { null },
     /** Recently played tracks; a cached track starts and follows with no server round trip. */
     private val cache: TrackCache? = null,
+    /** Indexes a stream's kept bytes for seeks on the device: (codec, first kept frame, kept frames). */
+    private val seekIndexes: (AudioCodec, Long, Long) -> EncodedSeekIndex? = ::seekIndexFor,
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -175,7 +178,7 @@ class NativePcmEngine(
         var remainingFrames: Long,
         initialCreditBytes: Int,
     ) : EncodedDecodeListener {
-        val decoding = checkNotNull(decoders).open(codec, this)
+        var decoding: EncodedDecoding = checkNotNull(decoders).open(codec, this)
         var outstandingBytes = initialCreditBytes
         var receivedBytes = 0L
         val decoded = ArrayDeque<FloatArray>()
@@ -190,10 +193,43 @@ class NativePcmEngine(
         var decoderFinished = false
         var closed = false
 
-        /** The stream's map as the server sent it, and, for a whole track, its bytes for the cache. */
+        /** The stream's map as the server sent it. */
         val initialSkipFrames = skipFrames
         val initialTotalFrames = remainingFrames
-        var recording: java.io.ByteArrayOutputStream? = null
+
+        /**
+         * A stream from the track's first frame keeps its bytes as they arrive, indexed, so a seek
+         * into them decodes on the device and the whole track can be kept in the cache.
+         */
+        var store: ByteStore? = null
+        var index: EncodedSeekIndex? = null
+
+        /** A seek decoding from the kept bytes until its first audio is ready to cut over to. */
+        var localSeek: LocalSeek? = null
+
+        fun keepBytes() {
+            if (stream.startFrame != 0L) return
+            store = ByteStore()
+            index = seekIndexes(codec, initialSkipFrames, initialTotalFrames)
+        }
+
+        fun write(bytes: ByteArray, offset: Int, length: Int) {
+            decoding.write(bytes, offset, length)
+            localSeek?.decoding?.write(bytes, offset, length)
+            val kept = store ?: return
+            if (kept.size + length > MAX_CACHED_TRACK_BYTES) {
+                store = null
+                index = null
+                return
+            }
+            kept.append(bytes, offset, length)
+            index?.update(kept)
+        }
+
+        fun end() {
+            decoding.end()
+            localSeek?.decoding?.end()
+        }
 
         override fun decoded(audio: DecodedAudio) {
             if (closed || failed) return
@@ -225,7 +261,52 @@ class NativePcmEngine(
             if (closed) return
             closed = true
             decoding.close()
+            localSeek?.decoding?.close()
+            localSeek = null
         }
+    }
+
+    /**
+     * A seek inside the bytes a stream already received, as Spotify seeks inside its download: a
+     * second decoder starts at the server's own window for the target while the old place keeps
+     * playing, and takes over once its first audio is decoded. Nothing is asked of the server.
+     */
+    private inner class LocalSeek(val encoded: EncodedStream, val targetFrame: Long, window: LocalSeekWindow) :
+        EncodedDecodeListener {
+        val decoding: EncodedDecoding = checkNotNull(decoders).open(encoded.codec, this)
+        var skipFrames = window.skipFrames
+        var remainingFrames = window.totalFrames
+        val decoded = ArrayDeque<FloatArray>()
+        var decodedFrames = 0
+        var finished = false
+        var committed = false
+
+        init {
+            val store = checkNotNull(encoded.store)
+            if (window.prefix.isNotEmpty()) decoding.write(window.prefix, 0, window.prefix.size)
+            decoding.write(store.bytes, window.byteOffset, store.size - window.byteOffset)
+            if (encoded.serverEos != null) decoding.end()
+            decoding.request(config.frames(LOCAL_SEEK_READY_SECONDS) * 2)
+        }
+
+        val ready: Boolean get() = finished || decodedFrames >= config.frames(LOCAL_SEEK_READY_SECONDS)
+
+        override fun decoded(audio: DecodedAudio) {
+            if (committed) return encoded.decoded(audio)
+            val skipped = minOf(skipFrames, audio.frames.toLong()).toInt()
+            skipFrames -= skipped
+            val kept = minOf((audio.frames - skipped).toLong(), remainingFrames).toInt()
+            if (kept <= 0) return
+            remainingFrames -= kept
+            decoded.addLast(audio.samples.copyOfRange(skipped * PcmRing.CHANNELS, (skipped + kept) * PcmRing.CHANNELS))
+            decodedFrames += kept
+        }
+
+        override fun finished() {
+            if (committed) encoded.finished() else finished = true
+        }
+
+        override fun failed(message: String) = encoded.failed(message)
     }
 
     private var pumpingEncoded = false
@@ -233,6 +314,9 @@ class NativePcmEngine(
     private companion object {
         /** A longer file is streamed every time rather than held in memory to be kept. */
         const val MAX_CACHED_TRACK_BYTES = 64 * 1024 * 1024
+
+        /** A seek inside kept bytes cuts over once this much of the new place is decoded. */
+        const val LOCAL_SEEK_READY_SECONDS = 0.1
     }
 
     private data class LoopRange(val startFrame: Long, val endFrame: Long, val short: Boolean) {
@@ -287,7 +371,7 @@ class NativePcmEngine(
 
     /** Whether a seek has not cut over yet; until it does, [timelineFrame] still names the old place. */
     val seekPending: Boolean
-        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null
+        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null || current?.encoded?.localSeek != null
 
     // Inspection for the engine's own tests; production reads only the events.
     @VisibleForTesting
@@ -421,6 +505,7 @@ class NativePcmEngine(
             return
         }
         if (seekWithinBuffer(stream, frame)) return
+        if (seekWithinKeptBytes(stream, frame)) return
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
         pendingSeek = PendingSeek(target.streamId, frame)
@@ -446,6 +531,49 @@ class NativePcmEngine(
         promote(PcmBoundaryKind.QUEUED_NEXT, next.startFrame)
         sink.play()
         return true
+    }
+
+    /** Starts a [LocalSeek] when [frame] lies in bytes the playing stream already received. */
+    private fun seekWithinKeptBytes(stream: Stream, frame: Long): Boolean {
+        val encoded = stream.encoded ?: return false
+        if (loop != null || stream.eosReceived || encoded.closed) return false
+        val store = encoded.store ?: return false
+        val window = encoded.index?.window(store, frame - stream.startFrame) ?: return false
+        // The newest seek wins: an older one, local or on the server, is dropped.
+        encoded.localSeek?.decoding?.close()
+        if (continuity?.kind == StreamKind.SEEK) closeContinuity("seek-replaced")
+        pendingSeek = null
+        encoded.localSeek = LocalSeek(encoded, frame, window)
+        return true
+    }
+
+    /** Cuts over to a [LocalSeek] whose first audio is decoded: the old place stops, the new one plays on. */
+    private fun commitLocalSeek() {
+        val stream = current ?: return
+        val encoded = stream.encoded ?: return
+        val seek = encoded.localSeek ?: return
+        if (!seek.ready) return
+        encoded.decoding.close()
+        encoded.decoding = seek.decoding
+        encoded.skipFrames = seek.skipFrames
+        encoded.remainingFrames = seek.remainingFrames
+        encoded.decoded.clear()
+        encoded.decoded.addAll(seek.decoded)
+        encoded.decodedHeadFrame = 0
+        encoded.decodedFrames = seek.decodedFrames
+        encoded.decoderFinished = seek.finished
+        encoded.localCreditFrames = 0
+        encoded.deliveredFrames = 0
+        encoded.localSeek = null
+        seek.committed = true
+        currentRing.clear()
+        stream.inFlightFrames = 0
+        stream.receivedFrames = 0
+        rebuffering = false
+        timelineFrame = seek.targetFrame
+        events(PcmEngineEvent.Boundary(PcmBoundaryKind.SEEK, stream.streamId, stream.streamId, seek.targetFrame))
+        refillCredit(stream)
+        pumpEncoded(stream)
     }
 
     /** The worklet's `set-loop` with `active: false`: a replay in progress resumes the track after the loop. */
@@ -512,7 +640,7 @@ class NativePcmEngine(
             is PcmServerEvent.Eos -> stream.encoded?.let { encoded ->
                 if (encoded.serverEos != null) return
                 encoded.serverEos = event
-                encoded.decoding.end()
+                encoded.end()
                 keepInCache(stream, encoded)
                 finishEncodedWhenDrained(stream)
             } ?: acceptEos(stream, event)
@@ -572,11 +700,7 @@ class NativePcmEngine(
                 stream.nextSequence += 1
                 encoded.outstandingBytes -= frame.payloadLength
                 encoded.receivedBytes += frame.payloadLength
-                encoded.decoding.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
-                encoded.recording?.let { recording ->
-                    if (recording.size() + frame.payloadLength > MAX_CACHED_TRACK_BYTES) encoded.recording = null
-                    else recording.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
-                }
+                encoded.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
                 refillEncodedBytes(stream)
             }
         }
@@ -696,6 +820,7 @@ class NativePcmEngine(
      */
     fun render(maxFrames: Int): Int {
         if (failed || maxFrames <= 0) return 0
+        commitLocalSeek()
         commitPreparedSeek()
         val head = current ?: return 0
         if (pausing) pausing = !sink.fadeOutSettled()
@@ -874,10 +999,7 @@ class NativePcmEngine(
                 checkNotNull(event.initialCreditBytes).toInt(),
             )
             stream.encoded = encoded
-            // A stream from the track's first frame is the whole file: it may be kept for next time.
-            if (cache != null && stream.startFrame == 0L && stream.track.cacheKey != null) {
-                encoded.recording = java.io.ByteArrayOutputStream()
-            }
+            encoded.keepBytes()
             refillEncodedBytes(stream)
         }
         if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
@@ -985,9 +1107,9 @@ class NativePcmEngine(
 
     /** Keeps a whole encoded track on the device once every byte arrived. */
     private fun keepInCache(stream: Stream, encoded: EncodedStream) {
-        val bytes = encoded.recording?.toByteArray() ?: return
-        encoded.recording = null
+        val store = encoded.store ?: return
         val key = stream.track.cacheKey ?: return
+        val bytes = store.copyOfRange(0, store.size)
         cache?.store(key, CachedTrack(encoded.codec.wire, config.sampleRate, encoded.initialSkipFrames, encoded.initialTotalFrames, bytes))
     }
 
@@ -1007,8 +1129,9 @@ class NativePcmEngine(
         val encoded = EncodedStream(stream, codec, cached.skipFrames, cached.totalFrames, initialCreditBytes = 0)
         stream.encoded = encoded
         encoded.receivedBytes = cached.bytes.size.toLong()
-        encoded.decoding.write(cached.bytes, 0, cached.bytes.size)
-        encoded.decoding.end()
+        encoded.keepBytes()
+        encoded.write(cached.bytes, 0, cached.bytes.size)
+        encoded.end()
         encoded.serverEos = PcmServerEvent.Eos(stream.generation, stream.streamId, stream.role.wire, cached.totalFrames, cached.totalFrames)
         if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
         grantInitialCredit(stream)

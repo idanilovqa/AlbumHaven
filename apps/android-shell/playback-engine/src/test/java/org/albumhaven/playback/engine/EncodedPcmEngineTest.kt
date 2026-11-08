@@ -182,4 +182,39 @@ class EncodedPcmEngineTest {
         assertEquals(Run(2, 0, second.frames), harness.sink.runs().last())
         assertEquals(emptyList<String>(), harness.server.violations)
     }
+
+    @Test
+    fun aSeekIntoReceivedAudioPlaysTheExactFrameWithoutTheServer() {
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 30)
+        val harness = PcmHarness(long, encoded = true)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 48_000 }
+        val heard = harness.sink.writtenFrames.toLong()
+        harness.engine.seek(600_000)
+        harness.step()
+        harness.engine.seek(200_000)
+        harness.playToEnd()
+
+        assertEquals(null, harness.failure())
+        assertEquals("both seeks stayed on the device", 1, harness.sent<PcmClientControl.Open>().size)
+        val runs = harness.sink.runs()
+        assertEquals(Run(3, 200_000, long.frames - 200_000), runs.last())
+        assertTrue("the old place played on until the first cutover", runs.first().start == 0L && runs.first().length >= heard)
+        assertEquals(listOf(600_000L, 200_000L), harness.emitted<PcmEngineEvent.Boundary>().map { it.timelineFrame })
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aSeekPastTheReceivedAudioAsksTheServer() {
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 300)
+        val harness = PcmHarness(long, encoded = true)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 48_000 }
+        // Five minutes of float audio is far more than the bytes credited so far.
+        harness.engine.seek(long.frames - 48_000)
+        harness.playToEnd()
+
+        assertEquals(listOf(0L, long.frames - 48_000), harness.sent<PcmClientControl.Open>().map { it.startFrame })
+        assertEquals(Run(3, long.frames - 48_000, 48_000), harness.sink.runs().last())
+    }
 }

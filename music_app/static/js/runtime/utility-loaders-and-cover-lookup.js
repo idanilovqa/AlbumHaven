@@ -27,6 +27,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     && pendingCompleteLoad.problematicSummaryRequestToken
       === Number(state.utility.problematicSummaryRequestToken || 0)
   ) {
+    // Returning to the tab while the complete list loads shows the first page
+    // it already has, not the tab shell's "Loading..." until the list completes.
+    if (state.utility.loaded && shouldRenderInitialPage()) renderUtilityModalContent();
     return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -143,12 +144,14 @@ class CoverPreviewBackfill:
                 source_path.parent / ".album-haven" / "cover_variants",
                 source_path.parent / ".album-haven" / "v1" / "cover_variants",
             ):
-                if not cache_root.is_dir():
-                    continue
-                for preview_path in cache_root.rglob("*"):
-                    if preview_path.is_file():
-                        recorder(source_path, preview_path)
-                        recorded += 1
+                # os.walk skips folders that vanish mid-walk (concurrent variant
+                # cleanup); rglob aborted the whole relocation inventory instead.
+                for folder, _subfolders, file_names in os.walk(cache_root):
+                    for file_name in file_names:
+                        preview_path = Path(folder) / file_name
+                        if preview_path.is_file():
+                            recorder(source_path, preview_path)
+                            recorded += 1
             if self._data_dir and cover_revision:
                 preview_path = find_existing_cover_display_variant(
                     source_path,

@@ -388,6 +388,42 @@ def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
     assert recorded == [(source, preview)]
 
 
+def test_inventory_existing_previews_skips_a_folder_removed_during_the_walk(tmp_path):
+    import shutil
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    cache_root = source.parent / ".album-haven" / "cover_variants"
+    previews = [cache_root / name / "preview.webp" for name in ("20", "30", "40")]
+    for preview in previews:
+        preview.parent.mkdir(parents=True)
+        preview.write_bytes(b"preview")
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    recorded = []
+    removed = []
+
+    def record(_source_path, preview_path):
+        recorded.append(Path(preview_path))
+        if not removed:
+            # Concurrent cover-variant cleanup removes one folder the walk has
+            # already listed but not entered yet; the other must still be read.
+            removed.append(next(p for p in previews if p != Path(preview_path)))
+            shutil.rmtree(removed[0].parent)
+
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": record,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+
+    assert worker.inventory_existing_previews() == 2
+    assert sorted(recorded) == sorted(p for p in previews if p != removed[0])
+
+
 def test_inventory_existing_previews_does_not_wait_for_foreground_idle(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 

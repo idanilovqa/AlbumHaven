@@ -316,6 +316,12 @@ test('re-rendering an unchanged album keeps its header (and Close) in place', ()
   context.renderTrackModalRelease({ ...album, year: 2002 });
   assert.equal(writes, 2, 'a changed header still re-renders');
   assert.match(html, /2002/);
+
+  // Closing clears the title in place; reopening the same album must restore it.
+  html = '<div class="album-details-header"></div>';
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 3, 'a header edited by another owner is rewritten');
+  assert.match(html, /Stable Album/);
 });
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {

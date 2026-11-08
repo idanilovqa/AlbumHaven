@@ -1982,10 +1982,13 @@ function renderTrackModalRelease(album) {
     });
     // The summary render and the hydrated details usually build the same header;
     // rewriting it replaced Close and the header actions under the pointer
-    // (a close click then waited ~500 ms for the new button).
-    if (renderedTrackModalHeaderHtml.get(els.header) !== headerHtml) {
+    // (a close click then waited ~500 ms for the new button). Other owners edit
+    // the header in place (closing clears the title), so the live DOM must
+    // still be exactly what this render wrote.
+    const rendered = renderedTrackModalHeaderHtml.get(els.header);
+    if (!rendered || rendered.built !== headerHtml || rendered.dom !== els.header.innerHTML) {
       els.header.innerHTML = headerHtml;
-      renderedTrackModalHeaderHtml.set(els.header, headerHtml);
+      renderedTrackModalHeaderHtml.set(els.header, { built: headerHtml, dom: els.header.innerHTML });
       els = getTrackModalElements();
     }
   }

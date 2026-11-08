@@ -6,7 +6,7 @@ import binascii
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
-from functools import partial
+from functools import lru_cache, partial
 import hashlib
 import json
 import logging
@@ -3710,12 +3710,22 @@ class PostgresLibraryBrowseRepository:
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection("relation-alias-maps", copy_payload=False)
             if cacheable
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            return dict(cached.get("relation_views") or {})
+            # A generic deepcopy of ~19k aliases cost ~140 ms per search; the maps
+            # hold only strings and string lists, so copy just those containers.
+            views = cached.get("relation_views") or {}
+            return {
+                **views,
+                "alias_to_canonical": dict(views.get("alias_to_canonical") or {}),
+                "canonical_to_aliases": {
+                    canonical: list(aliases) if isinstance(aliases, list) else aliases
+                    for canonical, aliases in (views.get("canonical_to_aliases") or {}).items()
+                },
+            }
 
         generation = 0
         if cacheable:
@@ -5420,14 +5430,19 @@ def _missing_album_query_pattern(query: str) -> re.Pattern[str]:
     return re.compile(fnmatch.translate("".join(pattern)))
 
 
+@lru_cache(maxsize=131072)
+def _folded_search_identity(name: str) -> str:
+    from music_app.services.view_search import fold_search_accents
+
+    return fold_search_accents(local_inventory_identity_key(name))
+
+
 def _missing_album_search_artist_keys(
     query: str,
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
 ) -> list[str]:
-    from music_app.services.view_search import fold_search_accents
-
-    normalized_query = fold_search_accents(local_inventory_identity_key(query))
+    normalized_query = _folded_search_identity(query)
     query_pattern = (
         _missing_album_query_pattern(query)
         if "%" in query or "_" in query
@@ -5435,7 +5450,8 @@ def _missing_album_search_artist_keys(
     )
 
     def matches(name: str) -> bool:
-        normalized_name = name.casefold() if query_pattern is not None else fold_search_accents(local_inventory_identity_key(name))
+        # Every search walks all ~19k alias names; their folded form never changes.
+        normalized_name = name.casefold() if query_pattern is not None else _folded_search_identity(name)
         return (
             bool(query_pattern.fullmatch(normalized_name))
             if query_pattern is not None

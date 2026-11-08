@@ -2041,3 +2041,5 @@
     inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
     0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
 }
+/* Until the requested section renders, the previous one is never shown (it flashed Problematic Files on mobile). */
+#utility-modal[data-utility-tab-pending] .utility-modal-body { visibility: hidden; }

@@ -2788,3 +2788,38 @@ test('full-summary initial detail supersedes an older in-flight preview detail',
   assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta').name,
     'Canonical initial detail');
 });
+
+test('Settings keeps its body hidden until the requested section renders (no Problematic Files flash)', () => {
+  const attributes = new Map([['data-active-tab', 'problematic-files']]);
+  const overlay = {
+    hidden: true,
+    getAttribute: (name) => (attributes.has(name) ? attributes.get(name) : null),
+    toggleAttribute: (name, force) => { if (force) attributes.set(name, ''); else attributes.delete(name); },
+  };
+  const { context } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame() { return 1; },
+    renderUtilityModalContent() {},
+  });
+  context.state.utility.activeTab = 'appearance';
+  context.openUtilityModal({ forceLoad: false });
+  assert.equal(overlay.hidden, false, 'the shell still paints first');
+  assert.equal(attributes.has('data-utility-tab-pending'), true, 'the stale section is not shown');
+
+  attributes.set('data-active-tab', 'appearance');
+  context.closeUtilityModal();
+  context.openUtilityModal({ forceLoad: false });
+  assert.equal(attributes.has('data-utility-tab-pending'), false, 'reopening the same section shows it at once');
+
+  const runtime = require('node:path').join(__dirname, '../../../music_app');
+  const fs = require('node:fs');
+  assert.match(fs.readFileSync(require('node:path').join(runtime, 'static/js/runtime/utility-renderers-and-actions.js'), 'utf8'),
+    /setAttribute\('data-active-tab', activeTab\);\s*els\.overlay\?\.removeAttribute\?\.\('data-utility-tab-pending'\)/);
+  assert.match(fs.readFileSync(require('node:path').join(runtime, 'static/css/runtime/utilities.css'), 'utf8'),
+    /#utility-modal\[data-utility-tab-pending\] \.utility-modal-body \{ visibility: hidden; \}/);
+});

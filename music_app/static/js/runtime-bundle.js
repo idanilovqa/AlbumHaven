@@ -7216,7 +7216,6 @@ function transitionGalleryMain(action) {
       preserveSidebarState: false,
       fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
-      skipPendingViewTransition: true,
       // Loaded albums may not cover the new sources; load instead of flashing an empty Library.
       showViewTransition: getFilteredGalleryMainModel().totals.albumCount === 0,
       transitionDetail: 'Loading the selected sources...',

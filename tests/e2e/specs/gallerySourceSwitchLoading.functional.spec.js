@@ -58,6 +58,7 @@ test('FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, neve
       await openLibrarySettings();
       before = await settings.readSettings();
       if (before.new_arrivals_roots.length) await settings.add('New Arrivals');
+      // The picker base belongs to this app; a chosen sibling folder reveals where it is.
       await settings.chooseLast('New Arrivals', 'Incoming additional');
       ownedRoot = path.join(path.dirname(await settings.roots('New Arrivals').last().inputValue()), OWNED_FOLDER);
       await writeNewArrivalsAlbum(ownedRoot);
@@ -70,7 +71,7 @@ test('FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, neve
       await galleryActions.goto('/?surface=albums&gallery_scope=all&category=main_library');
       await galleryActions.waitForGalleryReady();
       await expect(gallery.cards.first()).toBeVisible();
-      await expect(galleryActions.hasVisibleAlbum(ALBUM)).resolves.toBe(false);
+      expect(await galleryActions.hasVisibleAlbum(ALBUM)).toBe(false);
       await gallery.openSources();
       await gallery.source('Main Library').click();
       await expect(gallery.source('Main Library')).toHaveAttribute('aria-checked', 'false');

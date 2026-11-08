@@ -38,9 +38,10 @@
   <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
   <script src="/static/js/account.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/admin-members.js?v={{ runtime_asset_version }}" defer></script>
-  <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/path-input.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/admin-server.js?v={{ runtime_asset_version }}" defer></script>
+  {# Settings navigation mounts Settings pages on load, so their scripts (account, members, server) come first. #}
+  <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version }}" defer></script>
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}

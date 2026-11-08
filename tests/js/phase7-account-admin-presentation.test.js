@@ -91,3 +91,15 @@ test('disabled shared buttons are visibly inactive and pointer-hover checkbox ou
   assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
   assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);
 });
+
+test('UI-7: every Settings page script loads before settings navigation mounts the page, on both hosts', () => {
+  // Settings navigation mounts the visible Settings page as soon as it runs; a page script loaded after it
+  // left that page unmounted (the Server page's storage choices stayed disabled in the library document).
+  const index = readProjectFile('music_app', 'templates', 'index.html');
+  const navigation = index.indexOf('/static/js/settings-navigation.js');
+  for (const script of ['/static/js/account.js', '/static/js/admin-members.js', '/static/js/admin-server.js']) {
+    assert.ok(index.indexOf(script) >= 0 && index.indexOf(script) < navigation, `${script} loads before settings navigation`);
+  }
+  const server = readProjectFile('music_app', 'templates', 'admin-server.html');
+  assert.ok(server.indexOf('partials/admin-ui-assets.html') < server.indexOf('/static/js/settings-navigation.js'), 'the direct Server page loads admin-server.js first');
+});

@@ -82,6 +82,7 @@ class KnownTrackSampleRates extends Map {
 }
 
 function createEngineHarness(options = {}) {
+  const intervals = [];
   const sockets = [];
   const contexts = [];
   const nodes = [];
@@ -294,6 +295,9 @@ function createEngineHarness(options = {}) {
     performance: window.performance,
     queueMicrotask,
     setTimeout: scheduleTimeout,
+    // Intervals only run when a test ticks them.
+    setInterval: (callback, delay) => intervals.push({ callback, delay }),
+    clearInterval: () => {},
     state: {
       player: {
         streaming: {
@@ -364,6 +368,7 @@ function createEngineHarness(options = {}) {
     context,
     api,
     contexts,
+    intervals,
     dateNow: () => FakeDate.now(),
     engine: context.state.player.streaming,
     nodes,
@@ -6461,4 +6466,138 @@ test('a refused switch restarts cleanly at the track rate', async () => {
   assert.equal(harness.sent('open').at(-1).role, 'current');
   assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
   assert.equal(started.track.path, makeTrack('02.mp3').path);
+});
+
+// The fake stream: 100 bytes per 1,152-sample MP3 frame, every byte naming its own offset.
+function fakeSeekTable(open, frames = 2_000_000) {
+  const samples = [];
+  for (let sample = 0; sample < frames; sample += 1_152) samples.push(sample);
+  return {
+    type: 'seek-table',
+    generation: open.generation,
+    streamId: open.streamId,
+    prefixBytes: 0,
+    prerollFrames: 8 * 1_152,
+    offsets: [...samples.map((_, index) => index * 100), samples.length * 100],
+    samples: [...samples, frames],
+  };
+}
+
+function recordingDecoders() {
+  const decoders = [];
+  const create = () => {
+    const decoder = { inputs: [], ready: Promise.resolve(), free() {} };
+    decoder.decode = (bytes) => {
+      decoder.inputs.push(bytes);
+      const samplesDecoded = Math.floor(bytes.length / 100) * 1_152;
+      const left = new Float32Array(samplesDecoded);
+      return { channelData: [left, left], samplesDecoded };
+    };
+    decoders.push(decoder);
+    return decoder;
+  };
+  return { decoders, create };
+}
+
+async function startLocallySeekable(harness, receivedBytes) {
+  const open = await startEncoded(harness, makeTrack('01.mp3'), {
+    skipFrames: 0, totalFrames: 2_000_000, initialCreditBytes: 400_000,
+  });
+  harness.sockets[0].receive(fakeSeekTable(open));
+  harness.sockets[0].receive(encodedFrame(open, 0, Uint8Array.from({ length: receivedBytes }, (_, index) => index % 251)));
+  await harness.settle();
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: open.generation, streamId: open.streamId, renderedFrame: 0, contextTime: 1,
+  });
+  return open;
+}
+
+test('a seek inside the received bytes decodes them here, from the seek table, with no round trip', async () => {
+  const { decoders, create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  const open = await startLocallySeekable(harness, 300_000);
+  assert.equal(open.seekTable, true);
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(30);
+  await harness.settle();
+
+  assert.equal(harness.sent('open').length, opens, 'the server is not asked for the seek');
+  const local = harness.engine.roles.continuity;
+  assert.equal(local.local, true);
+  assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, local.streamId);
+  // 30 s is sample 1,440,000: decoding starts eight frames early, at frame 1,242's bytes.
+  const fed = decoders.at(-1).inputs;
+  assert.equal(fed[0].length, 300_000 - 124_200);
+  assert.equal(fed[0][0], 124_200 % 251);
+
+  harness.nodes[0].port.dispatch({
+    type: 'seek-boundary',
+    generation: open.generation,
+    outgoingStreamId: open.streamId,
+    incomingStreamId: local.streamId,
+    renderedFrame: 128,
+    timelineFrame: 1_440_000,
+    silentFrames: 0,
+  });
+  assert.equal(harness.engine.roles.current, local);
+  assert.equal(harness.sent('promote').length, 0, 'the server stream stays its current one');
+  assert.equal(harness.engine.pendingPromotion, null);
+
+  // Bytes the server keeps sending reach the role now reading the stream.
+  harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
+  await harness.settle();
+  assert.equal(decoders.at(-1).inputs.at(-1).length, 100);
+  // Its credits still name the server's stream.
+  assert.ok(harness.sent('credit').every(credit => credit.streamId === open.streamId));
+});
+
+test('a seek past the received bytes still asks the server', async () => {
+  const { create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  await startLocallySeekable(harness, 100_000);
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(30);
+
+  assert.equal(harness.sent('open').length, opens + 1);
+  assert.equal(harness.sent('open').at(-1).startFrame, 1_440_000);
+  assert.notEqual(harness.engine.roles.continuity.local, true);
+});
+
+test('the web lookup answers the shared seek-table vectors exactly as the server does', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'playback-seek-table-v1.json'), 'utf8'));
+  const harness = encodedHarness();
+  let checked = 0;
+  for (const section of [fixture, fixture.flac]) {
+    for (const vector of section.cases) {
+      const window = harness.context.lookupStreamingSeekTable(section.table, {
+        initialSkip: section.initialSkip,
+        initialTotal: section.initialTotal,
+        streamStart: section.streamStart,
+        target: vector.target,
+        receivedBytes: vector.receivedBytes,
+        ended: vector.ended,
+      });
+      assert.deepEqual(window && JSON.parse(JSON.stringify(window)), vector.window, JSON.stringify(vector));
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 10);
+});
+
+test('an open socket sends a keepalive every 25 seconds and stops with its socket', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  await harness.settle();
+  const keepalive = harness.intervals.find(({ delay }) => delay === 25_000);
+  assert.ok(keepalive);
+
+  keepalive.callback();
+  assert.equal(harness.sent('keepalive').length, 1);
+  assert.deepEqual(Object.keys(harness.sent('keepalive')[0]), ['type']);
+
+  harness.engine.socket = null;
+  keepalive.callback();
+  assert.equal(harness.sent('keepalive').length, 1);
 });

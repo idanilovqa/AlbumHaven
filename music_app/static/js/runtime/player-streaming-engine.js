@@ -23,6 +23,10 @@ const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+// The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
+const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
+const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
+const STREAMING_KEEPALIVE_INTERVAL_MS = 25_000;
 const STREAMING_RECENT_STALL_MS = 60_000;
 const STREAMING_REQUIRED_HEADROOM = 1.5;
 const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
@@ -100,7 +104,25 @@ function streamingRoleForId(streamId) {
   const engine = streamingEngineState();
   if (engine.roles.current?.streamId === streamId) return engine.roles.current;
   if (engine.roles.continuity?.streamId === streamId) return engine.roles.continuity;
+  // A role seeking inside received bytes reads the server stream it was cut from.
+  if (engine.roles.current?.encoded?.wire.streamId === streamId) return engine.roles.current;
   return null;
+}
+
+// Closes the server stream a role reads. A local seek role that is not yet current reads the
+// current role's stream, which stays open; it only stops reading it.
+function closeStreamingRoleStream(roleState, reason) {
+  const wire = roleState.encoded?.wire;
+  if (roleState.local && roleState.role === 'continuity') {
+    wire?.followers.delete(roleState.encoded);
+    return true;
+  }
+  return sendStreamingControl({
+    type: 'close',
+    generation: roleState.generation,
+    streamId: wire?.streamId ?? roleState.streamId,
+    reason,
+  });
 }
 
 function streamingWireRoleAccepted(roleState, wireRole) {
@@ -474,13 +496,7 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   const engine = streamingEngineState();
   const continuity = engine.roles.continuity;
   if (!continuity) return true;
-  const accepted = sendStreamingControl({
-    type: 'close',
-    generation: continuity.generation,
-    streamId: continuity.streamId,
-    reason,
-  });
-  if (!accepted) return false;
+  if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
     if (options?.kind === 'queued-next') {
@@ -542,6 +558,18 @@ function sendStreamingControl(message) {
     'control-send-error',
   );
   return false;
+}
+
+// A quiet socket (a long pause, a full buffer) keeps its proxies and NAT entries, as Android's
+// ping does; the server answers nothing.
+function keepStreamingSocketAlive(socket) {
+  const timer = setInterval(() => {
+    if (streamingEngineState().socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      clearInterval(timer);
+      return;
+    }
+    sendStreamingControl({ type: 'keepalive' });
+  }, STREAMING_KEEPALIVE_INTERVAL_MS);
 }
 
 function flushStreamingControls() {
@@ -752,6 +780,16 @@ function handleStreamingControl(message) {
     handleStreamingRateMismatch(roleState, message);
     return;
   }
+  if (message.type === 'seek-table') {
+    const table = parseStreamingSeekTable(message);
+    if (!table) {
+      failStreamingEngine('socket', { message: 'Invalid seek table' }, 'control-protocol-error');
+      return;
+    }
+    if (roleState.encoded?.wire.streamId === message.streamId) roleState.encoded.wire.table = table;
+    else roleState.pendingSeekTable = table;
+    return;
+  }
   if (message.type === 'metadata') {
     if (!validateStreamingMetadata(message, roleState)) {
       failStreamingEngine(
@@ -827,8 +865,13 @@ function handleStreamingControl(message) {
     }
     if (roleState.eosReceived) return;
     if (roleState.encoded && !roleState.encoded.delivered) {
-      roleState.encoded.eos = message;
-      void pumpStreamingEncodedRole(roleState);
+      const { wire } = roleState.encoded;
+      wire.eos = message;
+      for (const follower of [...wire.followers]) {
+        if (follower.delivered || !streamingRoleIsLive(follower.roleState)) continue;
+        follower.eos = message;
+        void pumpStreamingEncodedRole(follower.roleState);
+      }
       return;
     }
     roleState.eosReceived = true;
@@ -1045,21 +1088,94 @@ function sweepStreamingEncodedDecoders() {
   }
 }
 
-function createStreamingEncodedRole(roleState, message) {
+// One server stream's bytes as they arrive, kept so a seek inside them decodes here by the
+// stream's seek table (playback_seek_table.lookup, pinned by tests/fixtures/playback-seek-table-v1.json).
+function createStreamingWire(roleState, message) {
+  return {
+    streamId: roleState.streamId,
+    streamStart: roleState.startFrame,
+    initialSkip: message.skipFrames,
+    initialTotal: message.totalFrames,
+    nextSequence: 0,
+    creditedBytes: Number(message.initialCreditBytes) || 0,
+    lastArrivalMs: 0,
+    bytes: new Uint8Array(STREAMING_KEPT_INITIAL_BYTES),
+    size: 0,
+    table: roleState.pendingSeekTable || null,
+    eos: null,
+    followers: new Set(),
+  };
+}
+
+function keepStreamingWireBytes(wire, chunk) {
+  if (!wire.bytes) return;
+  if (wire.size + chunk.length > STREAMING_KEPT_MAX_BYTES) {
+    wire.bytes = null;
+    return;
+  }
+  if (wire.size + chunk.length > wire.bytes.length) {
+    let capacity = wire.bytes.length;
+    while (capacity < wire.size + chunk.length) capacity *= 2;
+    const grown = new Uint8Array(capacity);
+    grown.set(wire.bytes.subarray(0, wire.size));
+    wire.bytes = grown;
+  }
+  wire.bytes.set(chunk, wire.size);
+  wire.size += chunk.length;
+}
+
+function upperBoundStreamingSample(samples, value) {
+  let low = 0;
+  let high = samples.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (samples[middle] <= value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+// `playback_seek_table.lookup`: where `target` decodes from in the bytes received so far.
+function lookupStreamingSeekTable(table, { initialSkip, initialTotal, streamStart, target, receivedBytes, ended }) {
+  const offsetInStream = target - streamStart;
+  if (offsetInStream < 0 || offsetInStream >= initialTotal) return null;
+  const kept = initialSkip + offsetInStream;
+  const entry = Math.max(0, upperBoundStreamingSample(table.samples, Math.max(0, kept - table.prerollFrames)) - 1);
+  const after = upperBoundStreamingSample(table.samples, kept);
+  if (after >= table.samples.length || (table.offsets[after] > receivedBytes && !ended)) return null;
+  return {
+    prefixBytes: table.prefixBytes,
+    byteOffset: table.offsets[entry],
+    skipFrames: kept - table.samples[entry],
+    totalFrames: initialTotal - offsetInStream,
+  };
+}
+
+function parseStreamingSeekTable(message) {
+  const { prefixBytes, prerollFrames, offsets, samples } = message;
+  const integers = values => Array.isArray(values) && values.length > 0
+    && values.every((value, index) => Number.isSafeInteger(value) && value >= 0
+      && (index === 0 || value >= values[index - 1]));
+  if (!Number.isSafeInteger(prefixBytes) || prefixBytes < 0
+      || !Number.isSafeInteger(prerollFrames) || prerollFrames < 0
+      || !integers(offsets) || !integers(samples) || offsets.length !== samples.length) return null;
+  return { prefixBytes, prerollFrames, offsets, samples };
+}
+
+function createStreamingEncodedRole(roleState, message, wire = createStreamingWire(roleState, message)) {
   const engine = streamingEngineState();
   const decoder = createStreamingDecoder(message.codec);
   const encoded = {
     codec: message.codec,
     decoder,
     ready: false,
+    roleState,
+    wire,
     skipFrames: message.skipFrames,
     remainingFrames: message.totalFrames,
     deliveredFrames: 0,
     queue: [],
     queuedBytes: 0,
-    creditedBytes: Number(message.initialCreditBytes) || 0,
-    nextWireSequence: 0,
-    lastArrivalMs: 0,
     localCreditFrames: 0,
     decodedPcm: [],
     decodedFrames: 0,
@@ -1070,6 +1186,7 @@ function createStreamingEncodedRole(roleState, message) {
   };
   engine.encodedStreams ??= new Set();
   engine.encodedStreams.add(encoded);
+  wire.followers.add(encoded);
   roleState.encoded = encoded;
   sweepStreamingEncodedDecoders();
   decoder.ready.then(() => {
@@ -1099,17 +1216,19 @@ function refillStreamingEncodedBytes(roleState) {
   if (encoded.eos || roleState.closed) return;
   // The stream being left must not compete with the audio the listener just asked for.
   if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
+  const { wire } = encoded;
+  if (wire.eos) return;
   const missingBytes = streamingEncodedBufferBytes(roleState)
-    - encoded.queuedBytes - encoded.creditedBytes;
+    - encoded.queuedBytes - wire.creditedBytes;
   if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
-      || encoded.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
+      || wire.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
   const frames = STREAMING_ENCODED_CREDIT_BYTES;
   if (sendStreamingControl({
     type: 'credit',
     generation: roleState.generation,
-    streamId: roleState.streamId,
+    streamId: wire.streamId,
     frames,
-  })) encoded.creditedBytes += frames;
+  })) wire.creditedBytes += frames;
 }
 
 function appendStreamingDecodedAudio(encoded, decoded) {
@@ -1192,6 +1311,8 @@ function finishStreamingEncodedRole(roleState) {
     - encoded.remainingFrames;
   const eos = {
     ...encoded.eos,
+    streamId: roleState.streamId,
+    role: roleState.role,
     emittedFrames: encoded.deliveredFrames,
     authoritativeTotalFrames: startFrame + encoded.deliveredFrames,
   };
@@ -1239,32 +1360,40 @@ function handleStreamingEncodedBytes(view, buffer, failProtocol) {
     return;
   }
   const roleState = streamingRoleForId(streamId);
-  const encoded = roleState?.encoded;
-  if (!encoded || generation !== engine.generation || generation !== roleState.generation
-      || sequence !== encoded.nextWireSequence) {
+  const wire = roleState?.encoded?.wire;
+  if (!wire || wire.streamId !== streamId || generation !== engine.generation
+      || generation !== roleState.generation || sequence !== wire.nextSequence) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
-  if (byteCount > encoded.creditedBytes) {
+  if (byteCount > wire.creditedBytes) {
     failProtocol('frame exceeds granted byte credit');
     return;
   }
   const now = performance.now();
-  if (encoded.lastArrivalMs) {
+  if (wire.lastArrivalMs) {
     engine.transferBytes = (Number(engine.transferBytes) || 0) + byteCount;
-    engine.transferMs = (Number(engine.transferMs) || 0) + (now - encoded.lastArrivalMs);
+    engine.transferMs = (Number(engine.transferMs) || 0) + (now - wire.lastArrivalMs);
     if (engine.transferBytes > STREAMING_TRANSFER_WINDOW_BYTES) {
       engine.transferBytes /= 2;
       engine.transferMs /= 2;
     }
   }
-  encoded.nextWireSequence += 1;
-  encoded.creditedBytes -= byteCount;
-  encoded.lastArrivalMs = encoded.creditedBytes > 0 ? now : 0;
-  encoded.queue.push(new Uint8Array(buffer, 24, byteCount));
-  encoded.queuedBytes += byteCount;
-  refillStreamingEncodedBytes(roleState);
-  void pumpStreamingEncodedRole(roleState);
+  wire.nextSequence += 1;
+  wire.creditedBytes -= byteCount;
+  wire.lastArrivalMs = wire.creditedBytes > 0 ? now : 0;
+  const chunk = new Uint8Array(buffer, 24, byteCount);
+  keepStreamingWireBytes(wire, chunk);
+  for (const follower of [...wire.followers]) {
+    if (!streamingRoleIsLive(follower.roleState)) {
+      wire.followers.delete(follower);
+      continue;
+    }
+    follower.queue.push(chunk);
+    follower.queuedBytes += byteCount;
+    refillStreamingEncodedBytes(follower.roleState);
+    void pumpStreamingEncodedRole(follower.roleState);
+  }
 }
 
 function handleStreamingPcm(buffer) {
@@ -1508,7 +1637,8 @@ function handleStreamingWorkletMessage(message) {
       active: Boolean(engine.pendingContinuityTrack),
     });
     refreshStreamingActiveRoles();
-    const promoted = sendStreamingControl({
+    // A local seek role reads the stream the server still plays as current: nothing to promote.
+    const promoted = continuity.local || sendStreamingControl({
       type: 'promote',
       generation: message.generation,
       streamId: continuity.streamId,
@@ -1520,6 +1650,10 @@ function handleStreamingWorkletMessage(message) {
     }
     if (pendingSeek.kind === 'replacement') {
       pendingSeek.resolve?.(continuity);
+    }
+    if (continuity.local) {
+      engine.pendingPromotion = null;
+      maybeSchedulePendingStreamingContinuity();
     }
     publishStreamingDiagnostics();
     return;
@@ -1993,7 +2127,10 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
       socket.binaryType = 'arraybuffer';
-      socket.onopen = flushStreamingControls;
+      socket.onopen = () => {
+        flushStreamingControls();
+        keepStreamingSocketAlive(socket);
+      };
       socket.onerror = (event) => {
         if (engine.socket !== socket) return;
         const detail = event?.error?.message || event?.message || 'Playback socket error';
@@ -2119,7 +2256,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     startFrame,
     sampleRate: engine.sampleRate,
     durationSeconds: Number(track.durationSeconds) || 0,
-    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs } : {}),
+    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs, seekTable: true } : {}),
     ...(roleState.quality === '320' ? { quality: '320' } : {}),
   });
   if (!accepted) {
@@ -2131,6 +2268,67 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     refreshStreamingActiveRoles();
     return null;
   }
+  return roleState;
+}
+
+// A seek inside the bytes the current stream already received decodes here, with no round trip:
+// a continuity role reading the same server stream from the seek table's window.
+function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
+  const engine = streamingEngineState();
+  const wire = current.encoded?.wire;
+  if (!wire?.bytes || !wire.table || engine.pendingSeek) return null;
+  const window = lookupStreamingSeekTable(wire.table, {
+    initialSkip: wire.initialSkip,
+    initialTotal: wire.initialTotal,
+    streamStart: wire.streamStart,
+    target: startFrame,
+    receivedBytes: wire.size,
+    ended: Boolean(wire.eos),
+  });
+  if (!window) return null;
+  const roleState = {
+    role: 'continuity',
+    track: current.track,
+    generation: engine.generation,
+    streamId: engine.nextStreamId,
+    startFrame,
+    renderedFrameBase: null,
+    openedAtMs: performance.now(),
+    nextSequence: 0,
+    metadataAccepted: true,
+    local: true,
+    continuityOptions,
+    quality: current.quality,
+    backingCapacityFrames: ensureStreamingBackingCapacities().continuity,
+    provisionalTotalFrames: current.provisionalTotalFrames,
+    timelineStartFrame: startFrame,
+  };
+  roleState.targetBufferFrames = Math.min(
+    streamingRoleCapacityFrames(roleState),
+    streamingFrames(STREAMING_SEEK_PREPARE_SECONDS),
+    Math.max(0, roleState.provisionalTotalFrames - startFrame),
+  );
+  roleState.continuityIdentity = streamingContinuityIdentity(current.track, continuityOptions);
+  engine.nextStreamId += 1;
+  engine.roles.continuity = roleState;
+  engine.pcmEvidenceByStream ??= new Map();
+  engine.pcmEvidenceByStream.set(roleState.streamId, createStreamingPcmEvidence(roleState));
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  engine.diagnostics.localSeeks = (Number(engine.diagnostics.localSeeks) || 0) + 1;
+  refreshStreamingActiveRoles();
+  createStreamingEncodedRole(roleState, {
+    codec: current.encoded.codec,
+    skipFrames: window.skipFrames,
+    totalFrames: window.totalFrames,
+  }, wire);
+  const { encoded } = roleState;
+  const kept = wire.bytes;
+  if (window.prefixBytes > 0) encoded.queue.push(kept.slice(0, window.prefixBytes));
+  if (wire.size > window.byteOffset) encoded.queue.push(kept.slice(window.byteOffset, wire.size));
+  encoded.queuedBytes = encoded.queue.reduce((total, chunk) => total + chunk.length, 0);
+  if (wire.eos) encoded.eos = wire.eos;
+  grantStreamingInitialCredit(roleState);
   return roleState;
 }
 
@@ -2268,13 +2466,7 @@ async function startBrowserStreamingTrack(track, {
       || engine.lifecycleEpoch !== lifecycleEpoch) return null;
   const oldRoles = [engine.roles.current, engine.roles.continuity].filter(Boolean);
   for (const roleState of oldRoles) {
-    const accepted = sendStreamingControl({
-      type: 'close',
-      generation: roleState.generation,
-      streamId: roleState.streamId,
-      reason: 'replacement',
-    });
-    if (!accepted) return null;
+    if (!closeStreamingRoleStream(roleState, 'replacement')) return null;
   }
   engine.generation += 1;
   engine.positionFacadeAtMs = 0;
@@ -2567,13 +2759,7 @@ async function seekBrowserStreaming(seconds) {
     ? { ...(pendingQueuedOptions || activeQueuedOptions) }
     : null;
   if (staleContinuity) {
-    const accepted = sendStreamingControl({
-      type: 'close',
-      generation: staleContinuity.generation,
-      streamId: staleContinuity.streamId,
-      reason: 'seek-replaced',
-    });
-    if (!accepted) return null;
+    if (!closeStreamingRoleStream(staleContinuity, 'seek-replaced')) return null;
     engine.node.port.postMessage({
       type: 'drop-continuity',
       generation: staleContinuity.generation,
@@ -2590,9 +2776,9 @@ async function seekBrowserStreaming(seconds) {
   engine.pendingContinuityOptions = queuedOptions;
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
-  const replacement = openStreamingRole('continuity', currentTrack, startFrame, {
-    kind: 'seek', startSeconds, endSeconds: startSeconds,
-  });
+  const seekOptions = { kind: 'seek', startSeconds, endSeconds: startSeconds };
+  const replacement = openLocalStreamingSeekRole(current, startFrame, seekOptions)
+    || openStreamingRole('continuity', currentTrack, startFrame, seekOptions);
   if (!replacement) return null;
   engine.pendingSeek = {
     generation: engine.generation,

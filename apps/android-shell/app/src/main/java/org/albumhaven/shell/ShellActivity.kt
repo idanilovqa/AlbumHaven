@@ -19,6 +19,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -412,7 +413,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
-        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG || ShellChannel.tracesPlayback)
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -568,6 +569,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     private inner class ShellChromeClient : WebChromeClient() {
+        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+            val text = message.message()
+            if (!ShellChannel.tracesPlayback || !text.startsWith(PLAYBACK_TRACE)) return false
+            Log.w(TAG, text)
+            return true
+        }
+
         override fun onShowFileChooser(
             webView: WebView,
             filePathCallback: ValueCallback<Array<Uri>>,
@@ -587,6 +595,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private companion object {
         const val TAG = "AlbumHavenShell"
+        const val PLAYBACK_TRACE = "[playback-stop]"
         const val BRIDGE_OBJECT = "AlbumHavenBridge"
         const val STATE_ORIGIN = "shell_origin"
         const val STATE_URL = "shell_url"

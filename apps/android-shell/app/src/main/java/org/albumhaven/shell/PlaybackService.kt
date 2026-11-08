@@ -322,7 +322,7 @@ class PlaybackService : MediaLibraryService() {
                     loop.run()
                 }, "AlbumHavenPlayback").start()
             },
-            failures = { failure -> if (BuildConfig.DEBUG) Log.w(TAG, "Playback stopped", failure) },
+            failures = { failure -> if (BuildConfig.DEBUG || ShellChannel.tracesPlayback) Log.w(TAG, "Playback stopped", failure) },
             startGate = focusPolicy,
             // Path-free and once per start, so release builds log it too; off the playback thread.
             startTimings = { line -> main.post { Log.i(StartTiming.LOG_TAG, line) } },
@@ -351,6 +351,7 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun onControllerEvent(event: NativePlaybackEvent) {
+        if (ShellChannel.tracesPlayback) traceStop(event)
         if (event is NativePlaybackEvent.CurrentItem && event.reason == CurrentItemReason.LOAD) {
             queueLoadedAtMs = SystemClock.elapsedRealtime()
         }
@@ -360,6 +361,16 @@ class PlaybackService : MediaLibraryService() {
         saveRestorable(event)
         eventListener?.invoke(event)
         refreshAfterFailure(event)
+    }
+
+    private fun traceStop(event: NativePlaybackEvent) {
+        val line = when (event) {
+            is NativePlaybackEvent.State -> "state ${event.snapshot.state.wire} from ${event.source}"
+            is NativePlaybackEvent.Ownership -> "ownership ${event.ownership}"
+            is NativePlaybackEvent.Error -> "error ${event.code}"
+            else -> return
+        }
+        Log.w(TAG, "[playback-stop] $line")
     }
 
     // ---- Resumption ----

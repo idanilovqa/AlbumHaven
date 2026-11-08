@@ -9,6 +9,12 @@ enum class ShellChannel(val wireName: String) {
 
     companion object {
         fun fromWireName(name: String): ShellChannel = entries.first { it.wireName == name }
+
+        /**
+         * The sandbox build logs playback stops at warning level and lets its page be inspected over
+         * USB, so a stop nobody asked for can be traced on the owner's phone (November 7, 2026).
+         */
+        val tracesPlayback: Boolean get() = BuildConfig.CHANNEL == SANDBOX.wireName
     }
 }
 

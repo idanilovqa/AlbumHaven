@@ -587,8 +587,15 @@ function sendAndroidNativeTransport(name, payload = {}) {
   return sendAndroidBridgeCommand(name, payload).then(() => true);
 }
 
+// The sandbox app writes these lines to the phone's log, so a stop nobody asked for can be traced.
+function traceAndroidPlaybackStop(action) {
+  if (!hasAndroidCapability('sandbox.select.v1')) return;
+  console.warn(`[playback-stop] ${action}\n${new Error().stack}`);
+}
+
 function pauseAndroidNativePlayback() {
   const native = androidNativePlayback;
+  traceAndroidPlaybackStop('pause');
   // As the web engine's pause supersedes its pending start, a pause stops a pending switch, so
   // Android never plays the track the web does not show. The next play restarts the shown one.
   if (native.startingRevision && native.startingRevision === native.revision) {
@@ -685,6 +692,7 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   const native = androidNativePlayback;
   // A media session outlives the document: the next document of this origin re-attaches to it.
   if (reason === 'unload' && hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY)) return;
+  traceAndroidPlaybackStop(`stop ${reason}`);
   native.revision += 1;
   native.ownerIntent = false;
   native.items = [];

@@ -728,13 +728,11 @@ function openGalleryArtistInfo(anchor) {
 }
 
 // A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
-function resolveSplitAlbumsSwitchMode(control, event) {
-  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
-  const rect = control.querySelector?.('.gallery-switch__track')?.getBoundingClientRect?.();
-  if (rect?.width > 0 && event.detail !== 0 && event.clientX >= rect.left && event.clientX <= rect.right) {
-    return GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * 3)))];
-  }
-  return GALLERY_SPLIT_ALBUM_MODES[(current + 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+// Owner (11-08): every click, on the knob, the track or the label, moves to the next position in the cycle
+// Show -> Separate -> Hide -> Show, so three clicks visit every position once.
+function resolveSplitAlbumsSwitchMode() {
+  const current = Math.max(0, GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums));
+  return GALLERY_SPLIT_ALBUM_MODES[(current + GALLERY_SPLIT_ALBUM_MODES.length - 1) % GALLERY_SPLIT_ALBUM_MODES.length];
 }
 
 function handleSplitAlbumsSwitchKeydown(event) {
@@ -770,7 +768,7 @@ function handleGalleryMainClick(event) {
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
   if (splitAlbums) {
     event.preventDefault();
-    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode(splitAlbums, event) });
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode() });
     return true;
   }
   const type = event.target.closest?.('[data-gallery-album-type]');

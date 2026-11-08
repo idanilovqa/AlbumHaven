@@ -52,7 +52,8 @@
 /* Three-position variant: 0 (left, off), 1 (middle, palette accent), 2 (right, on). */
 .gallery-switch--tri .gallery-switch__track { width: 54px; flex-basis: 54px; }
 .gallery-switch--tri[data-switch-position="0"] { color: var(--appearance-muted, var(--muted)); }
-.gallery-switch--tri[data-switch-position="1"] .gallery-switch__track { background: var(--appearance-accent, #55c7ff); }
+/* Owner: the middle (Separate) position has its own colour, distinct from the palette accent and the on colour. */
+.gallery-switch--tri[data-switch-position="1"] .gallery-switch__track { background: var(--gallery-switch-middle, #e0a33a); }
 .gallery-switch--tri[data-switch-position="1"] .gallery-switch__knob { transform: translateX(17px); }
 .gallery-switch--tri[data-switch-position="2"] .gallery-switch__track { background: var(--appearance-play, #4bc173); }
 .gallery-switch--tri[data-switch-position="2"] .gallery-switch__knob { transform: translateX(34px); }

@@ -793,7 +793,7 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   });
   assert.deepEqual(plain(actions), [
     { type: 'toggle-featured-on' },
-    { type: 'set-split-albums', mode: 'hide' },
+    { type: 'set-split-albums', mode: 'separate' },
   ]);
   assert.equal(prevented.length, 2);
 });
@@ -1970,4 +1970,17 @@ test('reopening a family drawer cancels the earlier closing callbacks', () => {
   staleFinish();
   assert.equal(run.panel.hidden, false, 'a stale close cannot finish the new animation');
   assert.equal(run.hiddenWrites(), writes);
+});
+
+test('ID-012: each click on the Split Albums switch moves Show -> Separate -> Hide -> Show', () => {
+  const context = loadRuntime();
+  const state = { splitAlbums: 'show' };
+  context.ensureGalleryMainState = () => state;
+  const visited = [];
+  for (let click = 0; click < 3; click += 1) {
+    state.splitAlbums = context.resolveSplitAlbumsSwitchMode();
+    visited.push(state.splitAlbums);
+  }
+  assert.deepEqual(visited, ['separate', 'hide', 'show']);
+  assert.match(galleryMainCssSource, /data-switch-position="1"\] \.gallery-switch__track \{ background: var\(--gallery-switch-middle, #e0a33a\); \}/);
 });

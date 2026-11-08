@@ -4389,3 +4389,46 @@ def test_progressive_provider_cannot_publish_after_terminal_task(
     assert late_candidate_done.wait(timeout=1)
 
     assert publisher_events[-1] == "fail"
+
+
+def test_remote_cover_preview_is_small_and_served_from_memory_on_reopen(monkeypatch):
+    """Cover Look Up REMOTE cards waited for every full provider image on every open."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from music_app.services import cover_lookup_runtime
+
+    source = BytesIO()
+    Image.new("RGB", (1600, 1200), (40, 80, 120)).save(source, "PNG")
+    downloads = []
+    monkeypatch.setattr(cover_lookup_runtime, "fetch_remote_cover_bytes",
+                        lambda url, **_kwargs: downloads.append(url) or (source.getvalue(), "image/png"))
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_PREVIEW_CACHE", type(cover_lookup_runtime._REMOTE_PREVIEW_CACHE)())
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_PREVIEW_CACHE_BYTES", 0)
+    url = "https://images.example/large-cover.png"
+
+    payload, mime_type = cover_lookup_runtime.fetch_remote_cover_preview(url, user_agent="test")
+    again = cover_lookup_runtime.fetch_remote_cover_preview(url, user_agent="test")
+
+    assert mime_type == "image/jpeg"
+    with Image.open(BytesIO(payload)) as preview:
+        assert max(preview.size) == cover_lookup_runtime._REMOTE_PREVIEW_MAX_EDGE
+    assert len(payload) < len(source.getvalue())
+    assert again == (payload, mime_type)
+    assert downloads == [url]
+
+
+def test_remote_cover_preview_keeps_unreadable_and_failed_images_as_the_provider_sent_them(monkeypatch):
+    from music_app.services import cover_lookup_runtime
+
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_PREVIEW_CACHE", type(cover_lookup_runtime._REMOTE_PREVIEW_CACHE)())
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_PREVIEW_CACHE_BYTES", 0)
+    monkeypatch.setattr(cover_lookup_runtime, "fetch_remote_cover_bytes",
+                        lambda url, **_kwargs: (None, None) if "missing" in url else (b"<svg/>", "image/svg+xml"))
+
+    assert cover_lookup_runtime.fetch_remote_cover_preview("https://images.example/missing.jpg", user_agent="t") == (None, None)
+    assert cover_lookup_runtime.fetch_remote_cover_preview("https://images.example/art.svg", user_agent="t") == (b"<svg/>", "image/svg+xml")
+    assert list(cover_lookup_runtime._REMOTE_PREVIEW_CACHE) == [
+        cover_lookup_runtime.normalize_remote_image_url("https://images.example/art.svg")
+    ]

@@ -546,9 +546,39 @@ def _device_profile_preferences(row: object) -> dict[str, object]:
     return {
         **base,
         "device_profiles": normalize_appearance_device_profiles(
-            values.get("device_section_profiles"), base_preferences=base,
+            _known_device_profile_values(values.get("device_section_profiles")), base_preferences=base,
         ),
     }
+
+
+def _known_device_profile_values(payload: object) -> object:
+    """Stored profiles without values a newer build added.
+
+    Saving stays strict, but a stored profile is read by every deployed build:
+    sandbox3 saved Album "album_art_quality_alert", and builds without that
+    field rejected the whole appearance, so every page fell back to the default
+    blue theme with no source frames.
+    """
+    if not isinstance(payload, Mapping):
+        return payload
+    known: dict[str, object] = {}
+    for profile, profile_value in payload.items():
+        wrapped = isinstance(profile_value, Mapping) and set(profile_value) == {"sections"}
+        sections = profile_value["sections"] if wrapped else profile_value
+        if not isinstance(sections, Mapping):
+            known[profile] = profile_value
+            continue
+        filtered = {}
+        for section, candidate in sections.items():
+            allowed = _DEVICE_SECTION_FIELDS.get(section)
+            if allowed is None:
+                continue
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("values"), Mapping):
+                keep = allowed | ({"loop_control_style"} if section == "player" else set())
+                candidate = {**candidate, "values": {k: v for k, v in candidate["values"].items() if k in keep}}
+            filtered[section] = candidate
+        known[profile] = {"sections": filtered} if wrapped else filtered
+    return known
 
 class PostgresAppearancePreferencesRepository:
     def __init__(

@@ -20889,9 +20889,7 @@ function buildUtilityIntegrationDetail(item) {
   const summary = scrobbleState.summary;
   const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
   const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
-  const lastfmTotal = scrobbleState.loading
-    ? 'Loading...'
-    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const lastfmTotal = formatLastfmTotal(scrobbleState);
   const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
       <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
       <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
@@ -20913,6 +20911,13 @@ function buildUtilityIntegrationDetail(item) {
       ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
       <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section>
       ${submitScrobbles}</div>`;
+}
+
+// The last known Last.fm total stays on screen while a fresher one is fetched.
+function formatLastfmTotal(scrobbleState) {
+  const total = scrobbleState?.summary?.lastfm_total ?? scrobbleState?.rememberedTotal;
+  if (total != null) return String(total);
+  return scrobbleState?.loading || scrobbleState?.refreshingTotal ? 'Loading...' : 'Unavailable';
 }
 
 function matchesUtilityRuleSearch(item) {
@@ -29021,6 +29026,8 @@ function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
   owner.summary = null;
+  owner.rememberedTotal = null;
+  owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   return owner;
@@ -29051,6 +29058,54 @@ function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
   };
 }
 
+const LASTFM_TOTAL_STORAGE_PREFIX = 'albumHaven.lastfmTotal.';
+
+function readRememberedLastfmTotal(username) {
+  try {
+    const stored = localStorage.getItem(LASTFM_TOTAL_STORAGE_PREFIX + username);
+    const total = stored === null ? NaN : Number(stored);
+    return Number.isInteger(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastfmTotal(username, total) {
+  if (total == null) return;
+  try {
+    localStorage.setItem(LASTFM_TOTAL_STORAGE_PREFIX + username, String(total));
+  } catch {
+    // Remembering is a convenience; the next refresh shows the total anyway.
+  }
+}
+
+function paintLastfmTotal(owner) {
+  const node = document.querySelector('#utility-modal [data-lastfm-total]');
+  if (node) node.textContent = `LastFM Total: ${formatLastfmTotal(owner)}`;
+}
+
+// Asking Last.fm takes seconds: the page shows the last known total at once
+// and this replaces only that number when the fresh one arrives.
+async function refreshLastfmTotal(owner, requestGeneration, username) {
+  const isCurrent = () => state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration;
+  owner.refreshingTotal = true;
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles?refresh_total=1', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    const total = data.lastfm_total == null ? NaN : Number(data.lastfm_total);
+    if (!response.ok || !data.ok || !Number.isInteger(total) || total < 0 || !isCurrent() || !owner.summary) return;
+    owner.summary = { ...owner.summary, lastfm_total: total };
+    rememberLastfmTotal(username, total);
+  } catch (error) {
+    console.warn('[AlbumHaven][Integrations] Failed to refresh the Last.fm total.', error);
+  } finally {
+    if (isCurrent()) {
+      owner.refreshingTotal = false;
+      paintLastfmTotal(owner);
+    }
+  }
+}
+
 async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
   const owner = ensureLastfmScrobbleState();
   if (!lastfm?.connected) {
@@ -29059,6 +29114,9 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
   }
   if (owner.loading && !replace) return owner.loadPromise;
   const requestGeneration = ++owner.requestGeneration;
+  const username = String(lastfm.username || '');
+  owner.rememberedTotal = readRememberedLastfmTotal(username);
+  owner.refreshingTotal = false;
   owner.loading = true;
   renderUtilityModalContent();
   const loadPromise = (async () => {
@@ -29067,7 +29125,11 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
-        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        const summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
+        else rememberLastfmTotal(username, summary.lastfm_total);
+        owner.summary = summary;
+        if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
       }
       return owner.summary;
     } catch (error) {
@@ -31239,18 +31301,20 @@ function buildRemoteCoverLookupPreviewUrl(url) {
   return `/utilities/cover-lookup/remote-image?url=${encodeURIComponent(raw)}`;
 }
 
-function buildRemoteCoverLookupImageUrl(url, key = '') {
+function buildRemoteCoverLookupImageUrl(url, key = '', { preview = false } = {}) {
   const raw = String(url || '').trim();
   if (!raw) return '';
   const params = new URLSearchParams({ url: raw });
   if (key) params.set('key', String(key));
+  // Cards show a server-shrunk, cached preview; the lightbox keeps the full image.
+  if (preview) params.set('size', 'preview');
   return `/utilities/cover-lookup/remote-image?${params.toString()}`;
 }
 
-function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '') {
+function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '', options = {}) {
   const raw = String(preferredUrl || '').trim();
   if (!raw) return '';
-  return buildRemoteCoverLookupImageUrl(raw, key);
+  return buildRemoteCoverLookupImageUrl(raw, key, options);
 }
 
 function buildCoverLookupSearchQuery(album) {
@@ -33123,9 +33187,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
-    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
+    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '', { preview: true })
     : kind === 'saved-remote'
-      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
+      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`, { preview: true })
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', {

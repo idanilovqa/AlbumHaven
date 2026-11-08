@@ -33122,17 +33122,6 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
   }).join('');
 }
 
-// The selected cover's row starts the view; a cover in its section's first row keeps that section's title in view.
-function resolveCoverLookupInitialScrollTop(body, card) {
-  if (!card) return 0;
-  const top = (node) => Number(node?.getBoundingClientRect?.().top);
-  const gallery = card.closest?.('.cover-lookup-gallery');
-  const inFirstRow = gallery && Math.abs(top(card) - top(gallery)) < 2;
-  const anchor = inFirstRow ? (card.closest?.('.cover-lookup-section') || gallery) : card;
-  const offset = top(anchor) - top(body);
-  if (!Number.isFinite(offset)) return Math.max(0, Number(card.offsetTop || 0) - 8);
-  return Math.max(0, Number(body.scrollTop || 0) + offset - 8);
-}
 
 function captureCoverLookupModalScrollAnchor(body) {
   if (!body) return null;
@@ -33448,15 +33437,14 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  // INT-028: on web and mobile the gallery opens with the selected cover's row at the top. Later renders
-  // (local inventory or candidates arriving) keep placing it there until the user scrolls.
+  // Owner (11-08): on web and mobile the gallery opens at the top, with LOCAL first even when it is empty.
+  // Later renders (local inventory or candidates arriving) keep it there until the user scrolls.
   const userScrolledSinceOpen = modalState.initialScrollTop != null
     && Math.abs(Number(els.body.scrollTop || 0) - Number(modalState.initialScrollTop)) > 2;
   if (modalState.initialScrollPending === true && !modalState.loading && !userScrolledSinceOpen) {
-    const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
-    els.body.scrollTop = resolveCoverLookupInitialScrollTop(els.body, selectedCard);
-    modalState.initialScrollTop = Number(els.body.scrollTop || 0);
-    if (selectedCard || !modalState.localInventoryPending) modalState.initialScrollPending = false;
+    els.body.scrollTop = 0;
+    modalState.initialScrollTop = 0;
+    if (!modalState.localInventoryPending) modalState.initialScrollPending = false;
   } else {
     if (userScrolledSinceOpen) modalState.initialScrollPending = false;
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);

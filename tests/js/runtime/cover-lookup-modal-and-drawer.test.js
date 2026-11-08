@@ -6979,12 +6979,12 @@ require('node:test')('visible service cover previews receive eager browser prior
   assert.doesNotMatch(deferredImage, /\ssrc=/);
 });
 
-require('node:test')('Cover Lookup opens with the selected cover row at the top on web and mobile, then follows the user', () => {
+require('node:test')('Cover Lookup opens at the top on web and mobile, even with a selected cover further down, then follows the user', () => {
   for (const mobile of [true, false]) {
     const selectedCard = { offsetTop: 820, offsetHeight: 180, closest: () => null, getBoundingClientRect: () => ({ top: 900 }) };
     const bodyElement = {
       innerHTML: '',
-      scrollTop: 0,
+      scrollTop: 400, // a stale position from an earlier open
       clientHeight: 500,
       getBoundingClientRect: () => ({ top: 80 }),
       querySelector: (selector) => selector === '.cover-lookup-art-card.is-active' ? selectedCard : null,
@@ -7021,25 +7021,12 @@ require('node:test')('Cover Lookup opens with the selected cover row at the top 
 
     context.renderCoverLookupModal();
 
-    assert.equal(bodyElement.scrollTop, 812, `${mobile ? 'mobile' : 'web'}: the selected row is at the top, not centered or at the bottom`);
+    assert.equal(bodyElement.scrollTop, 0, `${mobile ? 'mobile' : 'web'}: the gallery opens at the top, not at the selected cover`);
     assert.equal(context.state.coverLookup.modal.initialScrollPending, false);
     bodyElement.scrollTop = 120;
     context.renderCoverLookupModal();
     assert.equal(bodyElement.scrollTop, 120, 'later renders preserve the user position');
   }
-});
-
-require('node:test')('a selected cover in its section first row keeps the section title in view', () => {
-  const section = { getBoundingClientRect: () => ({ top: 96 }) };
-  const gallery = { getBoundingClientRect: () => ({ top: 130 }) };
-  const card = {
-    getBoundingClientRect: () => ({ top: 130 }),
-    closest: (selector) => (selector === '.cover-lookup-gallery' ? gallery : selector === '.cover-lookup-section' ? section : null),
-  };
-  const context = loadHelper();
-  const body = { scrollTop: 0, getBoundingClientRect: () => ({ top: 80 }) };
-  assert.equal(context.resolveCoverLookupInitialScrollTop(body, card), 8);
-  assert.equal(context.resolveCoverLookupInitialScrollTop(body, null), 0);
 });
 
 require('node:test')('staged extracted images retain decoded resolution on their cover card', async () => {

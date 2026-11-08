@@ -18570,6 +18570,17 @@ def test_live_watcher_reuses_scan_relations_after_cover_only_change(watcher_repa
     assert reused == original
 
 
+def _damage_current_artist_search_projection(connection, search_state):
+    # Search reads the current-semantics entries (migration 0111), not the legacy table.
+    if search_state == 'missing':
+        connection.execute('delete from library.local_artist_search_projection_current_entries')
+    else:
+        connection.execute(
+            "update library.local_artist_search_projection_current_entries "
+            "set canonical_artist_name = canonical_artist_name || ' (stale)'"
+        )
+
+
 @pytest.mark.parametrize("search_state", ["missing", "stale"])
 def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
     watcher_repair_inventory, monkeypatch, search_state,
@@ -18582,14 +18593,7 @@ def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
     fixture.seed(fixture.entry('Owner/Album/01.flac'))
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         original = persistence._commit_structural_relation_projection(connection, fixture.config)
-        if search_state == 'missing':
-            connection.execute("delete from library.local_artist_search_projection")
-        else:
-            connection.execute(
-                "update library.local_artist_search_projection "
-                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
-                "then repeat('1', 64) else repeat('0', 64) end"
-            )
+        _damage_current_artist_search_projection(connection, search_state)
         connection.execute(
             "update library.local_albums set metadata = metadata || %s::jsonb",
             (json.dumps({'selected_cover_path': 'synthetic-cover.jpg'}),),
@@ -18626,14 +18630,8 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
     fixture.seed(entry)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         original = persistence._commit_structural_relation_projection(connection, fixture.config)
-        if search_state == 'missing':
-            connection.execute('delete from library.local_artist_search_projection')
-        elif search_state == 'stale':
-            connection.execute(
-                "update library.local_artist_search_projection "
-                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
-                "then repeat('1', 64) else repeat('0', 64) end"
-            )
+        if search_state != 'ready':
+            _damage_current_artist_search_projection(connection, search_state)
 
     revision_before = fixture.adapter.load_inventory_mutation_revision()
 
@@ -18657,14 +18655,13 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
     assert not projections.relation_projection_stale_reason(after)
-    assert not projections.artist_search_projection_stale_reason(after)
+    # A damaged search projection stays reported for explicit startup reconciliation; the watcher never masks it.
+    assert bool(projections.artist_search_projection_stale_reason(after)) is (search_state != 'ready')
     assert after['relations_last_built'] == original['relations_last_built']
     assert persistence.deserialize_relation_views(after['relation_views']) == original['relation_views']
 
 
-def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
-    watcher_repair_inventory, monkeypatch,
-):
+def test_live_targeted_watcher_rebuilds_families_when_artist_changes(watcher_repair_inventory):
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import relation_projection_postgres as projections
     from tests.e2e.support import isolatedPostgres
@@ -18678,19 +18675,12 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
     revision_before = fixture.adapter.load_inventory_mutation_revision()
-    calls = []
-    original_builder = persistence.build_relation_views_from_postgres_rows
-
-    def build(config, rows):
-        calls.append(True)
-        return original_builder(config, rows)
-
-    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', build)
+    assert 'Guest' not in json.dumps(before['relation_views'])
     changed = {**entry, 'artist': 'Guest'}
+    # The watcher patches the changed album's relations in place instead of rebuilding the library.
     result = fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: changed},
     )
-    assert calls == [True]
     assert result['inventory_mutation_revision'] > revision_before
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
@@ -18698,7 +18688,9 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
         )
     assert not projections.relation_projection_stale_reason(after)
     assert not projections.artist_search_projection_stale_reason(after)
-    assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
+    # A scoped patch keeps the full publication's fingerprint and records the patch instead.
+    assert after['relation_projection']['targeted_patch_reason'] == 'targeted_reconciliation'
+    assert 'Guest' in json.dumps(after['relation_views'])
 
 
 def test_live_targeted_publication_keeps_another_writers_album_change_queued(

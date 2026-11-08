@@ -3540,7 +3540,13 @@ def _commit_structural_relation_projection(
         }
     current_projection = _relation_projection_scan_cache_from_row(
         _first_row(connection.execute(_load_relation_projection_sql())))
-    proven_current = current_projection.get('normalized_relation_ready') is True
+    # A pending dirty album (a cover-only change marks one) leaves the stored entries exactly as the last full
+    # publication wrote them unless a scoped patch ran since; then the fingerprint check below proves them current.
+    proven_current = current_projection.get('normalized_relation_ready') is True or (
+        current_projection.get('normalized_relation_published') is True
+        and isinstance(projection_metadata, dict)
+        and not projection_metadata.get('targeted_patch_reason')
+    )
     if proven_current:
         next_scan_cache['relation_views'] = current_projection['relation_views']
     if (

@@ -1032,6 +1032,7 @@ def _relation_projection_scan_cache_from_row(row: object | None) -> dict[str, ob
         'normalized_relation_ready': row_mapping.get('normalized_relation_ready'),
         'normalized_relation_initialized': row_mapping.get('normalized_relation_initialized'),
         'normalized_relation_dirty': row_mapping.get('normalized_relation_dirty'),
+        'normalized_relation_published': row_mapping.get('normalized_relation_published'),
         "relation_views": row_mapping.get("relation_views"),
         RELATION_PROJECTION_METADATA_KEY: row_mapping.get(RELATION_PROJECTION_METADATA_KEY),
         "relations_last_built": row_mapping.get("relations_last_built"),
@@ -1140,6 +1141,17 @@ def _load_relation_projection_sql() -> str:
           exists(select 1 from library.local_relation_projection_state state
             where state.library_id=library.libraries.id) as normalized_relation_initialized,
           exists(select 1 from library.local_relation_dirty_albums dirty where dirty.library_id=library.libraries.id) as normalized_relation_dirty,
+          -- The stored entries match the published fingerprint; pending dirty albums may still be unpatched.
+          exists(select 1 from library.local_relation_projection_state state
+            where state.library_id=library.libraries.id
+              and state.builder_version=library.libraries.metadata #>> '{scan_cache,relation_projection,builder_version}'
+              and state.source_fingerprint=library.libraries.metadata #>> '{scan_cache,relation_projection,source_fingerprint}'
+              and exists(select 1 from library.local_relation_compatibility_state compatibility
+                where compatibility.library_id=state.library_id
+                  and compatibility.current_semantics='current-v11-explicit-collaboration'
+                  and compatibility.legacy_semantics='legacy-v11-broad-aliases'
+                  and compatibility.source_fingerprint=state.source_fingerprint
+                  and compatibility.last_publication_xid=state.last_publication_xid)) as normalized_relation_published,
           exists(select 1 from library.local_relation_projection_state state
             where state.library_id=library.libraries.id
               and state.builder_version=library.libraries.metadata #>> '{scan_cache,relation_projection,builder_version}'

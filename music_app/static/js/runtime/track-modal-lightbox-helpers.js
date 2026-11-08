@@ -1048,6 +1048,8 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
@@ -1180,7 +1182,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {

@@ -4,10 +4,13 @@ export class AlbumTrackTable {
     this.tables = this.root.locator('.compact-data-table');
     this.rows = this.root.locator('.album-track-table__row');
     this.discHeadings = this.root.locator('.album-track-table__disc-heading');
-    this.total = this.root.locator('.album-track-table__total');
-    this.aggregateTotal = this.total.locator('.album-track-table__aggregate-total');
-    this.mainTotal = this.total.locator('.album-track-table__main-total');
-    this.bonusTotal = this.total.locator('.album-track-table__bonus-total');
+    this.totals = this.root.locator('.album-track-table__total');
+    this.summaryLines = this.totals.locator(':scope > *');
+    this.total = this.root.locator('.album-track-table__frame > .album-track-table__total');
+    this.aggregateTotal = this.root.locator('.album-track-table__aggregate-total');
+    this.mainTotal = this.root.locator('.album-track-table__main-total');
+    this.mainTotalDisc = this.root.locator('.album-track-table__disc:has(> .album-track-table__total)');
+    this.bonusTotal = this.root.locator('.album-track-table__bonus-total');
     this.playButtons = this.root.locator('.album-track-table__play');
     this.problemHeaders = this.tables.locator('.compact-data-table-header [data-cdt-column="problem"][aria-hidden="true"]');
     this.problemCells = this.rows.locator('[data-cdt-column="problem"]');

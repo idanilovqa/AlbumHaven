@@ -5444,6 +5444,81 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
     assert prepared_paths == {str(track_path)}
 
 
+def test_asgi_second_artbox_accepts_only_new_album_art(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import album_additional_artworks_postgres as artworks_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Testimony" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    cover = track_path.parent / "cover.jpg"
+    cover.write_bytes(_jpeg_bytes((10, 10, 10)))
+    back = track_path.parent / "back.jpg"
+    back.write_bytes(_jpeg_bytes((200, 10, 10)))
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    saved: list[dict[str, object]] = []
+
+    monkeypatch.setattr(asgi_routes, "_resolved_snapshot_album_context", lambda *_args: (None, 41, None))
+
+    class FakeBrowse:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id):
+            assert album_id == 41
+            return {"cover_path": str(cover.resolve()), "remote_cover_url": "https://img.example/front.jpg"}
+
+    class FakeSnapshots:
+        def __init__(self, _config):
+            pass
+
+        def get_for_album_context(self, *, album_id):
+            return {"candidates": [
+                {"url": "https://img.example/front.jpg"},
+                {"url": "https://img.example/back.jpg", "thumbnail_url": "https://img.example/back-thumb.jpg"},
+            ]}
+
+    class FakeArtworks:
+        def __init__(self, _config):
+            pass
+
+        def save(self, **kwargs):
+            saved.append(kwargs)
+            return [{"slot": 1, "source_kind": kwargs["source_kind"]}]
+
+    monkeypatch.setattr(browse_module, "PostgresLibraryBrowseRepository", FakeBrowse)
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeSnapshots)
+    monkeypatch.setattr(artworks_module, "AlbumAdditionalArtworkRepository", FakeArtworks)
+
+    def post(body):
+        status, _headers, response = _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/additional-artwork",
+            json_body={"album": _album_payload(track_path), **body},
+        )
+        return status, _decode_json(response)
+
+    assert post({"slot": 2, "source_kind": "local", "source_path": str(back)})[0] == 400
+    status, body = post({"slot": 1, "source_kind": "local", "source_path": str(cover)})
+    assert (status, body["error"]) == (409, "This art is already in the first artbox")
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://img.example/front.jpg"})
+    assert status == 409
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://elsewhere.example/x.jpg"})
+    assert (status, body["error"]) == (400, "Choose one of this album's cover candidates")
+    assert saved == []
+
+    status, body = post({"slot": 1, "source_kind": "local", "source_path": str(back)})
+    assert status == 200 and body["additional_artworks"] == [{"slot": 1, "source_kind": "local"}]
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://img.example/back-thumb.jpg"})
+    assert status == 200
+    assert [(item["album_id"], item["slot"], item["source_kind"], item["cover_path"], item["remote_url"]) for item in saved] == [
+        (41, 1, "local", str(back.resolve()), None),
+        (41, 1, "remote", None, "https://img.example/back-thumb.jpg"),
+    ]
+
+
 @pytest.mark.parametrize(("size", "poor"), [(400, True), (1400, False)])
 def test_saved_cover_recomputes_the_album_details_poor_art_alert(tmp_path, size, poor):
     from PIL import Image

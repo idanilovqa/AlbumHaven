@@ -445,6 +445,30 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:artist-tree-side-bar"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "navigation-tree-header-has-only-fold-control",
+      "loose-tracks-single-side-bar-button-under-artist-tree",
+      "side-bar-buttons-draw-their-icons"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-side-bar",
+      "filesystemCopy": "media/cases/artist-tree-side-bar"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
@@ -6379,6 +6403,231 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/navigationTreeStickyHeader.spec.js",
+    "case": "the navigation-tree header stays at the top of the side panel while the tree scrolls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the navigation-tree header stays at the top of the side panel while the tree scrolls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a short gallery name shares its row with the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a short gallery name shares its row with the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a long gallery name is printed in full above the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a long gallery name is printed in full above the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (artists)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (artists)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (collections)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (collections)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "mobile bottom sheets slide back down when closed (INT-023)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile bottom sheets slide back down when closed (INT-023)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupFrames.spec.js",
+    "case": "a selected suggested cover keeps the green suggestion ring around the blue selection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected suggested cover keeps the green suggestion ring around the blue selection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added (with service links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added (with service links)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
+    "case": "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,
@@ -10336,6 +10585,156 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 340px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-340px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 760px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-760px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (new Add art box)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-new-add-art-box"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (saved art with links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-saved-art-with-links"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "mobile Cover Look Up bottom sheet slides up from the bottom edge and rests there",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-cover-look-up-bottom-sheet-slides-up-from-the-bottom-edge-and-rests-there"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "bottom sheets appear without sliding when the device asks for reduced motion",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bottom-sheets-appear-without-sliding-when-the-device-asks-for-reduced-motion"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/duplicateFolderAlert.spec.js",
+    "case": "duplicate album files alert puts numbered folder buttons beside its text with readable numbers",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "duplicate-album-files-alert-puts-numbered-folder-buttons-beside-its-text-with-readable-numbers"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "desktop poor-art warning sits on the art top-right and expands leftward to its text with no dead space",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop-poor-art-warning-sits-on-the-art-top-right-and-expands-leftward-to-its-text-with-no-dead-space"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "the Album page setting hides the poor-art warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the-album-page-setting-hides-the-poor-art-warning"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "mobile poor-art warning sits on the page body top-right, not in the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-poor-art-warning-sits-on-the-page-body-top-right-not-in-the-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,
@@ -10515,7 +10914,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 320px",
+    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10523,7 +10922,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10531,7 +10930,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 320px",
+    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10539,7 +10938,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10547,7 +10946,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 320px",
+    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10555,7 +10954,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10563,7 +10962,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar retains source icons through header handoff at 390px",
+    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10571,7 +10970,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10579,7 +10978,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar retains source icons through header handoff at 390px",
+    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10587,7 +10986,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },
@@ -10595,7 +10994,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas retains source icons through header handoff at 390px",
+    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10603,7 +11002,7 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "mobile-album-source-marker-placement",
-      "source-labels-and-header-handoff"
+      "mobile-source-badges-on-album-art"
     ],
     "ownerApproval": "approved"
   },

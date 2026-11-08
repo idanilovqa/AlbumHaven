@@ -1789,6 +1789,7 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
             _app_config(request),
             source_path,
             indexed_paths=authoritative_track_paths,
+            paths_only=bool(payload.get("paths_only")),
         )
     except (FileNotFoundError, OSError, ValueError):
         return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)

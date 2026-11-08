@@ -28,7 +28,7 @@ async function mountVisualAnchor(page, name) {
     ${name === 'Log History Period' ? '<div id="app-form-modal" class="app-form-anchored">' : ''}
     <div id="surface" class="${panelClass}" data-anchored-surface="fixture">${content}</div>
     ${name === 'Log History Period' ? '</div>' : ''}</body></html>`);
-  for (const stylesheet of ['runtime/base-layout.css', 'runtime/account-menu.css', 'runtime/utilities.css',
+  for (const stylesheet of ['runtime/base-layout.css', 'runtime/account-menu.css', 'dialog-component.css', 'runtime/utilities.css',
     'app-chrome.css', 'gallery-main.css', 'runtime/trigger-anchor.css', 'appearance-backgrounds.css',
     'button-component.css', 'date-range-picker.css', 'search-input.css']) {
     await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', stylesheet) });
@@ -283,6 +283,7 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
     await page.goto(componentUrl);
     for (const stylesheet of [
       'runtime/account-menu.css',
+      'dialog-component.css',
       'runtime/utilities.css',
       'app-chrome.css',
       'gallery-main.css',

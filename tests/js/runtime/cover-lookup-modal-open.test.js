@@ -122,7 +122,7 @@ test('opening a compact album does not inherit an unrelated compact lookup task'
   assert.equal(context.state.coverLookup.modal.taskId, '');
 });
 
-test('split album conflict stays in Cover Lookup and choosing a release refreshes that exact album', async () => {
+test('split album conflict closes Cover Lookup, asks in a compact chooser, then opens the chosen release', async () => {
   class TestButton {}
   const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };
   const firstRelease = {
@@ -186,37 +186,44 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
       getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
     },
   };
+  const dialogs = [];
+  context.NavigationTree = {
+    renderItem: (item) => `<button data-cover-lookup-split-release="${item.attributes['data-cover-lookup-split-release']}">${item.label}|${item.count}</button>`,
+    setItemSelected: () => {},
+  };
+  context.window.NavigationTree = context.NavigationTree;
+  context.buildUtilityAlbumArtbox = () => '<span class="album-artbox"></span>';
+  context.closeCoverLookupModal = () => { overlay.hidden = true; };
+  context.showAppFormDialog = async (options) => {
+    dialogs.push({ options, overlayHidden: overlay.hidden });
+    return '42';
+  };
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  context.renderCoverLookupModal = () => {
-    renders.push({
-      loading: context.state.coverLookup.modal.loading,
-      releaseIds: (context.state.coverLookup.modal.currentReleases || [])
-        .map(release => release.album_id),
-    });
-  };
+  context.renderCoverLookupModal = () => { renders.push(context.state.coverLookup.modal.album?.album_id); };
   context.applyCoverLookupGalleryPayload = () => {};
   context.markCoverLookupAutomaticImprovementSeen = async () => {};
   context.ensureCoverLookupPolling = () => {};
+  context.isCoverLookupMobileSheet = () => false;
 
   await context.refreshCoverLookupGallery();
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(context.state.coverLookup.modal.loading, false);
-  assert.deepEqual(
-    context.state.coverLookup.modal.currentReleases.map((release) => release.album_id),
-    [41, 42],
-  );
-  assert.deepEqual(renders.at(-1), { loading: false, releaseIds: [41, 42] });
+  assert.equal(dialogs.length, 1);
+  assert.equal(dialogs[0].overlayHidden, true, 'Cover Look Up is not shown behind the split chooser');
+  assert.equal(dialogs[0].options.title, 'Choose the current release');
+  assert.match(dialogs[0].options.contentHtml, /First Release\|8 tracks[\s\S]*Second Release\|6 tracks/);
   assert.deepEqual(toasts, []);
-
-  await context.chooseCoverLookupCurrentRelease('42');
-
   assert.equal(context.state.coverLookup.modal.album.album_id, 42);
   assert.equal(context.state.coverLookup.modal.taskId, 'stale-task');
   assert.deepEqual(
     requests.find((request) => request.album?.album_id === secondRelease.album_id),
     { album: secondRelease, task_id: 'stale-task' },
   );
+
+  overlay.hidden = true;
+  await context.openCoverLookupModal(oldAlbum, { taskId: 'stale-task' });
+  assert.equal(dialogs.length, 2, 'reopening the same notification goes straight to the chooser');
 });
 
 test('notification Cover Lookup uses a sheet on mobile without presenting a mobile page', async () => {

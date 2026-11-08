@@ -232,7 +232,6 @@ test('album editions render the same keyboard tab component as Home', () => {
     { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
   ];
   context.state.modalReleaseIndex = 1;
-  context.renderVersionContextMenu = () => {};
   const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
   context.renderTrackModalTabs({ tabs });
   assert.equal(tabs.hidden, false);
@@ -4942,6 +4941,43 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   assert.equal(config.bonusLength, '');
 });
 
+test('every version tab after the original offers Separate release through the shared album menu', async () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const calls = [];
+  const context = loadHelper([], {
+    escapeHtml: value => String(value),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    ensureAlbumCardContextMenu: () => menu,
+    hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
+  });
+  const buttons = [{ dataset: {} }, { dataset: {} }, { dataset: {} }];
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original' },
+    { key: 'remaster', tabLabel: 'Remastered' },
+    { key: 'duplicate', tabLabel: 'Duplicate' },
+  ];
+  context.state.modalReleaseIndex = 0;
+  const tablist = { querySelectorAll: () => buttons, querySelector: () => null, addEventListener() {} };
+  context.mountInPageTabs = () => {};
+  context.renderTrackModalTabs({ tabs: { hidden: true, innerHTML: '', querySelector: () => tablist } });
+  assert.deepEqual(buttons.map((button) => button.dataset.versionContextKey), [undefined, 'remaster', 'duplicate']);
+
+  context.showVersionContextMenu('remaster', 40, 60);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.albumKey, 'remaster');
+  assert.match(menu.innerHTML, /class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="remaster">Separate release</);
+  context.hideVersionContextMenu();
+  assert.equal(menu.hidden, true);
+
+  context.ignoreAlbumVersion = async (key) => calls.push(['ignore', key]);
+  context.unmarkAlbumVersion = async (key) => calls.push(['unmark', key]);
+  context.state.view.manual_version_links = { linked: 'original' };
+  await context.separateAlbumRelease('remaster');
+  await context.separateAlbumRelease('linked');
+  assert.deepEqual(calls, [['ignore', 'remaster'], ['unmark', 'linked']], 'automatic versions become a version rule; manual links are unmarked');
+});
 
 test('release candidates remain symmetric when the gallery only contains Helloween 1985', () => {
   const ep = { key: 'helloween::helloween::year::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, preview_only: true };
@@ -4993,4 +5029,19 @@ test('details rule snapshot covers empty-shell opening until current rules arriv
   context.state.view.ignored_version_keys = [];
   context.state.view.manual_version_links = {};
   assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
+});
+
+test('Album Details names a tracklist section from album.track_sections on its first track (MusicBrainz contract)', () => {
+  // Contract with MusicBrainz Delivery 3: album.track_sections = [{ first_track_path, title }].
+  const { context } = createTrackModalCoverContext();
+  const track = (number, title) => ({ path: `C:/Music/Wallet Box/CD6/${number}.flac`, title, disc_number: 6, track_number: number });
+  const markup = context.buildTrackListHtml([track(1, 'Introducción'), track(2, 'Tema'), track(11, 'Libertango')], {
+    track_sections: [
+      { first_track_path: 'C:/Music/Wallet Box/CD6/1.flac', title: 'Suite Punta Del Este' },
+      { first_track_path: '', title: 'Ignored without a first track' },
+    ],
+  });
+  assert.equal((markup.match(/album-track-table__section-title">Suite Punta Del Este</g) || []).length, 1);
+  assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
+  assert.doesNotMatch(markup, /Ignored without a first track/);
 });

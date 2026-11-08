@@ -11,19 +11,11 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const titleId = escapeHtml(config.titleId || 'track-modal-title');
   const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
   const actionHtml = String(config.actionsHtml || '');
-  const qualityAlertHtml = config.poorArtQuality === true
-    ? buildSmallAlertHtml({
-      severity: 'warning',
-      message: 'Poor art quality',
-      className: 'album-details-header__quality-alert',
-      focusable: true,
-    })
-    : '';
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3></div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -47,7 +39,42 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, sourceMarkersHtml, ...tagParts].join('');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3></div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+}
+
+// UI-ARTQ: the poor-art warning sits on the album art's top-right corner (desktop) or the album page
+// body's top-right corner (mobile), never in the header. Collapsed it is the icon; hover or focus
+// expands it leftward to its full text. The Album page setting hides it (data-album-art-quality-alert).
+function renderAlbumArtQualityAlert(coverElement, album) {
+  const page = coverElement?.closest?.('#track-modal');
+  page?.querySelectorAll?.('.album-details-art-quality-alert').forEach((node) => node.remove());
+  if (album?.poor_art_quality !== true || !coverElement) return;
+  const mobile = Boolean(page?.classList?.contains('is-mobile-page'))
+    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const host = mobile ? coverElement.closest('.track-modal-body') : coverElement.querySelector('.track-modal-cover-shell');
+  host?.insertAdjacentHTML('beforeend', buildSmallAlertHtml({
+    severity: 'warning',
+    message: 'Poor art quality',
+    className: 'album-details-art-quality-alert',
+    focusable: true,
+  }));
+}
+
+const ALBUM_SERVICE_LINK_PROVIDERS = Object.freeze({
+  discogs: Object.freeze({ label: 'Discogs', host: /(^|\.)discogs\.com$/, icon: '/static/images/icons/service-discogs.png' }),
+  musicbrainz: Object.freeze({ label: 'MusicBrainz', host: /(^|\.)musicbrainz\.org$/, icon: '/static/images/icons/service-musicbrainz.png' }),
+});
+
+// Known release pages under the album art. Only HTTPS pages on each service's own host render.
+function buildAlbumServiceLinksHtml(links = []) {
+  const items = (Array.isArray(links) ? links : []).map((link) => {
+    const provider = ALBUM_SERVICE_LINK_PROVIDERS[String(link?.provider || '')];
+    let url = null;
+    try { url = new URL(String(link?.url || '')); } catch { url = null; }
+    if (!provider || !url || url.protocol !== 'https:' || !provider.host.test(url.hostname)) return '';
+    return `<a class="album-details-service-link" href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer"><img class="album-details-service-link__icon" src="${provider.icon}" alt="" width="16" height="16"><span class="album-details-service-link__label">${provider.label}</span></a>`;
+  }).filter(Boolean);
+  return items.length ? `<div class="album-details-service-links" aria-label="Release pages">${items.join('')}</div>` : '';
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -90,23 +117,14 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 }
 
 function buildLooseTracksHeaderActionsHtml() {
-  return [
-    ButtonComponent.renderActionButton({
-      presentation: 'bare',
-      ariaLabel: 'Edit tags',
-      title: 'Edit tags',
-      className: 'track-modal-edit-tags album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
-      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
-    }),
-    ButtonComponent.renderActionButton({
-      presentation: 'bare',
-      ariaLabel: 'Close loose tracks',
-      className: 'album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
-      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
-    }),
-  ].join('');
+  return ButtonComponent.renderActionButton({
+    presentation: 'bare',
+    ariaLabel: 'Edit tags',
+    title: 'Edit tags',
+    className: 'track-modal-edit-tags album-details-header__action',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+    attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+  });
 }
 
 function buildMissingAlbumDetailsHtml(config = {}) {
@@ -156,7 +174,8 @@ function syncMobileAlbumComposition(album) {
   const mobileHeader = document.getElementById('mobile-page-header');
   const freshSourceMarkers = overlay.querySelector('.album-details-header .album-details-cover-source-markers');
   const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector('.album-details-cover-source-markers');
+    || mobileHeader?.querySelector('.album-details-cover-source-markers')
+    || cover.querySelector('.track-modal-cover-shell > .album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
   }
@@ -179,8 +198,14 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (mobile && mobileHeader) mobileHeader.querySelector('.gallery-bar__context').appendChild(sourceMarkers);
-    else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
+    // INT-040: web shows the sources on the art (on hover) in every layout; mobile places them per layout:
+    // large cover in the page header's top right, centered cover beside the art's bottom-left, compact on the
+    // art's corner.
+    const artHost = cover.querySelector('.track-modal-cover-shell');
+    const host = !mobile ? artHost
+      : layout === 'classic_bar' ? mobileHeader
+        : layout === 'editorial_canvas' ? rail : artHost;
+    if (host) host.appendChild(sourceMarkers);
   }
   if (identity) {
     identity.hidden = !inline;
@@ -192,11 +217,9 @@ function syncMobileAlbumComposition(album) {
         title: album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
-        poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
-      if (sourceMarkers) identity.querySelector('.album-details-header__copy').appendChild(sourceMarkers);
     }
   }
   const freshActions = cover.querySelector('.album-artbox__overlay');

@@ -19,17 +19,6 @@ function handleGalleryBootstrapClick(event) {
     void confirmMissingAlbumRemoval(album, runtimeOptions);
     return;
   }
-  const ignoreVersionButton = event.target.closest('[data-ignore-version-context="1"]');
-  if (ignoreVersionButton) {
-    event.preventDefault();
-    const menu = document.getElementById('track-modal-version-context-menu');
-    ignoreAlbumVersion(menu?.dataset.albumKey || '');
-    return;
-  }
-
-  if (!event.target.closest('#track-modal-version-context-menu')) {
-    hideVersionContextMenu();
-  }
   const toggleCombineSimilarArtistsButton = event.target.closest('[data-toggle-combine-similar-artists="1"]');
   if (toggleCombineSimilarArtistsButton && !toggleCombineSimilarArtistsButton.disabled) {
     event.preventDefault();
@@ -49,7 +38,10 @@ function handleGalleryBootstrapClick(event) {
   }
 
   const closeNonAlbumModalButton = event.target.closest('[data-close-non-album-modal="1"]');
-  if (closeNonAlbumModalButton || overlayClickStartedOnOverlay(document.getElementById('non-album-modal'), event)) {
+  const nonAlbumOverlay = document.getElementById('non-album-modal');
+  // The desktop Loose Tracks page has no backdrop; only the modal presentation closes on an outside click.
+  if (closeNonAlbumModalButton || (!nonAlbumOverlay?.classList?.contains('non-album-modal--page')
+      && overlayClickStartedOnOverlay(nonAlbumOverlay, event))) {
     event.preventDefault();
     closeNonAlbumModal();
     return;
@@ -98,6 +90,18 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-additional-artbox="1"]')) {
+    event.preventDefault();
+    openAlbumAdditionalArtboxLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-additional-artbox-quick-search="1"]')) {
+    event.preventDefault();
+    void quickSearchAlbumAdditionalArtbox();
+    return;
+  }
+
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
@@ -110,9 +114,25 @@ function handleGalleryBootstrapClick(event) {
     event.preventDefault();
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
+    const menuAlbumKey = menu?.dataset.albumKey || '';
+    const album = getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
+
+    if (action === 'add-artbox') {
+      beginAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'remove-artbox') {
+      void removeAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'separate-release') {
+      void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);
+      return;
+    }
 
     if (action === 'open-explorer') {
       openAlbumInExplorer(album);
@@ -132,7 +152,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'mark-version') {
-      openVersionPickerModal(album);
+      void openVersionPickerModal(album);
       return;
     }
 
@@ -141,40 +161,6 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
-    return;
-  }
-
-  const versionPickerOption = event.target.closest('[data-version-picker-target]');
-  if (versionPickerOption) {
-    event.preventDefault();
-    state.versionPicker.selectedTargetKey = versionPickerOption.getAttribute('data-version-picker-target') || '';
-    renderVersionPickerModal();
-    return;
-  }
-
-  const closeVersionPickerButton = event.target.closest('[data-close-version-picker="1"]');
-  if (closeVersionPickerButton || overlayClickStartedOnOverlay(document.getElementById('version-picker-modal'), event)) {
-    event.preventDefault();
-    closeVersionPickerModal();
-    return;
-  }
-
-  const saveVersionPickerButton = event.target.closest('[data-save-version-picker="1"]');
-  if (saveVersionPickerButton) {
-    event.preventDefault();
-    const sourceAlbum = state.versionPicker.album;
-    const targetKey = String(state.versionPicker.selectedTargetKey || '');
-    if (!sourceAlbum || !targetKey || state.versionPicker.saving) return;
-    state.versionPicker.saving = true;
-    renderVersionPickerModal();
-    markAlbumVersion(sourceAlbum.key || '', targetKey)
-      .then(() => {
-        closeVersionPickerModal();
-      })
-      .catch(() => {
-        state.versionPicker.saving = false;
-        renderVersionPickerModal();
-      });
     return;
   }
 
@@ -710,7 +696,7 @@ function handleSidebarArtistSelectionClick(event) {
     || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
-    || previousGalleryMainState.showSplitAlbums === false
+    || previousGalleryMainState.splitAlbums === 'hide'
   ));
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();
@@ -1689,6 +1675,12 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     abandonScanPageForNavigation({ clearSelection: true });
   }
   const normalizedQuery = String(nextQuery || '');
+  // Owner (11-08): a new search never sits on Loose Tracks showing the previous search's matches. It returns to
+  // the artist tree so the gallery opens the best matching artist; a Loose Tracks match shows as the dot on the
+  // Loose Tracks side-bar button.
+  if (normalizedQuery.trim() && normalizedQuery.trim() !== String(state.view.query || '').trim()
+      && document.getElementById('non-album-modal')?.hidden === false
+      && typeof closeNonAlbumModal === 'function') closeNonAlbumModal();
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
   state.ui.failedGallerySearch = null;

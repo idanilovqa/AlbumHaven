@@ -15,11 +15,12 @@
 .album-details-header__tag--missing { --album-details-tag-accent: var(--appearance-error, #ef5350); }
 .album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 0; }
-.album-details-source-marker { gap: 4px; white-space: nowrap; }
-.album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.album-details-source-marker--hoard { --album-details-tag-accent: var(--library-source-hoard); }
-.album-details-source-marker--new_arrivals { --album-details-tag-accent: var(--library-source-arrivals); }
 :root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
+/* Release pages under the album art: one line, official icon, only the name underlines on hover. */
+.album-details-service-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 10px; }
+.album-details-service-link { display: inline-flex; align-items: center; gap: 7px; color: var(--appearance-ink, var(--text)); font-size: .8rem; font-weight: 600; text-decoration: none; }
+.album-details-service-link__icon { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 3px; }
+.album-details-service-link:is(:hover, :focus-visible) .album-details-service-link__label { text-decoration: underline; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__action-icon {
   display: block;
@@ -49,7 +50,8 @@
 .album-details-header[data-album-details-layout="stacked_bar"] .album-details-header__identity { display: grid; gap: 5px; }
 .album-details-header[data-album-details-layout="stacked_bar"] .album-details-header__actions { align-self: flex-start; }
 .album-details-header[data-album-details-layout="editorial_canvas"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__identity { display: grid; grid-column: 1 / -1; grid-row: 2; gap: 7px; padding-top: 10px; }
+/* The album info starts on the header line, beside the actions: no empty band right of the art's top. */
+.album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__identity { display: grid; grid-column: 1; grid-row: 1; gap: 7px; padding-top: 0; align-self: start; }
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__actions { grid-column: 2; grid-row: 1; }
 .album-details-header[data-album-details-layout="editorial_canvas"] .album-details-header__primary {
   font-size: clamp(1.35rem, 2.5vw, 2rem);
@@ -74,6 +76,19 @@
   min-width: 0;
 }
 
-.album-details-header__quality-alert {
-  flex: 0 0 auto;
+/* UI-ARTQ: art-quality warning anchored to the art's (mobile: the page body's) top-right corner,
+   so the shared SmallAlert grows leftward to its text on hover or focus. */
+.track-modal-cover-shell > .album-details-art-quality-alert,
+#track-modal.is-mobile-page .track-modal-body > .album-details-art-quality-alert { position: absolute; top: 8px; right: 8px; z-index: 2; }
+#track-modal.is-mobile-page .track-modal-body:has(> .album-details-art-quality-alert) { position: relative; }
+:root[data-album-art-quality-alert="disabled"] .album-details-art-quality-alert { display: none; }
+
+/* INT-040, web: the library sources sit on the album art's top-left corner in every layout and appear on hover. */
+#track-modal:not(.is-mobile-page) .track-modal-cover-shell > .album-details-cover-source-markers {
+  position: absolute; top: 8px; left: 8px; z-index: 3; display: flex; gap: 4px; min-height: 0; margin: 0;
+  opacity: 0; pointer-events: none; transition: opacity 150ms ease;
+}
+#track-modal:not(.is-mobile-page) .track-modal-cover-shell:is(:hover, :focus-within) > .album-details-cover-source-markers { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) {
+  #track-modal:not(.is-mobile-page) .track-modal-cover-shell > .album-details-cover-source-markers { transition: none; }
 }

@@ -1,0 +1,7 @@
+/* RunningLine (running-line.js): the only pan keyframes for overflowing text. Rows set
+   --running-line-distance and --running-line-duration; the text runs
+   `running-line-pan var(--running-line-duration) linear infinite alternate`. */
+@keyframes running-line-pan {
+  0%, 15% { transform: translateX(0); }
+  85%, 100% { transform: translateX(calc(-1 * var(--running-line-distance, 0px))); }
+}

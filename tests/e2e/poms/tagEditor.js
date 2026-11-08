@@ -22,11 +22,10 @@ export class TagEditor extends BasePage {
     this.artwork = this.overlay.locator('#tag-editor-artwork');
     this.artworkVisual = this.artwork.locator('img, .tag-editor-artwork-placeholder').first();
     this.folderPath = this.overlay.locator('.tag-editor-folder-path');
-    this.folderLoadButton = this.overlay.getByRole('button', {
-      name: 'Load all files from this folder',
+    this.folderLoadButton = this.artwork.getByRole('button', {
+      name: 'Load all tracks from the folder',
       exact: true,
     });
-    this.folderLoadButtonIcon = this.folderLoadButton.locator('svg');
     this.reorderCueRows = this.trackList.locator(
       '[data-tag-editor-track].is-reorder-before, [data-tag-editor-track].is-reorder-dragged',
     );

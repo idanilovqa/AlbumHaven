@@ -236,7 +236,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       expect(artworkBounds).not.toBeNull();
       expect(pathBounds).not.toBeNull();
       expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
-      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('');
+      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
 
       const pendingTitle = 'Pending folder expansion title';
       await tagEditorActions.setTrackName(pendingTitle);
@@ -392,10 +392,14 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
     const groups = await trackModalActions.readDiscGroupPresentation();
     expect(groups.headers).toEqual(['Bonus Disc']);
     expect(groups.totals).toEqual([
-      'Total Length: 25m 30s',
       'Total Main Album Length: 3:00',
       'Bonus Disc Length: 22:30',
+      'Total Length: 25m 30s',
     ]);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotalDisc.locator('.album-track-table__disc-heading'))
+      .toHaveCount(0);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveCount(1);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveCSS('white-space', 'nowrap');
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 25m 30s');
     await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');

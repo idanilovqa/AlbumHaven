@@ -158,7 +158,6 @@ function loadHelper() {
         focusGlowKey: '',
         focusGlowVisible: false,
       },
-      versionPicker: {},
       ui: {},
       lightbox: {},
       coverLookup: {
@@ -878,18 +877,20 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /<div class="album-track-table" data-track-path-column /);
+  assert.match(markup, /--cdt-columns: var\(--album-track-table-columns\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
-  assert.match(markup, /data-cdt-column="problem"/);
+  assert.doesNotMatch(markup, /data-cdt-column="problem"/, 'no loose track is problematic, so the slot is removed');
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__title" data-title-prefix="Main Artist feat\. Guest \/ ">Rare Song</);
+  assert.match(markup, /album-track-table__disc-title">Non-album rarity<\/span><span class="album-track-table__disc-count">1 track<\/span><span class="album-track-table__disc-length">4:05</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
   assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
@@ -905,6 +906,9 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     exception_type: 'Non-album rarity',
   }]);
   assert.match(rarityOnly, />Non-album rarity</);
+  assert.doesNotMatch(rarityOnly, /data-track-path-column/, 'without a display path the File path column is absent');
+  const withYear = context.buildNonAlbumTrackSectionsMarkup([{ path: 'C:/Music/A.mp3', title: 'Song', artist: 'Band', year_label: '2024', exception_type: 'Interview' }]);
+  assert.match(withYear, /album-track-table__secondary" title="2024"><span>2024</);
   assert.doesNotMatch(rarityOnly, />Interviews</);
 
   const otherOnly = context.buildNonAlbumTrackSectionsMarkup([{
@@ -2151,4 +2155,135 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
     non_album_tracks: [track],
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
+});
+
+test('gallery album menu offers Separate release for versions, not for unversioned albums', () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const context = vm.createContext({
+    console,
+    state: { view: { manual_version_links: {} } },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null), createElement: () => menu, body: { appendChild() {} } },
+    escapeHtml: (value) => String(value ?? ''),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    getAlbumIdentity: (album) => album.key,
+    getAvailableAlbumMoveActions: () => [],
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const sets = {
+    original: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    remaster: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    single: [{ key: 'single' }],
+  };
+  context.getAlbumReleaseSet = (album) => ({ releases: sets[album.key] });
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'original' });
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release: Remastered</);
+  assert.match(menu.innerHTML, /data-separate-release-key="live">Separate release: Live</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'remaster' });
+  assert.equal((menu.innerHTML.match(/separate-release"/g) || []).length, 1);
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'single' });
+  assert.doesNotMatch(menu.innerHTML, /Separate release/);
+});
+
+test('Mark As A Version offers only same-name albums sharing half their tracks, under an explanatory line', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
+  const calls = [];
+  const tracks = {
+    a: ['Starlight', 'Murderer', 'Warrior', 'Victim of Fate'],
+    b: ['Starlight', 'Murderer (Remastered)', 'Warrior', 'Cry for Freedom'],
+    c: ['Walls of Jericho', 'Ride the Sky'],
+  };
+  const context = vm.createContext({
+    escapeHtml: (value) => String(value ?? ''),
+    buildAlbumDisplayCoverUrl: () => '/cover',
+    compareAlbumVariants: () => 0,
+    flattenVisibleAlbums: () => [
+      { key: 'a', name: 'Helloween', album_artist: 'Helloween' },
+      { key: 'b', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: '2006' },
+      { key: 'c', name: 'HELLOWEEN [Bonus]', album_artist: 'Helloween' },
+      { key: 'd', name: 'Walls of Jericho', album_artist: 'Helloween' },
+    ],
+    fetchTrackModalAlbumDetails: async (key) => ({ tracks: (tracks[key] || []).map((title) => ({ title })) }),
+    markAlbumVersion: async (child, parent) => { calls.push(['mark', child, parent]); },
+    showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
+  });
+  vm.runInContext(source, context);
+  const helloween = { key: 'a', name: 'Helloween', album_artist: 'Helloween' };
+  assert.deepEqual(Array.from(context.getVersionPickerCandidates(helloween), (item) => item.key), ['b', 'c'], 'only albums of the same name');
+  assert.deepEqual(Array.from(context.getVersionPickerCandidates({ key: 'x', name: 'Keeper of the Seven Keys', album_artist: 'Helloween' })), []);
+  await context.openVersionPickerModal(helloween);
+  const options = calls[0][1];
+  assert.equal(options.title, 'Mark As A Version');
+  assert.equal(options.description, 'Select another album that is a version of Helloween.');
+  assert.equal(options.submitEnabled, false);
+  let enabled = false;
+  const listeners = {};
+  const option = { getAttribute: () => 'b', classList: { toggle() {} }, setAttribute() {} };
+  const list = { innerHTML: '', removeAttribute() {} };
+  const content = {
+    addEventListener: (name, handler) => { listeners[name] = handler; },
+    removeEventListener: (name) => { delete listeners[name]; },
+    querySelector: () => list,
+    querySelectorAll: () => [option],
+  };
+  options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(list.innerHTML, /data-version-picker-target="b"/, 'shares 3 of 4 tracks');
+  assert.doesNotMatch(list.innerHTML, /data-version-picker-target="c"/, 'same name, different tracks');
+  listeners.click({ target: { closest: () => option } });
+  assert.equal(enabled, true);
+  await options.onSubmit();
+  assert.deepEqual(calls[1], ['mark', 'a', 'b']);
+  options.onClose(content);
+  assert.equal(listeners.click, undefined);
+});
+
+test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {
+  const { context } = loadHelper();
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  [heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => (selector === '[data-navigation-mode]' ? [artistsMode, collectionsMode] : []);
+
+  context.syncLibraryNavigationMode('collections');
+  assert.equal(heading.textContent, 'Custom Collections');
+  assert.equal(collections.hidden, false);
+  assert.equal(artists.hidden, true);
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', true]);
+
+  context.syncLibraryNavigationMode('artists');
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});
+
+test('INT-007: an album already marked as a version is selected in Mark As A Version', () => {
+  const { context } = loadHelper();
+  context.state.view.manual_version_links = { 'helloween::remaster': 'helloween::original', 'other::x': 'other::y' };
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::original')], ['helloween::remaster']);
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::remaster')], ['helloween::original']);
+  const html = context.buildVersionPickerListHtml(
+    [{ key: 'helloween::remaster', name: 'Helloween' }, { key: 'helloween::live', name: 'Helloween' }],
+    context.getLinkedVersionKeys('helloween::original'),
+  );
+  assert.match(html, /version-picker-option is-active" type="button" data-version-picker-target="helloween::remaster" aria-pressed="true"/);
+  assert.match(html, /version-picker-option" type="button" data-version-picker-target="helloween::live" aria-pressed="false"/);
+  const template = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../music_app/templates/partials/app-form-modal.html'), 'utf8');
+  assert.match(template, /action_button\('Close', class_name='app-form-close', id='app-form-close'/);
 });

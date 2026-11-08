@@ -338,6 +338,11 @@ document.addEventListener('contextmenu', (event) => {
     );
     return;
   }
+  const artboxShell = event.target.closest('#track-modal-cover .track-modal-cover-shell');
+  if (artboxShell && showAlbumArtboxContextMenu(event.clientX, event.clientY, Number(artboxShell.dataset.artboxSlot || 0))) {
+    event.preventDefault();
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();

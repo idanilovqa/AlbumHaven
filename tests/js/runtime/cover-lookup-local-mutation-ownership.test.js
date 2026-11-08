@@ -443,7 +443,7 @@ async function openGenerationAWhileBIsRunning(h, a, generationAChoice) {
   assert.equal(h.context.state.coverLookup.tasks[0].status, 'running');
 }
 
-test('new task completion auto-selects its best candidate when the user made no explicit choice', async () => {
+test('new task completion suggests its best candidate without selecting it when the user made no explicit choice', async () => {
   const h = harness(), a = album('A');
   a.cover_path = null;
   a.tracks[0].cover_path = null;
@@ -457,7 +457,9 @@ test('new task completion auto-selects its best candidate when the user made no 
 
   await h.context.refreshCoverLookupGallery(false);
 
-  assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, generationBChoice.id);
+  // Owner (11-08): an unsaved automatic pick wears the suggestion frame; nothing reads as "Selected".
+  assert.equal(h.context.state.coverLookup.modal.suggestedRemoteId, generationBChoice.id);
+  assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, '');
 });
 
 test('a retained candidate saves through the generation that published it', async () => {

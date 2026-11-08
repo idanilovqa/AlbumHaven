@@ -21,8 +21,41 @@ where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Lib
 and libraries.library_kind = 'local' limit 1"""
 
 
+_STORAGE_UNAVAILABLE = "Can't read local art right now. Retrying."
+
+
 def root_key(root: Path | str) -> str:
     return os.path.normcase(os.path.normpath(str(root)))
+
+
+def local_inventory_root_for_tracks(config, track_paths):
+    """Read-only discovery folder for an album the strict cover-write resolver declines.
+
+    Albums spread over several folders (disc folders with free-form names, or copies in two
+    places) still have local art. Disc folders of one album share their album folder; otherwise
+    the folder holding most of the tracks is used. Never a library root or anything above one.
+    Returns None when no track file exists (storage really is unavailable) or no folder fits."""
+    from collections import Counter
+
+    from music_app.services.library_roots import configured_library_root_paths_snapshot
+
+    roots = [Path(root_key(root)) for root in configured_library_root_paths_snapshot(dict(config))]
+    folders = Counter(Path(root_key(path)).parent for path in track_paths if Path(path).is_file())
+    if not folders:
+        return None
+
+    def below_a_root(folder):
+        return any(folder != root and folder.is_relative_to(root) for root in roots)
+
+    parents = {folder.parent for folder in folders}
+    if len(folders) > 1 and len(parents) == 1 and below_a_root(next(iter(parents))):
+        return next(iter(parents))
+    folder = min(folders, key=lambda candidate: (-folders[candidate], str(candidate)))
+    return folder if below_a_root(folder) else None
+
+
+def local_inventory_tracks_exist(track_paths):
+    return any(Path(path).is_file() for path in track_paths)
 
 
 def context_key(paths):
@@ -95,14 +128,14 @@ class LocalCoverInventoryRepository:
             connection.commit()
         return dict(row) if row else {}
 
-    def defer_context(self, key, revision, *, delay_seconds=30):
+    def defer_context(self, key, revision, *, delay_seconds=30, error=_STORAGE_UNAVAILABLE):
         with self._connection() as connection:
             connection.execute(
                 f"""update library.local_cover_inventory_contexts
-                    set error = case when %(delay)s > 0 then 'Local artwork storage is unavailable. Checking again shortly.' else error end,
+                    set error = case when %(delay)s > 0 then %(error)s else error end,
                     retry_after = now() + %(delay)s * interval '1 second'
                     where library_id = ({_LIBRARY}) and context_key = %(key)s and revision = %(revision)s""",
-                {"key": key, "revision": revision, "delay": delay_seconds},
+                {"key": key, "revision": revision, "delay": delay_seconds, "error": error},
             )
             connection.commit()
 
@@ -390,8 +423,13 @@ class LocalCoverInventoryWorker:
                             root = resolve_album_root_from_track_paths(self.config, set(context["track_paths"]), cancel_requested=cancelled)
                             if cancelled():
                                 raise InterruptedError("Local cover context resolution cancelled")
+                            # NEW-003: the alert must tell the truth. Files that exist are never
+                            # "unavailable"; an album spread over several folders still gets its art.
+                            root = root or local_inventory_root_for_tracks(self.config, context["track_paths"])
                             if root:
                                 self.repository.publish_context(context["context_key"], context["revision"], root, foreground=context["foreground_requested"])
+                            elif local_inventory_tracks_exist(context["track_paths"]):
+                                self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=3600, error=None)
                             else:
                                 self.repository.defer_context(context["context_key"], context["revision"])
                         except InterruptedError:

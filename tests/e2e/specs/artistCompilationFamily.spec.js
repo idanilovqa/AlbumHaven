@@ -38,19 +38,12 @@ test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { t
   });
 
   await stepLogger.step('Resolve the album root and retain files from both discs', async () => {
-    const responsePromise = page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && response.url().endsWith('/utilities/tag-editor/folder-files')
-    ));
-    await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: 18 });
-    const payload = await (await responsePromise).json();
-
+    // Every file of both discs is already in the editor, so the folder action stays hidden (INT-011).
+    await tagEditorActions.expectFolderFullyLoaded();
     const paths = await tagEditorActions.readTrackPaths();
     expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
     expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
-    expect(payload.folder_path).toMatch(
-      /[\\/]Non-Compilation Cross-Credits$/u,
-    );
+    await expect(tagEditorActions.tagEditor.trackList.locator('.tag-editor-track-folder', { hasText: 'Disc 2' }).first()).toBeVisible();
   });
 });
 

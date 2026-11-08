@@ -15,13 +15,13 @@ export class ArtistPageSettings extends BasePage {
     this.combineSimilarArtistsButton = page.locator(this.combineSimilarArtistsButtonSelector);
     this.nonAlbumTracksButton = page.locator(this.nonAlbumTracksButtonSelector);
     this.libraryWideNonAlbumTracksButton = page.locator(
-      '[data-open-non-album-tracks="1"][data-library-wide="1"]',
+      '[data-open-non-album-tracks="1"][data-library-wide="1"]:visible',
     );
     this.nonAlbumTracksModal = page.locator(this.nonAlbumTracksModalSelector);
     this.nonAlbumTrackRows = page.locator(this.nonAlbumTrackRowSelector);
     this.nonAlbumTrackTitles = page.locator(this.nonAlbumTrackTitleSelector);
     this.nonAlbumTrackSections = this.nonAlbumTracksModal.locator('.album-track-table__disc');
-    this.nonAlbumTrackSectionTitles = this.nonAlbumTracksModal.locator('.album-track-table__disc-heading');
+    this.nonAlbumTrackSectionTitles = this.nonAlbumTracksModal.locator('.album-track-table__disc-title');
     this.nonAlbumTrackTable = this.nonAlbumTracksModal.locator('.album-track-table');
     this.nonAlbumTrackTotal = this.nonAlbumTracksModal.locator('.album-track-table__total');
     this.nonAlbumCompactTables = this.nonAlbumTracksModal.getByRole('table');
@@ -35,8 +35,7 @@ export class ArtistPageSettings extends BasePage {
     this.nonAlbumHeader = this.nonAlbumTracksModal.locator('.album-details-header');
     this.nonAlbumHeaderActions = this.nonAlbumHeader.locator('.album-details-header__action');
     this.nonAlbumHeaderFolderActions = this.nonAlbumHeader.locator('.album-details-header__action-icon--folder');
-    this.nonAlbumDialog = this.nonAlbumTracksModal.getByRole('dialog');
-    this.nonAlbumTracksCloseButton = page.locator(this.nonAlbumTracksCloseButtonSelector);
+    this.nonAlbumDialog = this.nonAlbumTracksModal.locator('.non-album-modal-dialog');
     this.nonAlbumTracksEditTagsButton = this.nonAlbumTracksModal.getByRole('button', {
       name: 'Edit tags',
       exact: true,
@@ -71,10 +70,6 @@ export class ArtistPageSettings extends BasePage {
     return '#non-album-modal [data-track-row-path] .album-track-table__title';
   }
 
-  get nonAlbumTracksCloseButtonSelector() {
-    return '#non-album-modal-close';
-  }
-
   get countSelector() {
     return '.gallery-options-count';
   }
@@ -103,8 +98,8 @@ export class ArtistPageSettings extends BasePage {
     });
   }
 
-  nonAlbumTrackArtistByTitle(trackTitle) {
-    return this.nonAlbumTrackRowByTitle(trackTitle).locator('.album-track-table__secondary');
+  nonAlbumTrackTitleByTitle(trackTitle) {
+    return this.nonAlbumTrackRowByTitle(trackTitle).locator('.album-track-table__title');
   }
 
   nonAlbumTrackPathByTitle(trackTitle) {

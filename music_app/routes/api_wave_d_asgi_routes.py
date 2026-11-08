@@ -1504,6 +1504,121 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     return await run_in_threadpool(complete_local_cover_selection)
 
 
+async def _additional_artwork_album_context(request: Request, payload: Mapping[str, object]):
+    """Resolve the persisted album for an additional-artbox mutation, or an error response."""
+    if client_surface_from_request(request) == "tv":
+        return None, None, None, ({"ok": False, "error": "Artbox changes are unavailable on TV."}, 403)
+    config = _app_config(request)
+    album, album_error = _require_album_payload(payload)
+    if album_error is not None:
+        return None, None, None, album_error
+    album, album_context = await _resolve_album_payload_context(config, album or {})
+    if album_context is None:
+        return None, None, None, ({"ok": False, "error": "Album root could not be resolved"}, 400)
+    _repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context, config, album, album_context.track_paths,
+    )
+    if identity_error is not None or album_id is None:
+        return None, None, None, identity_error or ({"ok": False, "error": "Album identity could not be resolved"}, 409)
+    return album, album_context, album_id, None
+
+
+@router.post("/utilities/cover-lookup/additional-artwork")
+async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONResponse:
+    """Choose the art for an album's second artbox (slot 1). Slot 0 stays the album cover."""
+    from music_app.services.album_additional_artworks_postgres import (
+        ADDITIONAL_ARTWORK_SLOTS,
+        AlbumAdditionalArtworkRepository,
+    )
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    config = _app_config(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    try:
+        slot = int(payload.get("slot"))
+    except (TypeError, ValueError):
+        slot = 0
+    if slot not in ADDITIONAL_ARTWORK_SLOTS:
+        return _json_response(({"ok": False, "error": "Only one additional artbox is allowed"}, 400))
+    source_kind = str(payload.get("source_kind") or "").strip()
+    album, album_context, album_id, error = await _additional_artwork_album_context(request, payload)
+    if error is not None:
+        return _json_response(error)
+    current = await run_in_threadpool(
+        PostgresLibraryBrowseRepository(config).build_album_detail_payload_by_id, album_id,
+    ) or {}
+    cover_path = None
+    remote_url = None
+    if source_kind == "local":
+        try:
+            resolved = validate_local_cover_source(
+                config, album_context.album_root, str(payload.get("source_path") or "").strip(),
+                track_paths=album_context.track_paths,
+            )
+        except ValueError as exc:
+            return _json_response(({"ok": False, "error": str(exc)}, 400))
+        except FileNotFoundError:
+            return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+        cover_path = str(resolved)
+        same_art = str(current.get("cover_path") or "").strip() == cover_path
+    elif source_kind == "remote":
+        remote_url = str(payload.get("remote_url") or "").strip()
+        snapshot = await run_in_threadpool(
+            AlbumCoverCandidateSnapshotRepository(config).get_for_album_context, album_id=album_id,
+        ) or {}
+        known_urls = {
+            str(candidate.get(field) or "").strip()
+            for candidate in list(snapshot.get("candidates") or [])
+            if isinstance(candidate, Mapping)
+            for field in ("url", "thumbnail_url")
+        }
+        if not remote_url.startswith(("https://", "http://")) or remote_url not in known_urls:
+            return _json_response(({"ok": False, "error": "Choose one of this album's cover candidates"}, 400))
+        same_art = remote_url in {
+            str(current.get("remote_cover_url") or "").strip(),
+            str(current.get("remote_cover_thumbnail_url") or "").strip(),
+        }
+    else:
+        return _json_response(({"ok": False, "error": "Unsupported artwork source"}, 400))
+    if same_art:
+        return _json_response(({"ok": False, "error": "This art is already in the first artbox"}, 409))
+    actor = getattr(request.state, "current_actor", None)
+    artworks = await run_in_threadpool(
+        AlbumAdditionalArtworkRepository(config).save,
+        album_id=album_id, slot=slot, source_kind=source_kind,
+        cover_path=cover_path, remote_url=remote_url,
+        account_id=getattr(actor, "account_id", None),
+    )
+    return JSONResponse({"ok": True, "album_id": album_id, "additional_artworks": artworks})
+
+
+@router.post("/utilities/cover-lookup/additional-artwork/remove")
+async def utilities_cover_lookup_additional_artwork_remove(request: Request) -> JSONResponse:
+    from music_app.services.album_additional_artworks_postgres import (
+        ADDITIONAL_ARTWORK_SLOTS,
+        AlbumAdditionalArtworkRepository,
+    )
+
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    try:
+        slot = int(payload.get("slot"))
+    except (TypeError, ValueError):
+        slot = 0
+    if slot not in ADDITIONAL_ARTWORK_SLOTS:
+        return _json_response(({"ok": False, "error": "Unknown artbox"}, 400))
+    _album, _context, album_id, error = await _additional_artwork_album_context(request, payload)
+    if error is not None:
+        return _json_response(error)
+    artworks = await run_in_threadpool(
+        AlbumAdditionalArtworkRepository(_app_config(request)).remove, album_id=album_id, slot=slot,
+    )
+    return JSONResponse({"ok": True, "album_id": album_id, "additional_artworks": artworks})
+
+
 @router.post("/utilities/cover-lookup/local-delete")
 async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     config = _app_config(request)

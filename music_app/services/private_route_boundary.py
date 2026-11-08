@@ -130,6 +130,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.delete",
     ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.upload",
     ("POST", "/utilities/cover-lookup/save-remote"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/additional-artwork"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/additional-artwork/remove"): "library.covers.write",
     ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.link",
     ("POST", "/utilities/fetch-cover"): "library.covers.fetch",
     ("POST", "/utilities/fetch-covers-unsuccessful"): "library.covers.fetch",

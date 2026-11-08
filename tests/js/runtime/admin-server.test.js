@@ -34,7 +34,7 @@ function runtime(initial = {}) {
   const retry = element({ hidden: true });
   const status = element({ hidden: true });
   const error = element({ hidden: true });
-  const progress = element({ value: 0, max: 1 });
+  const browse = element({ disabled: true, hasAttribute: (name) => name === 'data-path-input-browsable' });
   const fields = {
     '[data-preview-mode="album_folders"]': albumFolders,
     '[data-preview-mode="custom"]': custom,
@@ -44,9 +44,8 @@ function runtime(initial = {}) {
     '[data-preview-retry]': retry,
     '[data-preview-status]': status,
     '[data-preview-error]': error,
-    '[data-preview-progress]': progress,
-    '[data-preview-counts]': element(),
-    '[data-preview-location]': element(),
+    '[data-preview-counts]': element({ hidden: true }),
+    '[data-path-input-browse]': browse,
     '[data-preview-failure]': element({ hidden: true }),
   };
   const form = element();
@@ -72,7 +71,7 @@ function runtime(initial = {}) {
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
-  return { context, form, albumFolders, custom, pathInput, save, cancel, retry, status, error, progress, fetches, polls };
+  return { context, form, albumFolders, custom, pathInput, save, cancel, retry, status, error, browse, fetches, polls };
 }
 
 const settleController = () => new Promise(resolve => setImmediate(resolve));
@@ -84,7 +83,7 @@ async function mount(ui, options) {
   return cleanup;
 }
 
-test('save stays disabled until initial server state loads', async () => {
+test('save stays disabled until a valid unsaved choice exists', async () => {
   const ui = runtime({
     mode: 'album_folders', revision: 4, operation_state: 'idle',
     total_count: 0, completed_count: 0, failed_count: 0, total_bytes: 0,
@@ -94,8 +93,27 @@ test('save stays disabled until initial server state loads', async () => {
   const cleanup = ui.context.window.AlbumHavenMountAdminServer(ui.context.document);
   assert.equal(ui.save.disabled, true);
   await settleController();
+  assert.equal(ui.save.disabled, true, 'the saved choice is not a change');
+  const counts = ui.form.querySelector('[data-preview-counts]');
+  assert.equal(counts.hidden, false);
+  assert.equal(counts.textContent, '17 previews · 4.0 KB stored');
+
+  ui.albumFolders.checked = false;
+  ui.custom.checked = true;
+  await ui.custom.listeners.get('change')();
+  assert.equal(ui.pathInput.value, '', 'a special path is never filled in silently');
+  assert.equal(ui.save.disabled, true, 'a special path without a folder cannot be saved');
+  ui.pathInput.value = '   ';
+  ui.pathInput.listeners.get('input')();
+  assert.equal(ui.save.disabled, true);
+  ui.pathInput.value = 'D:\Previews';
+  ui.pathInput.listeners.get('input')();
   assert.equal(ui.save.disabled, false);
-  assert.match(ui.form.querySelector('[data-preview-counts]').textContent, /17 previews · 4\.0 KB stored/);
+
+  ui.custom.checked = false;
+  ui.albumFolders.checked = true;
+  await ui.albumFolders.listeners.get('change')();
+  assert.equal(ui.save.disabled, true, 'returning to the saved choice disables Save again');
   cleanup();
 });
 
@@ -113,7 +131,9 @@ test('mode choice controls the server-path field and save payload', async () => 
   ui.custom.checked = true;
   await ui.custom.listeners.get('change')();
   assert.equal(ui.pathInput.disabled, false);
-  assert.equal(ui.pathInput.value, 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews');
+  assert.equal(ui.pathInput.value, '');
+  assert.equal(ui.pathInput.placeholder, 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews');
+  assert.equal(ui.save.disabled, true);
 
   ui.custom.checked = false;
   ui.albumFolders.checked = true;
@@ -125,6 +145,7 @@ test('mode choice controls the server-path field and save payload', async () => 
   await ui.custom.listeners.get('change')();
 
   ui.pathInput.value = 'D:\\Album previews';
+  ui.pathInput.listeners.get('input')();
   await ui.form.listeners.get('submit')({ preventDefault() {} });
   const request = ui.fetches.at(-1);
   assert.equal(request.url, '/admin/server/preview-storage');
@@ -145,8 +166,8 @@ test('active relocation polls a bounded status request and exposes cancel', asyn
 
   assert.equal(ui.cancel.hidden, false);
   assert.equal(ui.retry.hidden, true);
-  assert.equal(ui.progress.value, 4);
-  assert.equal(ui.progress.max, 10);
+  assert.match(ui.form.querySelector('[data-preview-counts]').textContent, /4 of 10 moved · 0 failed/);
+  assert.equal(ui.save.disabled, true);
   assert.equal(ui.polls.length, 1);
   assert.equal(ui.polls[0].delay, 2000);
 
@@ -190,13 +211,34 @@ test('completed relocation with failures permits choosing a new destination', as
 
   assert.equal(ui.albumFolders.disabled, false);
   assert.equal(ui.custom.disabled, false);
-  assert.equal(ui.save.disabled, false);
   assert.equal(ui.retry.hidden, false);
 
   ui.albumFolders.checked = false;
   ui.custom.checked = true;
   await ui.custom.listeners.get('change')();
   assert.equal(ui.pathInput.disabled, false);
+  ui.pathInput.value = 'E:\Previews';
+  ui.pathInput.listeners.get('input')();
+  assert.equal(ui.save.disabled, false);
+});
+
+test('folder browse fills the special path and is disabled for album folders', async () => {
+  const ui = runtime({
+    mode: 'album_folders', revision: 3, operation_state: 'idle',
+    total_count: 0, completed_count: 0, failed_count: 0, suggested_path: 'C:\Previews',
+  });
+  const chosen = [];
+  await mount(ui, { chooseFolder: async settings => { chosen.push(settings.title); return 'F:/Album previews'; } });
+
+  assert.equal(ui.browse.disabled, true, 'album folders keep the folder picker disabled');
+  ui.albumFolders.checked = false;
+  ui.custom.checked = true;
+  await ui.custom.listeners.get('change')();
+  assert.equal(ui.browse.disabled, false);
+  await ui.browse.listeners.get('click')({ preventDefault() {} });
+  assert.deepEqual(chosen, ['Choose server folder']);
+  assert.equal(ui.pathInput.value, 'F:/Album previews');
+  assert.equal(ui.save.disabled, false);
 });
 
 test('canceled relocation offers resume so moved bytes can be reconciled', async () => {
@@ -235,4 +277,13 @@ test('active relocation retries polling after a transient status failure', async
   await ui.polls[0].callback();
   assert.equal(ui.polls.length, 2);
   cleanup();
+});
+
+test('folder browse stays disabled without the browse permission', async () => {
+  const ui = runtime({ mode: 'custom', requested_root: 'C:/Previews', revision: 2, operation_state: 'idle' });
+  ui.browse.hasAttribute = () => false;
+  await mount(ui);
+  assert.equal(ui.custom.checked, true);
+  assert.equal(ui.pathInput.disabled, false);
+  assert.equal(ui.browse.disabled, true);
 });

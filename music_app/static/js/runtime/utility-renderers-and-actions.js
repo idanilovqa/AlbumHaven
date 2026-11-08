@@ -838,6 +838,7 @@ function renderUtilityModalContent(options = {}) {
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
+  els.overlay?.removeAttribute?.('data-utility-tab-pending');
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;

@@ -20,7 +20,7 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
   assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
   assert.match(adminNavigation, /<form[^>]*method="post"[^>]*action="\/logout">[\s\S]*name="csrf_token"[\s\S]*navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)[\s\S]*<\/form>/);
-  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
+  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section == 'users'/);
   assert.match(navigationMacro, /set tag = 'button' if action else 'a'/);
   assert.match(navigationMacro, /if action %}type="submit"/);
   assert.match(navigationMacro, /if selected %} aria-current="{{ 'page' if settings else 'true' }}"/);
@@ -30,7 +30,7 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
 test('shared page headers keep Back before the title on desktop', () => {
   assert.match(
     mobileLayoutCss,
-    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
+    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1 \/ span 2;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
   );
 });
 
@@ -76,7 +76,7 @@ test('Account identity selector belongs to its account content, not duplicate mo
   const source = readProjectFile('tests', 'e2e', 'phase7', 'poms', 'authPages.js');
   const assignment = source.match(/this\.signedInIdentity\s*=\s*([^;]+);/)?.[1];
   assert.equal(assignment, `page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
-  assert.match(accountTemplate, /<section class="account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
+  assert.match(accountTemplate, /<section class="settings-main account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
   // No first()/nth()/visibility fallback: duplicate identities within the owning
   // account surface must still fail Playwright's strict locator assertions.
   assert.doesNotMatch(assignment, /first\(|nth\(|:visible|filter\(/);
@@ -90,4 +90,16 @@ test('disabled shared buttons are visibly inactive and pointer-hover checkbox ou
   assert.ok(checkboxHover);
   assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
   assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);
+});
+
+test('UI-7: every Settings page script loads before settings navigation mounts the page, on both hosts', () => {
+  // Settings navigation mounts the visible Settings page as soon as it runs; a page script loaded after it
+  // left that page unmounted (the Server page's storage choices stayed disabled in the library document).
+  const index = readProjectFile('music_app', 'templates', 'index.html');
+  const navigation = index.indexOf('/static/js/settings-navigation.js');
+  for (const script of ['/static/js/account.js', '/static/js/admin-members.js', '/static/js/admin-server.js']) {
+    assert.ok(index.indexOf(script) >= 0 && index.indexOf(script) < navigation, `${script} loads before settings navigation`);
+  }
+  const server = readProjectFile('music_app', 'templates', 'admin-server.html');
+  assert.ok(server.indexOf('partials/admin-ui-assets.html') < server.indexOf('/static/js/settings-navigation.js'), 'the direct Server page loads admin-server.js first');
 });

@@ -5931,6 +5931,50 @@ test('artist blocks place owned albums before a counted Featured On subsection',
     ]);
 });
 
+test('a split release stays in the main discography instead of Featured On (Jordsjø / Breidablik)', () => {
+    const { context } = createRuntimeContext();
+    context.isGallerySplitAlbum = (album) => album.is_split_album === true;
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const owned = { key: 'jordsjo::nattfiolen', name: 'Nattfiolen', artist_relationship: 'owned' };
+    const split = { key: 'jordsjo / breidablik::kontraster', name: 'Kontraster', artist_relationship: 'featured', is_split_album: true };
+    const guest = { key: 'va::guest', name: 'Guest spot', artist_relationship: 'featured' };
+    const blocks = virtualGrid.getBlocksForSection({ group: { albums: [owned, split, guest] } });
+    assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+        { kind: 'row', albums: [owned, split] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+});
+
+test('Separate Split Albums gives each release type its own split section before Featured On', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const owned = { key: 'jordsjo::nattfiolen', name: 'Nattfiolen', release_type: 'Album', artist_relationship: 'owned' };
+    const studioSplit = { key: 'jordsjo / breidablik::kontraster', name: 'Kontraster', release_type: 'Album', artist_relationship: 'featured', is_split_album: true };
+    const compilationSplit = { key: 'jordsjo / breidablik::collected', name: 'Collected split', release_type: 'Compilation', artist_relationship: 'owned', is_split_album: true };
+    const guest = { key: 'va::guest', name: 'Guest spot', artist_relationship: 'featured' };
+    const section = { group: { albums: [compilationSplit, owned, studioSplit, guest] } };
+    context.state.gallery.mainState = { ...context.state.gallery.mainState, splitAlbums: 'separate' };
+    assert.deepEqual(JSON.parse(JSON.stringify(virtualGrid.getBlocksForSection(section))), [
+        { kind: 'subheading', title: 'Studio Albums', count: 1 },
+        { kind: 'row', albums: [owned] },
+        { kind: 'subheading', title: 'Studio Split', count: 1 },
+        { kind: 'row', albums: [studioSplit] },
+        { kind: 'subheading', title: 'Compilation Split', count: 1 },
+        { kind: 'row', albums: [compilationSplit] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+    context.state.gallery.mainState = { ...context.state.gallery.mainState, splitAlbums: 'show' };
+    assert.deepEqual(JSON.parse(JSON.stringify(virtualGrid.getBlocksForSection(section))), [
+        { kind: 'row', albums: [compilationSplit, owned, studioSplit] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+});
+
 test('selected Hans Zimmer keeps joint owners and one chronological Featured On section', () => {
   const { context } = createRuntimeContext();
   const preferencePath = path.join(path.dirname(helperPath), 'gallery-display-preference-helpers.js');

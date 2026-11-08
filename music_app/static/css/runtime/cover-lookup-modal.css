@@ -169,10 +169,6 @@
   display: grid;
   gap: 8px;
 }
-.cover-lookup-current-release-choice > .cover-lookup-section-title {
-  letter-spacing: normal;
-  text-transform: none;
-}
 .cover-lookup-current-release {
   display: flex;
   align-items: center;
@@ -204,8 +200,8 @@
 .cover-lookup-section-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 10px;
 }
 .cover-lookup-section-title,
 .cover-lookup-subsection-title {
@@ -506,16 +502,54 @@
   outline-offset: -2px;
   box-shadow: none;
 }
+/* INT-028: the suggested cover's green frame glows: a light travels around its edge and the frame slowly
+   breathes. Reduced motion keeps the steady frame. */
+@property --cover-lookup-suggest-angle { syntax: '<angle>'; inherits: false; initial-value: 0turn; }
+@keyframes cover-lookup-suggest-travel { to { --cover-lookup-suggest-angle: 1turn; } }
+@keyframes cover-lookup-suggest-breathe {
+  50% { outline-color: color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
+}
 .cover-lookup-art-card.is-suggested {
+  position: relative;
   border-color: var(--appearance-success, var(--success, #52d7aa));
-  outline-color: var(--appearance-success, var(--success, #52d7aa));
-  animation: cover-lookup-suggested-pulse 1.8s ease-in-out infinite;
+  outline: 3px solid var(--appearance-success, var(--success, #52d7aa));
+  outline-offset: -2px;
+  animation: cover-lookup-suggest-breathe 2.8s ease-in-out infinite;
 }
-@keyframes cover-lookup-suggested-pulse {
-  50% { box-shadow: 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
+.cover-lookup-art-card.is-suggested::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  padding: 3px;
+  border-radius: inherit;
+  background: conic-gradient(from var(--cover-lookup-suggest-angle), transparent 0turn 0.72turn,
+    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.86turn, #fff 0.9turn,
+    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.94turn, transparent 1turn);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: cover-lookup-suggest-travel 3.2s linear infinite;
 }
+/* INT-028 (owner): a suggested cover the user selects keeps both frames: the blue selection inside, the
+   breathing green suggestion ring outside it. */
+@keyframes cover-lookup-suggest-breathe-ring {
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent), 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
+}
+.cover-lookup-art-card.is-suggested.is-active {
+  border-color: #60a5fa;
+  outline: 3px solid #60a5fa;
+  outline-offset: -2px;
+  box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa));
+  overflow: visible;
+  animation: cover-lookup-suggest-breathe-ring 2.8s ease-in-out infinite;
+}
+.cover-lookup-art-card.is-suggested.is-active::after { inset: -4px; border-radius: 17px; }
 @media (prefers-reduced-motion: reduce) {
-  .cover-lookup-art-card.is-suggested { animation: none; }
+  .cover-lookup-art-card.is-suggested, .cover-lookup-art-card.is-suggested.is-active { animation: none; }
+  .cover-lookup-art-card.is-suggested::after { display: none; }
 }
 .cover-lookup-art-preview {
   position: relative;
@@ -769,61 +803,6 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
-.version-picker-card {
-  width: min(720px, calc(100vw - 32px));
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  gap: 12px;
-}
-
-.version-picker-header,
-.version-picker-actions {
-  flex: 0 0 auto;
-}
-
-.version-picker-actions .button {
-  min-width: 96px;
-  font-weight: 700;
-}
-
-.version-picker-cancel {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.version-picker-save {
-  border-color: rgba(96, 165, 250, 0.42);
-  background: rgba(96, 165, 250, 0.18);
-  color: #eff6ff;
-}
-
-.version-picker-save:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: rgba(96, 165, 250, 0.28);
-}
-
-.version-picker-save:disabled {
-  opacity: 0.45;
-  cursor: default;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(245, 247, 250, 0.56);
-}
-
-.version-picker-body {
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.version-picker-description {
-  margin: 0;
-  color: rgba(245, 247, 250, 0.82);
-}
-
 .version-picker-list {
   display: flex;
   flex-direction: column;
@@ -935,3 +914,8 @@
     box-shadow: none; border-color: Highlight;
   }
 }
+/* Split-release chooser: a compact NavigationTree list inside the shared dialog. */
+.cover-lookup-split-choice { display: grid; gap: 4px; max-height: min(60vh, 420px); margin-top: 12px; overflow-y: auto; }
+/* Second-artbox mode: the first artbox's art is shown but cannot be chosen again. */
+.cover-lookup-art-card.is-disabled { opacity: .38; filter: grayscale(1); cursor: not-allowed; }
+.cover-lookup-art-card.is-disabled .cover-lookup-art-delete { display: none; }

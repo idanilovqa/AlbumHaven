@@ -81,36 +81,6 @@
   background: rgba(96,165,250,0.12);
   border-color: rgba(96,165,250,0.35);
 }
-.track-modal-version-context-menu {
-  position: fixed;
-  z-index: 160;
-  min-width: 190px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(17, 24, 39, 0.98);
-  box-shadow: 0 16px 42px rgba(0,0,0,0.34);
-}
-.track-modal-version-context-menu[hidden] {
-  display: none;
-}
-.track-modal-version-context-menu button {
-  width: 100%;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.76rem;
-  font-weight: 700;
-  padding: 8px;
-  text-align: left;
-}
-.track-modal-version-context-menu button:hover {
-  background: rgba(96,165,250,0.12);
-}
-
 .track-modal-body {
   display: grid;
   grid-template-columns: minmax(228px, 288px) minmax(0, 1fr);
@@ -136,26 +106,6 @@
 }
 .track-modal-duplicate-tabs[hidden] {
   display: none;
-}
-.track-modal-duplicate-folder.ui-button {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  padding: 0;
-}
-.track-modal-duplicate-folder::before {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  background: currentColor;
-  mask: url('/static/images/icons/tabler-folder-open.svg') center / contain no-repeat;
-  -webkit-mask: url('/static/images/icons/tabler-folder-open.svg') center / contain no-repeat;
-}
-.track-modal-duplicate-folder .ui-button__content {
-  position: relative;
-  padding-top: 3px;
-  font-size: 10px;
 }
 .track-modal-duplicate-tab {
   border: 1px solid var(--border);
@@ -721,7 +671,18 @@
   .track-modal-cover:has(> .album-details-cover-source-markers) .track-modal-cover-shell {
     height: min(calc(100% - 32px), 100cqw);
   }
+  /* UI-14 (owner): adding a second artbox never resizes the first, not even by a pixel. Each artbox keeps the
+     single-cover size; the second stacks below and the cover column scrolls to it. */
+  .track-modal-cover:has(> .track-modal-additional-artbox) {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
+    overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  }
+  .track-modal-cover:has(> .track-modal-additional-artbox) > * { flex: 0 0 auto; }
+  .track-modal-cover:has(> .album-details-service-links) .track-modal-cover-shell { height: min(calc(100% - 30px), 100cqw); }
+  .track-modal-cover:has(> .track-modal-additional-artbox) > .album-details-service-links { margin-top: 0; }
 }
+.track-modal-additional-artbox { margin-top: 12px; }
+@media (min-width: 721px) { .track-modal-additional-artbox { margin-top: 0; } }
 .track-modal-main { min-height: 0; overflow: hidden; }
 .track-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {

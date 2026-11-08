@@ -3500,6 +3500,7 @@ async function openCoverLookupModal(album, options = {}) {
     await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
     return;
   }
+  if (typeof cancelBottomSheetExit === 'function') cancelBottomSheetExit(els.overlay);
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
@@ -3582,7 +3583,10 @@ async function openCoverLookupModal(album, options = {}) {
   }
 }
 
-function closeCoverLookupModal() {
+function closeCoverLookupModal({ immediate = false } = {}) {
+  const sheetOverlay = getCoverLookupModalElements().overlay;
+  if (!immediate && isCoverLookupMobileSheet(sheetOverlay) && !sheetOverlay.hidden && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(sheetOverlay, () => closeCoverLookupModal({ immediate: true }))) return;
   if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;

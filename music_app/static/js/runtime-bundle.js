@@ -7127,6 +7127,10 @@ const galleryMainSurfaceCloseCallbacks = new WeakMap();
 function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
+  if (!immediate && active.surface.classList?.contains?.('is-mobile-artist-dialog') && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(active.surface, () => {
+        if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true });
+      }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
   if (active.key === 'search-suggestions' && state.ui) {
@@ -34269,6 +34273,7 @@ async function openCoverLookupModal(album, options = {}) {
     await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
     return;
   }
+  if (typeof cancelBottomSheetExit === 'function') cancelBottomSheetExit(els.overlay);
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
@@ -34351,7 +34356,10 @@ async function openCoverLookupModal(album, options = {}) {
   }
 }
 
-function closeCoverLookupModal() {
+function closeCoverLookupModal({ immediate = false } = {}) {
+  const sheetOverlay = getCoverLookupModalElements().overlay;
+  if (!immediate && isCoverLookupMobileSheet(sheetOverlay) && !sheetOverlay.hidden && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(sheetOverlay, () => closeCoverLookupModal({ immediate: true }))) return;
   if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
@@ -49939,6 +49947,24 @@ function syncMobileUtilityDetail() {
   if (!modal) return;
   modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }
+
+// INT-023 (owner): a bottom sheet closed by X, the backdrop or a drag slides back down with the same motion it
+// opened with. Returns true while the exit runs; `done` then finishes the close (once, unless reopened).
+const BOTTOM_SHEET_EXIT_MS = 260;
+function runBottomSheetExit(sheet, done, { backdrop = null } = {}) {
+  if (!sheet?.classList || sheet.classList.contains('is-sheet-closing')) return Boolean(sheet?.classList?.contains('is-sheet-closing'));
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  sheet.classList.add('is-sheet-closing');
+  backdrop?.classList?.add('is-sheet-closing');
+  window.setTimeout(() => {
+    if (!sheet.classList.contains('is-sheet-closing')) return; // reopened meanwhile
+    sheet.classList.remove('is-sheet-closing');
+    backdrop?.classList?.remove('is-sheet-closing');
+    done();
+  }, BOTTOM_SHEET_EXIT_MS);
+  return true;
+}
+function cancelBottomSheetExit(sheet) { sheet?.classList?.remove('is-sheet-closing'); }
 
 // END js/runtime/mobile-navigation.js
 

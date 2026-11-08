@@ -1031,3 +1031,21 @@ function syncMobileUtilityDetail() {
   if (!modal) return;
   modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }
+
+// INT-023 (owner): a bottom sheet closed by X, the backdrop or a drag slides back down with the same motion it
+// opened with. Returns true while the exit runs; `done` then finishes the close (once, unless reopened).
+const BOTTOM_SHEET_EXIT_MS = 260;
+function runBottomSheetExit(sheet, done, { backdrop = null } = {}) {
+  if (!sheet?.classList || sheet.classList.contains('is-sheet-closing')) return Boolean(sheet?.classList?.contains('is-sheet-closing'));
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  sheet.classList.add('is-sheet-closing');
+  backdrop?.classList?.add('is-sheet-closing');
+  window.setTimeout(() => {
+    if (!sheet.classList.contains('is-sheet-closing')) return; // reopened meanwhile
+    sheet.classList.remove('is-sheet-closing');
+    backdrop?.classList?.remove('is-sheet-closing');
+    done();
+  }, BOTTOM_SHEET_EXIT_MS);
+  return true;
+}
+function cancelBottomSheetExit(sheet) { sheet?.classList?.remove('is-sheet-closing'); }

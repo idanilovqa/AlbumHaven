@@ -423,11 +423,18 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
    `translate` leaves `transform` free for a sheet's own drag offset. */
 @keyframes bottom-sheet-enter { from { translate: 0 100%; } }
 @keyframes bottom-sheet-backdrop-enter { from { opacity: 0; } }
+@keyframes bottom-sheet-exit { to { translate: 0 100%; } }
+@keyframes bottom-sheet-backdrop-exit { to { opacity: 0; } }
 @media (max-width: 900px) and (prefers-reduced-motion: no-preference) {
   .artist-info-overlay.is-mobile-artist-dialog,
   .cover-lookup-modal.is-mobile-sheet > .cover-lookup-modal-dialog { animation: bottom-sheet-enter 320ms cubic-bezier(.22, .9, .3, 1); }
   .mobile-artist-info-backdrop:not([hidden]),
   .cover-lookup-modal.is-mobile-sheet { animation: bottom-sheet-backdrop-enter 320ms ease-out; }
+  /* Closing (X, backdrop, drag) plays the same motion in reverse. */
+  .artist-info-overlay.is-mobile-artist-dialog.is-sheet-closing,
+  .cover-lookup-modal.is-mobile-sheet.is-sheet-closing > .cover-lookup-modal-dialog { animation: bottom-sheet-exit 260ms cubic-bezier(.5, 0, .75, .2) forwards; }
+  .mobile-artist-info-backdrop.is-sheet-closing,
+  .cover-lookup-modal.is-mobile-sheet.is-sheet-closing { animation: bottom-sheet-backdrop-exit 260ms ease-in forwards; }
 }
 @media (max-width: 900px) {
   :is(button, a, [role="button"], .album-track-table__row) { -webkit-tap-highlight-color: transparent; }

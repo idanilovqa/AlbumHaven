@@ -343,6 +343,10 @@ const galleryMainSurfaceCloseCallbacks = new WeakMap();
 function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
+  if (!immediate && active.surface.classList?.contains?.('is-mobile-artist-dialog') && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(active.surface, () => {
+        if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true });
+      }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
   if (active.key === 'search-suggestions' && state.ui) {

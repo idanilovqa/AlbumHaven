@@ -34,7 +34,7 @@ test('FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after rel
 
 test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button', {
   tag: '@area:gallery-search',
-}, async ({ artistPageSettingsActions, galleryActions, navigationPanelActions, page, stepLogger }) => {
+}, async ({ artistPageSettingsActions, freshBrowserSession, galleryActions, navigationPanelActions, page, stepLogger }) => {
   // Owner rule (11-08): no buttons in the web navigation-tree header; a new side-bar entry goes vertically under
   // the existing side-bar buttons; one control in one place; never an empty or icon-less button.
   const navigation = navigationPanelActions.navigationPanel;
@@ -73,5 +73,26 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
   await stepLogger.step('The side-bar button opens library-wide Loose Tracks', async () => {
     await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
     await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeVisible();
+    await expect(page.locator('#non-album-modal-subtitle')).toHaveText(/^\d+ tracks?$/);
+  });
+  await stepLogger.step('INT-033: on a phone the Loose Tracks page header shows "Loose Tracks / N tracks"', async () => {
+    const desktopCount = (await page.locator('#non-album-modal-subtitle').textContent()).trim();
+    const phone = (await freshBrowserSession.create({ phone: true })).page;
+    await phone.goto('/');
+    await phone.locator('#mobile-library-button').click();
+    await phone.locator('#shell-navigation-rail [data-navigation-mode="collections"]').tap();
+    const title = phone.locator('#mobile-page-title');
+    const summary = phone.locator('#mobile-page-summary');
+    await expect(title).toBeVisible();
+    await expect(title).toHaveText('Loose Tracks');
+    await expect(summary).toBeVisible();
+    await expect(summary).toHaveText(desktopCount);
+    const header = await phone.evaluate(() => {
+      const box = (id) => document.getElementById(id).getBoundingClientRect();
+      const t = box('mobile-page-title'), s = box('mobile-page-summary');
+      return { below: s.top >= t.bottom - 1, height: s.height, inView: s.bottom <= window.innerHeight && s.top >= 0 };
+    });
+    expect(header).toMatchObject({ below: true, inView: true });
+    expect(header.height).toBeGreaterThan(8);
   });
 });

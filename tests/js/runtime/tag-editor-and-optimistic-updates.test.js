@@ -290,6 +290,34 @@ test('version tabs are the sole edition indicator while standalone editions reta
   );
 });
 
+test('re-rendering an unchanged album keeps its header (and Close) in place', () => {
+  // The summary render and the hydrated details usually build the same header;
+  // rewriting it replaced Close under the pointer and a close click waited ~500 ms.
+  const album = {
+    key: 'stable', name: 'Stable Album', album_artist: 'Stable Artist', year: 2001,
+    release_type: 'ALBUM', cover_path: 'C:\\Music\\Stable\\cover.png', tracks: [],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:stable-cover', cached: true }),
+  });
+  let html = '';
+  let writes = 0;
+  Object.defineProperty(elements.header, 'innerHTML', {
+    configurable: true,
+    get: () => html,
+    set: (value) => { writes += 1; html = value; },
+  });
+
+  context.renderTrackModalRelease(album);
+  context.renderTrackModalRelease({ ...album, tracks: [] });
+  assert.equal(writes, 1);
+
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 2, 'a changed header still re-renders');
+  assert.match(html, /2002/);
+});
+
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
   const context = loadHelper([]);
 

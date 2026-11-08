@@ -14694,6 +14694,106 @@ def test_a_cached_complete_list_serves_the_first_page_without_copying_it_whole()
         browse.invalidate_postgres_utility_projection_cache(database_url=url)
 
 
+def test_concurrent_first_opens_share_one_candidate_query():
+    """A second open while the first page was still building ran the whole-library
+    candidate query again (about 5 s each on the owner's library)."""
+    import threading
+
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-single-flight-test"
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": url},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    repository._browse_connection_context = lambda: _ProblematicSnapshotConnectionStub()
+    row = _normal_problematic_product_row(album_key="album-1", album_title="Album 1")
+    row.update({"album_id": 1, "track_id": 501, "track_key": "track-1"})
+    queries, building, release, second_looked = [], Event(), Event(), Event()
+
+    def load_candidate_ids(*, connection, limit):
+        queries.append(limit)
+        building.set()
+        assert release.wait(10)
+        return [1]
+
+    cached = repository._get_cached_utility_projection
+
+    def get_cached(kind, **options):
+        if threading.current_thread().name == "second-open":
+            second_looked.set()
+        return cached(kind, **options)
+
+    repository._load_problematic_candidate_ids = load_candidate_ids
+    repository._load_problematic_file_rows = lambda album_key=None, **kwargs: [row]
+    repository._load_missing_album_rows = lambda *, connection, limit: []
+    repository._get_cached_utility_projection = get_cached
+    pages = {}
+
+    def open_page(name):
+        pages[name] = repository.build_problematic_files_page(limit=50)
+
+    first = threading.Thread(target=open_page, args=("first",))
+    second = threading.Thread(target=open_page, args=("second",), name="second-open")
+    try:
+        first.start()
+        assert building.wait(10)
+        second.start()
+        assert second_looked.wait(10)
+        release.set()
+        first.join(10)
+        second.join(10)
+        assert queries == [50], "the second open waits for the first build"
+        assert [item["key"] for item in pages["first"]["items"]] == ["album-1"]
+        assert [item["key"] for item in pages["second"]["items"]] == ["album-1"]
+    finally:
+        release.set()
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+@pytest.mark.parametrize(("previous_quota", "category", "invalidated"), [
+    (False, "no_candidate", False),
+    (False, "timeout", False),
+    (False, "rate_limit_quota", True),
+    (True, "rate_limit_quota", False),
+    (True, "no_candidate", True),
+])
+def test_spotify_outcomes_drop_problematic_files_only_when_the_quota_problem_changes(
+    monkeypatch, previous_quota, category, invalidated,
+):
+    """Every Spotify outcome of a cover lookup dropped the cached list, so a running
+    lookup kept Problematic Files cold; only a failed quota outcome is listed."""
+    from music_app.services import cover_provider_outcomes_postgres as outcomes
+    from music_app.services import library_browse_postgres as browse
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def transaction(self):
+            return self
+
+        def execute(self, sql, params):
+            return self
+
+        def fetchone(self):
+            return {"quota": previous_quota}
+
+    dropped = []
+    monkeypatch.setattr(browse, "invalidate_postgres_utility_projection_cache",
+                        lambda **kwargs: dropped.append(kwargs["kinds"]))
+    outcomes.persist_cover_provider_outcomes(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/quota-test"},
+        album_id=7, album_key="album-7",
+        outcomes={"search_spotify": {"category": category}},
+        connect=lambda _url: Connection(),
+    )
+    assert dropped == ([("problematic-files",)] if invalidated else [])
+
+
 def test_problematic_files_summary_and_initial_detail_share_one_repeatable_read_snapshot():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 

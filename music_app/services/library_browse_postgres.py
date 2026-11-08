@@ -2660,40 +2660,53 @@ class PostgresLibraryBrowseRepository:
         )
         return payload
 
-    def build_problematic_files_payload(self) -> dict[str, object]:
-        kind = "problematic-files"
+    def _build_utility_projection_once(
+        self,
+        kind: str,
+        cached: Callable[[], dict[str, object] | None],
+        build: Callable[[int | None], dict[str, object]],
+    ) -> dict[str, object]:
+        """Concurrent requests share one build of a projection: the others wait
+        and read what it cached, or build again if it was invalidated meanwhile."""
+        cache_key = self._utility_projection_cache_key(kind)
         while True:
-            cached_payload = self._get_cached_utility_projection(kind)
-            if cached_payload is not None:
-                cached_payload["projection_cache_status"] = "hit"
-                return cached_payload
-            cache_key = self._utility_projection_cache_key(kind)
-            if cache_key is None:
-                payload = self._build_problematic_files_payload_uncached()
-                payload["projection_cache_status"] = "rebuilt"
+            payload = cached()
+            if payload is not None:
                 return payload
+            if cache_key is None:
+                return build(None)
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 flight = _UTILITY_PROJECTION_SINGLEFLIGHT.get(cache_key)
                 if flight is None:
                     flight = Event()
                     _UTILITY_PROJECTION_SINGLEFLIGHT[cache_key] = flight
                     generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-                    leader = True
-                else:
-                    leader = False
-            if leader:
-                break
+                    break
             flight.wait()
         try:
-            payload = self._build_problematic_files_payload_uncached()
-            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-            payload["projection_cache_status"] = "rebuilt"
-            return payload
+            return build(generation)
         finally:
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 if _UTILITY_PROJECTION_SINGLEFLIGHT.get(cache_key) is flight:
                     _UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
                     flight.set()
+
+    def build_problematic_files_payload(self) -> dict[str, object]:
+        kind = "problematic-files"
+
+        def cached() -> dict[str, object] | None:
+            payload = self._get_cached_utility_projection(kind)
+            if payload is not None:
+                payload["projection_cache_status"] = "hit"
+            return payload
+
+        def build(generation: int | None) -> dict[str, object]:
+            payload = self._build_problematic_files_payload_uncached()
+            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            payload["projection_cache_status"] = "rebuilt"
+            return payload
+
+        return self._build_utility_projection_once(kind, cached, build)
 
     def _build_problematic_files_payload_uncached(self) -> dict[str, object]:
         with self._connect_to_database() as connection:
@@ -2708,24 +2721,30 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
-        cached_payload = self._get_cached_utility_projection("problematic-files", copy_payload=False)
-        if cached_payload is not None:
-            # Copy only the page: the complete payload is megabytes on a real library.
-            page = deepcopy({key: value for key, value in cached_payload.items() if key != "items"})
-            page["items"] = deepcopy(list(cached_payload.get("items") or [])[:limit])
-            page["count"] = len(page["items"])
-            page["complete"] = False
-            page["total_candidate_count"] = None
-            page["projection_cache_status"] = "bounded"
-            return page
-        # Until the complete list is cached, a built first page is reused: every open
-        # would otherwise repeat the whole-library candidate query.
-        page_cache = self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}
-        if str(limit) in page_cache:
-            return deepcopy(page_cache[str(limit)])
-        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            page_generation = _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0)
+
+        def cached() -> dict[str, object] | None:
+            complete = self._get_cached_utility_projection("problematic-files", copy_payload=False)
+            if complete is not None:
+                # Copy only the page: the complete payload is megabytes on a real library.
+                page = deepcopy({key: value for key, value in complete.items() if key != "items"})
+                page["items"] = deepcopy(list(complete.get("items") or [])[:limit])
+                page["count"] = len(page["items"])
+                page["complete"] = False
+                page["total_candidate_count"] = None
+                page["projection_cache_status"] = "bounded"
+                return page
+            # Until the complete list is cached, a built first page is reused: every
+            # open would otherwise repeat the whole-library candidate query.
+            pages = self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}
+            return deepcopy(pages[str(limit)]) if str(limit) in pages else None
+
+        return self._build_utility_projection_once(
+            _PROBLEMATIC_FILES_PAGE_KIND,
+            cached,
+            lambda generation: self._build_problematic_files_first_page(limit=limit, generation=generation),
+        )
+
+    def _build_problematic_files_first_page(self, *, limit: int, generation: int | None) -> dict[str, object]:
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
@@ -2753,7 +2772,7 @@ class PostgresLibraryBrowseRepository:
             _PROBLEMATIC_FILES_PAGE_KIND,
             {**(self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}),
              str(limit): payload},
-            expected_generation=page_generation,
+            expected_generation=generation,
         )
         return payload
 
@@ -11174,7 +11193,8 @@ def _problematic_files_sql(
         exception_override_files as materialized (
           -- The few files that carry an exception override, found first. Joining
           -- every active file to its folder companions before this filter made
-          -- millions of rows on a real library (46 s of a 53 s cold request).
+          -- millions of rows on a real library (46 s of a 53 s cold request). One
+          -- pass over the active files matches an override by track id or by path.
           select distinct
             exception_files.track_id,
             exception_files.library_id,
@@ -11183,23 +11203,21 @@ def _problematic_files_sql(
             exception_files.file_album,
             exception_files.file_album_artist,
             exception_files.file_year
-          from (
-            select exception_files.*
-            from library.exception_overrides overrides
-            join active_problem_rows exception_files
-              on exception_files.library_id = overrides.library_id
-             and exception_files.track_id = overrides.track_id
-            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
-            union all
-            select exception_files.*
-            from library.exception_overrides overrides
-            join active_problem_rows exception_files
-              on exception_files.library_id = overrides.library_id
-             and exception_files.private_path = overrides.track_key
-            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
-          ) exception_files
+          from active_problem_rows exception_files
           where exception_files.file_album is not null
             and exception_files.file_album_artist is not null
+            and (
+              (exception_files.library_id, exception_files.track_id) in (
+                select overrides.library_id, overrides.track_id
+                from library.exception_overrides overrides
+                where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+              )
+              or (exception_files.library_id, exception_files.private_path) in (
+                select overrides.library_id, overrides.track_key
+                from library.exception_overrides overrides
+                where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+              )
+            )
         ),
         exception_source_tracks as materialized (
           select distinct

@@ -395,6 +395,10 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         () => readLoadedAlbumCount(page),
         { intervals: [100, 250, 500], timeout: 60_000 },
       ).toBe(loadedBefore + 1);
+      // The rendered album does not mean the watcher's refreshes are done: a
+      // later one could be taken for the response under test (it then predates
+      // the input). Wait for the app's own settled-query signal first.
+      await searchToolbarActions.waitForQuery(FULL_REFRESH_SEARCH_QUERY);
       responseBoundary = await observeResponseBoundary(
         cdp,
         candidateUrl => isFullSearchRefreshUrl(candidateUrl, FULL_REFRESH_SEARCH_QUERY),

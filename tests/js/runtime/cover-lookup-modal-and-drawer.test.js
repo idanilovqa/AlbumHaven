@@ -7997,7 +7997,7 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
     escapeHtml: value => String(value ?? ''),
     fetch: async () => ({ ok: true, json: async () => ({
       ok: true, local_inventory_complete: false, local_inventory_pending: false,
-      local_inventory_error: 'Local artwork storage is unavailable. Checking again shortly.',
+      local_inventory_error: "Can't read local art right now. Retrying.",
       local_covers: [{ path: 'N:/Album/front.jpg', width: 600, height: 600 }],
     }) }),
     setTimeout() { return 1; }, clearTimeout() {},
@@ -8011,9 +8011,9 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
 
   const html = body.innerHTML.replace(/\s+/g, ' ');
   const section = html.indexOf('<section class="cover-lookup-section">');
-  const alert = html.indexOf('Local artwork storage is unavailable');
+  const alert = html.indexOf('read local art right now');
   assert.ok(section >= 0 && alert > section, 'the alert is never above the LOCAL section');
-  assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="small-alert small-alert--warning cover-lookup-local-alert"[^>]*tabindex="0">.*?Local artwork storage is unavailable/, 'a compact, expandable alert right after the heading');
+  assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="small-alert small-alert--warning cover-lookup-local-alert"[^>]*tabindex="0">.*?read local art right now/, 'a compact, expandable alert right after the heading');
   assert.match(html, /<\/div> <div class="cover-lookup-gallery">/, 'the LOCAL gallery keeps its place under the heading');
 });
 

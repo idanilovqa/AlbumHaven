@@ -6568,6 +6568,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

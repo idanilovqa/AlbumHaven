@@ -74,8 +74,11 @@
 .small-alert:hover,
 .small-alert:focus-visible,
 .album-card__artbox-trigger:focus-visible .small-alert {
-  /* Grows to exactly its icon and text: no dead space. */
-  max-width: min(260px, 100%);
+  /* Grows to exactly its icon and text: no dead space. A longer message wraps so its whole text shows. */
+  max-width: min(320px, calc(100vw - 32px));
+  height: auto;
+  min-height: 30px;
+  border-radius: 15px;
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
@@ -272,3 +275,5 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 .small-alert.small-alert--badge.is-expanded { width: auto; max-width: 240px; padding-right: 10px; z-index: 5; position: relative; cursor: pointer; }
 .small-alert--badge.is-expanded .small-alert__text { display: inline; margin-left: 2px; color: #0b1018; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .small-alert--badge { cursor: pointer; }
+/* Expanded alerts show their full text (owner, 11-08): it wraps instead of being cut at the edge. */
+:is(.small-alert:hover, .small-alert:focus-visible, .album-card__artbox-trigger:focus-visible .small-alert):not(.small-alert--badge) .small-alert__text { white-space: normal; padding-block: 6px; line-height: 1.3; }

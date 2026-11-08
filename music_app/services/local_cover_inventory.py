@@ -21,7 +21,7 @@ where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Lib
 and libraries.library_kind = 'local' limit 1"""
 
 
-_STORAGE_UNAVAILABLE = "Local artwork storage is unavailable. Checking again shortly."
+_STORAGE_UNAVAILABLE = "Can't read local art right now. Retrying."
 
 
 def root_key(root: Path | str) -> str:

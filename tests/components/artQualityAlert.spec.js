@@ -63,3 +63,29 @@ test('mobile poor-art warning sits on the page body top-right, not in the header
   expect(body.x + body.width - (box.x + box.width)).toBeCloseTo(8, 0);
   expect(box.y - body.y).toBeCloseTo(8, 0);
 });
+
+test('an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setContent('<!doctype html><html><body style="margin:0;padding:16px;background:#101a29;color:#eef3fa"><div id="host" style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">LOCAL</h4></div></body></html>');
+  await page.addStyleTag({ path: path.join(staticRoot, 'css', 'runtime/alert-components.css') });
+  await page.addScriptTag({ content: "function escapeHtml(v){return String(v ?? '').replaceAll('\"','&quot;');}" });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', 'alert-components.js') });
+  await page.evaluate(() => {
+    document.getElementById('host').insertAdjacentHTML('beforeend', buildSmallAlertHtml({
+      severity: 'warning', focusable: true, className: 'cover-lookup-local-alert',
+      message: 'Some of these covers could not be listed because a folder is busy; the list refreshes on its own.',
+    }));
+  });
+  const alert = page.locator('.cover-lookup-local-alert');
+  await alert.focus();
+  await page.waitForTimeout(250);
+  const fit = await alert.evaluate((node) => {
+    const text = node.querySelector('.small-alert__text');
+    const box = node.getBoundingClientRect();
+    const textBox = text.getBoundingClientRect();
+    return { clipped: node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1 || textBox.right > box.right + 1,
+      right: node.getBoundingClientRect().right, viewport: window.innerWidth };
+  });
+  expect(fit.clipped).toBe(false);
+  expect(fit.right).toBeLessThanOrEqual(fit.viewport);
+});

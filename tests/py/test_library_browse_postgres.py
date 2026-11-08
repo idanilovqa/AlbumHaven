@@ -15137,6 +15137,42 @@ def test_problematic_files_invalidation_drops_the_last_list_and_rewarms(monkeypa
         browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
 
 
+def test_opened_rules_are_rebuilt_after_a_library_change_instead_of_on_the_next_click(monkeypatch):
+    """Settings > Rules took ~2 s on the shared library: every watcher change left it cold."""
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/rules-rewarm"
+    cache_key = (database_url, "rules")
+    timers, prewarmed = [], []
+
+    class RecordingTimer:
+        def __init__(self, delay, function, args):
+            timers.append((function, args))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(browse, "Timer", RecordingTimer)
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: prewarmed.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    repository._allow_background_prewarm = True
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", lambda: [])
+    try:
+        repository.build_utility_rules_payload()
+        browse.invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=["rules"])
+        assert cache_key not in browse._UTILITY_PROJECTION_CACHE
+        assert len(timers) == 1
+        timers[0][0](*timers[0][1])
+        assert prewarmed == ["rules"]
+    finally:
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_REWARM,
+                         browse._UTILITY_PROJECTION_GENERATIONS):
+            registry.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+
+
 def test_problematic_files_cold_first_page_answers_from_the_stored_last_list(monkeypatch):
     """A restarted server has no list in memory; the cold candidate pass took
     ~5 s on the owner's library. Migration 0117's snapshot answers at once."""

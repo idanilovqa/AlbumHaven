@@ -114,6 +114,9 @@ _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
 # The last complete Problematic Files list survives invalidation so the first
 # page and early search answer at once while the fresh list rebuilds.
 _STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
+# A list someone opened is rebuilt in the background after each library change,
+# so the next open answers from memory instead of rebuilding on the click.
+_REWARMED_UTILITY_KINDS = frozenset({"problematic-files", "rules"})
 _UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
 _UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
@@ -4019,9 +4022,8 @@ class PostgresLibraryBrowseRepository:
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
             if kind in _STALE_SERVED_UTILITY_KINDS:
                 _UTILITY_PROJECTION_STALE.pop(cache_key, None)
-                if self._allow_background_prewarm:
-                    # A list someone opened stays warm across later library changes.
-                    _UTILITY_PROJECTION_REWARM[cache_key] = partial(self.queue_utility_projection_prewarm, kind)
+            if kind in _REWARMED_UTILITY_KINDS and self._allow_background_prewarm:
+                _UTILITY_PROJECTION_REWARM[cache_key] = partial(self.queue_utility_projection_prewarm, kind)
 
     def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
         cache_key = self._utility_projection_cache_key(kind)
@@ -12319,12 +12321,23 @@ def _utility_rules_sql() -> str:
           limit 1
         ),
         relation_context as (
+          -- The whole-library alias map only explains ignored album-artist
+          -- problems; skip building it when no such rule exists.
           select
             library.libraries.id as library_id,
-            coalesce(
-              library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
-              '{}'::jsonb
-            ) as alias_to_canonical
+            case
+              when exists (
+                select 1
+                from library.ignored_repairs
+                where library.ignored_repairs.library_id = library.libraries.id
+                  and right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+              )
+                then coalesce(
+                  library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
+                  '{}'::jsonb
+                )
+              else '{}'::jsonb
+            end as alias_to_canonical
           from library.libraries
           join bootstrap_context
             on bootstrap_context.library_id = library.libraries.id
@@ -12346,7 +12359,7 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             null::text as file_private_path,
             null::jsonb as file_entry,
-            relation_context.alias_to_canonical
+            null::jsonb as alias_to_canonical
           from library.ignored_versions
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_versions.library_id
@@ -12375,7 +12388,10 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             library.local_track_files.private_path as file_private_path,
             library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
-            relation_context.alias_to_canonical
+            case
+              when right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+                then relation_context.alias_to_canonical
+            end as alias_to_canonical
           from library.ignored_repairs
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_repairs.library_id

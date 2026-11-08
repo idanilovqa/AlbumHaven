@@ -23,7 +23,7 @@ test('stop waits for the matching stopped acknowledgment before fixture restorat
       environment: createValidEnvironment(root, controlDirectory),
       createNonce: () => 'fixture-stop',
       pollIntervalMs: 1,
-      timeoutMs: 100,
+      timeoutMs: 10_000, // Real file writes; the fake sleep drives polling.
       async sleep() {
         polls += 1;
         assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'))), {
@@ -232,7 +232,7 @@ for (const ownedDirectoryName of ['watcher-grouped-feature-credit', 'watcher-art
     try {
       const lifecycle = createManagedAppLifecycle({
         environment: createValidEnvironment(root, controlDirectory), createNonce: () => 'watcher-cleanup-2',
-        pollIntervalMs: 1, timeoutMs: 100,
+        pollIntervalMs: 1, timeoutMs: 10_000,
         async sleep() {
           assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
             {
@@ -276,7 +276,7 @@ test('concurrent watcher cleanups with different owners are serialized independe
       environment: createValidEnvironment(root, controlDirectory),
       createNonce: () => nonces.shift(),
       pollIntervalMs: 1,
-      timeoutMs: 100,
+      timeoutMs: 10_000,
       async sleep() {
         const request = JSON.parse(fs.readFileSync(
           path.join(controlDirectory, 'restart-request.json'),

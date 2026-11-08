@@ -772,3 +772,35 @@ test('mobile Library path actions remain read-only despite server manage permiss
   context.isMobileClient = () => false;
   assert.equal(context.librarySettingsReadOnlyClient(), false);
 });
+
+test('Library Data Corrections sits above Album ratings, defaults to Display only, and saves the chosen mode', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  context.state.utility.librarySettings.allowedActions['library.files.edit_tags'] = true;
+  const markup = context.buildUtilityLibrarySettingsDetail();
+  const corrections = markup.indexOf('Library Data Corrections');
+  assert.ok(corrections > 0 && corrections < markup.indexOf('Album ratings'));
+  assert.ok(markup.indexOf('Album ratings') < markup.indexOf('data-save-library-settings'));
+  assert.match(markup, /<p>Corrects text metadata across your whole library\.<\/p>/);
+  assert.match(markup, /value="display_only" data-library-metadata-corrections="display_only"\s+checked[^>]*><span>Display only<\/span>/);
+  assert.match(markup, /value="write_tags" data-library-metadata-corrections="write_tags"\s+ ><span>Write in tags<\/span>/);
+  const radio = { disabled: false, getAttribute: () => 'write_tags', closest: selector => (selector.includes('data-library-metadata-corrections') ? radio : null) };
+  assert.equal(context.handleLibrarySettingsClick({ target: radio, preventDefault() {} }), true);
+  assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).metadata_corrections, 'write_tags');
+});
+
+test('Library Data Corrections is visibly disabled without the manage permission', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  context.state.utility.librarySettings.allowedActions = {};
+  const markup = context.buildLibraryDataCorrectionsSection(context.getLibrarySettingsDraft());
+  assert.equal((markup.match(/type="radio"[^>]*\sdisabled>/g) || []).length, 2);
+});
+
+test('Write in tags is visibly disabled for a manager who cannot edit tags', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  const markup = context.buildLibraryDataCorrectionsSection(context.getLibrarySettingsDraft());
+  assert.match(markup, /data-library-metadata-corrections="display_only"\s+checked\s+>/);
+  assert.match(markup, /data-library-metadata-corrections="write_tags"\s+\s*disabled>/);
+});

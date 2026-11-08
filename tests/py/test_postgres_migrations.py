@@ -465,7 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-73:] == [
+    assert migration_names[-76:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -537,8 +537,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0109_add_incremental_gallery_membership.sql",
         "0110_journal_gallery_metadata_changes.sql",
         "0111_add_relation_projection_compatibility.sql",
+        "0112_add_problematic_file_path_projection.sql",
         "0113_create_local_album_additional_artworks.sql",
         "0114_album_details_art_quality_alert.sql",
+        "0115_aggregate_gallery_membership_per_artist.sql",
+        "0116_add_problematic_text_corrections.sql",
     ]
 
 
@@ -3341,3 +3344,15 @@ def test_relation_compatibility_migration_is_additive_and_has_no_backfill():
     assert 'update library.' not in ddl
     assert 'delete from' not in ddl
     assert 'drop table' not in sql
+
+
+def test_text_corrections_migration_never_rewrites_local_track_files():
+    # local_track_files is large on real libraries: no column, default or
+    # backfill on it, only a side table that a write trigger keeps current.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0116_add_problematic_text_corrections.sql").read_text(encoding="utf-8"))
+    assert "alter table library.local_track_files" not in sql
+    assert "generated always" not in sql
+    assert "update library.local_track_files" not in sql
+    assert "from library.local_track_files" not in sql
+    assert "create table if not exists library.local_track_file_text_corrections" in sql
+    assert "after insert or update of metadata on library.local_track_files" in sql

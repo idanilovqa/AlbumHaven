@@ -294,6 +294,105 @@ def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
 
 
+def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    # `<> all(array)` compared every candidate file with every current path.
+    assert "<> all(" not in normalized_sql
+    assert (
+        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
+        "where current_file.private_path = library.local_track_files.private_path )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_identity", [False, True])
+def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_artist_sql(
+        preserve_existing_identity=preserve_existing_identity,
+    ))
+
+    if preserve_existing_identity:
+        assert (
+            "where ( library.local_artists.metadata) is distinct from "
+            "( library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+        assert "sort_name = excluded.sort_name" not in normalized_sql
+    else:
+        assert (
+            "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
+            "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_cover_authority", [True, False])
+def test_album_upsert_skips_albums_whose_update_would_write_the_same_values(preserve_existing_cover_authority):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_sql(
+        preserve_existing_cover_authority=preserve_existing_cover_authority,
+    ))
+    written = re.search(
+        r"release_year = (.*), cover_path = (.*), last_seen_at = now\(\), metadata = (.*) -- ", normalized_sql,
+    )
+    # The guard compares against exactly the values the update would write.
+    assert normalized_sql.endswith(
+        "where ( library.local_albums.artist_id, library.local_albums.title, library.local_albums.release_year, "
+        "library.local_albums.cover_path, library.local_albums.metadata ) is distinct from ( "
+        f"excluded.artist_id, excluded.title, {written[1]}, {written[2]}, {written[3]} );"
+    )
+
+
+def test_featured_artist_upsert_skips_unchanged_credits():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_featured_artist_sql())
+
+    assert (
+        "where library.local_album_featured_artists.metadata is distinct from ( "
+        "library.local_album_featured_artists.metadata || (excluded.metadata - 'source') )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("reported", [[0, 2], []])
+def test_unchanged_row_prefilter_sends_every_row_it_cannot_prove_unchanged(reported):
+    from music_app.services import scan_cache_persistence
+
+    rows = [{"track_key": f"t{index}", "title": f"Track {index}"} for index in range(3)]
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append([row["row_index"] for row in params["rows"].obj])
+            return SimpleNamespace(fetchall=lambda: [{"row_index": index} for index in reported])
+
+    unchanged = scan_cache_persistence._unchanged_row_fingerprints(
+        Connection(), scan_cache_persistence._unchanged_local_track_rows_sql(), rows,
+    )
+
+    assert executed == [[0, 1, 2]]
+    assert [row["track_key"] for row in rows if scan_cache_persistence._row_fingerprint(row) not in unchanged] == (
+        ["t1"] if reported else ["t0", "t1", "t2"]
+    )
+
+
+@pytest.mark.parametrize("builder", ["_unchanged_local_track_rows_sql", "_unchanged_local_track_file_rows_sql"])
+def test_unchanged_row_prefilters_mirror_their_upsert_guards(builder):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(getattr(scan_cache_persistence, builder)())
+
+    assert normalized_sql.startswith("with bootstrap_context as (")
+    assert "is not distinct from" in normalized_sql
+    assert "insert into" not in normalized_sql and "update " not in normalized_sql
+    if builder == "_unchanged_local_track_file_rows_sql":
+        assert "root_resolution.resolution_status = 'resolved'" in normalized_sql
+        assert "#- '{scan_cache,stale_marked_at}'" in normalized_sql
+
+
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 
@@ -648,14 +747,17 @@ def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
     )
 
 
-def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
+def test_targeted_inventory_revision_leaves_relation_status_to_its_publication():
+    # The targeted transaction publishes relations before committing; marking
+    # them stale made a loose-track-only change journal a full replay row.
     from music_app.services import scan_cache_persistence
 
     sql = scan_cache_persistence._increment_inventory_mutation_revision_sql()
     normalized = _normalized_sql(sql)
 
-    assert "'{scan_cache,relation_projection,status}'" in normalized
-    assert "to_jsonb('stale'::text)" in normalized
+    assert "'inventory_mutation_revision'" in normalized
+    assert "relation_projection,status" not in normalized
+    assert "'stale'" not in normalized
 
 
 def test_targeted_album_upsert_preserves_existing_user_cover_authority():
@@ -2828,6 +2930,45 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
     assert connection.execute_pipeline_states[relation_source_index] is False
 
 
+def test_cache_update_publishes_only_the_changed_files_albums(monkeypatch):
+    """A whole-library cache save stamped stale rows over a running scan's (sandbox2, 14:06)."""
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = FakeConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+
+    def entry(path, album):
+        return {"path": path, "mtime": 1.0, "size": 1, "album": album, "album_artist": "Can",
+                "artist": "Can", "title": Path(path).stem, "track_number": 1, "disc_number": 1,
+                "disc_number_raw": "1", "duration_seconds": 1, "year": 1971, "edition": "", "album_rating": 0,
+                "library_root_id": "main", "library_root_category": "main_library", "exception_type": None}
+
+    changed = "C:/Music/Can/Tago Mago/01 Paperhouse.flac"
+    file_cache = {
+        changed: entry(changed, "Tago Mago"),
+        "C:/Music/Can/Tago Mago/02 Mushroom.flac": entry("C:/Music/Can/Tago Mago/02 Mushroom.flac", "Tago Mago"),
+        "C:/Music/Can/Ege Bamyasi/01 Pinch.flac": entry("C:/Music/Can/Ege Bamyasi/01 Pinch.flac", "Ege Bamyasi"),
+    }
+
+    adapter.save_snapshot(Path("unused"), file_cache, "root-identity", 1.0, publish_paths={changed})
+
+    published_paths = sorted(
+        row["private_path"]
+        for sql, params in connection.executed if "insert into library.local_track_files" in sql
+        for row in params["rows"]
+    )
+    assert published_paths == sorted(path for path in file_cache if "Tago Mago" in path)
+    executed_sql = [sql for sql, _params in connection.executed]
+    assert scan_cache_persistence._synchronize_local_album_featured_artists_sql() not in executed_sql
+    assert scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql() in executed_sql
+    assert scan_cache_persistence._mark_stale_track_files_sql() not in executed_sql
+
+
 def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
@@ -2915,6 +3056,9 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert any("insert into library.local_tracks" in sql for sql in executed_sql)
     assert any("insert into library.local_track_files" in sql for sql in executed_sql)
     assert any("update library.local_track_files" in sql for sql in executed_sql)
+    # The full publication advances the inventory revision as its last write,
+    # so a whole-library save prepared before it is superseded, not applied.
+    assert executed_sql[-1] == scan_cache_persistence._increment_inventory_mutation_revision_sql()
 
     snapshot_params = [
         params for sql, params in connection.executed if "update library.libraries" in sql

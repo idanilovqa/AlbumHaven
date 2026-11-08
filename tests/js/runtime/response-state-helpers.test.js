@@ -2714,6 +2714,25 @@ test('deferred same-scope payload retains already hydrated non-album tracks', ()
   assert.equal(refreshed.non_album_tracks_deferred, false);
 });
 
+test('artist navigation keeps hydrated library-wide Loose Tracks', () => {
+  const context = loadHelpers();
+  const categories = ['main_library', 'hoard', 'new_arrivals'];
+  const libraryTracks = [{ path: '/fixture/main/Начало Века/loose.mp3', title: 'Тебя ждала' }];
+  context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: '', query: '',
+    visible_library_categories: categories, artist_groups: [], non_album_tracks_deferred: true,
+  });
+  context.state.view.library_non_album_tracks = libraryTracks;
+  context.state.view.library_non_album_tracks_hydrated_scope = '/view-data?scope=library';
+
+  const artistView = context.applyViewPayload({
+    surface: { active: 'albums' }, selected_artist: 'Art Zoyd', query: '',
+    visible_library_categories: categories, artist_groups: [], non_album_tracks_deferred: true,
+  });
+  assert.equal(artistView.library_non_album_tracks_hydrated_scope, '/view-data?scope=library');
+  assert.deepEqual(Array.from(artistView.library_non_album_tracks, (track) => track.title), ['Тебя ждала']);
+});
+
 test('deferred payload stays deferred when no hydrated non-album collection exists', () => {
   const context = loadHelpers();
   const categories = ['main_library', 'hoard', 'new_arrivals'];

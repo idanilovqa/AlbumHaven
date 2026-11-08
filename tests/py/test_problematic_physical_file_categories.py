@@ -1,5 +1,7 @@
 """Regression contracts for physical-file problems, independent of album tags."""
 
+import re
+
 import pytest
 
 from music_app.services import library_browse_postgres as browse
@@ -115,7 +117,8 @@ def test_targeted_physical_context_uses_normalized_folder_index_equality(modes):
     assert "physical_seed_folders as materialized" in sql
     assert "physical_folder_prefixes as" not in sql
     assert "= physical_seed_folders.physical_parent" in sql
-    assert "library.local_path_key(private_path)" in sql
+    # The indexed folder expression, whatever alias qualifies the file column.
+    assert re.search(r"library\.local_path_key\((\w+\.)?private_path\)", sql)
     assert "from selected_albums" in sql.split("physical_seed_folders as materialized", 1)[1]
     assert "physical_seed_folders.library_root_id" in sql
     assert "physical_seed_folders.library_id" in sql

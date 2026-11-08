@@ -1217,9 +1217,12 @@ async def refresh_api(request: Request) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     full_rescan = bool(payload.get("full_rescan"))
-    accepted_state_updates: dict[str, object] = {}
+    # A user-requested scan retries cover searches for coverless and poor-art
+    # albums now, instead of waiting for the negative search cache to expire.
+    accepted_state_updates: dict[str, object] = {"user_requested_cover_retry": True}
     if full_rescan:
         accepted_state_updates = {
+            "user_requested_cover_retry": True,
             "rescan_ignore_existing_cache": True,
             "scan_processed": 0,
             "scan_total": 0,

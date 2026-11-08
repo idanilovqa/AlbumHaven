@@ -89,6 +89,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   }
   return [
     ButtonComponent.renderActionButton({
+      presentation: 'bare',
       ariaLabel: editLabel,
       title: editLabel,
       disabled: missing,
@@ -97,6 +98,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       attributes: editAttributes,
     }),
     ButtonComponent.renderActionButton({
+      presentation: 'bare',
       ariaLabel: folderLabel,
       title: folderLabel,
       disabled: missing,
@@ -105,6 +107,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       attributes: folderAttributes,
     }),
     ButtonComponent.renderActionButton({
+      presentation: 'bare',
       ariaLabel: 'Close tracklist',
       className: 'track-modal-close album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
@@ -115,6 +118,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 
 function buildLooseTracksHeaderActionsHtml() {
   return ButtonComponent.renderActionButton({
+    presentation: 'bare',
     ariaLabel: 'Edit tags',
     title: 'Edit tags',
     className: 'track-modal-edit-tags album-details-header__action',

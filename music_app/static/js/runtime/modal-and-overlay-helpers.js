@@ -204,6 +204,14 @@ function openVersionPickerModal(album) {
 
 function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
+  // Library-wide Loose Tracks never narrow to the open artist: they are the
+  // whole library's loose tracks for the active sources (and search, when the
+  // search matched loose tracks). The hydrated scope key already encodes both.
+  if (options.libraryWide) {
+    return hasHydratedLibraryNonAlbumTracks() && Array.isArray(view.library_non_album_tracks)
+      ? view.library_non_album_tracks
+      : [];
+  }
   const mainState = state.gallery?.mainState;
   if (mainState) {
     const activeSources = activeGallerySourceCategories(mainState);
@@ -212,12 +220,8 @@ function getVisibleNonAlbumTracks(options = {}) {
       || ['main_library', 'new_arrivals', 'hoard'];
     if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
   }
-  const tracks = options.libraryWide && Array.isArray(view.library_non_album_tracks)
-    ? view.library_non_album_tracks
-    : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
-  const selectedArtist = options.libraryWide
-    ? ''
-    : String(view.selected_artist || '').trim();
+  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
@@ -254,17 +258,44 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
+// The library-wide request is the current browse scope without the open
+// artist or family selection, so every artist page shares one library result.
+// A search keeps its own view request: its loose tracks are query-scoped.
+function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
+  const searching = withQuery && Boolean(String(view.query || '').trim());
+  const url = new URL(buildApiUrl(searching ? view : {
+    ...view,
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    search_context: null,
+  }, { omitSidebar: true }), 'http://localhost');
+  url.searchParams.set('include_non_album', '1');
+  url.searchParams.set('include_library_wide_non_album', '1');
+  return url;
+}
+
+function getLibraryNonAlbumScopeKey(view = state.view || {}) {
+  return getDeferredNonAlbumScopeKey(buildLibraryNonAlbumRequestUrl(view));
+}
+
 function hasHydratedLibraryNonAlbumTracks() {
   const view = state.view || {};
-  const url = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
-  url.searchParams.set('include_non_album', '1');
-  return view.library_non_album_tracks_hydrated_scope === getDeferredNonAlbumScopeKey(url);
+  return Boolean(view.library_non_album_tracks_hydrated_scope)
+    && view.library_non_album_tracks_hydrated_scope === getLibraryNonAlbumScopeKey(view);
 }
 
 function hasNonAlbumSearchMatches(options = {}) {
   const view = state.view || {};
-  if (!String(view.query || '').trim() || view.non_album_tracks_deferred) return false;
-  if (options.libraryWide && !hasHydratedLibraryNonAlbumTracks()) return false;
+  if (!String(view.query || '').trim()) return false;
+  if (options.libraryWide) {
+    return hasHydratedLibraryNonAlbumTracks()
+      && view.library_non_album_tracks_search_matched === true
+      && getVisibleNonAlbumTracks(options).length > 0;
+  }
+  if (view.non_album_tracks_deferred) return false;
   return getVisibleNonAlbumTracks(options).length > 0;
 }
 
@@ -280,34 +311,84 @@ function getDeferredNonAlbumScopeKey(url) {
   return `${url.pathname}${query ? `?${query}` : ''}`;
 }
 
-async function hydrateDeferredNonAlbumTracks(options = {}) {
+let libraryNonAlbumHydrationRequest = null;
+
+async function fetchNonAlbumPayload(url) {
+  const response = await fetch(`${url.pathname}${url.search}`, {
+    headers: { Accept: 'application/json' },
+  });
+  const payload = await response.json();
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
+  }
+  return payload;
+}
+
+function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
   const view = state.view || {};
-  const libraryWide = options.libraryWide === true;
+  const scopeKey = getLibraryNonAlbumScopeKey(view);
+  if (view.library_non_album_tracks_hydrated_scope === scopeKey) {
+    return Promise.resolve(view.library_non_album_tracks || []);
+  }
+  // A search that found no loose tracks only resolves the whole library when
+  // Loose Tracks is actually opened; the search indicator never pays for it.
+  if (!resolveLibrary && view.library_non_album_search_probe_scope === scopeKey) return Promise.resolve([]);
+  const requestKey = `${scopeKey}|${resolveLibrary ? 'library' : 'probe'}`;
+  if (libraryNonAlbumHydrationRequest?.key === requestKey) return libraryNonAlbumHydrationRequest.promise;
+  const searching = Boolean(String(view.query || '').trim());
+  const libraryTracks = (payload) => (Array.isArray(payload?.library_non_album_tracks)
+    ? payload.library_non_album_tracks
+    : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
+  const request = { key: requestKey, promise: null };
+  request.promise = (async () => {
+    const probed = view.library_non_album_search_probe_scope === scopeKey;
+    let tracks = probed ? [] : libraryTracks(await fetchNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
+    const searchMatched = searching && tracks.length > 0;
+    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+      return state.view?.library_non_album_tracks || [];
+    }
+    if (searching && !searchMatched) {
+      state.view.library_non_album_search_probe_scope = scopeKey;
+      if (!resolveLibrary) {
+        if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+        return [];
+      }
+      // A search narrows Loose Tracks only when it found loose tracks.
+      tracks = libraryTracks(await fetchNonAlbumPayload(
+        buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
+      ));
+      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+        return state.view?.library_non_album_tracks || [];
+      }
+    }
+    state.view.library_non_album_tracks = tracks;
+    state.view.library_non_album_tracks_search_matched = searchMatched;
+    state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    return tracks;
+  })().finally(() => {
+    if (libraryNonAlbumHydrationRequest === request) libraryNonAlbumHydrationRequest = null;
+  });
+  libraryNonAlbumHydrationRequest = request;
+  return request.promise;
+}
+
+async function hydrateDeferredNonAlbumTracks(options = {}) {
+  if (options.libraryWide === true) {
+    return hydrateLibraryNonAlbumTracks({ resolveLibrary: options.resolveLibrary === true });
+  }
+  const view = state.view || {};
   const requestedArtist = String(view.selected_artist || '');
   const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
   requestUrl.searchParams.set('include_non_album', '1');
   const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
-  if (!view.non_album_tracks_deferred
-      && (!libraryWide || view.library_non_album_tracks_hydrated_scope === requestScopeKey)) {
-    return view.non_album_tracks || [];
-  }
-  if (libraryWide) {
-    requestUrl.searchParams.set('include_library_wide_non_album', '1');
-  }
-  const requestKey = `${requestUrl.pathname}${requestUrl.search}`;
-  const requestIdentity = getDeferredNonAlbumScopeKey(requestUrl);
-  if (deferredNonAlbumHydrationRequest?.key === requestIdentity) {
+  if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
+  if (deferredNonAlbumHydrationRequest?.key === requestScopeKey) {
     return deferredNonAlbumHydrationRequest.promise;
   }
-  const request = { key: requestIdentity, promise: null };
+  const request = { key: requestScopeKey, promise: null };
   request.promise = (async () => {
-    const response = await fetch(requestKey, {
-      headers: { Accept: 'application/json' },
-    });
-    const payload = await response.json();
-    if (!response.ok || payload?.ok === false) {
-      throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
-    }
+    const payload = await fetchNonAlbumPayload(requestUrl);
     const currentView = state.view || {};
     const currentScopeUrl = new URL(
       buildApiUrl(currentView, { omitSidebar: true }),
@@ -322,12 +403,6 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
     state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
       ? payload.non_album_tracks
       : [];
-    if (libraryWide) {
-      state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
-        ? payload.library_non_album_tracks
-        : state.view.non_album_tracks;
-      state.view.library_non_album_tracks_hydrated_scope = requestScopeKey;
-    }
     state.view.non_album_tracks_deferred = false;
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_tracks;
@@ -340,15 +415,15 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   return request.promise;
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
+  const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
-    const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
-    const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
+    const problematicAlbum = problematicIndex.get(trackPath) || null;
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -379,6 +454,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
       isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
     };
   });
@@ -476,6 +552,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
+  const problematicIndex = buildProblematicAlbumTrackPathIndex();
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       exceptionType(item) === section.exceptionType
@@ -485,7 +562,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       )
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
     const sectionSeconds = sectionItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
     return {
@@ -596,7 +673,9 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
-  const hydrationPending = Boolean(state.view?.non_album_tracks_deferred);
+  const hydrationPending = libraryWide
+    ? !hasHydratedLibraryNonAlbumTracks()
+    : Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
   const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
   const subtitle = hydrationPending
@@ -621,7 +700,12 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
-    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    const trackTable = details.closest?.('.album-track-table');
+    const syncExpanded = () => {
+      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+      trackTable?.classList?.toggle('album-track-table--collapsed-disc',
+        Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
+    };
     syncExpanded();
     details.addEventListener?.('toggle', syncExpanded);
   });
@@ -629,7 +713,7 @@ function openNonAlbumModal(options = {}) {
   if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   attachSharedPlayer();
   if (hydrationPending) {
-    hydrateDeferredNonAlbumTracks({ libraryWide })
+    hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
         if (!els.overlay.hidden) openNonAlbumModal(options);
       })

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import os
@@ -70,6 +72,9 @@ class TargetedLibraryReconciler:
     def stop(self) -> None:
         self._stop_event.set()
 
+    def wait_for_stop(self, timeout: float) -> bool:
+        return self._stop_event.wait(timeout)
+
     def replace_roots(self, roots: Iterable[dict[str, object]]) -> None:
         with self._roots_lock:
             self._roots = tuple(dict(root) for root in roots)
@@ -80,7 +85,10 @@ class TargetedLibraryReconciler:
         *,
         root_healthy: bool = True,
         publication_guard: object = _DEFAULT_PUBLICATION_GUARD,
+        reuse_unchanged_entries: bool = False,
+        interrupted: Callable[[], bool] | None = None,
     ) -> TargetedReconciliationResult:
+        """``interrupted`` stops the read and publication with health "deferred"."""
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
         root_id = str(getattr(request, "root_id", "") or "").strip()
@@ -249,13 +257,24 @@ class TargetedLibraryReconciler:
                 else self._exception_overrides
             )
             active_entries: dict[str, dict[str, object]] = {}
+            # A whole-root catch-up re-reads only files whose size, mtime or
+            # reader schema changed, exactly as a full scan does; on a slow
+            # disk re-reading every tag kept catch-ups running for hours.
+            persisted_entries = (
+                self._repository.load_file_entries(list(active_by_path))
+                if reuse_unchanged_entries else {}
+            )
             for path, matched_root in sorted(
                 active_by_path.values(),
                 key=lambda item: str(item[0]).casefold(),
             ):
                 if self._stop_event.is_set():
                     return TargetedReconciliationResult(0, (), "cancelled")
-                entry = self._metadata_reader(path)
+                if interrupted is not None and interrupted():
+                    return TargetedReconciliationResult(0, (), "deferred")
+                entry = _unchanged_persisted_entry(persisted_entries.get(str(path)), path)
+                if entry is None:
+                    entry = self._metadata_reader(path)
                 enriched = enrich_library_file_entry(
                     entry,
                     path=path,
@@ -270,6 +289,8 @@ class TargetedLibraryReconciler:
             clear_ambiguous_folder_covers(active_entries)
             if self._stop_event.is_set():
                 return TargetedReconciliationResult(0, (), "cancelled")
+            if interrupted is not None and interrupted():
+                return TargetedReconciliationResult(0, (), "deferred")
             effective_publication_guard = (
                 self._publication_guard
                 if publication_guard is _DEFAULT_PUBLICATION_GUARD
@@ -287,6 +308,19 @@ class TargetedLibraryReconciler:
                     else {}
                 ),
             )
+            identity_conflicts = list(persisted.get("identity_conflicts") or ())
+            if identity_conflicts:
+                from music_app.services.app_logging import log_app_event
+
+                log_app_event(
+                    self._config,
+                    logging.getLogger("music_app"),
+                    "Album identity conflict withheld from library publication",
+                    level="warning",
+                    history=True,
+                    root_id=root_id,
+                    conflicts=identity_conflicts,
+                )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
                 tuple(
@@ -430,3 +464,21 @@ class TargetedLibraryReconciler:
         except (OSError, ValueError):
             return resolved_root
         return album_directory
+
+
+def _unchanged_persisted_entry(persisted: object, path: Path) -> dict[str, object] | None:
+    from music_app.services.metadata import schema_upgrade_requires_file_read, upgrade_stored_file_entry
+
+    if not isinstance(persisted, dict):
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if (
+        persisted.get("mtime") == stat.st_mtime
+        and persisted.get("size") == stat.st_size
+        and not schema_upgrade_requires_file_read(persisted)
+    ):
+        return upgrade_stored_file_entry(persisted)
+    return None

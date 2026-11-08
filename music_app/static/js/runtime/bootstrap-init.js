@@ -2,7 +2,11 @@ const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
-document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
+document.querySelectorAll('[data-account-menu-component]').forEach((component) => attachAccountMenu(component, {
+  onOpen: (menu) => {
+    if (menu.querySelector('[data-open-utilities="1"]')) prefetchProblematicFilesForSettingsIntent();
+  },
+}));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
 if (typeof loadCoverLookupNotificationCounts === 'function') {

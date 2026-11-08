@@ -2096,7 +2096,8 @@ function renderTrackModalRelease(album) {
     if (duplicateSources.length > 1) {
       // Folders open in File Explorer only from a browser on the computer running Album Haven; elsewhere the
       // numbered folder buttons stay visible but disabled, so every copy is still identified.
-      const canOpenFolders = !window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.files.open_location');
+      const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+      const canOpenFolders = !capabilities || capabilities.allows('library.files.open_location');
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
@@ -2326,6 +2327,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
+        problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
         sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };

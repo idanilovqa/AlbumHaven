@@ -279,6 +279,7 @@ function handleGalleryBootstrapClick(event) {
     );
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     if (isLibraryHome) {
+      resetLibraryHomeNavigation();
       state.ui.gallerySearchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
       state.ui.preSearchView = null;
       state.ui.preSearchViewOrigin = null;
@@ -311,8 +312,8 @@ function handleGalleryBootstrapClick(event) {
     );
     if (alreadyAtLibraryHome) {
       releasePendingGallerySearchSuspensions();
-      const galleryScroll = document.getElementById('albums-scroll');
-      if (galleryScroll) galleryScroll.scrollTop = 0;
+      renderSidebar();
+      renderArtistGroups({ preserveScroll: true });
       closeArtistsDrawer({ restoreFocus: false });
       state.view.search_context = null;
       pushBrowserViewState({
@@ -603,6 +604,38 @@ function scrollRootGalleryToArtist(artist) {
     scrollWhenRendered(180);
     return true;
   });
+}
+
+// Home is an in-app restart: leave every surface the user navigated into and
+// land on the default library page with the Artist Tree at All artists.
+function resetLibraryHomeNavigation() {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const surface = typeof getDismissibleForegroundSurface === 'function'
+      ? getDismissibleForegroundSurface()
+      : null;
+    if (!surface) break;
+    surface.dismiss();
+    if (typeof getDismissibleForegroundSurface === 'function'
+        && getDismissibleForegroundSurface()?.surface === surface.surface) break;
+  }
+  if (state.ui.scanPageReturnContext || state.ui.forceScanPageVisible) {
+    abandonScanPageForNavigation({ clearSelection: true });
+  }
+  if (state.gallery.mainState) {
+    state.gallery.mainState.familyArtists = [];
+    delete state.gallery.mainState.familySelectionExplicit;
+  }
+  state.ui.pendingSidebarRevealArtist = '';
+  const sidebarList = document.getElementById('sidebar-list');
+  if (sidebarList) {
+    sidebarList.albumHavenSidebarVirtualScrollTop = 0;
+    const sidebarScroll = typeof resolveSidebarScrollContainer === 'function'
+      ? resolveSidebarScrollContainer(sidebarList)
+      : sidebarList;
+    if (sidebarScroll) sidebarScroll.scrollTop = 0;
+  }
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (galleryScroll) galleryScroll.scrollTop = 0;
 }
 
 function handleSidebarArtistSelectionClick(event) {
@@ -2494,6 +2527,9 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     state.ui.pendingViewTransitionRequestId = 0;
     if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();
+    // The mounted gallery is kept, so refresh its controls explicitly: the
+    // Loose Tracks search dot must disappear with the query.
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     pushBrowserViewState(nextView);
     return true;
   }

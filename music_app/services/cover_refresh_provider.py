@@ -41,6 +41,8 @@ from music_app.services.covers import (
     image_area,
     image_dimensions,
     image_sharpness,
+    embedded_front_cover_bytes,
+    image_bytes_are_visually_similar,
     images_are_visually_similar,
     is_authoritative_cover_name,
     is_low_quality_cover_name,
@@ -1307,6 +1309,18 @@ def ensure_best_cover_for_folder(
             preserve_user_ownership = True
             expected_cover_revision = cover_revision_for_path(local_cover)
             detail["same_art_quality_upgrade"] = True
+        elif local_cover is None:
+            # Without a folder image the tracks' embedded art is the album's
+            # identity: a provider listing with the right names but another
+            # release's artwork must never be written automatically.
+            embedded_art = embedded_front_cover_bytes(folder)
+            if embedded_art and not image_bytes_are_visually_similar(embedded_art, raw_bytes):
+                detail["reason"] = "embedded_art_mismatch"
+                detail["elapsed_ms"] = round(
+                    (time.perf_counter() - fetch_started_at) * 1000,
+                    2,
+                )
+                return local_cover, False, detail
 
         if reject_if_user_controlled and automatic_write_guard is None:
             detail["reason"] = "automatic_write_guard_unavailable"

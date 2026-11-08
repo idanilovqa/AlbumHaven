@@ -266,3 +266,24 @@ box-shadow: none !important;
 .ui-radio-option:has(input:disabled) input { cursor: not-allowed; }
 .ui-radio-group { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .ui-radio-group > legend { margin: 0 0 10px; padding: 0; font-size: 11px; font-weight: 700; }
+/* Text link: a button that reads as inline text and is underlined only on hover/focus. */
+.ui-text-link,
+.ui-text-link:is(:hover, :active, :focus-visible):not(:disabled) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ui-text-link {
+  text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.ui-text-link:is(:hover, :focus-visible):not(:disabled) {
+  color: var(--text, currentColor);
+  text-decoration-line: underline;
+}

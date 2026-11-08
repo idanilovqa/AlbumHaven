@@ -329,7 +329,7 @@ def test_actual_folder_family_expands_and_preserves_complete_artist_counts():
     assert views['folder_related'] == current['folder_related']
 
 
-def test_foreground_edit_does_not_consume_unrelated_dirty_backlog():
+def test_foreground_edit_refuses_an_unpublished_library_level_journal_row():
     import pytest
     from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
 
@@ -358,6 +358,8 @@ def test_foreground_edit_does_not_consume_unrelated_dirty_backlog():
                 return Cursor([{'id': 1, 'album_key': 'one'}])
             if 'from library.local_relation_album_facts' in sql:
                 return Cursor([])
+            if 'select album_id,album_keys from library.local_relation_dirty_albums' in sql:
+                return Cursor([])
             if 'select 1 from library.local_relation_dirty_albums' in sql:
                 assert params == (1, [1])
                 return Cursor([{'exists': 1}])
@@ -365,7 +367,7 @@ def test_foreground_edit_does_not_consume_unrelated_dirty_backlog():
                 assert 'from library.local_relation_dirty_albums' in sql
                 assert 'order by album_id limit 5' in sql
                 assert params == (1, [1])
-                return Cursor([{'album_id': 2, 'first_inventory_revision': 1,
+                return Cursor([{'album_id': -1, 'first_inventory_revision': 1,
                                 'first_gallery_generation': 1, 'first_change_xid': '1',
                                 'publication_xid': '2'}])
             raise AssertionError(f'Foreground must not read backlog sources or write projections: {sql}')
@@ -385,14 +387,17 @@ def test_tag_edit_admission_reads_only_projection_markers():
         def __exit__(self, *_args):
             return False
         def execute(self, sql, params):
-            assert 'local_tracks' not in sql
+            # Edited files resolve their albums by indexed path only.
+            assert 'files.private_path=any(%(paths)s::text[])' in sql
             assert 'local_albums' not in sql
             assert 'local_relation_album_facts' not in sql
             assert 'local_relation_dirty_albums' in sql
-            assert 'header.source_generation<>gallery.generation' in sql
+            assert 'min(dirty.first_gallery_generation)' in sql
+            assert 'C:/a.flac' in params['paths']
             return Cursor()
 
-    assert scoped.tag_edit_baseline_ready({'ALBUM_HAVEN_APP_DATABASE_URL': 'isolated'}, connect=lambda _: Connection())
+    assert scoped.tag_edit_baseline_ready({'ALBUM_HAVEN_APP_DATABASE_URL': 'isolated'}, connect=lambda _: Connection(),
+                                          track_paths=['C:/a.flac'])
 
 
 def test_removed_canonical_recomputes_surviving_alias_without_guest_expansion():

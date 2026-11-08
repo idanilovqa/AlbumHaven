@@ -481,9 +481,9 @@ function updateGalleryMainControls() {
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
     // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
-    const enabled = button.dataset.libraryWide === '1' || Boolean(state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
-      libraryWide: button.dataset.libraryWide === '1',
-    }).length > 0;
+    const libraryWide = button.dataset.libraryWide === '1';
+    const enabled = libraryWide || Boolean(state.view?.non_album_tracks_deferred)
+      || getVisibleNonAlbumTracks({ libraryWide }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
     const matches = typeof hasNonAlbumSearchMatches === 'function'

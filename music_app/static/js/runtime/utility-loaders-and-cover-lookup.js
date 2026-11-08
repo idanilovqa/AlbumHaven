@@ -1,5 +1,9 @@
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
+  // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
+  const renderRequested = () => (options.render === 'when-open'
+    ? isUtilityModalOpen()
+    : options.render !== false);
+  const shouldRender = () => renderRequested() && state.utility.activeTab === 'problematic-files';
   const shouldRenderInitialPage = () => (
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
@@ -23,6 +27,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     && pendingCompleteLoad.problematicSummaryRequestToken
       === Number(state.utility.problematicSummaryRequestToken || 0)
   ) {
+    // Returning to the tab while the complete list loads shows the first page
+    // it already has, not the tab shell's "Loading..." until the list completes.
+    if (state.utility.loaded && shouldRenderInitialPage()) renderUtilityModalContent();
     return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {
@@ -89,13 +96,21 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
+        // A track-opened album stays listed until the complete list can confirm it.
+        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedAlbum = pinnedKey && data.complete === false
+          && !summaryItems.some((item) => item.key === pinnedKey)
+          ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
+          : null;
+        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
-        });
+          // Visible problem controls stay usable until the forced refresh replaces them.
+          return item === selectedSummary ? selectedDetail : item;
+        }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
@@ -115,6 +130,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
+        scheduleProblematicServerSearch();
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
@@ -132,7 +148,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
-        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        // This forced refresh supersedes any clicked detail request, so it must
+        // paint whenever this load will not render its own final state.
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, {
+          render: options.render === false && !navigationOwnsRendering(),
+        });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -202,6 +222,46 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.loadPromise = requestPromise;
   state.utility.completeLoadPromise = requestPromise;
   return requestPromise;
+}
+
+let problematicServerSearchTimer = 0;
+
+// Until the complete list arrives, a search also asks the server, which searches
+// every album, so matches beyond the first page appear without waiting.
+function scheduleProblematicServerSearch() {
+  if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
+  problematicServerSearchTimer = 0;
+  const query = String(state.utility.searchQuery || '').trim();
+  // One character matches most of a library; the loaded rows answer it.
+  if (query.length < 2 || state.utility.problematicFilesComplete !== false) return;
+  problematicServerSearchTimer = scheduleBrowserTimeout(() => {
+    problematicServerSearchTimer = 0;
+    void searchProblematicFilesOnServer(query);
+  }, 250);
+}
+
+async function searchProblematicFilesOnServer(query) {
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  let data;
+  try {
+    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch (error) {
+    console.warn('[AlbumHaven][Utilities] Problematic Files search failed.', error);
+    return;
+  }
+  // The complete list, a newer query or a reload supersedes this answer.
+  if (String(state.utility.searchQuery || '').trim() !== query
+    || state.utility.problematicFilesComplete !== false
+    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return;
+  const known = new Set((state.utility.problematicFiles || []).map((item) => item?.key));
+  const found = (Array.isArray(data?.items) ? data.items : []).filter((item) => item?.key && !known.has(item.key));
+  if (!found.length) return;
+  state.utility.problematicFiles = [...state.utility.problematicFiles, ...found];
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
 }
 
 async function waitForProblematicFilesComplete() {
@@ -406,6 +466,24 @@ function validateProblematicSummaryPayload(payload) {
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
   };
+}
+
+// Album Details opens a track's album directly: waiting for the complete list
+// took tens of seconds on a large library whenever the album was off page one.
+async function loadProblematicAlbumDetailForTrackPath(trackPath) {
+  const path = String(trackPath || '').trim();
+  if (!path) return null;
+  try {
+    const response = await fetch(`/utilities/problematic-files/detail?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return validateProblematicDetailPayload(data, String(data?.key || '').trim());
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to load the problematic album for a track.', error);
+    return null;
+  }
 }
 
 function validateProblematicDetailPayload(payload, requestedKey) {
@@ -1125,6 +1203,27 @@ async function runLocalPlaylistImportAnalysis() {
   }
 }
 
+// A prefetch this recent is as fresh as a forced reload; inventory changes
+// still refresh an open list through the status poll.
+const PROBLEMATIC_PREFETCH_FRESH_MS = 5000;
+
+function isUtilityModalOpen() {
+  const overlay = getUtilityModalElements().overlay;
+  return Boolean(overlay && !overlay.hidden);
+}
+
+// Opening the account menu signals Settings: when Settings would open on
+// Problematic Files, overlap its cold first page with the menu interaction.
+function prefetchProblematicFilesForSettingsIntent() {
+  if (isUtilityModalOpen() || state.utility.activeTab !== 'problematic-files') return;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allowsUtilityTab('problematic-files')) return;
+  if (state.utility.loading || state.utility.completeLoadPromise) return;
+  state.utility.problematicPrefetchedAt = Date.now();
+  void loadProblematicFiles(true, { render: 'when-open' });
+}
+
 function loadActiveUtilityTab(force = false) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
@@ -1147,7 +1246,9 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
-  return loadProblematicFiles(force);
+  const freshPrefetch = state.utility.loaded
+    && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
+  return loadProblematicFiles(force && !freshPrefetch);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {

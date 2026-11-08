@@ -538,8 +538,19 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
           await page.mouse.wheel(0, wheelDelta);
           distanceToThreshold -= wheelDelta;
         }
+      // Response headers are not the commit: the body, parse and merge can land
+      // after the 96 ms settle window, when an immediate merge is correct. Keep
+      // the gesture alive until the production path has deferred the update.
+      const deferredDuringInput = responseBoundary.responseAt.then(async (epoch) => {
+        const deadline = Date.now() + RESPONSE_BOUNDARY_TIMEOUT_MS;
+        while (Date.now() < deadline
+            && !(await readDeferredGroupUpdate(galleryActions, diagnosticSequenceBeforeInput))) {
+          await new Promise(resolve => setTimeout(resolve, 8));
+        }
+        return epoch;
+      });
       activeInput = keepWheelActiveUntilResponseBoundary(
-        ui, page, responseBoundary.responseAt,
+        ui, page, deferredDuringInput,
         distance => { commandedDistance += distance; },
       );
       [response, responseAt] = await Promise.all([

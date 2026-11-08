@@ -64,11 +64,15 @@ for (const event of ['input', 'search']) {
     context.renderUtilityModalContent = () => {
       elements.list.innerHTML = context.getFilteredProblematicAlbums().map(album => album.name).join(',');
     };
+    const serverSearches = [];
+    // Albums beyond the loaded rows come from the server search.
+    context.scheduleProblematicServerSearch = () => serverSearches.push(context.state.utility.searchQuery);
     context.attachUtilityModalEvents();
     elements.search.value = 'Beta';
     handlers[event]();
     context.flushSearchTimers();
     assert.equal(elements.list.innerHTML, 'Beta Album');
+    assert.deepEqual(serverSearches, ['Beta']);
     elements.search.value = '';
     handlers[event]();
     context.flushSearchTimers();

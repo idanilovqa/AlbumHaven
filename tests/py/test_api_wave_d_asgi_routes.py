@@ -165,9 +165,31 @@ def postgres_runtime_fakes(app, monkeypatch):
     app.config["_TEST_COVER_LOOKUP_NOTIFICATIONS"] = persisted_notifications
 
 
+class _FilesystemCoverInventory:
+    """Route tests have no isolated database for the Postgres-backed local cover
+    inventory, so resolve an album's folder from its track paths instead."""
+
+    def __init__(self):
+        self.repository = self
+
+    @staticmethod
+    def root_for_tracks(paths):
+        # The inventory stores the physical album folder: a disc folder's parent.
+        from music_app.services.album_local_membership import _DISC_FOLDER
+
+        roots = set()
+        for path in paths or ():
+            parent = Path(str(path)).parent
+            roots.add(parent.parent if _DISC_FOLDER.search(parent.name) else parent)
+        return roots.pop() if len(roots) == 1 else None
+
+
 def _make_wave_d_app(flask_app):
     from music_app.routes.api_wave_d_asgi_routes import router
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
 
+    if isinstance(flask_app.config.get("_LOCAL_COVER_INVENTORY"), LocalCoverInventoryWorker):
+        flask_app.config["_LOCAL_COVER_INVENTORY"] = _FilesystemCoverInventory()
     asgi_app = FastAPI()
     from tests.py.asgi_testing import configure_test_bootstrap_actor
     configure_test_bootstrap_actor(asgi_app)
@@ -4643,6 +4665,12 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
         lambda _config, task_id: persisted_task if task_id == persisted_task["id"] else None,
         raising=False,
     )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
+    )
 
     status, _headers, body = _run_asgi_request(
         _make_wave_d_app(app),
@@ -5270,6 +5298,12 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
             else {}
         ),
     )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
+    )
     monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
     monkeypatch.setattr(
         asgi_routes,
@@ -5483,3 +5517,50 @@ def test_asgi_second_artbox_accepts_only_new_album_art(app, monkeypatch):
         (41, 1, "local", str(back.resolve()), None),
         (41, 1, "remote", None, "https://img.example/back-thumb.jpg"),
     ]
+
+
+@pytest.mark.parametrize(("size", "poor"), [(400, True), (1400, False)])
+def test_saved_cover_recomputes_the_album_details_poor_art_alert(tmp_path, size, poor):
+    from PIL import Image
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (size, size), (10, 20, 30)).save(cover, format="JPEG")
+    album = {"key": "artist::album", "poor_art_quality": True, "tracks": [{"path": str(tmp_path / "01.flac")}]}
+    payload = routes._authoritative_local_cover_album_payload(album, cover_path=cover, cover_revision="rev")
+    assert payload["poor_art_quality"] is poor
+
+
+def test_asgi_cover_saves_persist_off_the_event_loop(app, monkeypatch):
+    """Cover saves once promoted, hashed and persisted on the event loop, stalling every request."""
+    import threading
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    source_path = track_path.parent / "front.jpg"
+    source_path.write_bytes(_jpeg_bytes((10, 140, 30)))
+    _seed_album_state(app.library_state, track_path)
+    loop_thread = threading.get_ident()
+    persistence_threads: list[int] = []
+
+    def record_persistence(*_args, **_kwargs):
+        persistence_threads.append(threading.get_ident())
+        raise RuntimeError("stop after recording the persistence thread")
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", record_persistence)
+    asgi_app = _make_wave_d_app(app)
+    for path, body in (
+        ("/utilities/cover-lookup/pasted-image-save",
+         {"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))}),
+        ("/utilities/cover-lookup/local-select",
+         {"album": _album_payload(track_path), "source_path": str(source_path)}),
+    ):
+        try:
+            _run_asgi_request(asgi_app, "POST", path, json_body=body)
+        except RuntimeError:
+            pass
+    assert len(persistence_threads) == 2
+    assert loop_thread not in persistence_threads

@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from copy import deepcopy
+import functools
 import logging
 from pathlib import Path
 from threading import Event, Thread
@@ -1026,6 +1027,74 @@ def test_scan_music_incremental_uses_explicit_configured_library_roots_without_f
     assert captured_partial_publishers == [publish_partial_snapshot]
 
 
+@pytest.mark.parametrize("mode_change", [("display_only", "write_tags"), ("write_tags", "display_only")])
+def test_changing_library_data_corrections_keeps_reusing_unchanged_files(
+    mode_change,
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    # A forced scan right after startup (empty in-memory cache) must still
+    # reuse the stored entries: the corrections mode doesn't change what is read.
+    before, after = mode_change
+    root = runtime_config["MUSIC_DIR"]
+    track_path = root / "Artist" / "Album" / "song.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"generated-test-track")
+    stat = track_path.stat()
+    stored_entry = {
+        "path": str(track_path), "title": "Song", "album": "Album", "artist": "Artist",
+        "album_artist": "Artist", "album_rating": 0, "mtime": stat.st_mtime, "size": stat.st_size,
+        "cover_path": None, "release_date": None, "compilation_tag": None,
+        "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+    }
+    settings = {"main_library_roots": [{"id": "main", "path": str(root), "layout_mode": "artist"}]}
+    save_library_root_settings(runtime_config, {**settings, "metadata_corrections": before})
+    _install_scan_cache_adapter(
+        monkeypatch,
+        FakeScanCacheAdapter(
+            file_cache={str(track_path): stored_entry},
+            last_scan=5.0,
+            relation_views={"artists": ["Artist"]},
+            root_identity=library_root_cache_identity(runtime_config),
+        ),
+    )
+    save_library_root_settings(runtime_config, {**settings, "metadata_corrections": after})
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(library_indexing, "find_cover_for_track_folder", lambda *_args, **_kwargs: None)
+    opened = []
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: opened.append(path) or dict(stored_entry))
+
+    def scan_incrementally(**kwargs):
+        return library_indexing.scan_library_file_cache(
+            library_state,
+            roots=[root],
+            supported_extensions={".mp3"},
+            image_extensions={".jpg"},
+            exception_overrides={},
+            use_existing_cache=kwargs["use_existing_cache"],
+            expected_scan_generation=kwargs["expected_scan_generation"],
+            publication_state=kwargs["publication_state"],
+            publish_partial_snapshot=kwargs["publish_partial_snapshot"],
+        )
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan_incrementally,
+        refresh_relation_views=lambda **_kwargs: None,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert opened == []
+    assert library_state["file_cache"][str(track_path)]["album"] == "Album"
+
+
 def test_refresh_library_state_rescans_when_library_root_identity_changes(
     runtime_config,
     runtime_logger,
@@ -1432,6 +1501,65 @@ def test_successful_current_generation_scan_is_published_with_rating_seed_intent
     )
 
     assert publication_intents == [(True, 41)]
+
+
+@pytest.mark.parametrize(("interleaved", "expected_final_revision"), [(False, 9), (True, 8)])
+def test_scan_publishes_finished_album_folders_before_its_final_publication(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+    interleaved,
+    expected_final_revision,
+):
+    library_state.update({"file_cache": {}, "albums": [], "last_scan": 0.0, "relation_views": {"artists": []}})
+    adapter = _install_scan_cache_adapter(monkeypatch)
+    adapter.load_inventory_mutation_revision = lambda: 7
+    published = []
+    revisions = iter([8, 10] if interleaved else [8, 9])
+
+    def persist_targeted_inventory_mutation(*, root_id, active_file_entries):
+        published.append((root_id, sorted(active_file_entries)))
+        return {"inventory_mutation_revision": next(revisions)}
+
+    adapter.persist_targeted_inventory_mutation = persist_targeted_inventory_mutation
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda _cache, _keys: [SimpleNamespace(key="a")])
+    final_publications = []
+    entries = {
+        "first": {"C:/m/A/01.flac": {"path": "C:/m/A/01.flac"}},
+        "second": {"C:/m/B/01.flac": {"path": "C:/m/B/01.flac"}},
+    }
+
+    def scan_music_incremental(*, on_entries_ready, **_kwargs):
+        for folder, folder_entries in entries.items():
+            on_entries_ready("root-1", {folder: folder_entries}, folder == "second", frozenset(folder_entries))
+        return {path: entry for folder_entries in entries.values() for path, entry in folder_entries.items()}, 55.0
+
+    def refresh_relations(**kwargs):
+        final_publications.append((list(published), kwargs.get("expected_inventory_mutation_revision")))
+
+    monkeypatch.setattr(
+        "music_app.services.scan_state.ProgressiveScanPublisher",
+        functools.partial(scan_state.ProgressiveScanPublisher, max_albums=1),
+    )
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan_music_incremental,
+        refresh_relation_views=refresh_relations,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert final_publications == [(
+        [("root-1", ["C:/m/A/01.flac"]), ("root-1", ["C:/m/B/01.flac"])],
+        expected_final_revision,
+    )]
+    assert library_state["scan_progressive_publication"]["batches"] == 2
 
 
 def test_force_scan_repairs_legacy_rating_metadata_before_guarded_seed_publication(
@@ -2213,6 +2341,85 @@ def test_full_scan_carries_inventory_revision_captured_before_filesystem_scan(
     assert observed["refresh_kwargs"]["expected_inventory_mutation_revision"] == 23
 
 
+def test_superseded_full_scan_republishes_with_newer_published_files(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    # sandbox2 2026-11-05: a 4 h repair scan was discarded because watcher
+    # publications bumped the inventory revision while it ran.
+    revisions = iter([23, 24])
+    attempts = []
+
+    class RevisionAdapter(FakeScanCacheAdapter):
+        def load_cover_mutation_revision(self):
+            return 11
+
+        def load_inventory_mutation_revision(self):
+            return next(revisions)
+
+        def load_inventory_published_since(self, since_epoch):
+            assert since_epoch > 0
+            return {
+                # A watcher re-read the file after a later edit: adopted.
+                "edited": {"path": "edited", "album": "Watcher Album", "mtime": 20.0, "metadata_schema_version": 6},
+                # A whole-library save rewrote the stored v2 row (sandbox2
+                # 2026-11-05): older than the scan's fresh read, never adopted.
+                "kept": {"path": "kept", "album": "Stale Album", "mtime": 10.0, "metadata_schema_version": 2},
+                # Same file, newer mtime but an older reader: never adopted.
+                "reread": {"path": "reread", "album": "Old Reader", "mtime": 30.0, "metadata_schema_version": 5},
+                # A file this scan never saw: adopted.
+                "added": {"path": "added", "album": "Watcher Added", "mtime": 1.0, "metadata_schema_version": 6},
+            }, {"deleted"}
+
+    _install_scan_cache_adapter(monkeypatch, RevisionAdapter())
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda file_cache, _keys: [SimpleNamespace(key=f"albums-of-{len(file_cache)}")],
+    )
+    library_state.update({"file_cache": {}, "albums": [], "last_scan": 0.0, "relation_views": {"artists": []}})
+
+    fresh = {"metadata_schema_version": 6, "mtime": 10.0}
+
+    def scan(**_kwargs):
+        return {
+            "kept": {"path": "kept", "album": "Scan Album", **fresh},
+            "edited": {"path": "edited", "album": "Old Album", **fresh},
+            "reread": {"path": "reread", "album": "Scan Album", **fresh},
+            "deleted": {"path": "deleted", "album": "Scan Album", **fresh},
+        }, 55.0
+
+    def refresh(**kwargs):
+        attempts.append((kwargs["expected_inventory_mutation_revision"], dict(kwargs["publication_state"]["file_cache"])))
+        if len(attempts) == 1:
+            raise scan_state.ScanCacheInventorySuperseded("newer watcher publication")
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan,
+        refresh_relation_views=refresh,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert [revision for revision, _cache in attempts] == [23, 24]
+    assert attempts[1][1] == {
+        "kept": {"path": "kept", "album": "Scan Album", **fresh},
+        "edited": {"path": "edited", "album": "Watcher Album", "mtime": 20.0, "metadata_schema_version": 6},
+        "reread": {"path": "reread", "album": "Scan Album", **fresh},
+        "added": {"path": "added", "album": "Watcher Added", "mtime": 1.0, "metadata_schema_version": 6},
+    }
+    assert library_state["scan_outcome"] == "completed"
+    assert library_state["albums"][0].key == "albums-of-4"
+
+
 def test_stale_scan_generation_does_not_publish_rating_seed_intent(
     runtime_config,
     runtime_logger,
@@ -2374,7 +2581,8 @@ def test_scan_future_cancellation_remains_normal(
     library_state.update(file_cache={}, albums=[], last_scan=0.0)
     _install_scan_cache_adapter(monkeypatch)
     monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
-    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+    events = []
+    monkeypatch.setattr(scan_state, "log_app_event", lambda _cfg, _logger, action, **fields: events.append((action, fields)))
 
     def cancel(**_kwargs):
         raise cancellation("cancelled")
@@ -2392,6 +2600,7 @@ def test_scan_future_cancellation_remains_normal(
         assert future.result(timeout=5) is None
     assert future.exception() is None
     assert followups == []
+    assert ("Library indexing cancelled", {"level": "info", "reason": cancellation.__name__, "detail": "cancelled"}) in events
     assert library_state["scan_outcome"] == "cancelled"
     assert library_state["scan_in_progress"] is False
     assert "active_scan_preview_state" not in library_state

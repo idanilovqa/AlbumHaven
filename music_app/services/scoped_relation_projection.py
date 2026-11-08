@@ -470,7 +470,14 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
                 metadata['built_from_fingerprint'] = metadata['source_fingerprint']
             else:
                 legacy_views = legacy['relation_views']
-    current_albums = connection.execute("""select id,album_key from library.local_albums
+    else:
+        # Gallery headers stay at the first unpublished generation until every
+        # journaled album is published, so earlier album changes join this one.
+        for row in connection.execute("""select album_id,album_keys from library.local_relation_dirty_albums
+                where library_id=%s and album_id>0""", (library_id,)).fetchall():
+            ids.add(row['album_id'])
+            keys.update(row['album_keys'])
+    current_albums =connection.execute("""select id,album_key from library.local_albums
         where library_id=%(library_id)s and (id=any(%(album_ids)s::bigint[]) or album_key=any(%(album_keys)s::text[])
           or id in (select tracks.album_id from library.local_track_files files
             join library.local_tracks tracks on tracks.id=files.track_id
@@ -707,8 +714,12 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
     return result
 
 
-def tag_edit_baseline_ready(config, *, connect=None):
-    """Read only projection markers before any physical media write."""
+def tag_edit_baseline_ready(config, *, connect=None, track_paths=()):
+    """Read only projection markers before any physical media write.
+
+    Pending journal rows for other albums are published with the edit; only a
+    pending change to an edited album, detached tracks, or the library refuses.
+    """
     from music_app.services import relation_projection_postgres as relations
     from music_app.services.gallery_projection_postgres import BUILDER_VERSION
     with (connect or relations._connect)(config['ALBUM_HAVEN_APP_DATABASE_URL']) as connection:
@@ -724,16 +735,22 @@ def tag_edit_baseline_ready(config, *, connect=None):
               and compatibility.source_fingerprint=state.source_fingerprint
               and compatibility.last_publication_xid=state.last_publication_xid)
             and not exists(select 1 from library.local_relation_dirty_albums dirty
-              where dirty.library_id=context.library_id)
+              where dirty.library_id=context.library_id and (dirty.album_id<=0 or dirty.album_id in (
+                select tracks.album_id from library.local_track_files files
+                join library.local_tracks tracks on tracks.id=files.track_id
+                where tracks.library_id=context.library_id and files.private_path=any(%(paths)s::text[]))))
             and exists(select 1 from library.gallery_membership_headers header
               where header.library_id=context.library_id and header.builder_version=%(gallery_version)s)
             and not exists(select 1 from library.gallery_membership_headers header
               join library.gallery_projection_state gallery on gallery.library_id=header.library_id
               where header.library_id=context.library_id and header.builder_version=%(gallery_version)s
-                and header.source_generation<>gallery.generation) as ready
+                and header.source_generation<>coalesce((select min(dirty.first_gallery_generation)
+                  from library.local_relation_dirty_albums dirty where dirty.library_id=context.library_id),
+                  gallery.generation)) as ready
             from (""" + _CONTEXT + """) context
             join library.local_relation_projection_state state on state.library_id=context.library_id""",
-            {'relation_version': relations.RELATION_PROJECTION_BUILDER_VERSION, 'gallery_version': BUILDER_VERSION}))
+            {'relation_version': relations.RELATION_PROJECTION_BUILDER_VERSION, 'gallery_version': BUILDER_VERSION,
+             'paths': sorted({variant for path in track_paths for variant in (str(path), str(Path(path)))})}))
     return bool(row and row.get('ready'))
 
 

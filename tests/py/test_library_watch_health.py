@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from threading import Event, Thread
 
+import sys
+
 import pytest
 
 from tests.py.asgi_testing import decode_json, run_asgi_request
@@ -187,7 +189,10 @@ def test_recovery_publication_guard_allows_warning_from_before_reconciliation():
     assert entered
 
 
-def test_recovery_publication_guard_rejects_warning_newer_than_reconciliation():
+@pytest.mark.parametrize(("kind", "publishes"), [("OVERFLOW", True), ("ROOT_UNAVAILABLE", False)])
+def test_recovery_publication_guard_publishes_over_a_newer_overflow_only(kind, publishes):
+    # sandbox2 2026-11-04: N: overflowed every ~27 min while its catch-up took
+    # longer, so every catch-up was discarded and nothing ever published.
     from datetime import datetime, timedelta, timezone
 
     health = _health_module()
@@ -202,16 +207,39 @@ def test_recovery_publication_guard_rejects_warning_newer_than_reconciliation():
     )
     service.record_event(
         health.LibraryEvent(
-            health.LibraryEventKind.OVERFLOW,
+            getattr(health.LibraryEventKind, kind),
             "main-root",
             Path("C:/Music"),
         )
     )
 
     guard = service.recovery_publication_guard(reconciliation_started_at)
-    with pytest.raises(health.LibraryRootUnhealthyError):
+    if publishes:
         with guard(connection, ["main-root"]):
-            pytest.fail("a newer warning must block recovery publication")
+            pass
+        service.clear_after_reconciliation(
+            observed_root_ids=["main-root"], reconciliation_started_at=reconciliation_started_at,
+        )
+        assert [problem.state for problem in service.load_problems()] == ["overflow"], (
+            "the newer overflow stays and schedules another catch-up"
+        )
+    else:
+        with pytest.raises(health.LibraryRootUnhealthyError):
+            with guard(connection, ["main-root"]):
+                pytest.fail("a root that became unavailable must block recovery publication")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ReadDirectoryChangesW filter")
+def test_windows_watch_ignores_last_access_notifications():
+    from watchdog.observers import winapi
+
+    from music_app.services import library_watch
+
+    library_watch._ignore_last_access_notifications()
+
+    assert not winapi.WATCHDOG_FILE_NOTIFY_FLAGS & winapi.FILE_NOTIFY_CHANGE_LAST_ACCESS
+    assert winapi.WATCHDOG_FILE_NOTIFY_FLAGS & winapi.FILE_NOTIFY_CHANGE_LAST_WRITE
+    assert winapi.WATCHDOG_FILE_NOTIFY_FLAGS & winapi.FILE_NOTIFY_CHANGE_FILE_NAME
 
 
 def test_reconciliation_clear_removes_older_warning_and_preserves_newer_warning():
@@ -875,9 +903,10 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         def __init__(self, *_args, **kwargs):
             self.after_commit = kwargs["after_commit"]
 
-        def reconcile(self, request, *, root_healthy, publication_guard=None):
+        def reconcile(self, request, *, root_healthy, publication_guard=None, reuse_unchanged_entries=False):
             if publication_guard is not None:
                 assert root_healthy
+                assert reuse_unchanged_entries, "catch-ups skip unchanged files like a full scan"
                 assert request.paths == request.deleted_subtrees == frozenset({tmp_path})
                 recovery_calls.append(("recover", request.root_id))
                 return SimpleNamespace(health="healthy")
@@ -1315,3 +1344,17 @@ def test_public_health_projection_preserves_same_clock_event_identity(as_mapping
         assert "Private Music" not in json.dumps(projected)
         tokens.append(warning_token(projected))
     assert tokens[0] != tokens[1]
+
+
+def test_a_forced_full_scan_clears_the_roots_it_observed():
+    health = _health_module()
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+        connect=lambda _url: connection,
+    )
+    service = health.LibraryWatchHealthService(store)
+    service.record_event(health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music")))
+    assert service.clear_after_scan(scan_mode="background", observed_root_ids=["main"]) == 0
+    assert service.clear_after_scan(scan_mode=health.FORCED_FULL_SCAN_MODE, observed_root_ids=["main"]) == 1
+    assert service.root_allows_destructive_reconciliation("main")

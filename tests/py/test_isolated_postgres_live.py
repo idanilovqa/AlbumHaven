@@ -312,8 +312,15 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
         def seed(*entries):
+            from music_app.services.gallery_projection_postgres import initialize_gallery_membership
+            from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
             adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
+            # A full scan publishes its relation views; watcher publication
+            # requires that ready baseline, as after startup.
+            assert ensure_relation_projection_ready(config).get("ready")
+            initialize_gallery_membership(config)
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:
@@ -690,6 +697,393 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
             """).fetchall()
             assert connection.execute("select bool_and(scan_cache_stale) as all_stale from library.local_track_files").fetchone()["all_stale"]
         assert {row["name"] for row in retained} == {"Retained Guest"}
+
+
+def _live_album_rows(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = {
+            row["album_key"]: row for row in connection.execute(
+                "select album_key, title, release_year, metadata ->> 'source' as source from library.local_albums"
+            ).fetchall()
+        }
+        members = {
+            row["private_path"]: row["album_key"] for row in connection.execute(
+                """
+                select files.private_path, albums.album_key
+                from library.local_track_files files
+                join library.local_tracks tracks on tracks.id = files.track_id
+                left join library.local_albums albums on albums.id = tracks.album_id
+                where files.scan_cache_stale is false
+                """
+            ).fetchall()
+        }
+    return albums, members
+
+
+def _live_reconcile(fixture, entries, *folders):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    return TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(entries[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=tuple(Path(folder) for folder in folders),
+        deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+
+def test_live_watcher_album_of_a_new_year_never_rewrites_another_years_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    old_year = {**fixture.entry("Owner/Demo 2020/01.flac", album="Demo Album"), "year": 2020}
+    fixture.seed(old_year)
+    new_year = {**fixture.entry("Owner/Demo 2021/01.flac", album="Demo Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {new_year["path"]: new_year}, Path(new_year["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    # Both years are year-split exactly as a full scan would; neither album is rewritten.
+    years = {albums[key]["release_year"] for key in members.values()}
+    assert years == {2020, 2021}
+    assert albums[members[old_year["path"]]]["release_year"] == 2020
+    assert albums[members[new_year["path"]]]["release_year"] == 2021
+    assert members[old_year["path"]] != members[new_year["path"]]
+
+
+def test_live_watcher_follows_the_year_split_key_a_full_scan_created(watcher_repair_inventory):
+    # Mirrors sandbox2 2026-11-04: incoming 'unknown artist::' (2021) collided
+    # with the full scan's 'unknown artist::::year::2021'.
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Seed/01.flac", album="Seed Album"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%(library)s, %(artist)s, 'owner::demo album', 'Demo Album', 2020, '{"source": "legacy"}'::jsonb),
+                   (%(library)s, %(artist)s, 'owner::demo album::year::2021', 'Demo Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            {"library": owner["library_id"], "artist": owner["id"]},
+        )
+    arrival = {**fixture.entry("Owner/Demo 2021/01.flac", album="Demo Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {arrival["path"]: arrival}, Path(arrival["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    assert members[arrival["path"]] == "owner::demo album::year::2021"
+    assert albums["owner::demo album"]["release_year"] == 2020, "the other year's album is not rewritten"
+
+
+def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_albums(watcher_repair_inventory):
+    # Owner 2026-11-04: absent artist/album tags never make "Unknown Artist" or
+    # "Unknown Album"; those files are loose tracks flagged in Problematic Files.
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    tagged = fixture.entry("Owner/Real/01.flac", album="Real Album")
+    untagged = {**fixture.entry("Untagged/01.flac", album=""), "artist": "", "album_artist": "Unknown Artist"}
+    no_album = fixture.entry("Owner/No Album/01.flac", album="")
+    fixture.seed(tagged, untagged, no_album)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id = connection.execute("select library_id from library.local_artists limit 1").fetchone()["library_id"]
+        # A placeholder album an older scan published, plus a real album that
+        # must survive the retirement untouched.
+        artist = connection.execute("""insert into library.local_artists (library_id, artist_key, name)
+            values (%s, 'unknown artist', 'Unknown Artist')
+            on conflict (library_id, artist_key) do update set name = excluded.name returning id""",
+            (library_id,)).fetchone()["id"]
+        placeholder = connection.execute("""insert into library.local_albums (library_id, artist_id, album_key, title)
+            values (%s, %s, 'unknown artist::', '') returning id""", (library_id, artist)).fetchone()["id"]
+        connection.execute("""update library.local_tracks set album_id = %s where id = (
+            select track_id from library.local_track_files where private_path = %s)""", (placeholder, untagged["path"]))
+
+    fixture.seed(tagged, untagged, no_album)
+
+    albums, members = _live_album_rows(fixture)
+    assert members[tagged["path"]] == "owner::real album"
+    assert members[untagged["path"]] is None and members[no_album["path"]] is None
+    assert set(albums) == {"owner::real album"}
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        problems = {row["private_path"]: row["problem"] for row in connection.execute("""select private_path,
+            metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
+            from library.local_track_files""").fetchall()}
+    assert problems[untagged["path"]] == "Missing artist and album"
+    assert problems[no_album["path"]] == "Missing album"
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    sidebar = [item["artist"] for item in repository.build_root_sidebar_payload()["artists_sidebar"]]
+    assert "Owner" in sidebar and "Unknown Artist" not in sidebar
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    reasons = {reason for item in repository.build_problematic_files_payload()["items"] for reason in item["problem_reasons"]}
+    assert {"Missing artist and album", "Missing album"} <= reasons
+
+
+def test_live_slash_band_name_is_one_artist(watcher_repair_inventory):
+    # ID-001: 'To/Die/For' is one band, tagged as a single value.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    entries = []
+    for year, album in ((1999, "All Eternity"), (2001, "Epilogue"), (2003, "Jaded"), (2005, "IV")):
+        entry = fixture.entry(f"To Die For/{year} - {album}/01 - Track.flac", artist="To/Die/For", album=album)
+        entries.append({**entry, "album_artist": "To/Die/For", "artists": ["To/Die/For"], "year": year})
+    fixture.seed(*entries)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        artists = {row["name"] for row in connection.execute("select name from library.local_artists").fetchall()}
+    assert "To" not in artists and "To/Die/For" in artists
+    sidebar = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect).build_root_sidebar_payload()
+    counts = {item["artist"]: item.get("count") for item in sidebar["artists_sidebar"]}
+    assert "To" not in counts and "To/Die/For" in counts
+
+
+def test_live_root_catch_up_rereads_only_changed_files(watcher_repair_inventory):
+    # sandbox2 2026-11-04: an N: catch-up re-read all 54k files and never finished.
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    unchanged, edited = (
+        {**fixture.entry(f"Owner/Catch Up/0{index}.flac", album="Catch Up"), "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+         "release_date": None, "compilation_tag": None}
+        for index in (1, 2)
+    )
+    fixture.seed(unchanged, edited)
+    Path(edited["path"]).write_bytes(b"retagged media fixture")
+    read = []
+
+    def reader(path):
+        read.append(str(path))
+        stat = Path(path).stat()
+        return {**edited, "title": "Retagged", "mtime": stat.st_mtime, "size": stat.st_size}
+
+    root = Path(fixture.roots[0]["path"])
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=reader, wait=lambda _seconds: None,
+    ).reconcile(
+        SimpleNamespace(root_id="repair-main", paths=(root,), deleted_paths=(), deleted_subtrees=(root,), moves=()),
+        reuse_unchanged_entries=True,
+    )
+
+    assert result.health == "healthy"
+    assert read == [edited["path"]]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        titles = {row["private_path"]: row["title"] for row in connection.execute("""
+            select files.private_path, tracks.title from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id where files.scan_cache_stale is false""").fetchall()}
+    assert titles == {unchanged["path"]: "01", edited["path"]: "Retagged"}
+
+
+def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_repair_inventory):
+    # A superseded full scan adopts exactly these files instead of discarding itself.
+    import time
+
+    fixture = watcher_repair_inventory
+    untouched = fixture.entry("Owner/Untouched/01.flac", album="Untouched")
+    edited = fixture.entry("Owner/Edited/01.flac", album="Edited")
+    deleted = fixture.entry("Owner/Deleted/01.flac", album="Deleted")
+    fixture.seed(untouched, edited, deleted)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        scan_started = connection.execute("select extract(epoch from clock_timestamp()) as now").fetchone()["now"]
+    time.sleep(0.05)
+    retagged = {**edited, "title": "Watcher Title"}
+    _live_reconcile(fixture, {edited["path"]: retagged}, Path(edited["path"]).parent)
+    Path(deleted["path"]).unlink()
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(deleted["path"]),), deleted_subtrees=(), moves=(),
+    ))
+
+    published, removed = fixture.adapter.load_inventory_published_since(float(scan_started))
+
+    assert set(published) == {edited["path"]}
+    assert published[edited["path"]]["title"] == "Watcher Title"
+    assert removed == {deleted["path"]}
+
+
+def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    main_a = fixture.entry("Owner/Counted/01.flac", album="Counted")
+    main_b = fixture.entry("Owner/Counted/02.flac", album="Counted")
+    hoard = fixture.entry("Owner/Hoarded/01.flac", root=1, album="Hoarded")
+    fixture.seed(main_a, main_b, hoard)
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 2, "repair-hoard": 1}
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true') where private_path = %s",
+            (main_b["path"],),
+        )
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 1, "repair-hoard": 1}
+
+
+def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Demo Album"), "year": 2020}
+    fixture.seed(retagged)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        # A row keyed from another owner spelling already holds Owner / Demo Album / 2021.
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%s, %s, 'owner (legacy)::demo album', 'Demo Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            (owner["library_id"], owner["id"]),
+        )
+    retagged = {**retagged, "year": 2021}
+    clean = {**fixture.entry("Owner/Clean Album/01.flac", album="Clean Album"), "year": 2021}
+
+    result = _live_reconcile(
+        fixture, {retagged["path"]: retagged, clean["path"]: clean},
+        Path(retagged["path"]).parent, Path(clean["path"]).parent,
+    )
+
+    assert result.revision > 0, "the rest of the root still publishes"
+    albums, members = _live_album_rows(fixture)
+    assert members[clean["path"]] == "owner::clean album"
+    assert albums["owner (legacy)::demo album"]["source"] == "legacy", "existing rows are untouched"
+    assert albums["owner::demo album"]["release_year"] == 2020, "the colliding album is withheld, not merged"
+    assert members[retagged["path"]] == "owner::demo album"
+
+
+def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    clean = fixture.entry("Owner/Root Catch-up/01.flac")
+    broken = fixture.entry("Owner/Root Catch-up/02.flac")
+    fixture.seed()
+    tags = {
+        clean["path"]: dict(clean),
+        broken["path"]: {**broken, "title": "Bad\x00Title", "album": "Repair Album\x00", "genre": "Rock\x00"},
+    }
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(tags[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(Path(clean["path"]).parent,), deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+    assert result.revision > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_file_album, metadata #>> '{scan_cache,file_entry,title}' as title "
+            "from library.local_track_files where scan_cache_stale is false order by private_path"
+        ).fetchall()
+    assert [row["private_path"] for row in rows] == [clean["path"], broken["path"]]
+    assert all("\x00" not in str(row["title"]) + str(row["scan_file_album"]) for row in rows)
+    assert rows[1]["title"] == "Bad; Title" and rows[1]["scan_file_album"] == "Repair Album"
+
+
+def test_live_metadata_repair_lease_admits_one_instance_at_a_time(watcher_repair_inventory):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    fixture = watcher_repair_inventory
+    first = fixture.adapter.try_acquire_metadata_repair_lease()
+    second_instance = PostgresScanCacheAdapter(fixture.config, connect=isolatedPostgres._connect)
+    try:
+        assert first is not None
+        assert second_instance.try_acquire_metadata_repair_lease() is None
+    finally:
+        first.release()
+    again = second_instance.try_acquire_metadata_repair_lease()
+    assert again is not None
+    again.release()
+
+
+def test_live_outdated_file_metadata_is_detected_for_a_startup_repair_scan(watcher_repair_inventory):
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+
+    fixture = watcher_repair_inventory
+    current = {"metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "release_date": None}
+    tracks = [
+        {**fixture.entry(f"Art Zoyd/Génération sans futur/0{index}.flac", artist="Art Zoyd", album="Génération sans futur"), **current}
+        for index in (1, 2)
+    ]
+    fixture.seed(*tracks)
+    assert fixture.adapter.has_outdated_file_metadata() is False
+
+    # An entry read before the subtitle/edition fix still carries a per-track edition.
+    stale_reader = {**tracks[1], "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION - 1, "edition": "Speedy Gonzalez"}
+    fixture.seed(tracks[0], stale_reader)
+    assert fixture.adapter.has_outdated_file_metadata() is True
+
+
+@pytest.mark.parametrize("stale_track_editions", [False, True])
+def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watcher_repair_inventory, stale_track_editions):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    # The owner's two real copies: a Bandcamp copy in the main library and a
+    # Soulseek copy whose older reader stored each track subtitle as an edition.
+    main_titles = ["La Ville", "Speedy Gonzales", "Divertissement", "Trois Miniatures", "Génération Sans Futur", "Les fourmis"]
+    arrival_titles = ["La Ville", "Speedy Gonzalez", "Génération sans futur", "Divertissement", "Trois miniatures"]
+
+    def copy(root, folder, album, titles, disc_number):
+        return [
+            {**fixture.entry(f"{folder}/0{index}.flac", root=root, artist="Art Zoyd", album=album),
+             "title": title, "track_number": index, "disc_number": disc_number, "year": 1980,
+             "edition": title if stale_track_editions and root == 1 else ""}
+            for index, title in enumerate(titles, start=1)
+        ]
+
+    fixture.seed(*copy(0, "Prog 80s leftovers/1980 - Art Zoyd - Génération Sans Futur", "Génération Sans Futur", main_titles, None),
+                 *copy(1, "Art Zoyd (1980) - Génération sans futur", "Génération sans futur", arrival_titles, 1))
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    payload = PostgresLibraryBrowseRepository(fixture.config).build_problematic_files_payload()
+    duplicate_items = [
+        item for item in payload["items"]
+        if "duplicate" in " ".join(map(str, item.get("problem_reasons") or [])).casefold()
+    ]
+    assert duplicate_items, payload["items"]
+
+
+def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_inventory):
+    import shutil
+
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    loose = [
+        fixture.entry(f"Формы времени/{index:02d} - Трек.flac", artist="Начало Века", album=album, exception=exception)
+        for index, (album, exception) in enumerate((("Формы времени", "Random songs"), (None, "Custom Collection")), start=1)
+    ]
+    kept = fixture.entry("Начало Века/2009 - Тебя ждала (single)/01.flac", artist="Начало Века", album=None)
+    fixture.seed(*loose, kept)
+    folder = Path(loose[0]["path"]).parent
+    shutil.rmtree(folder)
+
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(), deleted_subtrees=(folder,), moves=(),
+    ))
+
+    assert result.revision > 0, "deleting album-less loose tracks is an inventory change"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_cache_stale from library.local_track_files order by private_path"
+        ).fetchall()
+    stale = {row["private_path"]: row["scan_cache_stale"] for row in rows}
+    assert all(stale[entry["path"]] for entry in loose)
+    assert stale[kept["path"]] is False
 
 
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])

@@ -41,6 +41,20 @@ test('inside actions and the opener retain normal activation', () => {
   assert.equal(h.closes(), 0);
 });
 
+test('a click inside the surface resolves the foreground surface once per gesture (INT-034)', () => {
+  // Resolving forces a full style pass; a Loose Tracks section toggle paid two.
+  const inside = {};
+  let resolves = 0;
+  const surface = { surface: { contains: target => target === inside }, isBackdrop: () => false, dismiss() {} };
+  const handlers = create(() => { resolves += 1; return surface; });
+  const event = { target: inside, pointerId: 1, isPrimary: true, button: 0, clientX: 1, clientY: 1, detail: 1,
+    preventDefault() {}, stopImmediatePropagation() {} };
+  for (const type of ['pointerdown', 'pointerup', 'click']) handlers[type](event);
+  assert.equal(resolves, 1);
+  handlers.click({ ...event, detail: 0 });
+  assert.equal(resolves, 2, 'a keyboard click without a pointer gesture still resolves');
+});
+
 test('dragging from inside to outside never dismisses or activates background', () => {
   const h = harness();
   h.send('pointerdown', h.inside);
@@ -109,13 +123,15 @@ test('binding uses capture and releases every listener on disposal', () => {
     assert.equal(capture, true); assert.equal(listeners.get(type), fn); listeners.delete(type);
   } };
   const dispose = bind(window, () => null);
-  assert.equal(listeners.size, 6); dispose(); assert.equal(listeners.size, 0);
+  assert.equal(listeners.size, 7); dispose(); assert.equal(listeners.size, 0);
 });
 
 
 function boundHarness() {
   const listeners = new Map();
+  const document = { visibilityState: 'visible' };
   const window = {
+    document,
     addEventListener(type, handler) { listeners.set(type, handler); },
     removeEventListener(type) { listeners.delete(type); },
   };
@@ -138,7 +154,8 @@ function boundHarness() {
     send('blur', focusedItem);
   } }; };
   openSurface();
-  return { send, window, background, dispose, closes: () => closes,
+  const setVisibility = value => { document.visibilityState = value; send('visibilitychange', document); };
+  return { send, window, background, dispose, setVisibility, closes: () => closes,
     closeSurface: () => { active = null; }, openSurface };
 }
 
@@ -174,6 +191,22 @@ test('the first backdrop click after losing window focus only restores app focus
     assert.equal(h.closes(), 1, 'the next deliberate backdrop click dismisses normally');
   } finally { h.dispose(); }
 });
+
+for (const order of ['blur-then-hidden', 'hidden-then-blur']) {
+  test(`returning from another browser tab (${order}) dismisses on the first backdrop click`, () => {
+    const h = boundHarness();
+    try {
+      if (order === 'blur-then-hidden') { h.send('blur', h.window); h.setVisibility('hidden'); }
+      else { h.setVisibility('hidden'); h.send('blur', h.window); }
+      h.setVisibility('visible');
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        const event = h.send(type);
+        assert.equal(event.stopped, true, `${type} must not reach the background`);
+      }
+      assert.equal(h.closes(), 1, 'the first click after a tab switch closes the modal');
+    } finally { h.dispose(); }
+  });
+}
 
 test('window refocus without an active surface does not reserve a later modal backdrop click', () => {
   const h = boundHarness();

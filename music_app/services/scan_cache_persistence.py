@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
+import json
 import logging
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol
@@ -100,6 +102,10 @@ class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 
 
+class ScanCacheInventorySuperseded(ScanCachePublicationSuperseded):
+    """A watcher or tag edit published files while the full scan was prepared."""
+
+
 class StructuralTagEditDestinationConflict(RuntimeError):
     """Raised when a structural tag edit would collide with another album."""
 
@@ -128,6 +134,7 @@ class ScanCacheAdapter(Protocol):
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
         ...
 
@@ -201,6 +208,26 @@ class ScanCacheAdapter(Protocol):
         ...
 
 
+_METADATA_REPAIR_LEASE_KEY = "album-haven:file-metadata-repair"
+
+
+class MetadataRepairLease:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def release(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            connection.execute(
+                "select pg_advisory_unlock(hashtextextended(%(key)s, 0))",
+                {"key": _METADATA_REPAIR_LEASE_KEY},
+            )
+        finally:
+            connection.close()
+
+
 class PostgresScanCacheAdapter:
     backend = PERSISTENCE_BACKEND_POSTGRES
 
@@ -223,6 +250,73 @@ class PostgresScanCacheAdapter:
         if str(payload.get("library_root_identity") or "") != str(root_identity):
             return 0.0
         return _float_or_zero(payload.get("last_scan"))
+
+    def try_acquire_metadata_repair_lease(self) -> "MetadataRepairLease | None":
+        """Hold a database-wide session lock so one instance repairs at a time.
+
+        Several app instances may share one library database. The lease lives on
+        its own connection until released (or until that process exits), so a
+        second instance sees it as held and skips its own repair scan.
+        """
+        connection = self._connect_to_database()
+        try:
+            if hasattr(connection, "autocommit"):
+                connection.autocommit = True
+            row = _first_row(connection.execute(
+                "select pg_try_advisory_lock(hashtextextended(%(key)s, 0)) as acquired",
+                {"key": _METADATA_REPAIR_LEASE_KEY},
+            ))
+            if row is not None and bool(_row_mapping(row).get("acquired")):
+                return MetadataRepairLease(connection)
+        except Exception:
+            connection.close()
+            raise
+        connection.close()
+        return None
+
+    def has_outdated_file_metadata(self) -> bool:
+        """True when an active file entry was read by an older metadata reader."""
+        from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(
+                """
+                select exists (
+                  select 1
+                  from library.local_track_files
+                  where scan_cache_stale is false
+                    and scan_file_entry_is_object is true
+                    and metadata #> '{scan_cache,file_entry}' ? 'path'
+                    and (
+                      coalesce(metadata #>> '{scan_cache,file_entry,metadata_schema_version}', '')
+                        <> %(schema_version)s
+                      or not (metadata #> '{scan_cache,file_entry}' ? 'release_date')
+                    )
+                ) as outdated
+                """,
+                {"schema_version": str(FILE_METADATA_SCHEMA_VERSION)},
+            ))
+        return bool(_row_mapping(row).get("outdated")) if row is not None else False
+
+    def count_published_files_by_root(self) -> dict[str, int]:
+        """Active published track files per configured root id."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                """
+                select coalesce(nullif(roots.metadata ->> 'root_id', ''),
+                                files.metadata ->> 'library_root_id') as root_id,
+                       count(*)::integer as file_count
+                from library.local_track_files files
+                join library.library_roots roots on roots.id = files.library_root_id
+                where files.scan_cache_stale is false
+                group by 1
+                """
+            ).fetchall()
+        return {
+            str(payload.get("root_id") or ""): int(payload.get("file_count") or 0)
+            for payload in map(_row_mapping, rows)
+            if payload.get("root_id")
+        }
 
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         try:
@@ -258,6 +352,38 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def load_inventory_published_since(self, since_epoch: float) -> tuple[dict[str, dict[str, object]], set[str]]:
+        """Files another publication wrote or removed after a full scan started."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                """
+                select files.private_path, files.scan_cache_stale,
+                  files.metadata #> '{scan_cache,file_entry}' as file_entry
+                from library.local_track_files files
+                join library.library_roots roots on roots.id = files.library_root_id and roots.is_active
+                join library.libraries libraries on libraries.id = roots.library_id
+                join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+                where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Library'
+                  and libraries.library_kind = 'local'
+                  and files.last_seen_at >= to_timestamp(%(since)s)
+                """,
+                {"since": float(since_epoch)},
+            ).fetchall()
+        published: dict[str, dict[str, object]] = {}
+        removed: set[str] = set()
+        for row in rows:
+            payload = _row_mapping(row)
+            path = str(payload["private_path"])
+            entry = payload.get("file_entry")
+            if payload.get("scan_cache_stale") or not isinstance(entry, dict):
+                removed.add(path)
+                continue
+            try:
+                published[path] = {**deserialize_file_entry(entry), "path": path}
+            except Exception:
+                published[path] = {**entry, "path": path}
+        return published, removed
 
     def load_file_entries(self, paths, *, include_siblings=False):
         """Read only selected files, optionally including their album containers."""
@@ -295,11 +421,11 @@ class PostgresScanCacheAdapter:
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
             raise ValueError("Targeted inventory mutation requires a root id.")
-        file_cache = {
+        file_cache = _without_nul_file_entries({
             str(path): dict(entry)
             for path, entry in active_file_entries.items()
             if str(path).strip() and isinstance(entry, dict)
-        }
+        })
         incoming_track_paths = set(file_cache)
         stale_by_root: dict[str, dict[str, set[str]]] = {
             normalized_root_id: {
@@ -506,6 +632,12 @@ class PostgresScanCacheAdapter:
                 ),
                 excluded_paths=stale_context_paths,
             )
+            _follow_existing_year_split_album_keys(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+            )
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
@@ -513,8 +645,19 @@ class PostgresScanCacheAdapter:
                 if str(row.get("album_key") or "").strip()
             }
             _execute_pipeline_batches(
-                    connection, _upsert_local_artist_sql(preserve_existing_identity=True), artist_rows,
-                )
+                connection, _upsert_local_artist_sql(preserve_existing_identity=True), artist_rows,
+            )
+            identity_conflicts = _withhold_semantic_identity_conflicts(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+                track_file_rows=track_file_rows,
+                separate_release_keys=separate_release_keys,
+            )
+            if identity_conflicts:
+                withheld_album_keys = {entry["album_key"] for entry in identity_conflicts}
+                affected_album_keys.difference_update(withheld_album_keys)
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_sql(preserve_existing_cover_authority=True),
@@ -557,11 +700,17 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            retired = connection.execute(
+                _retire_placeholder_albums_sql(), {"album_ids": sorted(prior_album_ids - {0})},
+            ).fetchall()
+            inventory_changed = inventory_changed or bool(retired)
+            affected_album_keys.update(str(_row_mapping(row)["album_key"]) for row in retired)
             if not inventory_changed:
                 return {
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
                     "new_track_paths": new_track_paths,
+                    **({"identity_conflicts": identity_conflicts} if identity_conflicts else {}),
                 }
             # A logical album can span different containers and configured
             # roots. Replace scan-owned credits using all its retained active
@@ -672,6 +821,7 @@ class PostgresScanCacheAdapter:
             "inventory_mutation_revision": revision,
             "affected_album_keys": sorted(affected_album_keys),
             "new_track_paths": new_track_paths,
+            **({"identity_conflicts": identity_conflicts} if identity_conflicts else {}),
         }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
@@ -1755,7 +1905,8 @@ class PostgresScanCacheAdapter:
                                 if isinstance(updated_file_entries.get(path), dict)}
         from music_app.services.scoped_relation_projection import tag_edit_baseline_ready
         with self._connect_to_database() as connection:
-            if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection)):
+            if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection),
+                                           track_paths=changed_paths):
                 from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
                 schedule_gallery_projection_refresh(self._config, incremental_membership=True)
                 raise RuntimeError("Library changes are still being reconciled. Retry this edit when library preparation finishes.")
@@ -1978,9 +2129,16 @@ class PostgresScanCacheAdapter:
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
+        """Publish the snapshot; with publish_paths, only the albums those files belong to.
+
+        A cache update's snapshot is otherwise as old as its load: publishing all
+        of it stamped old values over rows a running scan had just written.
+        """
         publication_started_at = perf_counter()
         del cache_path
+        file_cache = _without_nul_file_entries(file_cache)
         committed_relation_state: dict[str, object] | None = None
         repaired_cover_entries: dict[str, dict[str, object]] = {}
         with self._connect_to_database() as connection:
@@ -2022,6 +2180,23 @@ class PostgresScanCacheAdapter:
                 _file_cache_with_inferred_blank_album_memberships(file_cache),
                 effective_separate_release_keys,
             )
+            if publish_paths is not None:
+                # Albums are built from the whole snapshot so folder inference
+                # holds; only those holding a changed file become rows.
+                changed_keys = {_published_path_key(path) for path in publish_paths}
+                albums = [
+                    album for album in albums
+                    if any(_published_path_key(getattr(track, "path", "")) in changed_keys
+                           for track in getattr(album, "tracks", None) or [])
+                ]
+                album_keys = {
+                    _published_path_key(getattr(track, "path", ""))
+                    for album in albums for track in getattr(album, "tracks", None) or []
+                }
+                file_cache = {
+                    path: entry for path, entry in file_cache.items()
+                    if _published_path_key(path) in changed_keys | album_keys
+                }
             artist_rows, album_rows, featured_artist_rows, track_rows, track_file_rows = _inventory_rows_from_albums(
                 file_cache,
                 albums,
@@ -2031,6 +2206,13 @@ class PostgresScanCacheAdapter:
                 for row in track_file_rows
                 if str(row.get("private_path") or "")
             ]
+            # Compare before the lock; under it, write only what changed.
+            unchanged_track_rows = _unchanged_row_fingerprints(
+                connection, _unchanged_local_track_rows_sql(), track_rows,
+            )
+            unchanged_track_file_rows = _unchanged_row_fingerprints(
+                connection, _unchanged_local_track_file_rows_sql(), track_file_rows,
+            )
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
@@ -2042,7 +2224,7 @@ class PostgresScanCacheAdapter:
                 _load_inventory_mutation_revision(connection)
                 != prepared_inventory_mutation_revision
             ):
-                raise ScanCachePublicationSuperseded(
+                raise ScanCacheInventorySuperseded(
                     "Inventory changed through a structural tag edit while the scan snapshot was being prepared."
                 )
             from music_app.services.scoped_relation_projection import pending_scan_baseline, record_pending_scan_receipt
@@ -2072,6 +2254,14 @@ class PostgresScanCacheAdapter:
                 connection,
                 album_rows,
             )
+            _withhold_semantic_identity_conflicts(
+                connection,
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+                track_file_rows=track_file_rows,
+                separate_release_keys=set(separate_release_keys or set()),
+            )
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_sql(),
@@ -2082,31 +2272,36 @@ class PostgresScanCacheAdapter:
                 _upsert_local_album_featured_artist_sql(),
                 featured_artist_rows,
             )
-            connection.execute(
-                _synchronize_local_album_featured_artists_sql(),
-                {
-                    "current_featured_rows": _jsonb(
-                        [
-                            {
-                                "album_key": row["album_key"],
-                                "artist_key": row["artist_key"],
-                                "featured_kind": row["featured_kind"],
-                            }
-                            for row in featured_artist_rows
-                        ]
-                    ),
-                    "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
-                },
-            )
+            featured_sync_params = {
+                "current_featured_rows": _jsonb(
+                    [
+                        {
+                            "album_key": row["album_key"],
+                            "artist_key": row["artist_key"],
+                            "featured_kind": row["featured_kind"],
+                        }
+                        for row in featured_artist_rows
+                    ]
+                ),
+                "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
+            }
+            if publish_paths is None:
+                connection.execute(_synchronize_local_album_featured_artists_sql(), featured_sync_params)
+            else:
+                # The library-wide sync would drop every other album's credits.
+                connection.execute(
+                    _synchronize_targeted_local_album_featured_artists_sql(),
+                    {**featured_sync_params, "affected_album_keys": sorted({row["album_key"] for row in album_rows})},
+                )
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_sql(),
-                track_rows,
+                [row for row in track_rows if _row_fingerprint(row) not in unchanged_track_rows],
             )
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_file_sql(),
-                track_file_rows,
+                [row for row in track_file_rows if _row_fingerprint(row) not in unchanged_track_file_rows],
             )
             repaired_album_keys = sorted({
                 str(getattr(album, "key", "")) for album in albums
@@ -2121,24 +2316,26 @@ class PostgresScanCacheAdapter:
                     ).fetchall()
                     if (payload := _row_mapping(row)).get("private_path")
                 }
-            connection.execute(
-                _mark_stale_track_files_sql(),
-                {
-                    "current_paths": current_private_paths,
-                    "current_path_count": len(current_private_paths),
-                    "source": _SOURCE,
-                    "observed_root_ids": sorted(observed_library_root_ids or set()),
-                    "stale_metadata": _jsonb(
-                        {
-                            "scan_cache": {
-                                "source": _SOURCE,
-                                "stale": True,
-                                "stale_marked_at": datetime.now(timezone.utc).isoformat(),
+            if publish_paths is None:  # a cache update never marks files stale
+                connection.execute(
+                    _mark_stale_track_files_sql(),
+                    {
+                        "current_paths": current_private_paths,
+                        "current_path_count": len(current_private_paths),
+                        "source": _SOURCE,
+                        "observed_root_ids": sorted(observed_library_root_ids or set()),
+                        "stale_metadata": _jsonb(
+                            {
+                                "scan_cache": {
+                                    "source": _SOURCE,
+                                    "stale": True,
+                                    "stale_marked_at": datetime.now(timezone.utc).isoformat(),
+                                }
                             }
-                        }
-                    ),
-                },
-            )
+                        ),
+                    },
+                )
+            connection.execute(_retire_placeholder_albums_sql(), {"album_ids": None})
             relation_source_rows = list(
                 connection.execute(load_relation_source_rows_sql()).fetchall()
             )
@@ -2233,6 +2430,10 @@ class PostgresScanCacheAdapter:
                 if before_commit is not None:
                     before_commit(connection)
                 record_pending_scan_receipt(connection, pending_baseline, projection_metadata)
+                # A whole-library save prepared before this one must not
+                # overwrite it: advancing the revision supersedes that save,
+                # which then rebases onto this publication and retries.
+                connection.execute(_increment_inventory_mutation_revision_sql())
 
             if seed_missing_album_ratings:
                 if album_rating_seed_guard is None:
@@ -2290,7 +2491,25 @@ def _connect(database_url: str) -> Any:
     return psycopg.connect(database_url, row_factory=dict_row)
 
 
+def _published_path_key(path: object) -> str:
+    return os.path.normcase(os.path.normpath(str(path or "")))
+
+
+def _without_nul_file_entries(file_cache: dict) -> dict:
+    """Postgres text rejects NUL; one malformed tag must not block a whole root."""
+    from music_app.services.metadata import without_nul_characters
+
+    return {
+        path: without_nul_characters(entry) if isinstance(entry, dict) else entry
+        for path, entry in (file_cache or {}).items()
+    }
+
+
 def _jsonb(value: object) -> object:
+    from music_app.services.metadata import without_nul_characters
+
+    # Postgres jsonb rejects NUL; one malformed value must not abort a root.
+    value = without_nul_characters(value)
     if Jsonb is None:
         return value
     return Jsonb(value)
@@ -2358,6 +2577,143 @@ def _jsonb_compatible(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+_SEMANTIC_IDENTITY_CONFLICTS_SQL = """
+    with bootstrap_context as (
+      select library.libraries.id as library_id
+      from app.bootstrap_owners
+      join library.libraries
+        on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+       and library.libraries.name = 'Local Library'
+       and library.libraries.library_kind = 'local'
+      where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+      limit 1
+    ), incoming as (
+      select *
+      from jsonb_to_recordset(%(incoming_albums)s::jsonb) as incoming(
+        album_key text, artist_key text, title text, release_year integer, edition text
+      )
+    )
+    select incoming.album_key, existing.album_key as existing_album_key
+    from incoming
+    join bootstrap_context on true
+    join library.local_artists as artists
+      on artists.library_id = bootstrap_context.library_id
+     and artists.artist_key = incoming.artist_key
+    join library.local_albums as existing
+      on existing.library_id = bootstrap_context.library_id
+     and existing.artist_id = artists.id
+     and lower(btrim(existing.title)) = lower(btrim(incoming.title))
+     and existing.release_year is not distinct from incoming.release_year
+     and lower(btrim(coalesce(existing.metadata ->> 'edition', '')))
+         = lower(btrim(coalesce(incoming.edition, '')))
+     and existing.semantic_identity_discriminator = ''
+     and existing.album_key <> incoming.album_key
+    where nullif(btrim(incoming.title), '') is not null
+"""
+
+
+def _withhold_semantic_identity_conflicts(
+    connection: Any,
+    *,
+    album_rows: list[dict[str, object]],
+    featured_artist_rows: list[dict[str, object]],
+    track_rows: list[dict[str, object]],
+    track_file_rows: list[dict[str, object]],
+    separate_release_keys: set[str],
+) -> list[dict[str, object]]:
+    """Keep one album's identity collision from rolling back a whole publication.
+
+    Two different album keys may resolve to the same semantic identity (artist,
+    title, year, edition). The unique index then rejects the upsert and aborts
+    every other album in the same root. Albums that would collide are withheld
+    from this publication: their existing rows stay exactly as they are, nothing
+    is merged or re-owned, and the conflicts are returned for diagnostics.
+    """
+    def identity(row: dict[str, object]) -> tuple[object, ...]:
+        metadata = _jsonb_compatible(row.get("metadata"))
+        edition = metadata.get("edition") if isinstance(metadata, dict) else None
+        return (
+            row.get("artist_key"),
+            " ".join(str(row.get("title") or "").casefold().split()),
+            safe_int(row.get("release_year")),
+            str(edition or "").strip().casefold(),
+        )
+
+    def is_separate_release(row: dict[str, object]) -> bool:
+        metadata = _jsonb_compatible(row.get("metadata"))
+        owner = (metadata.get("album_artist") if isinstance(metadata, dict) else None) or ""
+        edition = metadata.get("edition") if isinstance(metadata, dict) else None
+        return album_separate_release_key(str(owner), str(row.get("title") or ""), str(edition or "")) in separate_release_keys
+
+    candidates = [
+        row for row in album_rows
+        if row.get("artist_key") and str(row.get("title") or "").strip() and not is_separate_release(row)
+    ]
+    conflicts: dict[str, dict[str, object]] = {}
+    keys_by_identity: dict[tuple[object, ...], set[str]] = {}
+    for row in candidates:
+        keys_by_identity.setdefault(identity(row), set()).add(str(row.get("album_key") or ""))
+    for row in candidates:
+        if len(keys_by_identity[identity(row)]) > 1:
+            conflicts[str(row["album_key"])] = {
+                "album_key": str(row["album_key"]), "title": row.get("title"),
+                "release_year": row.get("release_year"),
+                "conflicting_album_keys": sorted(keys_by_identity[identity(row)] - {str(row["album_key"])}),
+            }
+    if candidates:
+        incoming = []
+        for row in candidates:
+            metadata = _jsonb_compatible(row.get("metadata"))
+            incoming.append({
+                "album_key": row.get("album_key"), "artist_key": row.get("artist_key"),
+                "title": row.get("title"), "release_year": safe_int(row.get("release_year")),
+                "edition": metadata.get("edition") if isinstance(metadata, dict) else None,
+            })
+        for raw in connection.execute(
+            _SEMANTIC_IDENTITY_CONFLICTS_SQL, {"incoming_albums": _jsonb(incoming)},
+        ).fetchall():
+            found = _row_mapping(raw)
+            album_key = str(found.get("album_key") or "")
+            existing_key = str(found.get("existing_album_key") or "")
+            row = next((item for item in candidates if str(item.get("album_key")) == album_key), {})
+            entry = conflicts.setdefault(album_key, {
+                "album_key": album_key, "title": row.get("title"),
+                "release_year": row.get("release_year"), "conflicting_album_keys": [],
+            })
+            if existing_key and existing_key not in entry["conflicting_album_keys"]:
+                entry["conflicting_album_keys"] = sorted({*entry["conflicting_album_keys"], existing_key})
+    if not conflicts:
+        return []
+    withheld_keys = set(conflicts)
+    withheld_track_keys = {
+        str(row.get("track_key") or "") for row in track_rows if str(row.get("album_key") or "") in withheld_keys
+    }
+    withheld_paths = sorted(
+        str(row.get("private_path") or "") for row in track_file_rows
+        if str(row.get("track_key") or "") in withheld_track_keys
+    )
+    album_rows[:] = [row for row in album_rows if str(row.get("album_key") or "") not in withheld_keys]
+    featured_artist_rows[:] = [
+        row for row in featured_artist_rows if str(row.get("album_key") or "") not in withheld_keys
+    ]
+    track_rows[:] = [row for row in track_rows if str(row.get("album_key") or "") not in withheld_keys]
+    track_file_rows[:] = [
+        row for row in track_file_rows if str(row.get("track_key") or "") not in withheld_track_keys
+    ]
+    _LOGGER.warning(
+        "Withheld %s album(s) whose semantic identity collides with another album key; "
+        "their existing rows are unchanged: %s",
+        len(conflicts),
+        [
+            {key: entry[key] for key in ("album_key", "title", "release_year", "conflicting_album_keys")}
+            for entry in conflicts.values()
+        ],
+    )
+    return [
+        {**entry, "withheld_track_file_count": len(withheld_paths)} for entry in conflicts.values()
+    ]
 
 
 def _execute_semantic_local_album_key_adoptions(
@@ -3388,6 +3744,45 @@ def _targeted_preferred_paths(
     return preferred_paths
 
 
+def _follow_existing_year_split_album_keys(
+    connection: Any,
+    *,
+    album_rows: list[dict[str, object]],
+    featured_artist_rows: list[dict[str, object]],
+    track_rows: list[dict[str, object]],
+) -> None:
+    """Use the year-qualified key a full scan already created for this album.
+
+    A full scan splits one artist/title across years into ``<key>::year::<Y>``.
+    A watcher batch that only sees one year builds the bare ``<key>``; when the
+    bare row belongs to another year, upserting it would rewrite that album's
+    year onto the identity the year-qualified row already holds.
+    """
+    candidates = {
+        str(row.get("album_key") or ""): f"{row.get('album_key')}::year::{safe_int(row.get('release_year'))}"
+        for row in album_rows
+        if "::year::" not in str(row.get("album_key") or "")
+        and safe_int(row.get("release_year")) is not None
+    }
+    if not candidates:
+        return
+    existing = {
+        str(_row_mapping(row).get("album_key"))
+        for row in connection.execute(
+            "select album_key from library.local_albums where album_key = any(%(keys)s::text[])",
+            {"keys": sorted(candidates.values())},
+        ).fetchall()
+    }
+    remaps = {bare: qualified for bare, qualified in candidates.items() if qualified in existing}
+    if not remaps:
+        return
+    for rows in (album_rows, featured_artist_rows, track_rows):
+        for row in rows:
+            key = str(row.get("album_key") or "")
+            if key in remaps:
+                row["album_key"] = remaps[key]
+
+
 def _remap_targeted_album_identity_rows(
     *,
     album_rows: list[dict[str, object]],
@@ -4344,6 +4739,42 @@ def _load_inventory_mutation_revision_sql() -> str:
     """
 
 
+def _retire_placeholder_albums_sql() -> str:
+    """Delete "Unknown Artist"/"Unknown Album" rows once no track uses them.
+
+    Owner-approved 2026-11-04: absent tags are loose tracks, so a placeholder
+    album that an older scan published is retired after its tracks move to
+    Loose Tracks. Real albums and placeholders still holding tracks are kept.
+    """
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        delete from library.local_albums albums
+        using bootstrap_context
+        where albums.library_id = bootstrap_context.library_id
+          and (%(album_ids)s::bigint[] is null or albums.id = any(%(album_ids)s::bigint[]))
+          and (
+            lower(btrim(coalesce(albums.title, ''))) in ('', 'unknown album')
+            or exists (
+              select 1 from library.local_artists artists
+              where artists.id = albums.artist_id and artists.artist_key = 'unknown artist'
+            )
+          )
+          and not exists (
+            select 1 from library.local_tracks tracks where tracks.album_id = albums.id
+          )
+        returning albums.album_key
+    """
+
+
 def _increment_inventory_mutation_revision_sql() -> str:
     return """
         with bootstrap_context as (
@@ -4358,8 +4789,10 @@ def _increment_inventory_mutation_revision_sql() -> str:
         ),
         updated_library as (
           update library.libraries
-             set metadata = jsonb_set(
-                   coalesce(library.libraries.metadata, '{}'::jsonb)
+             -- The same transaction publishes relations before it commits, so
+             -- it never marks them stale: a loose-track-only change has no
+             -- album journal rows to justify a stale status.
+             set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                    || jsonb_build_object(
                         'inventory_mutation_revision',
                         coalesce(
@@ -4370,10 +4803,6 @@ def _increment_inventory_mutation_revision_sql() -> str:
                           0
                         ) + 1
                       ),
-                   '{scan_cache,relation_projection,status}',
-                   to_jsonb('stale'::text),
-                   true
-                 ),
                  updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id
@@ -7070,6 +7499,10 @@ def _upsert_local_artist_sql(*, preserve_existing_identity: bool = False) -> str
     # A track edit ensures artist references exist; it does not rename or
     # normalize the shared artist record for every other album using it.
     identity_update = "" if preserve_existing_identity else "name = excluded.name, sort_name = excluded.sort_name,"
+    # Unchanged artists are not rewritten: every rewrite fires the gallery and
+    # relation triggers and adds index entries, and a full scan sends them all.
+    identity_columns = "" if preserve_existing_identity else "library.local_artists.name, library.local_artists.sort_name,"
+    incoming_identity = "" if preserve_existing_identity else "excluded.name, excluded.sort_name,"
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7087,7 +7520,9 @@ def _upsert_local_artist_sql(*, preserve_existing_identity: bool = False) -> str
         on conflict (library_id, artist_key) do update
           set {identity_update}
               last_seen_at = now(),
-              metadata = library.local_artists.metadata || excluded.metadata;
+              metadata = library.local_artists.metadata || excluded.metadata
+          where ({identity_columns} library.local_artists.metadata)
+            is distinct from ({incoming_identity} library.local_artists.metadata || excluded.metadata);
     """
 
 
@@ -7123,6 +7558,11 @@ def _upsert_local_album_sql(
         if preserve_existing_cover_authority
         else "library.local_albums.metadata || excluded.metadata"
     )
+    release_year_update = """case
+                when nullif(library.local_albums.metadata ->> 'release_date', '') is not null
+                then library.local_albums.release_year
+                else excluded.release_year
+              end"""
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7156,14 +7596,19 @@ def _upsert_local_album_sql(
         on conflict (library_id, album_key) do update
           set artist_id = excluded.artist_id,
               title = excluded.title,
-              release_year = case
-                when nullif(library.local_albums.metadata ->> 'release_date', '') is not null
-                then library.local_albums.release_year
-                else excluded.release_year
-              end,
+              release_year = {release_year_update},
               cover_path = {cover_path_update},
               last_seen_at = now(),
-              metadata = {metadata_update};
+              metadata = {metadata_update}
+          -- An unchanged album is not rewritten, so it fires no row triggers.
+          where (
+            library.local_albums.artist_id, library.local_albums.title,
+            library.local_albums.release_year, library.local_albums.cover_path,
+            library.local_albums.metadata
+          ) is distinct from (
+            excluded.artist_id, excluded.title, {release_year_update},
+            {cover_path_update}, {metadata_update}
+          );
     """
 
 
@@ -7257,7 +7702,10 @@ def _upsert_local_album_featured_artist_sql() -> str:
         on conflict (library_id, album_id, artist_id, featured_kind) do update
           set last_seen_at = now(),
               metadata = library.local_album_featured_artists.metadata
-                         || (excluded.metadata - 'source');
+                         || (excluded.metadata - 'source')
+          where library.local_album_featured_artists.metadata is distinct from (
+            library.local_album_featured_artists.metadata || (excluded.metadata - 'source')
+          );
     """
 
 
@@ -7378,6 +7826,112 @@ def _upsert_local_track_sql() -> str:
     """
 
 
+_BOOTSTRAP_CONTEXT_SQL = """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )"""
+
+
+def _unchanged_local_track_rows_sql() -> str:
+    """Read-only twin of _upsert_local_track_sql's change guard: rows it would skip."""
+    return _BOOTSTRAP_CONTEXT_SQL + """
+        select input_row.row_index
+        from bootstrap_context
+        cross join jsonb_to_recordset(%(rows)s::jsonb) as input_row (
+          row_index integer, album_key text, artist_key text, track_key text, title text,
+          disc_number integer, track_number integer, duration_seconds integer, metadata jsonb
+        )
+        left join library.local_albums
+          on library.local_albums.library_id = bootstrap_context.library_id
+         and library.local_albums.album_key = input_row.album_key
+        left join library.local_artists
+          on library.local_artists.library_id = bootstrap_context.library_id
+         and library.local_artists.artist_key = input_row.artist_key
+        join library.local_tracks
+          on library.local_tracks.library_id = bootstrap_context.library_id
+         and library.local_tracks.track_key = input_row.track_key
+        where (
+             library.local_tracks.album_id, library.local_tracks.artist_id, library.local_tracks.title,
+             library.local_tracks.disc_number, library.local_tracks.track_number,
+             library.local_tracks.duration_seconds, library.local_tracks.metadata
+           ) is not distinct from (
+             library.local_albums.id, library.local_artists.id, input_row.title,
+             input_row.disc_number, input_row.track_number,
+             input_row.duration_seconds, library.local_tracks.metadata || input_row.metadata
+           );
+    """
+
+
+def _unchanged_local_track_file_rows_sql() -> str:
+    """Read-only twin of _upsert_local_track_file_sql's change guard: rows it would skip.
+
+    An unresolved root never counts as unchanged, so the upsert still reports it.
+    """
+    return _BOOTSTRAP_CONTEXT_SQL + """
+        select input_row.row_index
+        from bootstrap_context
+        cross join jsonb_to_recordset(%(rows)s::jsonb) as input_row (
+          row_index integer, track_key text, private_path text, relative_path text,
+          file_size_bytes bigint, modified_at_epoch double precision, metadata jsonb
+        )
+        cross join lateral library.local_track_file_root_resolution(
+          bootstrap_context.library_id, input_row.private_path, input_row.metadata
+        ) as root_resolution
+        join library.local_tracks
+          on library.local_tracks.library_id = bootstrap_context.library_id
+         and library.local_tracks.track_key = input_row.track_key
+        join library.local_track_files
+          on library.local_track_files.private_path = input_row.private_path
+        where root_resolution.resolution_status = 'resolved'
+          and (
+             library.local_track_files.track_id, library.local_track_files.library_root_id,
+             library.local_track_files.relative_path, library.local_track_files.file_size_bytes,
+             library.local_track_files.modified_at, library.local_track_files.metadata
+           ) is not distinct from (
+             library.local_tracks.id, root_resolution.library_root_id,
+             input_row.relative_path, input_row.file_size_bytes,
+             to_timestamp(input_row.modified_at_epoch),
+             (library.local_track_files.metadata || input_row.metadata) #- '{scan_cache,stale_marked_at}'
+           );
+    """
+
+
+def _row_fingerprint(row: dict[str, object]) -> str:
+    return json.dumps(_jsonb_compatible(row), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _unchanged_row_fingerprints(connection: Any, sql: str, rows: list[dict[str, object]]) -> set[str]:
+    """Fingerprints of rows whose upsert would write nothing, read before the lock.
+
+    The publication lock is then held only for rows that change. A row edited
+    between this read and the lock is caught by the revision check under it.
+    A row the query does not report is sent, so the guard stays the authority.
+    """
+    unchanged: set[str] = set()
+    for batch_start in range(0, len(rows), _PIPELINE_BATCH_SIZE):
+        batch = [
+            {**_jsonb_compatible(row), "row_index": index}
+            for index, row in enumerate(rows[batch_start:batch_start + _PIPELINE_BATCH_SIZE])
+        ]
+        unchanged_indexes = {
+            int(_row_mapping(result).get("row_index", -1))
+            for result in connection.execute(sql, {"rows": _jsonb(batch)}).fetchall() or ()
+        }
+        unchanged.update(
+            _row_fingerprint(row)
+            for index, row in enumerate(rows[batch_start:batch_start + _PIPELINE_BATCH_SIZE])
+            if index in unchanged_indexes
+        )
+    return unchanged
+
+
 def _upsert_local_track_file_sql() -> str:
     return """
         with bootstrap_context as (
@@ -7495,9 +8049,14 @@ def _mark_stale_track_files_sql() -> str:
             nullif(library.library_roots.metadata ->> 'root_id', ''),
             library.local_track_files.metadata ->> 'library_root_id'
           ) = any(%(observed_root_ids)s::text[])
+          -- A hashed anti-join: comparing each file against the whole path array
+          -- was quadratic for a full library.
           and (
             %(current_path_count)s = 0
-            or library.local_track_files.private_path <> all(%(current_paths)s::text[])
+            or not exists (
+              select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
+              where current_file.private_path = library.local_track_files.private_path
+            )
           );
     """
 
@@ -7615,11 +8174,12 @@ def _mark_targeted_track_files_stale_sql() -> str:
           where library.local_track_files.id = matched_files.id
           returning library.local_track_files.track_id
         )
+        -- Loose tracks have no album, but removing them is still an inventory
+        -- change: return one row per touched album, or a null key for loose tracks.
         select distinct library.local_albums.album_key as affected_album_key
         from updated_files
         join library.local_tracks
           on library.local_tracks.id = updated_files.track_id
-        join library.local_albums
-          on library.local_albums.id = library.local_tracks.album_id
-        where library.local_albums.album_key is not null;
+        left join library.local_albums
+          on library.local_albums.id = library.local_tracks.album_id;
     """

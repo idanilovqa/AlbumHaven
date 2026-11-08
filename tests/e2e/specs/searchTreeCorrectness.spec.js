@@ -34,10 +34,12 @@ const EXPECTED_COMPLETE_NEAL_GALLERY = [
 ];
 const FLOWER_KINGS_QUERY = 'flower kings';
 const FLOWER_KINGS_ARTIST = 'The Flower Kings';
+// The search tree keeps the library's alphabetical order; the best match is
+// selected, not moved to the top.
 const EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS = [
-  FLOWER_KINGS_ARTIST,
   'Agents Of Mercy',
   'Roine Stolt',
+  FLOWER_KINGS_ARTIST,
 ];
 const UNRELATED_ARTIST = 'Album Haven Last.fm Fixture';
 const RECENT_SEARCH_QUERY = 'Joseph';
@@ -181,8 +183,11 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
       numeric: true,
       sensitivity: 'base',
     })));
-    expect(await navigationPanelActions.readSidebarArtistNames())
-      .toEqual(await galleryActions.readArtistHeadings());
+    // Same artists as the gallery; the tree lists them alphabetically while the
+    // gallery leads with the selected best match.
+    const treeNames = await navigationPanelActions.readSidebarArtistNames();
+    expect([...treeNames].sort()).toEqual([...(await galleryActions.readArtistHeadings())].sort());
+    expect(treeNames).toEqual(EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS);
     expect(await galleryActions.readAlbumNamesByHeading(FLOWER_KINGS_ARTIST))
       .not.toHaveLength(0);
   });

@@ -98,9 +98,9 @@
           <div class="track-modal-subtitle" id="track-modal-subtitle"></div>
         </div>
         <div class="track-modal-actions">
-          {% call action_button('Edit album tags unavailable while album details load', class_name='track-modal-edit-tags album-details-header__action', id='track-modal-edit-tags', title='Edit album tags unavailable while album details load', disabled=true) %}<span class="album-details-header__action-icon album-details-header__action-icon--edit" aria-hidden="true"></span>{% endcall %}
-          {% call action_button('Open album folder unavailable while album details load', class_name='track-modal-folder album-details-header__action', id='track-modal-folder', title='Open album folder unavailable while album details load', disabled=true) %}<span class="album-details-header__action-icon album-details-header__action-icon--folder" aria-hidden="true"></span>{% endcall %}
-          {% call action_button('Close tracklist', class_name='track-modal-close album-details-header__action', id='track-modal-close', attributes={'data-close-track-modal': '1'}) %}<span class="album-details-header__action-icon album-details-header__action-icon--close" aria-hidden="true"></span>{% endcall %}
+          {% call action_button('Edit album tags unavailable while album details load', class_name='track-modal-edit-tags album-details-header__action', id='track-modal-edit-tags', presentation='bare', title='Edit album tags unavailable while album details load', disabled=true) %}<span class="album-details-header__action-icon album-details-header__action-icon--edit" aria-hidden="true"></span>{% endcall %}
+          {% call action_button('Open album folder unavailable while album details load', class_name='track-modal-folder album-details-header__action', id='track-modal-folder', presentation='bare', title='Open album folder unavailable while album details load', disabled=true) %}<span class="album-details-header__action-icon album-details-header__action-icon--folder" aria-hidden="true"></span>{% endcall %}
+          {% call action_button('Close tracklist', class_name='track-modal-close album-details-header__action', id='track-modal-close', presentation='bare', attributes={'data-close-track-modal': '1'}) %}<span class="album-details-header__action-icon album-details-header__action-icon--close" aria-hidden="true"></span>{% endcall %}
         </div>
       </div>
       <div class="track-modal-tabs" id="track-modal-tabs" hidden></div>

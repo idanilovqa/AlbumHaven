@@ -72,6 +72,7 @@ function normalizeLibrarySettingsPayload(raw) {
   const movePolicy = source.move_policy && typeof source.move_policy === 'object' ? source.move_policy : {};
   normalized.move_policy.preferred_main_write_root = String(movePolicy.preferred_main_write_root || '').trim();
   normalized.move_policy.move_new_arrivals_to = String(movePolicy.move_new_arrivals_to || '').trim();
+  normalized.metadata_corrections = source.metadata_corrections === 'write_tags' ? 'write_tags' : 'display_only';
   return normalized;
 }
 
@@ -216,7 +217,13 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
-  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings]')) { event.preventDefault(); return true; }
+  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings], [data-library-metadata-corrections]')) { event.preventDefault(); return true; }
+  const correctionMode = event.target.closest('[data-library-metadata-corrections]');
+  if (correctionMode) {
+    if (correctionMode.disabled || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) { event.preventDefault(); return true; }
+    getLibrarySettingsDraft().metadata_corrections = correctionMode.getAttribute('data-library-metadata-corrections');
+    return true;
+  }
   const toggle = event.target.closest('[id^="library-auto-move-"]');
   if (toggle) {
     event.preventDefault();
@@ -513,6 +520,31 @@ function buildLibrarySettingsRootSection(category, title, description) {
   `;
 }
 
+const LIBRARY_DATA_CORRECTION_MODES = [
+  { value: 'display_only', label: 'Display only' },
+  { value: 'write_tags', label: 'Write in tags' },
+];
+
+function buildLibraryDataCorrectionsSection(draft) {
+  const actions = ensureLibrarySettingsState().allowedActions || {};
+  const disabled = librarySettingsReadOnlyClient() || actions['library.settings.manage'] !== true;
+  // The app then edits tags for the user, so choosing it needs that permission.
+  const writeDisabled = disabled || (actions['library.files.edit_tags'] !== true && draft.metadata_corrections !== 'write_tags');
+  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option">
+      <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
+        ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${(mode.value === 'write_tags' ? writeDisabled : disabled) ? 'disabled' : ''}><span>${mode.label}</span>
+    </label>`).join('');
+  return `<section class="library-settings-section" aria-labelledby="library-data-corrections-heading">
+    <div class="library-settings-section-heading">
+      <div>
+        <h4 id="library-data-corrections-heading">Library Data Corrections</h4>
+        <p>Corrects text metadata across your whole library.</p>
+      </div>
+    </div>
+    <div class="library-settings-policy-grid" role="radiogroup" aria-labelledby="library-data-corrections-heading">${options}</div>
+  </section>`;
+}
+
 function buildUtilityLibrarySettingsDetail() {
   const librarySettingsState = ensureLibrarySettingsState();
   if (!librarySettingsState.loaded && !librarySettingsState.error) {
@@ -550,6 +582,7 @@ function buildUtilityLibrarySettingsDetail() {
           ${buildLibraryMovePolicyRow('move_new_arrivals_to', draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Move New Arrivals to Hoard', 'Move to Hoard', 'hoard')}
         </div>
       </section>
+      ${buildLibraryDataCorrectionsSection(draft)}
       <section class="library-settings-section">
         <div class="library-settings-section-heading">
           <div>

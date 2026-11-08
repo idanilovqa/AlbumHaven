@@ -120,6 +120,58 @@ def test_backfill_cleans_previous_relocation_directories_only_for_custom_storage
     assert source.read_bytes() == b"original art"
 
 
+def test_backfill_deletes_leftover_album_folder_previews_once_previews_live_elsewhere(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    source = tmp_path / "Art Zoyd/1980 - Génération sans futur/cover.jpg"
+    old = source.parent / ".album-haven"
+    legacy = old / "cover_variants/ab/abcdef.webp"
+    current = old / "v1/cover_variants/cd/cdef01.webp"
+    for preview in (legacy, current):
+        preview.parent.mkdir(parents=True)
+        preview.write_bytes(b"generated preview")
+    source.write_bytes(b"original art")
+    track = source.parent / "01 - Génération sans futur.flac"
+    track.write_bytes(b"audio")
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+        "_GENERATED_PREVIEW_STORAGE_POLICY": preview_storage_policy_from_mapping({}),
+    }
+    connection = _Connection([{"cover_path": str(source)}])
+    generated = []
+    worker = CoverPreviewBackfill(
+        config,
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda path, **kwargs: generated.append(Path(kwargs["cache_root"])),
+        throttle_seconds=0,
+    )
+    worker.run_once()
+    assert legacy.exists() and current.exists(), "album-folder storage keeps its previews"
+
+    custom_root = tmp_path / "ssd/previews"
+    config["_GENERATED_PREVIEW_STORAGE_POLICY"] = preview_storage_policy_from_mapping(
+        {"mode": "custom", "active_root": str(custom_root)}
+    )
+    worker.run_once()
+    assert not old.exists(), "no .album-haven folder remains in the music folder"
+    assert generated[-1] == custom_root / "v1", "new previews are written to the separate location"
+    assert source.read_bytes() == b"original art"
+    assert track.read_bytes() == b"audio"
+
+
+def test_album_folder_preview_removal_keeps_unknown_files(tmp_path):
+    from music_app.services.generated_preview_storage import remove_album_folder_previews
+
+    old = tmp_path / "album/.album-haven"
+    (old / "v1/cover_variants/ab").mkdir(parents=True)
+    (old / "v1/cover_variants/ab/preview.webp").write_bytes(b"generated")
+    (old / "notes.txt").write_text("user file")
+    remove_album_folder_previews(old)
+    assert not (old / "v1").exists()
+    assert (old / "notes.txt").read_text() == "user file"
+
+
 def test_backfill_cleanup_failure_does_not_starve_previews_and_attempts_each_root_once(tmp_path, monkeypatch):
     from music_app.services import cover_preview_backfill as backfill
     from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
@@ -133,7 +185,7 @@ def test_backfill_cleanup_failure_does_not_starve_previews_and_attempts_each_roo
         if root.parent.name == "locked":
             raise PermissionError("Legacy preview folder is inaccessible")
 
-    monkeypatch.setattr(backfill, "remove_empty_album_preview_directories", cleanup)
+    monkeypatch.setattr(backfill, "remove_album_folder_previews", cleanup)
     connection = _Connection([{"cover_path": str(path)} for path in sources])
     worker = backfill.CoverPreviewBackfill(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",

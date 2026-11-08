@@ -172,7 +172,20 @@ test('Load all tracks from the folder sits under the path only while the album f
   assert.doesNotMatch(artwork.innerHTML, /data-load-tag-editor-folder/);
 });
 
-test('loading the folder puts CD1 files before CD2 files and shows each folder name under its file', async () => {
+// Edit Tags names discs with the shared album disc rule (REC-005), owned by the tag-editor module.
+function loadDiscNumberRule() {
+  const sourcePath = path.join(root, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js');
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  const start = source.indexOf('function getPositiveAlbumTrackSortNumber');
+  const helperEnd = source.indexOf('\n}', start) + 2;
+  const ruleStart = source.indexOf('const ALBUM_TRACK_DISC_FOLDER_PATTERN');
+  const end = source.indexOf('\n}', source.indexOf('function getAlbumTrackDiscNumber')) + 2;
+  const context = vm.createContext({});
+  vm.runInContext(`${source.slice(start, helperEnd)}\n${source.slice(ruleStart, end)}\nthis.getAlbumTrackDiscNumber = getAlbumTrackDiscNumber;`, context);
+  return context.getAlbumTrackDiscNumber;
+}
+
+test('loading the folder puts CD1 files before CD2 files and marks each file with its disc', async () => {
   const cd2 = 'C:/Music/Album/CD2/01 - Late.mp3';
   const cd1a = 'C:/Music/Album/Disc 1/01 - Early.mp3';
   const cd1b = 'C:/Music/Album/Disc 1/02 - Middle.mp3';
@@ -184,6 +197,7 @@ test('loading the folder puts CD1 files before CD2 files and shows each folder n
     getSelectedTagEditorPaths: () => [cd2],
     getTrackTagInitialValues: (track) => ({ title: track.title }),
     getFileTypeFromPath: () => 'MP3',
+    getAlbumTrackDiscNumber: loadDiscNumberRule(),
     syncTagEditorCollectionFields() {},
     syncTagEditorPendingChanges() {},
     fetch: async () => ({ ok: true, async json() {
@@ -193,7 +207,7 @@ test('loading the folder puts CD1 files before CD2 files and shows each folder n
   await context.loadTagEditorFolderFiles();
   assert.deepEqual(JSON.parse(JSON.stringify(tagEditor.tracks.map((track) => track.path))), [cd1a, cd1b, cd2]);
   assert.equal(tagEditor.folderHasUnloadedTracks, false);
-  assert.match(list.innerHTML, /01 - Early\.mp3<\/span><span class="tag-editor-track-folder">Disc 1<\/span>/);
-  assert.match(list.innerHTML, /01 - Late\.mp3<\/span><span class="tag-editor-track-folder">CD2<\/span>/);
+  assert.match(list.innerHTML, /01 - Early\.mp3<\/span><span class="tag-editor-track-folder">CD 1<\/span>/);
+  assert.match(list.innerHTML, /01 - Late\.mp3<\/span><span class="tag-editor-track-folder">CD 2<\/span>/);
   assert.doesNotMatch(list.innerHTML, /tag-editor-track-folder">C:/, 'the folder name, never its path');
 });

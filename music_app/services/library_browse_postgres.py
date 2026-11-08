@@ -6,13 +6,14 @@ import binascii
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
+from functools import lru_cache, partial
 import hashlib
 import json
 import logging
 from pathlib import Path
 from os.path import basename, normcase
 import re
-from threading import Event, Lock
+from threading import Event, Lock, Timer
 from time import perf_counter, thread_time
 from types import SimpleNamespace
 from typing import Any
@@ -63,6 +64,8 @@ from music_app.services.opinion_read_seams import (
 )
 from music_app.services.metadata import (
     NON_ALBUM_EXCEPTION_VALUES,
+    TRACK_ARTIST_UNREADABLE_REASON,
+    text_correction_reason,
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
@@ -101,10 +104,24 @@ _SEARCH_ALL_ARTISTS_DISPLAY_COVER_QUEUE_LIMIT = 2
 _SEARCH_PREVIEW_ALBUM_LIMIT = 8
 _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
+# Databases without migration 0112's stored path projection (same pattern as
+# the pre-prefilter search fallback): use the inline expressions there.
+_PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+# The last complete Problematic Files list survives invalidation so the first
+# page and early search answer at once while the fresh list rebuilds.
+_STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
+_UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
+_UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
+_UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
+_UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
+# Candidate album ids per (cache key, generation); one whole-library pass
+# serves both the bounded first page and searches before the list completes.
+_PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
+_PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -147,6 +164,7 @@ def invalidate_postgres_utility_projection_cache(
     }
     if not normalized_kinds:
         return
+    rewarms = []
     with _UTILITY_PROJECTION_CACHE_LOCK:
         if normalized_database_url:
             affected_keys = {
@@ -168,7 +186,26 @@ def invalidate_postgres_utility_projection_cache(
             _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
-            _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            payload = _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            if payload is not None and cache_key[1] in _STALE_SERVED_UTILITY_KINDS:
+                _UTILITY_PROJECTION_STALE[cache_key] = payload
+            rewarm = _UTILITY_PROJECTION_REWARM.get(cache_key)
+            if rewarm is not None and cache_key not in _UTILITY_PROJECTION_REWARM_PENDING:
+                _UTILITY_PROJECTION_REWARM_PENDING.add(cache_key)
+                rewarms.append((cache_key, rewarm))
+    for cache_key, rewarm in rewarms:
+        # Let the invalidating write commit (and bursts settle) before rebuilding.
+        timer = Timer(
+            _UTILITY_PROJECTION_REWARM_DELAY_SECONDS, _run_utility_projection_rewarm, (cache_key, rewarm),
+        )
+        timer.daemon = True
+        timer.start()
+
+
+def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        _UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+    rewarm()
 
 
 def _request_flag(value: object) -> bool:
@@ -520,7 +557,7 @@ class PostgresLibraryBrowseRepository:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
             }, generation)
-        scoped_entries = _non_album_entries_from_inventory_candidates(
+        return _non_album_entries_from_inventory_candidates(
             rows,
             visible_library_categories=list(
                 view_state.get("visible_library_categories") or []
@@ -529,17 +566,7 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=canonical_to_aliases,
             visible_artist_names=scoped_artist_names,
             query=query,
-        )
-        if not include_library_wide:
-            return scoped_entries
-        return scoped_entries, _non_album_entries_from_inventory_candidates(
-            rows,
-            visible_library_categories=list(
-                view_state.get("visible_library_categories") or []
-            ),
-            alias_to_canonical=alias_to_canonical,
-            canonical_to_aliases=canonical_to_aliases,
-            query=query,
+            include_library_wide=include_library_wide,
         )
 
     def build_root_counts_payload(
@@ -1689,7 +1716,7 @@ class PostgresLibraryBrowseRepository:
                 rendered_selected_family_groups,
                 search_sidebar_artist_groups,
             )
-            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups)
+            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups, alphabetical=True)
             payload["artist_count"] = len(sidebar_groups)
             selected_family_keys = {
                 _artist_display_dedupe_key(str(group.get("artist") or "").strip())
@@ -2273,7 +2300,8 @@ class PostgresLibraryBrowseRepository:
                     ],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                    sidebar_groups
+                    sidebar_groups,
+                    alphabetical=True,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {
@@ -2369,7 +2397,9 @@ class PostgresLibraryBrowseRepository:
             perf_counter() - grouping_subphase_started_at
         ) * 1000
         grouping_subphase_started_at = perf_counter()
-        selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
+        selected_artist = "" if requested_all_artists else _top_search_selected_artist(
+            artist_groups, query=query, canonical_to_aliases=canonical_to_aliases,
+        )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
@@ -2662,7 +2692,8 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups
             )
             payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                sidebar_groups
+                sidebar_groups,
+                alphabetical=True,
             )
             payload["artist_count"] = len(sidebar_groups)
             phase_ms["sidebar"] = (
@@ -2734,23 +2765,30 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
+        status = "bounded"
         cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is None:
+            cached_payload = self._get_stale_utility_projection("problematic-files")
+            status = "stale"
         if cached_payload is not None:
             cached_items = list(cached_payload.get("items") or [])
             cached_payload["items"] = cached_items[:limit]
             cached_payload["count"] = len(cached_payload["items"])
             cached_payload["complete"] = False
             cached_payload["total_candidate_count"] = None
-            cached_payload["projection_cache_status"] = "bounded"
+            cached_payload["projection_cache_status"] = status
             return cached_payload
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            album_ids = self._load_problematic_candidate_ids(
-                connection=connection,
-                limit=limit,
-            )
+            album_ids = [
+                int(_row_mapping(row)["album_id"])
+                for row in connection.execute(
+                    _problematic_page_album_ids_sql(),
+                    {"candidate_ids": sorted(self._problematic_candidate_album_ids(connection)), "limit": limit},
+                ).fetchall()
+            ]
             payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(
@@ -2768,6 +2806,67 @@ class PostgresLibraryBrowseRepository:
         payload["projection_cache_status"] = "bounded"
         return payload
 
+    def build_problematic_files_search(self, query: str) -> dict[str, object]:
+        """Every problematic album whose summary matches ``query``, without the full list.
+
+        The complete projection answers exactly once cached; the last complete
+        list answers at once while a fresh one rebuilds. With neither, SQL
+        narrows the candidate albums (the ones the complete list evaluates) to
+        those whose title, artist, year or track titles contain the text, and
+        only those are evaluated. Matches only visible in computed text
+        (problem reasons, repaired spellings) arrive with the complete list
+        (``complete: false``).
+        """
+        needle = str(query or "").strip().lower()
+        if not needle:
+            raise ValueError("Problematic Files search needs a query.")
+        complete, status = True, "hit"
+        cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is None:
+            complete, status = False, "stale"
+            cached_payload = self._get_stale_utility_projection("problematic-files")
+        if cached_payload is not None:
+            items = [
+                item for item in cached_payload.get("items") or []
+                if _problematic_summary_matches_query(item, needle)
+            ]
+            cached_payload.update(
+                items=items, count=len(items), initial_detail=None, complete=complete,
+                query=query, search_truncated=False, projection_cache_status=status,
+            )
+            return cached_payload
+        with self._browse_connection_context() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            connection.execute("SET LOCAL work_mem = '16MB'")
+            connection.execute("SET LOCAL jit = off")
+            album_ids = [
+                int(_row_mapping(row)["id"])
+                for row in connection.execute(
+                    _problematic_search_album_ids_sql(),
+                    {
+                        "needle": needle,
+                        "candidate_ids": sorted(self._problematic_candidate_album_ids(connection)),
+                        "limit": PROBLEMATIC_SEARCH_ALBUM_LIMIT + 1,
+                    },
+                ).fetchall()
+            ]
+            truncated = len(album_ids) > PROBLEMATIC_SEARCH_ALBUM_LIMIT
+            payload = self._build_problematic_files_payload_from_rows(
+                connection=connection,
+                rows=self._load_problematic_file_rows(
+                    connection=connection,
+                    album_ids=album_ids[:PROBLEMATIC_SEARCH_ALBUM_LIMIT],
+                ),
+                include_initial_detail=False,
+            )
+        items = [item for item in payload["items"] if _problematic_summary_matches_query(item, needle)]
+        payload.update(
+            items=items, count=len(items), complete=False,
+            total_candidate_count=None, query=query, search_truncated=truncated,
+            projection_cache_status="search",
+        )
+        return payload
+
     def _build_problematic_files_payload_from_rows(
         self,
         *,
@@ -2775,6 +2874,7 @@ class PostgresLibraryBrowseRepository:
         rows: list[object],
         missing_rows: list[object] | None = None,
         limit: int | None = None,
+        include_initial_detail: bool = True,
     ) -> dict[str, object]:
         albums = _problematic_album_projection_payloads(rows)
         duplicate_candidates = [
@@ -2812,7 +2912,7 @@ class PostgresLibraryBrowseRepository:
             projected_items = projected_items[:limit]
         items = [item for item, _album in projected_items]
         initial_detail = None
-        if projected_items:
+        if projected_items and include_initial_detail:
             first_album = projected_items[0][1]
             first_key = str(first_album.get("key") or "")
             first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
@@ -2854,6 +2954,57 @@ class PostgresLibraryBrowseRepository:
                     "alias_to_canonical", {}
                 )
                 return _problematic_album_detail_payload(album)
+        return None
+
+    def build_problematic_file_detail_payload_for_track_path(
+        self,
+        track_path: object,
+    ) -> dict[str, object] | None:
+        """Album Details opens a track's problem without waiting for the full
+        Problematic Files list, which can take tens of seconds on a large library."""
+        path = str(track_path or "").strip()
+        if not path:
+            return None
+        with self._browse_connection_context() as connection:
+            album_keys = [
+                str(_row_mapping(row)["album_key"])
+                for row in connection.execute(
+                    """
+                    select distinct library.local_albums.album_key
+                    from library.local_track_files
+                    join library.local_tracks
+                      on library.local_tracks.id = library.local_track_files.track_id
+                    join library.local_albums
+                      on library.local_albums.id = library.local_tracks.album_id
+                    join app.bootstrap_owners
+                      on app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                    join library.libraries
+                      on library.libraries.id = library.local_tracks.library_id
+                     and library.libraries.owner_account_id = app.bootstrap_owners.account_id
+                     and library.libraries.name = 'Local Library'
+                     and library.libraries.library_kind = 'local'
+                    where library.local_track_files.private_path = %(path)s
+                    """,
+                    {"path": path},
+                ).fetchall()
+            ]
+        for album_key in album_keys:
+            for album in _problematic_album_projection_payloads(
+                self._load_problematic_file_rows(album_key=album_key)
+            ):
+                track_paths = {
+                    str(track.get("path") or "").strip()
+                    for track in album.get("tracks") or []
+                    if isinstance(track, Mapping)
+                }
+                if path not in track_paths:
+                    continue
+                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
+                    "alias_to_canonical", {}
+                )
+                detail = _problematic_album_detail_payload(album)
+                if detail is not None:
+                    return detail
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
@@ -3054,8 +3205,10 @@ class PostgresLibraryBrowseRepository:
             return []
 
         with self._connect_to_database() as connection:
-            cursor = connection.execute(
-                _problem_exclusion_candidates_sql(),
+            cursor = _execute_problematic_sql(
+                connection,
+                self._database_url,
+                lambda path_columns: _problem_exclusion_candidates_sql(path_columns=path_columns),
                 {"album_keys": album_keys, "file_paths": file_paths},
             )
             rows = list(cursor.fetchall())
@@ -3547,12 +3700,22 @@ class PostgresLibraryBrowseRepository:
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection("relation-alias-maps", copy_payload=False)
             if cacheable
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            return dict(cached.get("relation_views") or {})
+            # A generic deepcopy of ~19k aliases cost ~140 ms per search; the maps
+            # hold only strings and string lists, so copy just those containers.
+            views = cached.get("relation_views") or {}
+            return {
+                **views,
+                "alias_to_canonical": dict(views.get("alias_to_canonical") or {}),
+                "canonical_to_aliases": {
+                    canonical: list(aliases) if isinstance(aliases, list) else aliases
+                    for canonical, aliases in (views.get("canonical_to_aliases") or {}).items()
+                },
+            }
 
         generation = 0
         if cacheable:
@@ -3659,6 +3822,9 @@ class PostgresLibraryBrowseRepository:
         }
 
         def load_rows(active_connection: Any) -> list[object]:
+            def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:
+                return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
+
             def standalone_rows() -> list[object]:
                 from hashlib import sha256
                 from music_app.services.album_local_membership import physical_album_root
@@ -3694,17 +3860,18 @@ class PostgresLibraryBrowseRepository:
             if use_selected_album_ids:
                 if not selected_album_ids:
                     return []
-                cursor = active_connection.execute(
-                    _problematic_files_sql(
+                cursor = execute(
+                    lambda path_columns: _problematic_files_sql(
                         candidate_summary=True,
                         selected_album_ids=True,
+                        path_columns=path_columns,
                     ),
                     {"album_ids": selected_album_ids},
                 )
                 return list(cursor.fetchall())
             if use_candidate_summary:
-                cursor = active_connection.execute(
-                    _problematic_files_sql(candidate_summary=True),
+                cursor = execute(
+                    lambda path_columns: _problematic_files_sql(candidate_summary=True, path_columns=path_columns),
                     candidate_params,
                 )
                 return [*cursor.fetchall(), *standalone_rows()]
@@ -3740,13 +3907,16 @@ class PostgresLibraryBrowseRepository:
                             identity.get("album_edition"),
                         ) == normalized_album_key
                     ]
-                cursor = active_connection.execute(
-                    _problematic_files_sql(duplicate_candidates=True),
-                    {"album_ids": _load_duplicate_candidate_album_ids(active_connection, candidate_keys, repository=self)},
+                duplicate_album_ids = _load_duplicate_candidate_album_ids(
+                    active_connection, candidate_keys, repository=self,
+                )
+                cursor = execute(
+                    lambda path_columns: _problematic_files_sql(duplicate_candidates=True, path_columns=path_columns),
+                    {"album_ids": duplicate_album_ids},
                 )
                 return list(cursor.fetchall())
-            cursor = active_connection.execute(
-                _problematic_files_sql(),
+            cursor = execute(
+                lambda path_columns: _problematic_files_sql(path_columns=path_columns),
                 {"album_key": normalized_album_key},
             )
             return [*cursor.fetchall(), *standalone_rows()]
@@ -3755,26 +3925,6 @@ class PostgresLibraryBrowseRepository:
             return load_rows(connection)
         with self._connect_to_database() as owned_connection:
             return load_rows(owned_connection)
-
-    def _load_problematic_candidate_ids(
-        self,
-        *,
-        connection: Any,
-        limit: int,
-    ) -> list[int]:
-        cursor = connection.execute(
-            _problematic_files_sql(
-                candidate_summary=True,
-                candidate_ids_page=True,
-            ),
-            {
-                "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
-                "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
-                "limit": limit,
-            },
-        )
-        rows = [_row_mapping(row) for row in cursor.fetchall()]
-        return [int(row["album_id"]) for row in rows]
 
     def _load_utility_rules_rows(self) -> list[object]:
         with self._connect_to_database() as connection:
@@ -3850,6 +4000,49 @@ class PostgresLibraryBrowseRepository:
             ):
                 return
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
+            if kind in _STALE_SERVED_UTILITY_KINDS:
+                _UTILITY_PROJECTION_STALE.pop(cache_key, None)
+                if self._allow_background_prewarm:
+                    # A list someone opened stays warm across later library changes.
+                    _UTILITY_PROJECTION_REWARM[cache_key] = partial(self.queue_utility_projection_prewarm, kind)
+
+    def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
+        cache_key = self._utility_projection_cache_key(kind)
+        if cache_key is None:
+            return None
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            payload = _UTILITY_PROJECTION_STALE.get(cache_key)
+            return None if payload is None else deepcopy(payload)
+
+    def _problematic_candidate_album_ids(self, connection: Any) -> frozenset[int]:
+        """Every album the complete list evaluates, computed once per invalidation generation."""
+        cache_key = self._utility_projection_cache_key("problematic-files")
+        with _PROBLEMATIC_CANDIDATE_IDS_LOCK:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) if cache_key else None
+                cached = _PROBLEMATIC_CANDIDATE_IDS.get(cache_key) if cache_key else None
+            if cached is not None and cached[0] == generation:
+                return cached[1]
+            cursor = _execute_problematic_sql(
+                connection,
+                self._database_url,
+                lambda path_columns: _problematic_files_sql(
+                    candidate_summary=True, candidate_ids_only=True, path_columns=path_columns,
+                ),
+                {
+                    "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                    "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+                },
+            )
+            # Loose files without an album join the union as null album ids.
+            album_ids = frozenset(
+                int(album_id) for row in cursor.fetchall()
+                if (album_id := _row_mapping(row)["album_id"]) is not None
+            )
+            if cache_key is not None:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    _PROBLEMATIC_CANDIDATE_IDS[cache_key] = (generation, album_ids)
+            return album_ids
 
     def queue_settings_projection_prewarm(self) -> None:
         if not self._allow_background_prewarm:
@@ -4029,7 +4222,11 @@ def _non_album_entries_from_inventory_candidates(
     canonical_to_aliases: Mapping[str, object],
     visible_artist_names: Iterable[object] = (),
     query: object = "",
-) -> list[dict[str, object]]:
+    include_library_wide: bool = False,
+) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Loose-track entries visible to the artist scope; with ``include_library_wide``
+    also the library-wide list, from one pass (the fuzzy query match dominated a
+    search's follow-up request and ran twice per row)."""
     from music_app.services.relation_projection_builder import root_relative_parts
     from music_app.services.view_search import (
         normalize_search_text,
@@ -4065,6 +4262,7 @@ def _non_album_entries_from_inventory_candidates(
         if local_inventory_identity_key(alias)
     }
     entries: list[dict[str, object]] = []
+    library_entries: list[dict[str, object]] = []
     for row in rows:
         payload = _row_mapping(row)
         entry = _non_album_entry_from_inventory_candidate(payload)
@@ -4094,11 +4292,12 @@ def _non_album_entries_from_inventory_candidates(
             for part in Path(relative_path).parts[:-1]
             if normalize_search_text(part)
         }
-        if visible_artist_keys and (
+        in_artist_scope = not visible_artist_keys or not (
             local_inventory_identity_key(entry_artist) not in visible_artist_keys
             and local_inventory_identity_key(canonical_artist) not in visible_artist_keys
             and not visible_path_parts.intersection(path_parts)
-        ):
+        )
+        if not in_artist_scope and not include_library_wide:
             continue
         if query_words:
             # The library-relative path only: the absolute path's machine folders would match queries.
@@ -4119,8 +4318,12 @@ def _non_album_entries_from_inventory_candidates(
             ]
             if not search_terms_match_fields(query_words, search_fields):
                 continue
-        entries.append(entry)
-    return entries
+        if include_library_wide:
+            library_entries.append(entry)
+        if in_artist_scope:
+            # Separate dicts: callers enrich each list independently.
+            entries.append(dict(entry) if include_library_wide else entry)
+    return (entries, library_entries) if include_library_wide else entries
 
 def _connect(database_url: str) -> Any:
     if psycopg is None:
@@ -4612,20 +4815,25 @@ def _annotate_album_payload_problematic_tracks(
         and bool(_effective_row_exception_type(row_payload))
         and str(row_payload.get("file_private_path") or "").strip()
     }
-    problematic_track_paths = {
-        str(problem_row.get("path") or "").strip()
-        for problematic_album in _problematic_album_projection_payloads(rows)
-        for problem_row in _problematic_track_problem_rows(problematic_album)
-        if str(problem_row.get("path") or "").strip()
-        and str(problem_row.get("path") or "").strip() not in non_album_track_paths
-    }
+    # Album Details shows these reasons on the track's Problematic Files icon,
+    # so hovering it never needs a Problematic Files request.
+    problem_reasons_by_path: dict[str, list[str]] = {}
+    for problematic_album in _problematic_album_projection_payloads(rows):
+        for problem_row in _problematic_track_problem_rows(problematic_album):
+            path = str(problem_row.get("path") or "").strip()
+            if path and path not in non_album_track_paths:
+                reasons = problem_reasons_by_path.setdefault(path, [])
+                reasons.extend(
+                    str(reason) for reason in problem_row.get("reasons") or []
+                    if str(reason) not in reasons
+                )
     for album in albums:
         for track in album.get("tracks") or []:
             if isinstance(track, dict):
-                track["is_problematic"] = (
-                    str(track.get("path") or "").strip()
-                    in problematic_track_paths
-                )
+                reasons = problem_reasons_by_path.get(str(track.get("path") or "").strip())
+                track["is_problematic"] = reasons is not None
+                if reasons:
+                    track["problem_reasons"] = list(reasons)
 
 
 def _duplicate_sources_for_projected_album(album: Mapping[str, object], result: Mapping[str, object]) -> list[dict[str, object]]:
@@ -5222,14 +5430,19 @@ def _missing_album_query_pattern(query: str) -> re.Pattern[str]:
     return re.compile(fnmatch.translate("".join(pattern)))
 
 
+@lru_cache(maxsize=131072)
+def _folded_search_identity(name: str) -> str:
+    from music_app.services.view_search import fold_search_accents
+
+    return fold_search_accents(local_inventory_identity_key(name))
+
+
 def _missing_album_search_artist_keys(
     query: str,
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
 ) -> list[str]:
-    from music_app.services.view_search import fold_search_accents
-
-    normalized_query = fold_search_accents(local_inventory_identity_key(query))
+    normalized_query = _folded_search_identity(query)
     query_pattern = (
         _missing_album_query_pattern(query)
         if "%" in query or "_" in query
@@ -5237,7 +5450,8 @@ def _missing_album_search_artist_keys(
     )
 
     def matches(name: str) -> bool:
-        normalized_name = name.casefold() if query_pattern is not None else fold_search_accents(local_inventory_identity_key(name))
+        # Every search walks all ~19k alias names; their folded form never changes.
+        normalized_name = name.casefold() if query_pattern is not None else _folded_search_identity(name)
         return (
             bool(query_pattern.fullmatch(normalized_name))
             if query_pattern is not None
@@ -5528,6 +5742,7 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "album_rating": file_entry.get("album_rating"),
         "exception_type": _effective_row_exception_type(row_payload),
         "_text_mojibake_candidate": row_payload.get("file_text_mojibake_candidate"),
+        "text_corrections": _row_json_mapping(row_payload.get("file_text_corrections")) or file_entry.get("text_corrections"),
         "local_album_membership_problem": (
             row_payload["local_album_membership_problem"]
             if "local_album_membership_problem" in row_payload
@@ -5562,10 +5777,12 @@ def _album_file_year_mismatch(album: Mapping[str, object]) -> bool:
 
 
 _PROBLEM_REASON_IDENTITY_CODES = {
+    TRACK_ARTIST_UNREADABLE_REASON: "track-artist-unreadable",
     "Empty audio file": "empty-audio-file",
     "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
     "Missing album": "missing-album",
+    "Missing artist and album": "missing-artist-and-album",
     "Missing track title": "missing-track-title",
     "Missing track artist": "missing-track-artist",
     "Missing album artist": "missing-album-artist",
@@ -6087,6 +6304,13 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield str(entry["local_album_membership_problem"])
     if reviewable_edition_title(entry.get("album"), entry.get("edition")):
         yield "Edition descriptor in album name"
+    yield from _text_correction_problem_reasons(entry.get("text_corrections"))
+
+
+def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
+    """Problems the app corrects for display but the tags still carry."""
+    for field, correction in (corrections.items() if isinstance(corrections, Mapping) else ()):
+        yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
 def _iter_problematic_track_reasons(
@@ -6329,6 +6553,66 @@ _PROBLEMATIC_OPTIONAL_SUMMARY_FIELDS = frozenset(
         "raw_album_artist",
     }
 )
+
+
+PROBLEMATIC_SEARCH_ALBUM_LIMIT = 2000
+
+
+def _problematic_summary_matches_query(album: Mapping[str, object], needle: str) -> bool:
+    """The Problematic Files list filter (getFilteredProblematicAlbums), server side."""
+    def texts(values: object) -> list[str]:
+        return [str(value or "") for value in values] if isinstance(values, list) else []
+
+    haystack = [
+        str(album.get(key) or "")
+        for key in ("name", "raw_name", "album_artist", "raw_album_artist", "year")
+    ]
+    haystack += texts(album.get("problem_reasons"))
+    haystack.append(str(album.get("search_text") or ""))
+    haystack += [str(track.get("title") or "") for track in album.get("tracks") or [] if isinstance(track, Mapping)]
+    for row in album.get("repair_preview_rows") or []:
+        if isinstance(row, Mapping):
+            haystack += [str(row.get(key) or "") for key in ("track_title", "original", "repaired")]
+    return needle in "\n".join(haystack).lower()
+
+
+def _problematic_search_album_ids_sql() -> str:
+    """Candidate albums whose own title, artist, year or track titles contain the needle."""
+    return """
+        select albums.id
+        from library.local_albums albums
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where albums.id = any(%(candidate_ids)s::bigint[])
+          and (
+            strpos(lower(albums.title), %(needle)s) > 0
+            or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
+            or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
+            or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
+            or exists (
+              select 1 from library.local_tracks tracks
+              where tracks.album_id = albums.id
+                and strpos(lower(tracks.title), %(needle)s) > 0
+            )
+          )
+        order by albums.id
+        limit %(limit)s
+    """
+
+
+def _problematic_page_album_ids_sql() -> str:
+    """The first ``limit`` candidate albums in the complete list's order."""
+    return """
+        select albums.id as album_id
+        from library.local_albums albums
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where albums.id = any(%(candidate_ids)s::bigint[])
+        order by
+          lower(coalesce(albums.title, '')) collate "C",
+          lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name, '')) collate "C",
+          coalesce(albums.release_year::text, '') collate "C",
+          lower(coalesce(albums.album_key, '')) collate "C"
+        limit %(limit)s::integer
+    """
 
 
 def _path_file_type(path: object) -> str:
@@ -8180,18 +8464,56 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
     return artist_groups
 
 
-def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query: str) -> str:
+def _top_search_selected_artist(
+    artist_groups: list[dict[str, object]],
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, object] | None = None,
+) -> str:
+    """The artist a search auto-selects.
+
+    A query naming an artist keeps the ranked best match. A title-only query
+    ("Divine Comedy") names nobody, so every group ties and the alphabetical
+    first, often one track artist of a compilation, would hide the rest:
+    select the artist owning the most matching albums instead, counting each
+    album once for its owner (a compilation's album owner, not its credits).
+    """
     if not str(query or "").strip():
         return ""
-    for group in artist_groups:
+    artists = [str(group.get("artist") or "").strip() for group in artist_groups]
+    artists = [artist for artist in artists if artist]
+    if not artists:
+        return ""
+    aliases_by_artist = canonical_to_aliases or {}
+
+    def aliases(artist: str) -> list[object]:
+        value = aliases_by_artist.get(artist)
+        return list(value) if isinstance(value, (list, tuple, set)) else []
+
+    if any(_artist_name_matches_search_query(query, artist, aliases(artist)) for artist in artists):
+        return artists[0]
+    def owned_album_count(group: Mapping[str, object]) -> int:
+        # A group lists every matching album its artist appears on; it owns
+        # those whose album artist is that artist (or one of its aliases).
         artist = str(group.get("artist") or "").strip()
-        if artist:
-            return artist
-    return ""
+        names = {_artist_display_dedupe_key(name) for name in [artist, *aliases(artist)] if str(name or "").strip()}
+        return sum(
+            1 for album in group.get("albums") or []
+            if isinstance(album, Mapping) and _artist_display_dedupe_key(str(album.get("album_artist") or "")) in names
+        )
+
+    counts = [owned_album_count(group) for group in artist_groups if str(group.get("artist") or "").strip()]
+    best = max(counts)
+    # Ties, and groups owning nothing, keep the existing group order.
+    return artists[counts.index(best)] if best else artists[0]
 
 
-def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
+def _artists_sidebar_from_groups(
+    artist_groups: list[dict[str, object]],
+    *,
+    alphabetical: bool = False,
+) -> list[dict[str, object]]:
+    sidebar = [
         {
             "artist": str(group.get("artist") or "").strip(),
             "artist_display": _artist_tree_display_value(
@@ -8202,6 +8524,14 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
         for group in artist_groups
         if str(group.get("artist") or "").strip()
     ]
+    # Search ranks artists to choose its best match; the Artist Tree itself
+    # always keeps the library's normal alphabetical order.
+    if alphabetical:
+        sidebar.sort(key=lambda item: (
+            artist_collation_key(item["artist_display"] or item["artist"]),
+            artist_collation_key(item["artist"]),
+        ))
+    return sidebar
 
 
 def _merge_artist_groups_for_sidebar(
@@ -10756,6 +11086,15 @@ def _missing_albums_sql(
     )).replace("__BOUNDED_ORDER__", bounded_order)
 
 
+def _physical_parent_sql(path_expression: str) -> str:
+    return f"""regexp_replace(
+              case when library.local_path_style({path_expression}) = 'windows'
+                then replace(library.local_path_key({path_expression}), chr(92), '/')
+                else library.local_path_key({path_expression}) end,
+              '/[^/]*$', ''
+            )"""
+
+
 def _physical_album_container_sql(path_expression: str) -> str:
     parent = f"regexp_replace(replace({path_expression}, chr(92), '/'), '/[^/]*$', '')"
     name = f"regexp_replace({parent}, '^.*/', '')"
@@ -10870,11 +11209,11 @@ def _problematic_files_sql(
     *,
     candidate_summary: bool = False,
     candidate_ids_only: bool = False,
-    candidate_ids_page: bool = False,
     selected_album_ids: bool = False,
     targeted_problem_owners: bool = False,
     duplicate_candidates: bool = False,
     duplicate_sources_only: bool = False,
+    path_columns: bool = False,
 ) -> str:
     spotify_quota_cte = "" if duplicate_sources_only else """
         spotify_quota_albums as materialized (
@@ -10891,9 +11230,9 @@ def _problematic_files_sql(
 
     if duplicate_sources_only and (not duplicate_candidates or candidate_summary or targeted_problem_owners):
         raise ValueError("Duplicate source projection requires only duplicate_candidates=True.")
-    if (candidate_ids_only or candidate_ids_page or selected_album_ids) and not candidate_summary:
+    if (candidate_ids_only or selected_album_ids) and not candidate_summary:
         raise ValueError("Problematic candidate query modes require candidate_summary=True.")
-    if sum((candidate_ids_only, candidate_ids_page, selected_album_ids)) > 1:
+    if candidate_ids_only and selected_album_ids:
         raise ValueError("Problematic candidate query modes are mutually exclusive.")
     inventory_physical_context = candidate_summary and not selected_album_ids
     physical_scope_ctes = ""
@@ -10920,18 +11259,21 @@ def _problematic_files_sql(
           select distinct scoped_files.id
           from physical_seed_folders
           join lateral (
-            select id, track_id, private_path
-            from library.local_track_files
-            where library_root_id = physical_seed_folders.library_root_id
-              and regexp_replace(case when library.local_path_style(private_path) = 'windows'
-                then replace(library.local_path_key(private_path), chr(92), '/')
-                else library.local_path_key(private_path) end, '/[^/]*$', '')
+            -- Check each folder file's track by key; a join outside this lateral
+            -- hashed every track in the library.
+            select files.id
+            from library.local_track_files files
+            join library.local_tracks scoped_tracks
+              on scoped_tracks.id = files.track_id
+             and scoped_tracks.library_id = physical_seed_folders.library_id
+            where files.library_root_id = physical_seed_folders.library_root_id
+              and regexp_replace(case when library.local_path_style(files.private_path) = 'windows'
+                then replace(library.local_path_key(files.private_path), chr(92), '/')
+                else library.local_path_key(files.private_path) end, '/[^/]*$', '')
                 = physical_seed_folders.physical_parent
-              and scan_cache_stale is false
+              and files.scan_cache_stale is false
             offset 0
           ) scoped_files on true
-          join library.local_tracks scoped_tracks on scoped_tracks.id = scoped_files.track_id
-          where scoped_tracks.library_id = physical_seed_folders.library_id
         ),
         """
         physical_scope_join = "join physical_scope_file_ids on physical_scope_file_ids.id = library.local_track_files.id"
@@ -10944,13 +11286,8 @@ def _problematic_files_sql(
             library.local_tracks.album_id, library.local_tracks.library_id,
             library.local_track_files.library_root_id,
             library.local_track_files.file_size_bytes as file_size,
-            regexp_replace(
-              case when library.local_path_style(library.local_track_files.private_path) = 'windows'
-                then replace(library.local_path_key(library.local_track_files.private_path), chr(92), '/')
-                else library.local_path_key(library.local_track_files.private_path) end,
-              '/[^/]*$', ''
-            ) as physical_parent,
-            regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
+            __PHYSICAL_PARENT__ as physical_parent,
+            __SOURCE_DIRECTORY__ as source_directory,
             __PHYSICAL_ALBUM_CONTAINER__ as physical_album_container,
             library.local_track_files.track_id,
             coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
@@ -10961,10 +11298,12 @@ def _problematic_files_sql(
               or library.local_tracks.track_number <= 0) as track_problem,
             (library.local_track_files.scan_file_entry_is_object is true
               and (library.local_track_files.scan_file_text_mojibake_candidate is true
-                or library.local_track_files.scan_file_metadata_problem_candidate is true)) as file_problem,
+                or library.local_track_files.scan_file_metadata_problem_candidate is true
+                or text_corrections.track_file_id is not null)) as file_problem,
             nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
             nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
-            nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year
+            nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year,
+            __FILE_ALBUM_IDENTITY__ as file_album_identity
           from library.local_track_files
           __PHYSICAL_SCOPE_JOIN__
           join library.local_tracks
@@ -10974,14 +11313,20 @@ def _problematic_files_sql(
             on roots.id = library.local_track_files.library_root_id
            and roots.library_id = library.local_tracks.library_id
            and roots.is_active is true
+          left join library.local_track_file_text_corrections text_corrections
+            on text_corrections.track_file_id = library.local_track_files.id
           where library.local_track_files.scan_cache_stale is false
-            and library.local_path_key(library.local_track_files.private_path) <> ''
+            and __PATH_KEY_PRESENT__
         ),
         mixed_physical_folders as (
+          -- Two hash aggregates: a distinct count per group forces a full sort.
           select library_id, library_root_id, physical_parent
-          from active_problem_rows
+          from (
+            select distinct library_id, library_root_id, physical_parent, album_id
+            from active_problem_rows
+          ) folder_albums
           group by library_id, library_root_id, physical_parent
-          having count(distinct album_id) > 1
+          having count(*) > 1
         ),
         physical_file_context as materialized (
           select files.*,
@@ -10994,6 +11339,36 @@ def _problematic_files_sql(
            and mixed.library_root_id = files.library_root_id
            and mixed.physical_parent = files.physical_parent
         ),
+        exception_override_files as materialized (
+          -- The few files that carry an exception override, found first. Joining
+          -- every active file to its folder companions before this filter made
+          -- millions of rows on a real library (46 s of a 53 s cold request).
+          select distinct
+            exception_files.track_id,
+            exception_files.library_id,
+            exception_files.library_root_id,
+            exception_files.physical_album_container,
+            exception_files.file_album,
+            exception_files.file_album_artist,
+            exception_files.file_year
+          from (
+            select exception_files.*
+            from library.exception_overrides overrides
+            join active_problem_rows exception_files
+              on exception_files.library_id = overrides.library_id
+             and exception_files.track_id = overrides.track_id
+            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+            union all
+            select exception_files.*
+            from library.exception_overrides overrides
+            join active_problem_rows exception_files
+              on exception_files.library_id = overrides.library_id
+             and exception_files.private_path = overrides.track_key
+            where nullif(btrim(overrides.override_payload ->> 'exception_type'), '') is not null
+          ) exception_files
+          where exception_files.file_album is not null
+            and exception_files.file_album_artist is not null
+        ),
         exception_source_tracks as materialized (
           select distinct
             source_files.album_id as source_album_id,
@@ -11004,13 +11379,7 @@ def _problematic_files_sql(
             exception_tracks.disc_number,
             exception_tracks.track_number,
             exception_tracks.duration_seconds
-          from library.exception_overrides
-          join active_problem_rows exception_files
-            on exception_files.library_id = library.exception_overrides.library_id
-           and (
-             exception_files.track_id = library.exception_overrides.track_id
-             or exception_files.private_path = library.exception_overrides.track_key
-           )
+          from exception_override_files exception_files
           join library.local_tracks exception_tracks
             on exception_tracks.id = exception_files.track_id
            and exception_tracks.library_id = exception_files.library_id
@@ -11022,11 +11391,6 @@ def _problematic_files_sql(
            and source_files.file_album_artist = exception_files.file_album_artist
            and source_files.file_year is not distinct from exception_files.file_year
            and source_files.album_id is not null
-          where nullif(btrim(
-              library.exception_overrides.override_payload ->> 'exception_type'
-          ), '') is not null
-            and exception_files.file_album is not null
-            and exception_files.file_album_artist is not null
         ),
     """
     physical_file_ctes = (
@@ -11038,7 +11402,24 @@ def _problematic_files_sql(
         ).replace(
             # Computed once per row so the duplicate join can hash on it.
             "__PHYSICAL_ALBUM_CONTAINER__",
-            _physical_album_container_sql("library.local_track_files.private_path"),
+            "library.local_track_files.scan_physical_album_container" if path_columns
+            else _physical_album_container_sql("library.local_track_files.private_path"),
+        ).replace(
+            "__PHYSICAL_PARENT__",
+            "library.local_track_files.scan_physical_parent" if path_columns
+            else _physical_parent_sql("library.local_track_files.private_path"),
+        ).replace(
+            "__SOURCE_DIRECTORY__",
+            "library.local_track_files.scan_source_directory" if path_columns
+            else "regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '')",
+        ).replace(
+            "__PATH_KEY_PRESENT__",
+            "library.local_track_files.scan_path_key_present is true" if path_columns
+            else "library.local_path_key(library.local_track_files.private_path) <> ''",
+        ).replace(
+            "__FILE_ALBUM_IDENTITY__",
+            "library.local_track_files.scan_file_album_identity" if path_columns
+            else "library.duplicate_identity_text(nullif(lower(btrim(library.local_track_files.scan_file_album)), ''))",
         )
     )
     candidate_ctes = ""
@@ -11065,24 +11446,32 @@ def _problematic_files_sql(
         """
     duplicate_album_ids_cte = """
         duplicate_album_ids as (
+          -- Duplicate-source checks run only for these albums. PostgreSQL 18
+          -- duplicate_identity_text is Python's NFC + casefold identity, so equal
+          -- identities are complete; older servers only lower(), so they keep the
+          -- broad superset as duplicate candidates too.
           select distinct candidate.album_id
           from active_problem_rows candidate
           join (
-            select file_year,
-              lower(regexp_replace(btrim(file_album), '\\s+', ' ', 'g')) as title_key
-            from active_problem_rows
-            group by file_year, lower(regexp_replace(btrim(file_album), '\\s+', ' ', 'g'))
-            having count(distinct source_directory) > 1
+            select file_year, file_album_identity
+            from (
+              select distinct file_year, file_album_identity, source_directory
+              from active_problem_rows
+              where file_album_identity is not null
+            ) identity_directories
+            group by file_year, file_album_identity
+            having count(*) > 1
           ) identity_candidates
             on identity_candidates.file_year = candidate.file_year
-           and identity_candidates.title_key = lower(regexp_replace(btrim(candidate.file_album), '\\s+', ' ', 'g'))
+           and identity_candidates.file_album_identity = candidate.file_album_identity
           union
           select candidate.album_id
           from active_problem_rows candidate
-          where candidate.file_year in (
-            select file_year from active_problem_rows
-            where octet_length(file_album) <> length(file_album)
-          )
+          where current_setting('server_version_num')::integer < 180000
+            and candidate.file_year in (
+              select file_year from active_problem_rows
+              where octet_length(file_album) <> length(file_album)
+            )
         ),
     """
     if candidate_summary and not selected_album_ids:
@@ -11103,7 +11492,9 @@ def _problematic_files_sql(
             max(active_problem_rows.file_album_artist) as max_file_album_artist,
             count(active_problem_rows.file_album_artist) < count(*) as has_blank_album_artist,
             min(active_problem_rows.file_year) as min_file_year,
-            max(active_problem_rows.file_year) as max_file_year
+            max(active_problem_rows.file_year) as max_file_year,
+            -- A blank file year splits a release by year in Python ("Missing year").
+            count(active_problem_rows.file_year) < count(*) as has_blank_year
           from active_problem_rows
           group by active_problem_rows.album_id
         ),
@@ -11217,6 +11608,7 @@ def _problematic_files_sql(
               )
             )
             or active_album_rollup.min_file_year <> active_album_rollup.max_file_year
+            or active_album_rollup.has_blank_year
             or (
               library.local_albums.release_year is not null
               and (
@@ -11234,28 +11626,54 @@ def _problematic_files_sql(
             )
         ),
         active_track_order_rollup as (
+          -- Distinct numbers first so both aggregates hash instead of sorting.
           select
-            active_problem_rows.album_id,
-            active_problem_rows.disc_number,
+            track_numbers.album_id,
+            track_numbers.disc_number,
             (
-              min(active_problem_rows.effective_track_number) <> 1
-              or count(distinct active_problem_rows.effective_track_number)
-                <> max(active_problem_rows.effective_track_number)
+              min(track_numbers.effective_track_number) <> 1
+              or count(*) <> max(track_numbers.effective_track_number)
             ) as incomplete_track_order
-          from active_problem_rows
-          where active_problem_rows.effective_track_number is not null
-          group by active_problem_rows.album_id, active_problem_rows.disc_number
+          from (
+            select distinct album_id, disc_number, effective_track_number
+            from active_problem_rows
+            where effective_track_number is not null
+          ) track_numbers
+          group by track_numbers.album_id, track_numbers.disc_number
         ),
         candidate_album_ids as (
           select active_candidate_ids.album_id from active_candidate_ids
           union
-          select physical_file_context.album_id from physical_file_context
-          where physical_file_context.file_size = 0
-             or physical_file_context.file_mixed_album_folder
-             or physical_file_context.local_album_membership_problem is not null
+          -- Same members as physical_file_context's flags, without materializing
+          -- that per-file context for every active file.
+          select active_problem_rows.album_id from active_problem_rows
+          where active_problem_rows.file_size = 0
+          union
+          select active_problem_rows.album_id
+          from active_problem_rows
+          join mixed_physical_folders mixed
+            on mixed.library_id = active_problem_rows.library_id
+           and mixed.library_root_id = active_problem_rows.library_root_id
+           and mixed.physical_parent = active_problem_rows.physical_parent
+          union
+          select active_problem_rows.album_id
+          from active_problem_rows
+          join local_album_membership membership
+            on membership.file_id = active_problem_rows.file_id
           union
           select required_text_missing_album_ids.album_id
           from required_text_missing_album_ids
+          union
+          -- Superset of edition_title_normalization.parse_edition_title: a title
+          -- ending in a bracketed edition, Russian издание, or expanded remaster.
+          select active_problem_rows.album_id
+          from active_problem_rows
+          where active_problem_rows.file_album ~ '[])]$'
+            and (
+              position('edition' in active_problem_rows.file_album) > 0
+              or position('издание' in active_problem_rows.file_album) > 0
+              or position('remaster' in active_problem_rows.file_album) > 0
+            )
           union
           select duplicate_album_ids.album_id from duplicate_album_ids
           union
@@ -11271,8 +11689,12 @@ def _problematic_files_sql(
                 _mojibake_candidate_fields_sql(album_text_expressions),
             )
         )
-        selected_album_join = "join candidate_album_ids on candidate_album_ids.album_id = library.local_albums.id"
-        selected_album_filter = ""
+        # A one-time hashed array probe: the union's row estimate is far too
+        # high, and a join plans a repeated nested scan of every candidate.
+        selected_album_join = ""
+        selected_album_filter = (
+            "where library.local_albums.id = any(array(select album_id from candidate_album_ids))"
+        )
     if candidate_ids_only:
         candidate_ctes_sql = candidate_ctes.rstrip()
         if candidate_ctes_sql.endswith(","):
@@ -11293,38 +11715,6 @@ def _problematic_files_sql(
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
             from candidate_album_ids;
-        """
-    if candidate_ids_page:
-        candidate_ctes_sql = candidate_ctes.rstrip()
-        if candidate_ctes_sql.endswith(","):
-            candidate_ctes_sql = candidate_ctes_sql[:-1]
-        return f"""
-            with bootstrap_context as (
-              select library.libraries.id as library_id
-              from app.bootstrap_owners
-              join library.libraries
-                on library.libraries.owner_account_id = app.bootstrap_owners.account_id
-               and library.libraries.name = 'Local Library'
-               and library.libraries.library_kind = 'local'
-              where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-              limit 1
-            ),
-            {spotify_quota_cte}
-            {physical_file_ctes}
-            {candidate_ctes_sql}
-            select candidate_album_ids.album_id
-            from candidate_album_ids
-            join library.local_albums
-              on library.local_albums.id = candidate_album_ids.album_id
-            left join library.local_artists
-              on library.local_artists.id = library.local_albums.artist_id
-            order by
-              lower(coalesce(library.local_albums.title, '')) collate "C",
-              lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''),
-                             library.local_artists.name, '')) collate "C",
-              coalesce(library.local_albums.release_year::text, '') collate "C",
-              lower(coalesce(library.local_albums.album_key, '')) collate "C"
-            limit %(limit)s::integer;
         """
     if selected_album_ids:
         selected_album_filter = (
@@ -11386,6 +11776,8 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_year as file_year,
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
+            (select text_corrections.text_corrections from library.local_track_file_text_corrections text_corrections
+              where text_corrections.track_file_id = library.local_track_files.id) as file_text_corrections,
             exception_override.override_payload ->> 'exception_type' as exception_type,
             exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
@@ -11424,6 +11816,7 @@ def _problematic_files_sql(
           active_track_files.file_year,
           active_track_files.file_track_number,
           active_track_files.file_text_mojibake_candidate,
+          active_track_files.file_text_corrections,
           active_track_files.exception_type,
           active_track_files.exception_override_present,
         """
@@ -11492,10 +11885,11 @@ def _problematic_files_sql(
         ),
         """
     elif candidate_summary:
+        # Join the folder context once; inside the per-track lateral loop the
+        # planner rebuilt its hash for every selected file.
         selected_active_track_file_rows_sql = f"""
-        selected_active_track_file_rows as materialized (
-          select selected_track_file.*, physical_file_context.file_mixed_album_folder,
-            physical_file_context.local_album_membership_problem
+        selected_track_file_rows as materialized (
+          select selected_track_file.*
           from selected_tracks
           cross join lateral (
             select
@@ -11522,8 +11916,13 @@ def _problematic_files_sql(
               and library.local_track_files.scan_cache_stale is false
             offset 0
           ) selected_track_file
+        ),
+        selected_active_track_file_rows as materialized (
+          select selected_track_file_rows.*, physical_file_context.file_mixed_album_folder,
+            physical_file_context.local_album_membership_problem
+          from selected_track_file_rows
           join physical_file_context
-            on physical_file_context.file_id = selected_track_file.file_id
+            on physical_file_context.file_id = selected_track_file_rows.file_id
         ),
         """
     else:
@@ -11720,6 +12119,8 @@ def _problematic_files_sql(
           join selected_albums
             on selected_albums.id = library.local_tracks.album_id
            and selected_albums.library_id = library.local_tracks.library_id
+          -- The CTE row estimate is far too high; an id array keeps the album index.
+          where library.local_tracks.album_id = any(array(select id from selected_albums))
           {exception_source_track_union}
         ),
         {selected_active_track_file_rows_sql}
@@ -11763,8 +12164,35 @@ def _problematic_files_sql(
     """
 
 
-def _problem_exclusion_candidates_sql() -> str:
-    return _problematic_files_sql(targeted_problem_owners=True)
+def _problem_exclusion_candidates_sql(*, path_columns: bool = False) -> str:
+    return _problematic_files_sql(targeted_problem_owners=True, path_columns=path_columns)
+
+
+def _execute_problematic_sql(
+    connection: Any,
+    database_url: str,
+    build_sql: Callable[[bool], str],
+    params: Mapping[str, object],
+) -> Any:
+    """Read the stored path projection (migration 0112) when the schema has it."""
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        path_columns = database_url not in _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES
+    try:
+        return connection.execute(build_sql(path_columns), params)
+    except Exception as exc:
+        if (
+            not path_columns
+            or getattr(exc, "sqlstate", None) != "42703"
+            or not any(column in str(exc) for column in (
+                "scan_path_key_present", "scan_physical_parent", "scan_source_directory",
+                "scan_physical_album_container", "scan_file_album_identity",
+            ))
+        ):
+            raise
+        connection.rollback()
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES.add(database_url)
+        return connection.execute(build_sql(False), params)
 
 
 def _utility_rules_sql() -> str:

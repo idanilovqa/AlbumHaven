@@ -707,6 +707,23 @@ test('rootFullPayload requests full root albums without changing other browse UR
     startupPreview: { mode: 'empty_shell' },
     startupHydration: { required: true },
   }), false);
+  // A pasted q-only search URL during a long repair scan still fetches its results.
+  for (const specificView of [{ query: 'Beardfish' }, { selected_artist: 'Beardfish' }]) {
+    assert.equal(shouldRunImmediateStartupHydration({
+      album_count: 0,
+      artists_sidebar: [],
+      primary_artist_groups: [],
+      family_artist_groups: [],
+      artist_groups: [],
+      ...specificView,
+    }, {
+      partialView: false,
+      scanInProgress: true,
+      relationsInProgress: false,
+      startupPreview: { mode: 'empty_shell' },
+      startupHydration: { required: true },
+    }), true);
+  }
   assert.equal(shouldRunImmediateStartupHydration({
     album_count: 1,
     artists_sidebar: [{ artist: 'Broadcast' }],

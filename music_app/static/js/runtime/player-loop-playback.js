@@ -1047,6 +1047,9 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     album: btn.getAttribute('data-track-album') || '',
     coverPath: btn.getAttribute('data-track-cover') || '',
     durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
+    ...(btn.closest?.('#non-album-modal')
+      ? { looseTracksOrigin: { libraryWide: state.ui?.nonAlbumLibraryWide === true } }
+      : {}),
   });
   if (currentAlbum) {
     setAlbumPlaybackQueue(currentAlbum, trackPath);
@@ -1101,14 +1104,11 @@ function attachPlayerEvents() {
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
-  els.albumLink?.addEventListener('click', () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album);
-  });
-  els.coverButton?.addEventListener('click', () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
-  });
+  els.albumLink?.addEventListener('click', () => openCurrentPlayerTrackSource());
+  els.coverButton?.addEventListener('click', () => openCurrentPlayerTrackSource({
+    coverLightboxGallery: false,
+    foreground: true,
+  }));
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {
     const next = Number(els.timeline.value) || 0;

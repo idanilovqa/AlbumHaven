@@ -133,6 +133,20 @@ def watchdog_event_kind(event_type: object) -> LibraryEventKind | None:
     }.get(str(event_type or "").strip().casefold())
 
 
+def _ignore_last_access_notifications() -> None:
+    """Stop reads from flooding the change buffer.
+
+    Watchdog subscribes to FILE_NOTIFY_CHANGE_LAST_ACCESS. With NTFS last-access
+    updates enabled, every file a scan or catch-up reads raised a notification,
+    overflowed the buffer and restarted the catch-up that caused it. Access
+    times never change library contents; ReadDirectoryChangesW reads this flag
+    at call time.
+    """
+    from watchdog.observers import winapi
+
+    winapi.WATCHDOG_FILE_NOTIFY_FLAGS &= ~winapi.FILE_NOTIFY_CHANGE_LAST_ACCESS
+
+
 def publish_watchdog_event(
     event: object,
     *,
@@ -283,6 +297,8 @@ class WatchdogLibraryEventSource:
         emitter.run = run_with_health
         if os.name == "nt":
             from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+            _ignore_last_access_notifications()
 
             if isinstance(emitter, WindowsApiEmitter):
                 read_events = emitter._read_events

@@ -22,7 +22,6 @@ _SEARCH_SYMBOL_WORDS = {
     "%": "percent",
     "$": "dollar",
     "*": "star",
-    "∞": "infinity",
 }
 _ARTIST_IDENTITY_ROLE_TOKENS = {
     "band",

@@ -3,6 +3,8 @@
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// How often a running scan's progressively published albums refresh the view.
+const LIVE_SCAN_REFRESH_INTERVAL_MS = 5000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -204,6 +206,28 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+// The last automatic reverse prepend: a prepend must push the viewport down by
+// about its own height. When it does not, the next one re-exposes the top and
+// the chain walks the whole library backwards with no user input.
+let rootGalleryPreviousPrepend = null;
+
+function readRootGalleryUserScrollGeneration() {
+  return typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.getUserScrollIntentGeneration?.() ?? null;
+}
+
+function rootGalleryPreviousPrependStalled(scroll) {
+  const last = rootGalleryPreviousPrepend;
+  if (!last) return false;
+  if (last.userScrollGeneration !== readRootGalleryUserScrollGeneration()) {
+    rootGalleryPreviousPrepend = null;
+    return false;
+  }
+  const grown = Number(scroll.scrollHeight || 0) - last.scrollHeight;
+  return grown > 0 && Number(scroll.scrollTop || 0) - last.scrollTop < grown / 2;
+}
+
 async function loadPreviousRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -211,7 +235,8 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT
+    || rootGalleryPreviousPrependStalled(scroll)) return false;
 
   const request = {
     controller: new AbortController(),
@@ -251,6 +276,11 @@ async function loadPreviousRootGalleryPage() {
       || data.gallery_page?.previous_cursor === request.cursor) return false;
 
     const currentPage = state.view.gallery_page;
+    rootGalleryPreviousPrepend = {
+      scrollTop: Number(scroll.scrollTop || 0),
+      scrollHeight: Number(scroll.scrollHeight || 0),
+      userScrollGeneration: readRootGalleryUserScrollGeneration(),
+    };
     applyViewPayload({
       ...state.view,
       artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
@@ -2441,6 +2471,13 @@ async function pollStatus() {
     const scanFinalizing = Boolean(normalizedStatus.scan_in_progress)
       && String(normalizedStatus.scan_phase || '').trim().toLowerCase() === 'finalizing';
     const busyNow = normalizedStatus.scan_in_progress || normalizedStatus.relations_in_progress;
+    // A reading scan publishes finished albums as it goes; show them while it
+    // runs, at most every few seconds, rather than only once it completes.
+    const liveScanRefreshDue = Boolean(normalizedStatus.scan_in_progress)
+      && !scanFinalizing
+      && !normalizedStatus.relations_in_progress
+      && Date.now() - Number(state.ui.lastLiveScanRefreshAt || 0) >= LIVE_SCAN_REFRESH_INTERVAL_MS;
+    const inventoryRefreshAllowed = !busyNow || liveScanRefreshDue;
     const coverBusyNow = Boolean(normalizedStatus.covers_in_progress);
     const wasPollingBusy = Boolean(state.wasPollingBusy);
     const wasScanFinalizing = Boolean(state.wasScanFinalizing);
@@ -2525,9 +2562,13 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    if (busyNow && liveScanRefreshDue
+      && (state.ui.pendingInventoryMutationViewRefresh || state.ui.pendingArtistTreeRefresh)) {
+      state.ui.lastLiveScanRefreshAt = Date.now();
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
-      && !busyNow
+      && inventoryRefreshAllowed
       && !coverBusyNow
       && !state.busy
       && !hasPendingSidebarNavigation()
@@ -2553,7 +2594,7 @@ async function pollStatus() {
         );
       }
     }
-    if (state.ui.pendingArtistTreeRefresh && !busyNow && !state.busy && !hasPendingSidebarNavigation()) {
+    if (state.ui.pendingArtistTreeRefresh && inventoryRefreshAllowed && !state.busy && !hasPendingSidebarNavigation()) {
       try {
         await refreshArtistTreeAfterInventoryMutation(currentInventoryRevision);
         if (!ownsStatus()) return;

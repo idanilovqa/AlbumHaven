@@ -45,6 +45,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
+      // A refresh can move the track's album; keep it in view until the user scrolls.
+      if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }

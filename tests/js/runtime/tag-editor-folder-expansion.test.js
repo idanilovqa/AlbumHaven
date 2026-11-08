@@ -204,7 +204,8 @@ test('loading the folder puts CD1 files before CD2 files and marks each file wit
     syncTagEditorCollectionFields() {},
     syncTagEditorPendingChanges() {},
     fetch: async () => ({ ok: true, async json() {
-      return { ok: true, folder_path: 'C:/Music/Album', tracks: [{ path: cd1a, title: 'Early' }, { path: cd1b, title: 'Middle' }, { path: cd2, title: 'Late' }] };
+      // The CD2 file still carries a stale disc 1 tag: the label follows its folder (REC-005, owner).
+      return { ok: true, folder_path: 'C:/Music/Album', tracks: [{ path: cd1a, title: 'Early' }, { path: cd1b, title: 'Middle' }, { path: cd2, title: 'Late', disc_number: '1' }] };
     } }),
   });
   await context.loadTagEditorFolderFiles();

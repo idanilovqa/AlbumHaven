@@ -6163,6 +6163,27 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+let searchPendingRailFallback = null;
+function releaseSearchPendingRail() {
+  if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+  searchPendingRailFallback = null;
+  const rail = document.getElementById('shell-navigation-rail');
+  rail?.removeAttribute?.('data-search-pending');
+  rail?.setAttribute?.('aria-busy', 'false');
+}
+function holdSearchPendingRail(searching) {
+  const rail = document.getElementById('shell-navigation-rail');
+  if (searching) {
+    if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+    searchPendingRailFallback = null;
+    rail?.setAttribute?.('data-search-pending', '');
+    rail?.setAttribute?.('aria-busy', 'true');
+  } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
+    // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
+    searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
+  }
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
@@ -6239,6 +6260,7 @@ function renderSidebar() {
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
   ensureSidebarVirtualScrollListeners(el);
+  if (!state.ui?.pendingGallerySearch) releaseSearchPendingRail();
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
@@ -6425,10 +6447,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
   // NEW-005 (owner): while a search runs, the side panel never shows the previous search's tree (leaving Loose
-  // Tracks briefly showed the old selected artist); it shows again with the new results.
-  const rail = document.getElementById('shell-navigation-rail');
-  rail?.toggleAttribute?.('data-search-pending', searching);
-  rail?.setAttribute?.('aria-busy', String(searching));
+  // Tracks briefly showed the old selected artist). The tree shows again once it has rendered the new results.
+  holdSearchPendingRail(searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
@@ -30961,7 +30981,8 @@ function renderTagEditor(options = {}) {
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
       // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
-      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      // REC-005 (owner): the disc comes from the disc folder's name; the disc tag only when the folder has none.
+      const discNumber = showFolderNames ? (getAlbumTrackDiscNumber({ path }) || getAlbumTrackDiscNumber(track)) : null;
       const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">

@@ -2837,7 +2837,8 @@ function renderTagEditor(options = {}) {
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
       // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
-      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      // REC-005 (owner): the disc comes from the disc folder's name; the disc tag only when the folder has none.
+      const discNumber = showFolderNames ? (getAlbumTrackDiscNumber({ path }) || getAlbumTrackDiscNumber(track)) : null;
       const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">

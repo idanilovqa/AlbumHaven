@@ -2,13 +2,9 @@
 .server-preview-settings .account-section { display: grid; gap: 14px; }
 .server-preview-settings .account-section > :is(h2, p) { margin-bottom: 0; }
 .server-storage-choices { max-width: 46rem; }
-.server-storage-choices .ui-radio-option { width: fit-content; min-width: 13rem; }
 .server-path-field { max-width: 46rem; margin-bottom: 0; }
 .server-preview-summary,
 .server-preview-failure { margin: 0; color: var(--muted); font-size: 12px; }
 .server-preview-failure { color: var(--red, var(--appearance-error, #ef5350)); }
 .server-setting-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
-@media (max-width: 640px) {
-  .server-storage-choices .ui-radio-option { width: 100%; }
-}

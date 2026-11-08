@@ -165,9 +165,15 @@ class OkHttpConnectionWarmer(
     }
 }
 
+private const val PING_SECONDS = 25L
+
 /** `/playback/pcm` over OkHttp, authenticated like the page that selected the origin. */
-class OkHttpPcmTransportFactory(private val client: OkHttpClient, private val session: ShellSession) :
+class OkHttpPcmTransportFactory(client: OkHttpClient, private val session: ShellSession) :
     PcmTransportFactory {
+    // A paused socket carries no audio; proxies such as Cloudflare close a WebSocket idle for about
+    // 100 seconds, which would cost a resume a reconnect and a refetch. Pings keep it open.
+    private val client = client.newBuilder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
+
     override fun connect(listener: PcmTransportListener): PcmTransport {
         // OkHttp upgrades an http(s) URL itself.
         val request = session.authorize(Request.Builder(), withCsrf = false)

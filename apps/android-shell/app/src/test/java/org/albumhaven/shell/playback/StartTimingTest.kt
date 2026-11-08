@@ -41,14 +41,14 @@ class StartTimingTest {
 
     @Test
     fun aSelectedTrackReportsOneLineWithEveryStageInOrderOnceItIsHeard() {
-        val claimIo = ManualExecutor()
-        val harness = ControllerHarness(first, claimIo = claimIo, outputModel = true)
+        val harness = ControllerHarness(first, outputModel = true)
+        harness.openOnConnect = false
         harness.load(1, first)
         repeat(20) { harness.step() }
-        // Nothing is heard while the claim is requested, so nothing is reported yet.
+        // Nothing is heard while the socket connects, so nothing is reported yet.
         assertEquals(emptyList<String>(), harness.timings)
 
-        claimIo.drain()
+        harness.listener!!.onOpen()
         harness.runUntil { harness.timings.isNotEmpty() }
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
 
@@ -66,9 +66,8 @@ class StartTimingTest {
         val chain = listOf("gate", "open", "metadata", "first_pcm", "first_write", "audible").map { ms(timing, it) }
         assertEquals(chain.sorted(), chain)
         assertTrue(chain.first() >= 0)
-        // The claim answered after the twenty steps it was held, and nothing was written before it.
-        assertTrue(ms(timing, "claim") >= 100)
-        assertTrue(ms(timing, "first_write") >= ms(timing, "claim"))
+        // The socket opened after the twenty steps it was held, and the stream opened on it.
+        assertTrue(ms(timing, "socket") >= 100)
         assertTrue(ms(timing, "socket") <= ms(timing, "open"))
         // The output plays what was written only on its next period.
         assertTrue(ms(timing, "audible") > ms(timing, "first_write"))
@@ -77,9 +76,24 @@ class StartTimingTest {
     }
 
     @Test
-    fun aSkipBeforeTheFirstSoundSupersedesItsStartAndIsTimedOnItsOwn() {
+    fun aPlayIsHeardFromItsBufferBeforeTheClaimAnswers() {
         val claimIo = ManualExecutor()
-        val harness = ControllerHarness(first, second, claimIo = claimIo)
+        val harness = ControllerHarness(first, claimIo = claimIo, outputModel = true)
+        harness.load(1, first)
+        harness.runUntil { harness.timings.isNotEmpty() }
+
+        // The owner chose an instant start: sound does not wait for the claim's round trip.
+        val timing = fields(harness.timings.single())
+        assertEquals("audible", timing["outcome"])
+        assertEquals("-", timing["claim"])
+        claimIo.drain()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+    }
+
+    @Test
+    fun aSkipBeforeTheFirstSoundSupersedesItsStartAndIsTimedOnItsOwn() {
+        val harness = ControllerHarness(first, second)
+        harness.openOnConnect = false
         harness.load(1, first, second)
         repeat(4) { harness.step() }
         assertEquals(CommandResult.ACCEPTED, harness.controller.next(1))
@@ -88,19 +102,17 @@ class StartTimingTest {
         assertEquals(1, harness.timings.size)
         val superseded = fields(harness.timings[0])
         assertEquals("superseded", superseded["outcome"])
-        assertEquals("-", superseded["claim"])
         assertEquals("-", superseded["audible"])
 
-        claimIo.drain()
+        harness.listener!!.onOpen()
         harness.runUntil { harness.timings.size == 2 }
         val skipped = fields(harness.timings[1])
         assertEquals("2", skipped["start"])
         assertEquals("next", skipped["kind"])
         assertEquals("1", skipped["index"])
         assertEquals("audible", skipped["outcome"])
-        // The skip found the socket its predecessor opened.
-        assertEquals("true", skipped["socket_reused"])
-        assertEquals(skipped["gate"], skipped["socket"])
+        // The skip waited for the socket its predecessor started connecting.
+        assertTrue(ms(skipped, "socket") >= ms(skipped, "gate"))
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
         assertEquals(2, harness.timings.size)
         harness.timings.forEach { assertPathFree(harness, it, first, second) }
@@ -110,6 +122,7 @@ class StartTimingTest {
     fun aPauseBeforeTheFirstSoundEndsTheStartOnceAndAResumeIsTimedFromTheQueuedOutput() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
+        harness.openOnConnect = false
         harness.load(1, first)
         repeat(4) { harness.step() }
         harness.controller.pause()
@@ -117,6 +130,7 @@ class StartTimingTest {
         assertEquals(listOf("paused"), harness.timings.map { fields(it)["outcome"] })
 
         claimIo.drain()
+        harness.listener!!.onOpen()
         harness.controller.play(1)
         harness.runUntil {
             claimIo.drain()
@@ -139,7 +153,8 @@ class StartTimingTest {
         assertEquals("-", resumed["open"])
         assertEquals("-", resumed["first_write"])
         assertEquals("true", resumed["socket_reused"])
-        assertTrue(ms(resumed, "audible") >= ms(resumed, "claim"))
+        // The resume is heard from the output's buffer before the claim's round trip answers.
+        assertEquals("-", resumed["claim"])
 
         // Play while already playing starts nothing new.
         harness.controller.play(1)

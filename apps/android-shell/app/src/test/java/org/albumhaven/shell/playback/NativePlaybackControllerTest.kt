@@ -257,22 +257,39 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun theStreamFillsItsCushionWhileTheClaimIsRequestedAndPlaysOnlyOnceGranted() {
+    fun aPlayIsHeardFromItsBufferWhileTheClaimIsRequested() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
         harness.load(1, first)
         repeat(20) { harness.step() }
 
-        val open = harness.sinks.last()
-        assertTrue(harness.controller.snapshot.state != NativePlaybackState.PLAYING)
-        assertEquals(0, open.writtenFrames)
-        assertTrue(harness.server.texts.count { it.contains("\"credit\"") } > 0)
+        // The owner chose an instant start: the buffered stream plays before the claim answers.
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertTrue(harness.sinks.last().writtenFrames > 0)
+
+        claimIo.drain()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+        assertEquals(listOf(Run(1, 0, first.frames)), harness.sinks.last().runs())
+    }
+
+    @Test
+    fun aRefusedClaimSilencesAnInstantStartAtOnce() {
+        val claimIo = ManualExecutor()
+        val harness = ControllerHarness(first, claimIo = claimIo)
+        harness.claims.acquireResponse = { ClaimResponse.Conflict }
+        harness.load(1, first)
+        repeat(20) { harness.step() }
+        val output = harness.sinks.last()
+        assertTrue(output.writtenFrames > 0)
 
         claimIo.drain()
         harness.step()
-        assertTrue(open.writtenFrames > 0)
-        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
-        assertEquals(listOf(Run(1, 0, first.frames)), harness.sinks.last().runs())
+        val written = output.writtenFrames
+        repeat(20) { harness.step() }
+
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(written, output.writtenFrames)
+        assertTrue("the output was stopped and flushed", output.operations.takeLast(2) == listOf("pause", "flush"))
     }
 
     @Test

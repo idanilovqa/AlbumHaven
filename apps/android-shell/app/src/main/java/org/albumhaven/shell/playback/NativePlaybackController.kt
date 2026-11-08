@@ -465,7 +465,7 @@ class NativePlaybackController(
             // A stream may buffer while the claim is requested; only an owner is heard, and a pause
             // the owner made finishes its fade even once the claim is given back.
             val wasPausing = pausing()
-            written = if (loaded && (claims.owned || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            written = if (loaded && (mayBeHeard() || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
             if (wasPausing && !pausing()) pauseSettled()
             if (timing.awaitingAudible) sink?.let { timing.heard(clock(), it.heardFrames()) }
             maybeFinishDrainedQueue()
@@ -481,7 +481,7 @@ class NativePlaybackController(
         if (retired) return Long.MAX_VALUE
         // A fading pause is polled closely, so the output pauses soon after its fade reaches silence.
         if (loaded && pausing()) return PAUSE_POLL_MS
-        if (loaded && claims.owned) return RENDER_WAIT_MS
+        if (loaded && mayBeHeard()) return RENDER_WAIT_MS
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
             shutdownDeadlineMs,
@@ -650,6 +650,7 @@ class NativePlaybackController(
                 }
                 ClaimOutcome.BLOCKED -> {
                     wantPlay = false
+                    // Unloading silences an instant start at once: another client owns playback.
                     unload("ownership-blocked")
                     setState(NativePlaybackState.PAUSED)
                 }
@@ -661,12 +662,20 @@ class NativePlaybackController(
                 }
             }
         }
+        // Sound starts from what is buffered now; the claim's answer arrives meanwhile.
+        startWhenReady()
         listens.begin(item.listenTrack(), heldPositionMs / 1000.0)
     }
 
-    /** Starts or resumes once both the claim and the socket are ready. */
+    /**
+     * Playback is heard while it owns the claim, and also while a play asks for it: the owner chose
+     * an instant start from the buffer (2026-11-08). A refused claim silences it on its answer.
+     */
+    private fun mayBeHeard(): Boolean = claims.owned || (wantPlay && claims.acquiring)
+
+    /** Starts or resumes once the socket is ready and the claim is held or being asked for. */
     private fun startWhenReady() {
-        if (!wantPlay || !claims.owned || !transportOpen) return
+        if (!wantPlay || !mayBeHeard() || !transportOpen) return
         val current = engine
         if (loaded && current != null) {
             heldFrame = null

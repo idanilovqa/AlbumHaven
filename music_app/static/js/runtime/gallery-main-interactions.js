@@ -646,6 +646,7 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  syncGalleryBarNameFit(bar, name);
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -934,4 +935,17 @@ function createGalleryFamilyPaintController(toggle) {
     visit,
     end() { selected = null; visited.clear(); },
   };
+}
+
+// Owner (11-08): on mobile the gallery buttons share the name's row when the whole name fits beside them; a
+// longer name keeps the row to itself, printed in full, and the buttons move under it. Measured only when the
+// name, its info button or the window width changes, never on every scroll frame.
+function syncGalleryBarNameFit(bar, name) {
+  if (!bar?.classList || !name) return;
+  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}`;
+  if (bar.dataset.galleryNameFitKey === key) return;
+  bar.dataset.galleryNameFitKey = key;
+  bar.classList.remove('is-name-wrapping');
+  if (Number(window.innerWidth) > 900) return;
+  if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
 }

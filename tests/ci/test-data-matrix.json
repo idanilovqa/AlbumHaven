@@ -6478,6 +6478,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a short gallery name shares its row with the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a short gallery name shares its row with the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a long gallery name is printed in full above the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a long gallery name is printed in full above the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

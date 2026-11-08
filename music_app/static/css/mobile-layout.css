@@ -644,6 +644,11 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }
+  /* Owner (11-08): the Gallery's buttons share the name row when the whole name fits (syncGalleryBarNameFit);
+     a longer name is printed in full on its own row and the buttons stay under it. */
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) > .gallery-bar__actions { grid-row: 1; margin-top: -8px; }
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;
     color: inherit;

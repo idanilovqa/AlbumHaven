@@ -9,14 +9,15 @@ const renderProgressMarkup = initialPercent => fs.readFileSync(
   path.join(root, 'music_app/templates/components/startup-progress.html'),
   'utf8',
 )
-  .replace(/{{ startup_progress_initial \| default\(0\) }}/, String(initialPercent))
-  .replace(/{% if not startup_progress_initial %} hidden{% endif %}/, initialPercent ? '' : ' hidden')
+  .replace(/{% set startup_progress_percent = [^%]+%}\s*/, '')
+  .replaceAll('{{ startup_progress_percent }}', String(initialPercent))
+  .replace(/{% if not startup_progress_percent %} hidden{% endif %}/, initialPercent ? '' : ' hidden')
   .replace(/<script[\s\S]*?<\/script>/, '');
 
-const loadProgress = async (page, initialPercent) => {
+const loadProgress = async (page, initialPercent, { themed = true } = {}) => {
   const markup = renderProgressMarkup(initialPercent);
   await page.setContent(`<body>${markup}<main><button>Gallery action</button></main></body>`);
-  await applyFixtureAppearance(page, { palette_id: 'parchment-pine', panel_index: 0 });
+  if (themed) await applyFixtureAppearance(page, { palette_id: 'parchment-pine', panel_index: 0 });
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/base-layout.css') });
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/startup-progress.css') });
   await page.addScriptTag({ path: path.join(root, 'music_app/static/js/startup-progress.js') });
@@ -105,6 +106,33 @@ for (const width of [390, 1280]) {
   });
 }
 
+test('startup progress keeps a colored bar without a themed palette or the sign-in stylesheet', async ({ page }) => {
+  await loadProgress(page, 50, { themed: false });
+  const colors = await page.evaluate(() => ({
+    track: getComputedStyle(document.querySelector('.progress-bar')).backgroundColor,
+    fill: getComputedStyle(document.querySelector('.progress-fill')).backgroundColor,
+    fillTransition: getComputedStyle(document.querySelector('.progress-fill')).transitionDuration,
+  }));
+  expect(colors.track).toBe('rgba(24, 36, 53, 0.82)');
+  expect(colors.fill).toBe('rgb(50, 188, 115)');
+  expect(colors.fillTransition).toBe('0s');
+});
+
+test('startup progress paints its starting stage before the script runs', async ({ page }) => {
+  await page.setContent(`<body>${renderProgressMarkup(50)}</body>`);
+  await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
+  await expect(page.locator('.progress-fill')).toHaveAttribute('style', /width:\s*50%/);
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+});
+
+test('a startup failure hides the whole meter, never a lone percent', async ({ page }) => {
+  await loadProgress(page, 50);
+  await page.evaluate(() => window.AlbumHavenStartupProgress.fail());
+  await expect(page.locator('[data-startup-meter]')).toBeHidden();
+  await expect(page.locator('[data-startup-percent]')).toBeHidden();
+  await expect(page.getByRole('alert')).toBeVisible();
+});
+
 test('startup progress honors reduced motion with an immediate stage update', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await loadProgress(page, 0);
@@ -140,9 +168,8 @@ test('sign-in progress continues on the app document without restarting or uncov
     }
     return samples;
   });
-  expect(Math.min(...widths)).toBeGreaterThanOrEqual(25);
+  expect(Math.min(...widths)).toBeGreaterThanOrEqual(50);
   await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
   await page.evaluate(() => window.AlbumHavenStartupProgress.finish());
   await expect(overlay).toBeHidden();
-  expect(await page.evaluate(() => sessionStorage.getItem('albumHaven.startupProgress'))).toBeNull();
 });

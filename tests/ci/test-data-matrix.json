@@ -83,7 +83,7 @@
       "watcher:targeted-create-and-disc-subtitle-search"
     ],
     "filesystemScenarios": [
-      "media-copy:watcher-disc-subtitle-search"
+      "media-copy:watcher-reconciliation"
     ],
     "expectedContracts": [
       "watcher-production-revision",
@@ -93,7 +93,7 @@
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:watcher-disc-subtitle-search",
-      "filesystemCopy": "media/cases/watcher-disc-subtitle-search"
+      "filesystemCopy": "media/cases/watcher-reconciliation"
     },
     "ownerApproval": "approved"
   },
@@ -367,6 +367,50 @@
       "single-continuation-request-owner",
       "no-stationary-first-page-boundary",
       "mobile-mounted-card-continuation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+    "case": "FTC-GALLERY-STARTUP-007 desktop sign-in progress never restarts and keeps a visible advancing bar",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "auth:sign-in-cold-load"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "startup-progress-monotonic-across-sign-in",
+      "startup-progress-visible-bar-width-matches-percent",
+      "desktop-cold-load"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+    "case": "FTC-GALLERY-STARTUP-007M mobile sign-in progress never restarts and keeps a visible advancing bar",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "auth:sign-in-cold-load"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "startup-progress-monotonic-across-sign-in",
+      "startup-progress-visible-bar-width-matches-percent",
+      "mobile-cold-load"
     ],
     "ownerApproval": "approved"
   },
@@ -10765,6 +10809,52 @@
     "expectedContracts": [
       "startup-progress-continuity",
       "startup-progress-first-frame-cover"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress keeps a colored bar without a themed palette or the sign-in stylesheet",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-default-colors",
+      "startup-progress-no-width-transition"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress paints its starting stage before the script runs",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-server-painted-stage"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "a startup failure hides the whole meter, never a lone percent",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-failure-hides-meter"
     ],
     "ownerApproval": "approved"
   },

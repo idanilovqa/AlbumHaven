@@ -540,6 +540,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+              "case": "FTC-GALLERY-STARTUP-007 desktop sign-in progress never restarts and keeps a visible advancing bar",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+              "case": "FTC-GALLERY-STARTUP-007M mobile sign-in progress never restarts and keeps a visible advancing bar",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
               "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
               "area": "gallery-search"

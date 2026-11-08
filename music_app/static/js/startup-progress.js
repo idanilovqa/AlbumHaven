@@ -2,6 +2,7 @@
   const root = document.querySelector('[data-startup-progress]');
   if (!root) return;
   const bar = root.querySelector('[role="progressbar"]');
+  const meter = root.querySelector('[data-startup-meter]');
   const percentLabel = root.querySelector('[data-startup-percent]');
   const error = root.querySelector('[data-startup-error]');
   const previousInert = new Map();
@@ -13,26 +14,6 @@
   let animationStartPercent = 0;
   const animationDurationMs = 700;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-  // Sign-in navigates to the app document mid-progress; hand the reached
-  // percent across that navigation so the bar continues instead of restarting.
-  const handoffKey = 'albumHaven.startupProgress';
-  const handoffMaxAgeMs = 60000;
-  const writeHandoff = value => {
-    try { window.sessionStorage.setItem(handoffKey, JSON.stringify({ percent: value, at: Date.now() })); } catch {}
-  };
-  const clearHandoff = () => {
-    try { window.sessionStorage.removeItem(handoffKey); } catch {}
-  };
-  const readHandoff = () => {
-    try {
-      const entry = JSON.parse(window.sessionStorage.getItem(handoffKey) || 'null');
-      const value = Number(entry?.percent);
-      const age = Date.now() - Number(entry?.at);
-      return value > 0 && value < 100 && age >= 0 && age <= handoffMaxAgeMs ? value : 0;
-    } catch {
-      return 0;
-    }
-  };
   const markFirstVisibleFeedback = () => {
     const queue = Array.isArray(window.__ALBUM_HAVEN_STARTUP_MARKS__)
       ? window.__ALBUM_HAVEN_STARTUP_MARKS__
@@ -76,7 +57,6 @@
     const next = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
     if (completed || next < targetPercent) return;
     targetPercent = next;
-    writeHandoff(next);
     animationStartPercent = percent;
     animationStartedAt = 0;
     root.hidden = false;
@@ -98,7 +78,6 @@
       if (completed) return;
       completed = true;
       targetPercent = 100;
-      clearHandoff();
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;
       render(100);
@@ -107,19 +86,17 @@
     fail() {
       if (completed || root.hidden) return;
       completed = true;
-      clearHandoff();
       error.hidden = false;
-      bar.hidden = true;
+      meter.hidden = true;
       root.querySelector('[data-startup-retry]').focus();
     },
     reset() {
       completed = false; targetPercent = 0;
-      clearHandoff();
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;
       animationStartedAt = 0;
       animationStartPercent = 0;
-      render(0); error.hidden = true; bar.hidden = false; hide();
+      render(0); error.hidden = true; meter.hidden = false; hide();
     },
   };
   root.querySelector('[data-startup-retry]').addEventListener('click', () => window.location.reload());
@@ -129,13 +106,12 @@
     }
   }, true);
   window.addEventListener('error', () => window.AlbumHavenStartupProgress.fail());
+  // The server paints the document's starting stage (sign-in 0, app 50), so the
+  // first frame already shows it and progress only moves forward from there.
   const initialPercent = Number(root.dataset.startupProgress) || 0;
   if (initialPercent > 0) {
-    const reached = Math.min(readHandoff(), initialPercent);
-    if (reached > 0) {
-      targetPercent = reached;
-      render(reached);
-    }
+    targetPercent = initialPercent;
+    render(initialPercent);
     show(initialPercent);
   }
 })();

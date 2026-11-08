@@ -258,12 +258,11 @@ box-shadow: none !important;
 .ui-path-input:has(> input:disabled) input { cursor: not-allowed; }
 .settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 
-/* Shared radio option: native radio semantics with a pointer target and an unmistakable selected state. */
-.ui-radio-option { box-sizing: border-box; display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--appearance-line, var(--border, var(--line))); border-radius: 9px; color: var(--appearance-ink, var(--text, var(--ink))); font-weight: 700; cursor: pointer; }
+/* Shared radio option: a plain native radio and its label, like the tag-writing choices in Settings (no frame). */
+.ui-radio-option { display: flex; align-items: center; gap: 10px; width: fit-content; color: var(--appearance-ink, var(--text, var(--ink))); font-weight: 700; cursor: pointer; }
 .ui-radio-option input[type='radio'] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--appearance-control-selected, var(--appearance-accent, var(--accent))); cursor: pointer; }
-.ui-radio-option:has(input:checked) { border-color: var(--appearance-control-selected, var(--appearance-accent, var(--accent))); background: color-mix(in srgb, var(--appearance-control-selected, var(--appearance-accent, #55c7ff)) 14%, transparent); }
-.ui-radio-option:has(input:focus-visible) { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff)); outline-offset: 1px; }
+.ui-radio-option input[type='radio']:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff)); outline-offset: 2px; }
 .ui-radio-option:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .ui-radio-option:has(input:disabled) input { cursor: not-allowed; }
-.ui-radio-group { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.ui-radio-group { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .ui-radio-group > legend { margin: 0 0 10px; padding: 0; font-size: 11px; font-weight: 700; }

@@ -585,7 +585,7 @@ test('FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that di
     await stepLogger.step('Search the second CD name and open the album it finds', async () => {
       await searchToolbarActions.search(secondDiscName, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(secondDiscName);
-      await galleryActions.waitForAlbumVisible(album, 60000);
+      await galleryActions.waitForAlbumVisible(album, { timeout: 60000 });
       await galleryActions.clickAlbumDetailsByAlbumName(album);
       await trackModalActions.waitForReady();
     });

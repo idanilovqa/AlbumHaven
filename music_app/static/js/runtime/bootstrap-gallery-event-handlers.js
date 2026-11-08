@@ -96,6 +96,12 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-additional-artbox-quick-search="1"]')) {
+    event.preventDefault();
+    void quickSearchAlbumAdditionalArtbox();
+    return;
+  }
+
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();

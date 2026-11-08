@@ -4573,10 +4573,22 @@ function buildAlbumAdditionalArtboxHtml(album) {
   if (artwork) {
     const source = buildAdditionalArtworkCoverSource(album, artwork);
     const label = `Second artbox for ${albumName}`;
+    const preview = buildAlbumDisplayCoverUrl(source);
+    const full = (typeof buildAlbumLightboxCoverUrl === 'function' && buildAlbumLightboxCoverUrl(source)) || preview;
+    // UI-14 (owner): like the first artbox, a click opens the full-size art; Cover Look Up and the quick cover
+    // search are the hover tools.
+    const toolsHtml = `${ButtonComponent.renderActionButton({
+      icon: 'search', ariaLabel: `Cover Art Look Up for the ${label.toLowerCase()}`, title: 'Cover Art Look Up',
+      className: 'track-modal-cover-tool is-lookup', attributes: { 'data-open-additional-artbox': '1' },
+    })}${ButtonComponent.renderActionButton({
+      icon: 'bolt', ariaLabel: `Search covers for the ${label.toLowerCase()}`, title: 'Quick cover search',
+      className: 'track-modal-cover-tool is-fast-fetch', attributes: { 'data-additional-artbox-quick-search': '1' },
+    })}`;
     return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
       state: 'ready',
       label,
-      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-additional-artbox="1" aria-label="${escapeHtml(`Change ${label}`)}"><img src="${escapeHtml(buildAlbumDisplayCoverUrl(source))}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(full)}" data-cover-preview-src="${escapeHtml(preview)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}"><img src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+      overlayHtml: toolsHtml,
     })}</div>`;
   }
   if (albumAdditionalArtboxState.pendingAlbumKey && albumAdditionalArtboxState.pendingAlbumKey === String(album?.key || '')) {
@@ -4641,6 +4653,14 @@ function clearPendingAlbumAdditionalArtbox() {
 function openAlbumAdditionalArtboxLookup() {
   const album = getCurrentAlbumDetailsRelease();
   if (album) void openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+}
+
+// Quick cover search for the second artbox: its Cover Look Up opens and runs a fresh search right away.
+async function quickSearchAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return;
+  await openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+  if (state.coverLookup?.modal?.artboxSlot === ALBUM_ADDITIONAL_ARTBOX_SLOT) startCoverLookupForAlbum(state.coverLookup.modal.album);
 }
 
 function applyAlbumAdditionalArtworks(albumKey, artworks) {
@@ -4711,6 +4731,12 @@ async function saveAdditionalArtworkFromLookup() {
   const selection = remote
     ? { source_kind: 'remote', remote_url: String(remote.url || '') }
     : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_path: modal.pendingLocalPath } : null);
+  if (album && !selection && modal.artboxCleared) {
+    // Saved with nothing selected: the second artbox is emptied, freeing its art for the album cover.
+    await removeAlbumAdditionalArtbox();
+    closeCoverLookupModal();
+    return;
+  }
   if (!album || !selection) return;
   modal.saving = true;
   syncCoverLookupSaveButton();
@@ -4726,6 +4752,23 @@ async function saveAdditionalArtworkFromLookup() {
     modal.saving = false;
     syncCoverLookupSaveButton();
   }
+}
+
+// UI-14 (owner): in the album cover's Cover Look Up, the art in the second artbox is dimmed and cannot be chosen.
+function isCoverLookupItemInSecondArtbox(item, kind) {
+  const modal = state.coverLookup?.modal;
+  if (!modal || modal.artboxSlot) return false;
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  if (!artwork) return false;
+  if (kind === 'local') {
+    const path = String(artwork.cover_path || '').trim();
+    return Boolean(path) && String(item?.path || '').trim() === path;
+  }
+  if (kind === 'remote') {
+    const url = String(artwork.remote_url || artwork.remote_cover_url || '').trim();
+    return Boolean(url) && [item?.url, item?.thumbnail_url].map((value) => String(value || '').trim()).includes(url);
+  }
+  return false;
 }
 
 // END js/runtime/album-additional-artbox.js
@@ -31783,7 +31826,8 @@ function syncCoverLookupSaveButton() {
   // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
   const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
-  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection));
+  const clearsArtbox = Boolean(state.coverLookup.modal.artboxSlot && state.coverLookup.modal.artboxCleared);
+  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -31827,7 +31871,7 @@ function syncCoverLookupSelectionUi() {
     const shouldBeActive = !selectedRemoteId && !pendingPastedImageId && (
       pendingLocalPath
         ? localPath === pendingLocalPath
-        : card.hasAttribute('data-cover-lookup-local-active')
+        : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
     if (shouldBeActive) {
@@ -32994,6 +33038,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
   const inFirstArtbox = typeof isCoverLookupItemInFirstArtbox === 'function' && isCoverLookupItemInFirstArtbox(item, kind);
+  // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
+  const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
+  const inOtherArtbox = inFirstArtbox || inSecondArtbox;
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
@@ -33014,7 +33061,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
-  const isActive = !inFirstArtbox && (kind === 'local'
+  const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
@@ -33047,7 +33094,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
   const otherRemoteArtAttr = isOtherRemoteArt ? 'data-cover-lookup-other-remote-art="1"' : '';
-  const selectAttr = inFirstArtbox || (isOtherRemoteArt && !isSelectableOtherRemoteArt)
+  const selectAttr = inOtherArtbox || (isOtherRemoteArt && !isSelectableOtherRemoteArt)
     ? ''
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
@@ -33072,10 +33119,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = inFirstArtbox ? 'In the first artbox' : kind === 'saved-remote'
+  const actionLabel = inFirstArtbox ? 'In the first artbox' : inSecondArtbox ? 'In the second artbox' : kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = inFirstArtbox
+  const roleAttr = inOtherArtbox
     ? 'role="group" aria-disabled="true"'
     : isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
@@ -33087,7 +33134,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${inFirstArtbox ? 'is-disabled' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${inOtherArtbox ? 'is-disabled' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview${imageUrl ? ' is-loading' : ''}" aria-busy="${Boolean(imageUrl)}">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="var preview=this.parentElement; preview.classList.remove('is-loading'); preview.classList.remove('has-load-error'); preview.setAttribute('aria-busy', 'false');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.remove('is-loading'); preview.classList.add('has-load-error'); preview.setAttribute('aria-busy', 'false'); }">` : ''}
@@ -33104,7 +33151,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt && !inFirstArtbox ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isOtherRemoteArt && !isSelectableOtherRemoteArt && !inOtherArtbox ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -34324,6 +34371,11 @@ async function openCoverLookupModal(album, options = {}) {
     : 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
+  // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
+  state.coverLookup.modal.artboxCleared = false;
+  if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
+    state.coverLookup.modal.activeLocalSelectionPath = String(getAlbumAdditionalArtwork(album)?.cover_path || '');
+  }
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
@@ -34559,6 +34611,17 @@ async function startCoverLookupForAlbum(album, options = {}) {
 
 function selectLocalCoverFromLookup(sourcePath) {
   if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (modalState.artboxSlot && String(sourcePath || '') === String(modalState.activeLocalSelectionPath || '')
+      && !modalState.pendingLocalPath && !modalState.selectedRemoteId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -46351,6 +46414,12 @@ function handleGalleryBootstrapClick(event) {
   if (event.target.closest('[data-open-additional-artbox="1"]')) {
     event.preventDefault();
     openAlbumAdditionalArtboxLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-additional-artbox-quick-search="1"]')) {
+    event.preventDefault();
+    void quickSearchAlbumAdditionalArtbox();
     return;
   }
 

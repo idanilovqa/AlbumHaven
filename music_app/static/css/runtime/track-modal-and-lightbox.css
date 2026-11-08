@@ -671,15 +671,14 @@
   .track-modal-cover:has(> .album-details-cover-source-markers) .track-modal-cover-shell {
     height: min(calc(100% - 32px), 100cqw);
   }
-  /* A second artbox stacks under the cover; both stay square and share the column height. */
-  .track-modal-cover:has(> .track-modal-additional-artbox) { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
-  .track-modal-cover:has(> .track-modal-additional-artbox) .track-modal-cover-shell {
-    height: min(calc((100% - 12px) / 2), 100cqw);
+  /* UI-14 (owner): adding a second artbox never resizes the first, not even by a pixel. Each artbox keeps the
+     single-cover size; the second stacks below and the cover column scrolls to it. */
+  .track-modal-cover:has(> .track-modal-additional-artbox) {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
+    overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
   }
+  .track-modal-cover:has(> .track-modal-additional-artbox) > * { flex: 0 0 auto; }
   .track-modal-cover:has(> .album-details-service-links) .track-modal-cover-shell { height: min(calc(100% - 30px), 100cqw); }
-  .track-modal-cover:has(> .album-details-service-links):has(> .track-modal-additional-artbox) .track-modal-cover-shell {
-    height: min(calc((100% - 42px) / 2), 100cqw);
-  }
   .track-modal-cover:has(> .track-modal-additional-artbox) > .album-details-service-links { margin-top: 0; }
 }
 .track-modal-additional-artbox { margin-top: 12px; }

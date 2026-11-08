@@ -6583,6 +6583,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added (with service links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added (with service links)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

@@ -15,6 +15,7 @@ function load(overrides = {}) {
     URL,
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
     state: { modalReleases: [], modalReleaseIndex: 0, coverLookup: { modal: {} } },
+    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
     albumHasDisplayCover: (album) => Boolean(album?.cover_path),
     buildAlbumDisplayCoverUrl: (album) => `/cover?path=${album.cover_path || album.remote_cover_url}`,
     ensureAlbumCardContextMenu: () => menu,
@@ -139,4 +140,32 @@ test('AlbumTrackTable renders a named section as a shaded row before its first t
   assert.ok(first < html.indexOf('At the Fathomless Depths') && html.indexOf("Night's Blood") < second && second < html.indexOf('Where Dead Angels Lie (Demo)'));
   assert.match(html, /compact-data-table-row--full-span album-track-table__section-row"[^>]*aria-label="Where Dead Angels Lie"/);
   assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 1, 'one Total Length for the album');
+});
+
+test('UI-14: a saved second artbox opens full size with Cover Look Up and quick search on hover', () => {
+  const { context } = load();
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] };
+  const html = context.buildAlbumAdditionalArtboxHtml(album);
+  assert.match(html, /class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="\/cover\?path=D:\/Music\/Testimony\/back\.jpg"/);
+  assert.match(html, /album-artbox__overlay">[\s\S]*data-open-additional-artbox="1"[\s\S]*data-additional-artbox-quick-search="1"/);
+});
+
+test('UI-14: the album cover lookup dims the art in the second artbox', () => {
+  const { context } = load();
+  context.state.coverLookup.modal = { artboxSlot: 0, album: { ...testimony(), additional_artworks: [{ slot: 1, cover_path: 'D:/Music/Testimony/back.jpg', remote_url: 'https://img.example/back.jpg' }] } };
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/cover.jpg' }, 'local'), false);
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ url: 'https://img.example/back.jpg' }, 'remote'), true);
+  context.state.coverLookup.modal.artboxSlot = 1;
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), false, 'its own lookup can choose it');
+});
+
+test('UI-14: saving the second artbox with nothing selected empties it', async () => {
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, cover_path: 'D:/Music/Testimony/back.jpg' }] };
+  const { context, calls } = load({ savedArtworks: [] });
+  context.state.modalReleases = [album];
+  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: true, pendingLocalPath: '', selectedRemoteId: '' };
+  await context.saveAdditionalArtworkFromLookup();
+  assert.deepEqual(calls.fetches.map((call) => call.url), ['/utilities/cover-lookup/additional-artwork/remove']);
+  assert.equal(calls.closed, 1);
 });

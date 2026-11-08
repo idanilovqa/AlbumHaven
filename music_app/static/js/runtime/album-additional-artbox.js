@@ -33,10 +33,22 @@ function buildAlbumAdditionalArtboxHtml(album) {
   if (artwork) {
     const source = buildAdditionalArtworkCoverSource(album, artwork);
     const label = `Second artbox for ${albumName}`;
+    const preview = buildAlbumDisplayCoverUrl(source);
+    const full = (typeof buildAlbumLightboxCoverUrl === 'function' && buildAlbumLightboxCoverUrl(source)) || preview;
+    // UI-14 (owner): like the first artbox, a click opens the full-size art; Cover Look Up and the quick cover
+    // search are the hover tools.
+    const toolsHtml = `${ButtonComponent.renderActionButton({
+      icon: 'search', ariaLabel: `Cover Art Look Up for the ${label.toLowerCase()}`, title: 'Cover Art Look Up',
+      className: 'track-modal-cover-tool is-lookup', attributes: { 'data-open-additional-artbox': '1' },
+    })}${ButtonComponent.renderActionButton({
+      icon: 'bolt', ariaLabel: `Search covers for the ${label.toLowerCase()}`, title: 'Quick cover search',
+      className: 'track-modal-cover-tool is-fast-fetch', attributes: { 'data-additional-artbox-quick-search': '1' },
+    })}`;
     return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
       state: 'ready',
       label,
-      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-additional-artbox="1" aria-label="${escapeHtml(`Change ${label}`)}"><img src="${escapeHtml(buildAlbumDisplayCoverUrl(source))}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(full)}" data-cover-preview-src="${escapeHtml(preview)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}"><img src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+      overlayHtml: toolsHtml,
     })}</div>`;
   }
   if (albumAdditionalArtboxState.pendingAlbumKey && albumAdditionalArtboxState.pendingAlbumKey === String(album?.key || '')) {
@@ -101,6 +113,14 @@ function clearPendingAlbumAdditionalArtbox() {
 function openAlbumAdditionalArtboxLookup() {
   const album = getCurrentAlbumDetailsRelease();
   if (album) void openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+}
+
+// Quick cover search for the second artbox: its Cover Look Up opens and runs a fresh search right away.
+async function quickSearchAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return;
+  await openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+  if (state.coverLookup?.modal?.artboxSlot === ALBUM_ADDITIONAL_ARTBOX_SLOT) startCoverLookupForAlbum(state.coverLookup.modal.album);
 }
 
 function applyAlbumAdditionalArtworks(albumKey, artworks) {
@@ -171,6 +191,12 @@ async function saveAdditionalArtworkFromLookup() {
   const selection = remote
     ? { source_kind: 'remote', remote_url: String(remote.url || '') }
     : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_path: modal.pendingLocalPath } : null);
+  if (album && !selection && modal.artboxCleared) {
+    // Saved with nothing selected: the second artbox is emptied, freeing its art for the album cover.
+    await removeAlbumAdditionalArtbox();
+    closeCoverLookupModal();
+    return;
+  }
   if (!album || !selection) return;
   modal.saving = true;
   syncCoverLookupSaveButton();
@@ -186,4 +212,21 @@ async function saveAdditionalArtworkFromLookup() {
     modal.saving = false;
     syncCoverLookupSaveButton();
   }
+}
+
+// UI-14 (owner): in the album cover's Cover Look Up, the art in the second artbox is dimmed and cannot be chosen.
+function isCoverLookupItemInSecondArtbox(item, kind) {
+  const modal = state.coverLookup?.modal;
+  if (!modal || modal.artboxSlot) return false;
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  if (!artwork) return false;
+  if (kind === 'local') {
+    const path = String(artwork.cover_path || '').trim();
+    return Boolean(path) && String(item?.path || '').trim() === path;
+  }
+  if (kind === 'remote') {
+    const url = String(artwork.remote_url || artwork.remote_cover_url || '').trim();
+    return Boolean(url) && [item?.url, item?.thumbnail_url].map((value) => String(value || '').trim()).includes(url);
+  }
+  return false;
 }

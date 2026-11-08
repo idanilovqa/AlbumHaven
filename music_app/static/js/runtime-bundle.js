@@ -32931,9 +32931,10 @@ function renderCoverLookupModal() {
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
-  // NEW-003: a local-art problem is a label beside the LOCAL heading; the section itself never moves or changes shape.
+  // NEW-003: a local-art problem is a compact alert right after the LOCAL heading, expanding to its text on
+  // hover or focus; the section itself never moves or changes shape.
   const galleryErrorMarkup = modalState.galleryError
-    ? buildAlertLabelHtml({ severity: 'warning', message: modalState.galleryError }) : '';
+    ? buildSmallAlertHtml({ severity: 'warning', message: modalState.galleryError, focusable: true, className: 'cover-lookup-local-alert' }) : '';
   const localInventoryUnknown = Boolean((modalState.galleryError || modalState.localInventoryPending) && !modalState.localInventoryLoaded);
   const galleryLoadingMarkup = modalState.loading ? buildCoverLookupGalleryLoadingMarkup(modalState) : '';
   replaceCoverLookupModalMarkup(els.body, `
@@ -32943,7 +32944,7 @@ function renderCoverLookupModal() {
         <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
         ${galleryErrorMarkup}
       </div>
-      <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown ? '' : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
+      <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>

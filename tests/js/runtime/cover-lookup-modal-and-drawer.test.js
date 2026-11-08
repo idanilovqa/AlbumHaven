@@ -7973,7 +7973,7 @@ require('node:test')('a background gallery refresh keeps an existing error stead
   assert.deepEqual(rendered, ['Album root could not be resolved'], 'the alert never disappears and reappears');
 });
 
-require('node:test')('NEW-003: a local artwork problem is a label beside the LOCAL heading and the section keeps its shape', async () => {
+require('node:test')('NEW-003: a local artwork problem is a compact alert right after the LOCAL heading and the section keeps its shape', async () => {
   const body = { innerHTML: '', scrollTop: 0 };
   const context = loadHelper({
     escapeHtml: value => String(value ?? ''),
@@ -7995,6 +7995,6 @@ require('node:test')('NEW-003: a local artwork problem is a label beside the LOC
   const section = html.indexOf('<section class="cover-lookup-section">');
   const alert = html.indexOf('Local artwork storage is unavailable');
   assert.ok(section >= 0 && alert > section, 'the alert is never above the LOCAL section');
-  assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="alert-label alert-label--warning"[^>]*>Local artwork storage is unavailable/);
+  assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="small-alert small-alert--warning cover-lookup-local-alert"[^>]*tabindex="0">.*?Local artwork storage is unavailable/, 'a compact, expandable alert right after the heading');
   assert.match(html, /<\/div> <div class="cover-lookup-gallery">/, 'the LOCAL gallery keeps its place under the heading');
 });

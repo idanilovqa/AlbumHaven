@@ -625,7 +625,12 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
-    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    const trackTable = details.closest?.('.album-track-table');
+    const syncExpanded = () => {
+      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+      trackTable?.classList?.toggle('album-track-table--collapsed-disc',
+        Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
+    };
     syncExpanded();
     details.addEventListener?.('toggle', syncExpanded);
   });

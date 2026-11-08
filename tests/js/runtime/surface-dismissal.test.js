@@ -41,6 +41,20 @@ test('inside actions and the opener retain normal activation', () => {
   assert.equal(h.closes(), 0);
 });
 
+test('a click inside the surface resolves the foreground surface once per gesture (INT-034)', () => {
+  // Resolving forces a full style pass; a Loose Tracks section toggle paid two.
+  const inside = {};
+  let resolves = 0;
+  const surface = { surface: { contains: target => target === inside }, isBackdrop: () => false, dismiss() {} };
+  const handlers = create(() => { resolves += 1; return surface; });
+  const event = { target: inside, pointerId: 1, isPrimary: true, button: 0, clientX: 1, clientY: 1, detail: 1,
+    preventDefault() {}, stopImmediatePropagation() {} };
+  for (const type of ['pointerdown', 'pointerup', 'click']) handlers[type](event);
+  assert.equal(resolves, 1);
+  handlers.click({ ...event, detail: 0 });
+  assert.equal(resolves, 2, 'a keyboard click without a pointer gesture still resolves');
+});
+
 test('dragging from inside to outside never dismisses or activates background', () => {
   const h = harness();
   h.send('pointerdown', h.inside);

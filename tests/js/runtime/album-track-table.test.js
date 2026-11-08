@@ -216,8 +216,10 @@ test('collapsing any loose-track section also collapses the aggregate length', (
   );
   assert.match(
     css,
-    /\.album-track-table:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\) \.album-track-table__total\s*\{[^}]*display:\s*none/s,
+    /\.album-track-table--collapsed-disc \.album-track-table__total\s*\{[^}]*display:\s*none/s,
   );
+  // INT-034: a :has() over [open] restyled all ~5k Loose Tracks rows per toggle.
+  assert.doesNotMatch(css, /:has\([^)]*\[open\]/);
 });
 
 test('the final table right outline fades into the footer without a corner glow layer', () => {

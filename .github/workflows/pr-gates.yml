@@ -66,11 +66,11 @@ jobs:
 
       - name: Lint
         working-directory: apps/android-shell
-        run: ./gradlew --no-daemon --console=plain lintStableRelease lintSandboxRelease
+        run: ./gradlew --no-daemon --console=plain lintStableRelease lintSandboxRelease :playback-engine:lintRelease
 
       - name: Kotlin unit and contract-fixture tests
         working-directory: apps/android-shell
-        run: ./gradlew --no-daemon --console=plain testStableDebugUnitTest testSandboxDebugUnitTest
+        run: ./gradlew --no-daemon --console=plain testStableDebugUnitTest testSandboxDebugUnitTest :playback-engine:testDebugUnitTest
 
       # The browser side of the shared contract fixtures runs in test_js (npm run test:js:all).
       # The repository is public, so APKs are never uploaded (owner decision,
@@ -149,7 +149,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: apps/android-shell
-          script: ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
+          script: ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
 
       - name: Upload instrumentation reports
         if: ${{ always() }}

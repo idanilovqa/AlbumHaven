@@ -3,8 +3,11 @@ package org.albumhaven.playback.engine
 import org.json.JSONException
 import org.json.JSONObject
 
-/** Path-free track identity; [playbackRef] is the signed reference `/playback/pcm` resolves. */
-data class PcmTrack(val playbackRef: String, val durationSeconds: Double)
+/**
+ * Path-free track identity; [playbackRef] is the signed reference `/playback/pcm` resolves, and
+ * [cacheKey] an opaque, stable key the device may keep the track under.
+ */
+data class PcmTrack(val playbackRef: String, val durationSeconds: Double, val cacheKey: String? = null)
 
 /** Client controls handled by `_handle_control` in music_app/routes/playback_stream_asgi.py. */
 sealed interface PcmClientControl {

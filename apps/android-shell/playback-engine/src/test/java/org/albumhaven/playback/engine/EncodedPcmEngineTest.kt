@@ -109,4 +109,54 @@ class EncodedPcmEngineTest {
 
         assertEquals("metadata-protocol-error", harness.failure()?.code)
     }
+
+    @Test
+    fun aTrackHeardWholeIsKeptAndItsReplayAsksNothingOfTheServer() {
+        val cache = MemoryTrackCache()
+        val harness = PcmHarness(first, encoded = true, cache = cache)
+        harness.engine.start(first.pcm)
+        harness.playToEnd()
+        assertEquals(setOf("key-1"), cache.tracks.keys)
+
+        val opens = harness.sent<PcmClientControl.Open>().size
+        val written = harness.sink.writtenFrames
+        harness.engine.start(first.pcm)
+        harness.playUntil { harness.emitted<PcmEngineEvent.Ended>().size == 2 }
+
+        assertEquals("the replay opened no server stream", opens, harness.sent<PcmClientControl.Open>().size)
+        assertEquals(listOf(Run(1, 0, first.frames), Run(1, 0, first.frames)), harness.sink.runs())
+        assertEquals(first.frames.toInt() * 2, harness.sink.writtenFrames.also { assertTrue(it > written) })
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aCachedSuccessorFollowsWithoutAGapOrAServerPromote() {
+        val cache = MemoryTrackCache()
+        PcmHarness(second, encoded = true, cache = cache).apply {
+            engine.start(second.pcm)
+            playToEnd()
+        }
+        val harness = PcmHarness(first, second, encoded = true, cache = cache)
+        harness.engine.start(first.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playToEnd()
+
+        assertEquals(listOf(Run(1, 0, first.frames), Run(2, 0, second.frames)), harness.sink.runs())
+        assertEquals(listOf("ref-1"), harness.sent<PcmClientControl.Open>().map { it.track.playbackRef })
+        assertEquals(emptyList<PcmClientControl.Promote>(), harness.sent<PcmClientControl.Promote>())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aStartPartWayThroughAKeptTrackIsStreamed() {
+        val cache = MemoryTrackCache()
+        val harness = PcmHarness(first, encoded = true, cache = cache)
+        harness.engine.start(first.pcm)
+        harness.playToEnd()
+        harness.engine.start(first.pcm, startFrame = 10_000)
+        harness.playUntil { harness.emitted<PcmEngineEvent.Ended>().size == 2 }
+
+        assertEquals(listOf(0L, 10_000L), harness.sent<PcmClientControl.Open>().map { it.startFrame })
+        assertEquals(Run(1, 10_000, first.frames - 10_000), harness.sink.runs().last())
+    }
 }

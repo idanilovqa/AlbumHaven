@@ -13,6 +13,7 @@ import org.albumhaven.playback.engine.PcmEngineConfig
 import org.albumhaven.playback.engine.PcmEngineEvent
 import org.albumhaven.playback.engine.PcmSink
 import org.albumhaven.playback.engine.PcmTrack
+import org.albumhaven.playback.engine.TrackCache
 
 import org.albumhaven.playback.decode.AudioCodec
 import org.albumhaven.playback.decode.EncodedDecoders
@@ -43,7 +44,8 @@ data class QueueItem(
     val queueGroup: Int = 0,
     val resumeToken: String? = null,
 ) {
-    fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0)
+    /** The track to stream; a re-encoded file changes its duration, and with it the key it is kept under. */
+    fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0, cacheKey = "$listenKey:$durationMs")
 
     fun claimTrack() = ClaimTrack(playbackRef, title, artist, album, artworkUrl)
 
@@ -207,6 +209,8 @@ class NativePlaybackController(
     decoders: ((post: (Runnable) -> Unit) -> EncodedDecoders)? = null,
     /** The codecs whose decoders passed their self-check; the server streams these encoded. */
     private val codecs: () -> Set<AudioCodec> = { emptySet() },
+    /** Recently played tracks on the device; a cached track starts with no server round trip. */
+    private val cache: TrackCache? = null,
 ) {
     private val decoders: EncodedDecoders? = decoders?.invoke { task -> post(task) }
 
@@ -742,6 +746,7 @@ class NativePlaybackController(
                 decoders = decoders,
                 codecs = { codecs() - failedCodecs },
                 quality = { lowBitrateWanted(rate) },
+                cache = cache,
                 events = ::onEngineEvent,
             )
         } catch (refused: RuntimeException) {

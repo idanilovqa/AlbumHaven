@@ -15,7 +15,19 @@ const val RATE = 48_000
 
 /** Every sample identifies itself: left is its source frame index, right is its track tag. */
 class SyntheticTrack(val tag: Int, val frames: Long, val sampleRate: Int = RATE) {
-    val pcm = PcmTrack("ref-$tag", frames.toDouble() / sampleRate)
+    val pcm = PcmTrack("ref-$tag", frames.toDouble() / sampleRate, cacheKey = "key-$tag")
+}
+
+/** A [TrackCache] in memory, recording what it was asked. */
+class MemoryTrackCache : TrackCache {
+    val tracks = mutableMapOf<String, CachedTrack>()
+    val loads = mutableListOf<String>()
+
+    override fun load(key: String): CachedTrack? = tracks[key].also { loads += key }
+
+    override fun store(key: String, track: CachedTrack) {
+        tracks[key] = track
+    }
 }
 
 fun encodedFrame(role: PcmRole, generation: Long, streamId: Long, sequence: Long, payload: ByteArray): ByteArray {
@@ -521,6 +533,7 @@ class PcmHarness(
     val sink: RecordingSink = RecordingSink(),
     /** Streams come encoded and decode through [decoders]. */
     encoded: Boolean = false,
+    val cache: MemoryTrackCache? = null,
 ) {
     val server = FakeAhpcServer(tracks.toList(), chunkFrames).also { it.encoded = encoded }
     val events = mutableListOf<PcmEngineEvent>()
@@ -534,6 +547,7 @@ class PcmHarness(
         config, sink, server, clockMs = { nowMs },
         decoders = decoders.takeIf { encoded },
         codecs = { setOf(AudioCodec.MP3) },
+        cache = cache,
     ) { events += it }
 
     fun deliver() {

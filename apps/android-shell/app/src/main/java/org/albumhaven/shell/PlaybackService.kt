@@ -32,8 +32,10 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import org.albumhaven.playback.decode.DecoderSelfCheck
+import org.albumhaven.playback.engine.DiskTrackCache
 import org.albumhaven.playback.decode.ThreadedEncodedDecoders
 import org.albumhaven.shell.net.ShellSession
+import java.io.File
 import org.albumhaven.shell.playback.AudioFocusPolicy
 import org.albumhaven.playback.engine.AudioTrackPcmSink
 import org.albumhaven.shell.playback.CommandResult
@@ -331,9 +333,24 @@ class PlaybackService : MediaLibraryService() {
             startTimings = { line -> main.post { Log.i(StartTiming.LOG_TAG, line) } },
             decoders = { post -> ThreadedEncodedDecoders(post) },
             codecs = { verifiedCodecs },
+            cache = trackCache,
         )
         return created.also { it.start() }
     }
+
+    /**
+     * Recently played tracks, kept as their encoded bytes in the app's cache directory up to the
+     * quota Android grants the app (the owner chose "as much as can be used", 2026-11-08); Android
+     * may reclaim them when storage runs low. A fifth of the quota stays for the WebView's caches.
+     */
+    private val trackCache by lazy {
+        val directory = File(cacheDir, "tracks")
+        val storage = getSystemService(android.os.storage.StorageManager::class.java)
+        DiskTrackCache(directory, quotaBytes = {
+            runCatching { storage.getCacheQuotaBytes(storage.getUuidForPath(cacheDir)) * 4 / 5 }.getOrDefault(0L)
+        }, io = cacheIo)
+    }
+    private val cacheIo = Executors.newSingleThreadExecutor()
 
     /** The web player's decoder self-check, once per process and off the main thread; until it passes, streams are server PCM. */
     private fun verifyDecoders() {

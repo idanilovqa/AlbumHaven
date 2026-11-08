@@ -120,6 +120,8 @@ class NativePcmEngine(
     private val codecs: () -> Set<AudioCodec> = { emptySet() },
     /** The quality each open asks for: null for the original, or `320` on a weak connection. */
     private val quality: () -> String? = { null },
+    /** Recently played tracks; a cached track starts and follows with no server round trip. */
+    private val cache: TrackCache? = null,
     private val events: (PcmEngineEvent) -> Unit,
 ) {
     init {
@@ -156,6 +158,9 @@ class NativePcmEngine(
         /** The codecs this stream's open offered; metadata may name only one of them. */
         var offeredCodecs: Set<AudioCodec> = emptySet()
         var encoded: EncodedStream? = null
+
+        /** Played from the device's cache: the server never heard of it, so no control names it. */
+        var local = false
     }
 
     /**
@@ -184,6 +189,11 @@ class NativePcmEngine(
         var serverEos: PcmServerEvent.Eos? = null
         var decoderFinished = false
         var closed = false
+
+        /** The stream's map as the server sent it, and, for a whole track, its bytes for the cache. */
+        val initialSkipFrames = skipFrames
+        val initialTotalFrames = remainingFrames
+        var recording: java.io.ByteArrayOutputStream? = null
 
         override fun decoded(audio: DecodedAudio) {
             if (closed || failed) return
@@ -219,6 +229,11 @@ class NativePcmEngine(
     }
 
     private var pumpingEncoded = false
+
+    private companion object {
+        /** A longer file is streamed every time rather than held in memory to be kept. */
+        const val MAX_CACHED_TRACK_BYTES = 256 * 1024 * 1024
+    }
 
     private data class LoopRange(val startFrame: Long, val endFrame: Long, val short: Boolean) {
         val frames: Int get() = (endFrame - startFrame).toInt()
@@ -343,7 +358,7 @@ class NativePcmEngine(
     /** Cancels every held decoder role and discards unplayed PCM. */
     fun stop(reason: String) {
         if (!failed) {
-            for (stream in listOfNotNull(continuity, current)) {
+            for (stream in listOfNotNull(continuity, current).filterNot { it.local }) {
                 val close = PcmClientControl.Close(stream.generation, stream.streamId, reason)
                 // A refused open registers nothing, and the server rejects a close of an unknown stream.
                 if (stream.metadataAccepted) send(close) else unconfirmedCloses[stream.streamId] = close
@@ -498,6 +513,7 @@ class NativePcmEngine(
                 if (encoded.serverEos != null) return
                 encoded.serverEos = event
                 encoded.decoding.end()
+                keepInCache(stream, encoded)
                 finishEncodedWhenDrained(stream)
             } ?: acceptEos(stream, event)
             is PcmServerEvent.Promoted -> acceptPromoted(event)
@@ -557,6 +573,10 @@ class NativePcmEngine(
                 encoded.outstandingBytes -= frame.payloadLength
                 encoded.receivedBytes += frame.payloadLength
                 encoded.decoding.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
+                encoded.recording?.let { recording ->
+                    if (recording.size() + frame.payloadLength > MAX_CACHED_TRACK_BYTES) encoded.recording = null
+                    else recording.write(frame.bytes, frame.payloadOffset, frame.payloadLength)
+                }
                 refillEncodedBytes(stream)
             }
         }
@@ -821,7 +841,9 @@ class NativePcmEngine(
             }
             PcmBoundaryKind.LOOP -> Unit
         }
-        if (!send(PcmClientControl.Promote(incoming.generation, incoming.streamId))) return
+        // A cached stream promotes on the device alone; the server's current, if any, ends with its EOS.
+        if (incoming.local) pendingPromotion = null
+        else if (!send(PcmClientControl.Promote(incoming.generation, incoming.streamId))) return
         if (kind == PcmBoundaryKind.SEEK && !incoming.eosReceived) {
             grantCredit(incoming, capacityFrames(PcmRole.CURRENT))
         }
@@ -841,10 +863,15 @@ class NativePcmEngine(
         if (!valid) return fail("metadata-protocol-error", "Invalid streaming metadata")
         stream.metadataAccepted = true
         if (codec != null) {
-            stream.encoded = EncodedStream(
+            val encoded = EncodedStream(
                 stream, codec, checkNotNull(event.skipFrames), checkNotNull(event.totalFrames),
                 checkNotNull(event.initialCreditBytes).toInt(),
             )
+            stream.encoded = encoded
+            // A stream from the track's first frame is the whole file: it may be kept for next time.
+            if (cache != null && stream.startFrame == 0L && stream.track.cacheKey != null) {
+                encoded.recording = java.io.ByteArrayOutputStream()
+            }
             refillEncodedBytes(stream)
         }
         if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
@@ -947,7 +974,39 @@ class NativePcmEngine(
         continuityRing.clear()
         if (pendingSeek?.streamId == stream.streamId) pendingSeek = null
         if (stream.kind == StreamKind.QUEUED_NEXT) expectContinuity = false
-        send(PcmClientControl.Close(stream.generation, stream.streamId, reason))
+        if (!stream.local) send(PcmClientControl.Close(stream.generation, stream.streamId, reason))
+    }
+
+    /** Keeps a whole encoded track on the device once every byte arrived. */
+    private fun keepInCache(stream: Stream, encoded: EncodedStream) {
+        val bytes = encoded.recording?.toByteArray() ?: return
+        encoded.recording = null
+        val key = stream.track.cacheKey ?: return
+        cache?.store(key, CachedTrack(encoded.codec.wire, config.sampleRate, encoded.initialSkipFrames, encoded.initialTotalFrames, bytes))
+    }
+
+    /**
+     * Plays [stream] from the device's cache when it starts at the first frame and the track is
+     * kept at this rate: its whole file goes to the decoder at once and nothing is asked of the server.
+     */
+    private fun openFromCache(stream: Stream): Boolean {
+        val cache = cache ?: return false
+        if (decoders == null || stream.startFrame != 0L || stream.kind == StreamKind.SEEK || stream.kind == StreamKind.LOOP) return false
+        val key = stream.track.cacheKey ?: return false
+        val cached = cache.load(key) ?: return false
+        val codec = AudioCodec.fromWire(cached.codec)?.takeIf(stream.offeredCodecs::contains) ?: return false
+        if (cached.sampleRate != config.sampleRate) return false
+        stream.local = true
+        stream.metadataAccepted = true
+        val encoded = EncodedStream(stream, codec, cached.skipFrames, cached.totalFrames, initialCreditBytes = 0)
+        stream.encoded = encoded
+        encoded.receivedBytes = cached.bytes.size.toLong()
+        encoded.decoding.write(cached.bytes, 0, cached.bytes.size)
+        encoded.decoding.end()
+        encoded.serverEos = PcmServerEvent.Eos(stream.generation, stream.streamId, stream.role.wire, cached.totalFrames, cached.totalFrames)
+        if (stream.kind == StreamKind.START) events(PcmEngineEvent.StartAccepted(stream.streamId))
+        grantInitialCredit(stream)
+        return true
     }
 
     private fun open(role: PcmRole, track: PcmTrack, kind: StreamKind, startFrame: Long): Stream? {
@@ -967,6 +1026,7 @@ class NativePcmEngine(
             if (loop?.short == true && retainedStreamId == null) retainedStreamId = stream.streamId
         }
         if (decoders != null) stream.offeredCodecs = codecs()
+        if (openFromCache(stream)) return stream
         val accepted = send(
             PcmClientControl.Open(
                 generation, stream.streamId, role, track, startFrame, config.sampleRate,

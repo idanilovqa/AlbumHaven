@@ -15144,6 +15144,58 @@ def test_problematic_files_invalidation_keeps_the_last_list_for_the_first_page_a
         browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
 
 
+def test_problematic_files_cold_first_page_answers_from_the_stored_last_list(monkeypatch):
+    """A restarted server has no list in memory; the cold candidate pass took
+    ~5 s on the owner's library. Migration 0117's snapshot answers at once."""
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/cold-snapshot"
+    cache_key = (database_url, "problematic-files")
+    loads = []
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+
+    def load_snapshot():
+        loads.append(1)
+        return {"items": [{"key": f"album-{i}"} for i in range(3)], "initial_detail": {"key": "album-0"}}
+
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", load_snapshot)
+    try:
+        page = repository.build_problematic_files_page(limit=2)
+        assert [item["key"] for item in page["items"]] == ["album-0", "album-1"]
+        assert page["projection_cache_status"] == "stale"
+        assert page["complete"] is False
+        repository.build_problematic_files_page(limit=2)
+        assert len(loads) == 1, "the stored list is read once per process"
+    finally:
+        browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)
+        browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
+
+
+def test_problematic_files_snapshot_is_stored_only_by_writer_instances(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    submitted = []
+
+    class RecordingExecutor:
+        def submit(self, function, *args):
+            submitted.append((function, args))
+
+    monkeypatch.setattr(browse, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    payload = {"items": [{"key": "a"}], "projection_cache_status": "rebuilt"}
+    browse_only = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/browse-only",
+        "SHARED_LIBRARY_BROWSE_ONLY": True,
+    })
+    browse_only._queue_problematic_files_snapshot_store(payload)
+    assert submitted == []
+
+    writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/writer"})
+    writer._queue_problematic_files_snapshot_store(payload)
+    assert len(submitted) == 1
+    stored = json.loads(submitted[0][1][0])
+    assert stored == {"items": [{"key": "a"}]}
+
+
 def test_problematic_candidate_ids_are_computed_once_per_library_change():
     from music_app.services import library_browse_postgres as browse
 

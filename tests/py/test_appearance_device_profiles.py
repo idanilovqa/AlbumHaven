@@ -206,6 +206,36 @@ def test_device_profile_load_returns_profiles_and_outline_for_one_account():
     assert "client_profile = 'desktop'" in connection.operations[0][0]
 
 
+def test_device_profile_load_ignores_values_a_newer_build_saved():
+    """sandbox3 saved Album 'album_art_quality_alert'; builds without that field
+    rejected the whole appearance and every page fell back to default blue."""
+    from music_app.services.appearance_preferences_postgres import (
+        PostgresAppearancePreferencesRepository,
+    )
+    from tests.py.test_account_appearance_asgi import AGGREGATE_APPEARANCE
+
+    row = {
+        **AGGREGATE_APPEARANCE,
+        "device_section_profiles": {"mobile": {"sections": {
+            "album": {"mode": "custom", "values": {"album_art_quality_alert": "glow", "library_source_indicators": AGGREGATE_APPEARANCE.get("library_source_indicators")}},
+            "future_section": {"mode": "custom", "values": {"anything": 1}},
+        }}},
+    }
+    row["device_section_profiles"]["mobile"]["sections"]["album"]["values"] = {
+        key: value for key, value in row["device_section_profiles"]["mobile"]["sections"]["album"]["values"].items()
+        if value is not None
+    }
+    repository = PostgresAppearancePreferencesRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: _SequenceConnection([row]),
+    )
+
+    loaded = repository.load_device_profiles(account_id=41)
+
+    assert set(loaded["device_profiles"]) == {"mobile", "tv"}
+    assert "album_art_quality_alert" not in str(loaded["device_profiles"])
+
+
 def test_device_profile_save_persists_profiles_and_outline_in_one_account_owned_statement():
     from music_app.services.appearance_preferences_postgres import (
         PostgresAppearancePreferencesRepository,

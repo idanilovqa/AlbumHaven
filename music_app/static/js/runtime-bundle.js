@@ -7217,6 +7217,9 @@ function transitionGalleryMain(action) {
       fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
       skipPendingViewTransition: true,
+      // Loaded albums may not cover the new sources; load instead of flashing an empty Library.
+      showViewTransition: getFilteredGalleryMainModel().totals.albumCount === 0,
+      transitionDetail: 'Loading the selected sources...',
     });
   }
 }
@@ -16629,7 +16632,7 @@ function beginPendingViewTransition(requestId, options = {}) {
   renderLibraryLoader({
     ...(state.status || {}),
     transition_in_progress: true,
-    transition_detail: 'Updating the current artist view...',
+    transition_detail: options.transitionDetail || 'Updating the current artist view...',
   });
 }
 
@@ -17656,7 +17659,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
+  if (requestOptions.showSearchProgress || requestOptions.showViewTransition || state.ui.pendingViewTransition
     || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
     beginPendingViewTransition(requestId, requestOptions);
   }

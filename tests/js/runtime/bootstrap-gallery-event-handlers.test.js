@@ -5845,6 +5845,33 @@ test('source changes request an authoritative Artist Tree instead of preserving 
 });
 
 
+for (const [loadedSource, expectsLoader] of [['new_arrivals', false], ['main_library', true]]) {
+  test(`switching to New Arrivals ${expectsLoader ? 'shows the shared loader when no loaded album remains' : 'keeps loaded New Arrivals albums visible'}`, () => {
+    const { context, calls } = createContext({
+      useProductionBuildApiUrl: true,
+      currentUrl: 'http://localhost/?surface=albums',
+    });
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-interactions.js'), 'utf8'), context);
+    const categories = ['main_library', 'new_arrivals', 'hoard'];
+    context.state.view = {
+      ...context.state.view,
+      surface: { active: 'albums' },
+      visible_library_categories: categories,
+      loaded_library_categories: categories,
+      artist_groups: [{ artist: 'Loaded artist', albums: [{ key: 'loaded', library_root_category: loadedSource }] }],
+    };
+    context.state.gallery.mainState = context.createGalleryMainState({
+      sources: { main_library: false, new_arrivals: true, hoard: true },
+    });
+
+    context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
+
+    const options = calls.fetchAndRender.at(-1).runtimeOptions;
+    assert.equal(options.showViewTransition, expectsLoader);
+    assert.equal(options.transitionDetail, 'Loading the selected sources...');
+  });
+}
+
 for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library', 'new_arrivals', 'hoard']] of [[10, ['main_library', 'new_arrivals', 'hoard']], [9, ['main_library', 'new_arrivals', 'hoard']], [10, ['main_library']], [10, ['main_library', 'new_arrivals', 'hoard'], ['main_library']]]) {
   test(`manual family clear validates captured full-tree completeness and source scope (${mountedCount}/10, ${loadedCategories.length} sources, ${sidebarCategories.length} sidebar sources)`, () => {
     const { context, calls } = createContext({ searchInputValue: '' });

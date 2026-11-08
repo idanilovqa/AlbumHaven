@@ -100,6 +100,35 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
+    "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "gallery-source-switch-loading",
+    "databaseScenarios": [
+      "settings:owned-new-arrivals-root"
+    ],
+    "filesystemScenarios": [
+      "media-copy:settings-root-picker-new-arrivals-album"
+    ],
+    "expectedContracts": [
+      "source-switch-shows-shared-loader",
+      "source-switch-never-renders-empty-library",
+      "new-arrivals-albums-render-after-switch"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:gallery-source-switch-loading",
+      "filesystemCopy": "settings-root-picker-fixture/New Arrivals source switch"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
     "profile": "functional-core",

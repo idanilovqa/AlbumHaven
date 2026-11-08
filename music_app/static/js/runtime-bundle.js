@@ -31117,7 +31117,7 @@ function logCoverLookupTaskDebug(context, task) {
   });
 }
 
-function reconcileCoverLookupRemoteSelection(possibleMatches) {
+function reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst = false } = {}) {
   const matches = Array.isArray(possibleMatches) ? possibleMatches : [];
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const selectedMatchExists = selectedRemoteId
@@ -31135,8 +31135,10 @@ function reconcileCoverLookupRemoteSelection(possibleMatches) {
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
-  if (selectableMatches.length) {
-    state.coverLookup.modal.selectedRemoteId = String(selectableMatches[0].id);
+  // Owner (11-08): nothing is pre-selected. An unsaved automatic pick is only suggested (the green
+  // suggestion frame), so the gallery never shows "Selected" for a cover that is not the album's.
+  if (selectableMatches.length && suggestFirst && !state.coverLookup.modal.suggestedRemoteId) {
+    state.coverLookup.modal.suggestedRemoteId = String(selectableMatches[0].id);
   }
 }
 
@@ -31376,12 +31378,12 @@ function applyCoverLookupCandidateSource(candidateSource) {
     modal.selectedRemoteId = '';
     return;
   }
-  // Only an unchosen cover adopts the suggestion; a manual choice keeps its own selection.
+  // An unchosen cover is only suggested, never pre-selected: the user picks it, then saves.
   if (bestCandidateIsSelectable && !hasManualChoice) {
-    modal.selectedRemoteId = bestCandidateId;
+    modal.selectedRemoteId = '';
     return;
   }
-  reconcileCoverLookupRemoteSelection(possibleMatches);
+  reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst: !hasManualChoice && searchAwaitsDecision && !hasCurrentCover });
 }
 
 function applyCoverLookupGalleryPayload(gallery) {

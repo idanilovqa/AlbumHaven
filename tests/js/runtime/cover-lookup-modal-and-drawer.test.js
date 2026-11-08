@@ -3603,8 +3603,13 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   }];
 
   context.reconcileCoverLookupRemoteSelection(matches);
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '', 'nothing is pre-selected');
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId || '', '', 'without a pending decision nothing is suggested');
 
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'metallica-deluxe');
+  // An album with no cover awaiting its search result: the first cover is suggested, still not selected.
+  context.reconcileCoverLookupRemoteSelection(matches, { suggestFirst: true });
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'metallica-deluxe');
 
   context.state.coverLookup.modal.selectedRemoteId = 'manual-choice';
   context.reconcileCoverLookupRemoteSelection([
@@ -4606,7 +4611,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     ['saved-best'],
     'a durable album snapshot must populate the gallery without a lookup task',
   );
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'saved-best');
+  // Owner (11-08): an automatic pick is suggested, never pre-selected.
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'saved-best');
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
   assert.equal(context.state.coverLookup.modal.candidateSnapshot.revision, 3);
   assert.equal(
     context.state.coverLookup.tasks[0].notification_action_taken,
@@ -4859,7 +4866,9 @@ for (const status of ['pending', 'running']) {
   context.state.coverLookup.tasks = [];
 
   await context.refreshCoverLookupGallery(false);
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'candidate-a');
+  // Owner (11-08): an automatic pick is suggested, never pre-selected.
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'candidate-a');
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 
   await context.refreshCoverLookupGallery(false);
   assert.deepEqual(
@@ -4868,10 +4877,11 @@ for (const status of ['pending', 'running']) {
     'progressive ranking must append without reordering an already displayed card',
   );
   assert.equal(
-    context.state.coverLookup.modal.selectedRemoteId,
+    context.state.coverLookup.modal.suggestedRemoteId,
     'candidate-b',
-    'the improving best candidate must remain auto-selected before an explicit override',
+    'the improving best candidate stays suggested before an explicit override',
   );
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 
   context.selectRemoteCoverFromLookup('candidate-a');
   await context.refreshCoverLookupGallery(false);
@@ -5216,7 +5226,9 @@ for (const status of ['pending', 'running']) {
 
   await context.loadCoverLookupTasks({ toast: false });
 
-  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'metallica-deluxe');
+  // Owner (11-08): an automatic pick is suggested, never pre-selected.
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'metallica-deluxe');
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

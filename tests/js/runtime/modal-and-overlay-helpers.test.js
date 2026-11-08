@@ -2159,3 +2159,34 @@ test('Mark As A Version uses the shared app-form dialog with no instruction sent
   options.onClose(content);
   assert.equal(listeners.click, undefined);
 });
+
+test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {
+  const { context } = loadHelper();
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  [heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => (selector === '[data-navigation-mode]' ? [artistsMode, collectionsMode] : []);
+
+  context.syncLibraryNavigationMode('collections');
+  assert.equal(heading.textContent, 'Custom Collections');
+  assert.equal(collections.hidden, false);
+  assert.equal(artists.hidden, true);
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', true]);
+
+  context.syncLibraryNavigationMode('artists');
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});

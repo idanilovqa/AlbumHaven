@@ -188,7 +188,7 @@
 .shell-navigation-rail-toggle { flex: 0 0 auto; margin-left: 1px; }
 .shell-navigation-rail:not(.is-folded) .shell-navigation-rail-toggle { order: -1; }
 .shell-navigation-rail.is-folded { padding: 16px 10px; }
-.shell-navigation-compact { display: flex; justify-content: center; }
+.shell-navigation-compact { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .shell-navigation-compact[hidden],
 #artist-tree-expanded[hidden] { display: none; }
 .shell-navigation-compact-action svg,

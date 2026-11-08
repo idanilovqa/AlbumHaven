@@ -7207,8 +7207,8 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const libraryScopePending = button.dataset.libraryWide === '1' && !hasHydratedLibraryNonAlbumTracks();
-    const enabled = libraryScopePending || Boolean(state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
+    // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
+    const enabled = button.dataset.libraryWide === '1' || Boolean(state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
       libraryWide: button.dataset.libraryWide === '1',
     }).length > 0;
     button.disabled = !enabled;
@@ -7520,6 +7520,18 @@ function handleGalleryMainClick(event) {
     event.preventDefault();
     openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
     hydrateDeferredNonAlbumTracksForAlbumTypes();
+    return true;
+  }
+  const navigationMode = event.target.closest?.('[data-navigation-mode]');
+  if (navigationMode) {
+    event.preventDefault();
+    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
+    if (navigationMode.dataset.navigationMode === 'collections') {
+      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
+      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
+    } else if (pageOpen) {
+      closeNonAlbumModal();
+    }
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -12518,10 +12530,24 @@ function setNonAlbumPagePresentation(overlay, open) {
     if (page) { dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal'); }
     else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
   }
-  document.querySelectorAll('[data-open-non-album-tracks][data-library-wide="1"]').forEach((item) => {
-    if (item.matches('[data-navigation-tree-item]')) window.NavigationTree?.setItemSelected(item, Boolean(open && state.ui.nonAlbumLibraryWide));
-  });
+  syncLibraryNavigationMode(Boolean(open && state.ui.nonAlbumLibraryWide) ? 'collections' : 'artists');
   return Boolean(page);
+}
+
+// The side panel has two modes: Artists (the artist tree) and Loose Tracks (the Custom Collections tree,
+// holding Loose Tracks today and custom collections later). Library-wide Loose Tracks open = Loose Tracks mode.
+function syncLibraryNavigationMode(mode) {
+  const collections = mode === 'collections';
+  document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
+  });
+  const heading = document.getElementById('navigation-tree-heading');
+  if (heading) heading.textContent = collections ? 'Custom Collections' : 'Artists';
+  const collectionsTree = document.getElementById('sidebar-collections');
+  const artistsTree = document.getElementById('sidebar-list');
+  if (collectionsTree) collectionsTree.hidden = !collections;
+  if (artistsTree) artistsTree.hidden = collections;
+  collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {

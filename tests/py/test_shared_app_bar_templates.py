@@ -190,19 +190,26 @@ def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render
     assert not any("Open New Arrivals" in switch.text for switch in menu.find_all())
 
 
-def test_loose_tracks_live_in_the_left_navigation_collections_section(render):
+def test_loose_tracks_is_a_side_panel_mode_with_its_own_collections_tree(render):
     shell = render().one(id="app-shell")
     toolbar = render().one(**{"class": "toolbar-right"})
     assert toolbar.find_all(**{"data-open-non-album-tracks": None}) == []
+    modes = shell.one(**{"class": "mobile-artists-mode"}).find_all(**{"data-navigation-mode": None})
+    assert [mode.attrs["data-navigation-mode"] for mode in modes] == ["artists", "collections"]
+    assert [mode.attrs["aria-pressed"] for mode in modes] == ["true", "false"]
+    artists = shell.one(id="sidebar-list")
+    assert artists.find_all(**{"data-open-non-album-tracks": None}) == []
     collections = shell.one(id="sidebar-collections")
     assert collections.attrs["data-navigation-tree"] == "collections"
-    assert collections.attrs["aria-label"] == "Collections"
+    assert collections.attrs["aria-label"] == "Custom Collections"
+    assert "hidden" in collections.attrs
     item = collections.one(**{"data-navigation-tree-key": "collection:loose-tracks"})
-    assert item.attrs["data-open-non-album-tracks"] == "1"
     assert item.attrs["data-library-wide"] == "1"
     compact = shell.one(id="shell-navigation-compact")
-    rail = compact.one(**{"data-open-non-album-tracks": "1"})
-    assert rail.attrs["data-library-wide"] == "1"
+    buttons = compact.find_all("button")
+    assert buttons[0].attrs["id"] == "artist-tree-navigation-button"
+    assert buttons[1].attrs["data-open-non-album-tracks"] == "1"
+    assert "disabled" not in buttons[1].attrs
 
 
 def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):

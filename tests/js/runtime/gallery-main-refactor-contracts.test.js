@@ -490,7 +490,7 @@ test('artist non-album tracks stay clickable while deferred without a second gal
   assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
   context.hasHydratedLibraryNonAlbumTracks = () => true;
   context.updateGalleryMainControls();
-  assert.equal(button.disabled, true, 'a confirmed empty library collection is disabled');
+  assert.equal(button.disabled, false, 'library-wide Loose Tracks is a navigation destination and stays pressable when empty');
   button.dataset.libraryWide = '';
   context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
   context.hasNonAlbumSearchMatches = () => false;

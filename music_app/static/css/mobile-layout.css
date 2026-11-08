@@ -404,7 +404,13 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */
-.mobile-artists-mode, .mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
+.mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
+/* Library navigation modes (Artists / Loose Tracks): icon buttons at the end of the desktop panel header. */
+.shell-navigation-rail .sidebar-top:has(.mobile-artists-mode) { display: flex; align-items: center; gap: 6px; }
+.mobile-artists-mode { display: flex; gap: 4px; margin: 0 0 0 auto; }
+.mobile-artists-mode-button span { display: none; }
+.mobile-artists-mode-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.mobile-artists-mode-button[aria-pressed="true"] { color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
 /* Bottom sheets (mobile Artist info, Cover Look Up) slide up from the bottom edge when they open.
    `translate` leaves `transform` free for a sheet's own drag offset. */
 @keyframes bottom-sheet-enter { from { translate: 0 100%; } }
@@ -439,7 +445,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .shell-navigation-rail .sidebar-top { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; }
   .shell-navigation-rail .sidebar-top > [data-close-artists-drawer] { order: -1; }
   .shell-navigation-rail .desktop-artists-heading { display: none; }
-  .shell-navigation-rail .mobile-artists-mode { display: block; }
+  .shell-navigation-rail .mobile-artists-mode { display: flex; gap: 8px; margin: 0; }
+  .mobile-artists-mode-button span { display: inline; }
   .mobile-artists-mode-button { width: auto; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--appearance-panel-line, var(--border)); border-radius: 9px; color: inherit; background: transparent; }
   .shell-navigation-rail .mobile-artists-mode { flex: 0 1 auto; min-width: 0; }
   .shell-navigation-rail .mobile-artists-mode-button { display: inline-flex; width: max-content; max-width: 100%; flex: none; aspect-ratio: auto; }
@@ -522,7 +529,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 @media (max-width: 900px) {
   :root .in-page-tabs > [role="tab"] { background: transparent !important; box-shadow: none !important; }
-  :root .mobile-artists-mode-button[aria-pressed="true"] { background: transparent !important; color: inherit; box-shadow: none !important; }
+  :root .mobile-artists-mode-button[aria-pressed="true"] { background: transparent !important; color: inherit; box-shadow: none !important; border-color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport { filter: saturate(1.35) contrast(1.08); }
 
 }

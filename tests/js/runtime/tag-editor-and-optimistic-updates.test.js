@@ -188,6 +188,7 @@ function loadHelper(albums, overrides = {}) {
 test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
   let resolveRefresh;
   let refreshStarted = 0;
+  let refreshOptions = null;
   const context = loadHelper([], {
     state: {
       modalReleases: [],
@@ -205,8 +206,9 @@ test('marking an album version completes without waiting for the canonical galle
       context.state.view = { ...context.state.view, ...patch };
     },
     buildApiUrl: () => '/api/library',
-    fetchAndRender() {
+    fetchAndRender(_url, _push, options) {
       refreshStarted += 1;
+      refreshOptions = options;
       return new Promise((resolve) => { resolveRefresh = resolve; });
     },
     scheduleBrowserAnimationFrame(callback) { callback(); },
@@ -220,6 +222,8 @@ test('marking an album version completes without waiting for the canonical galle
 
   assert.equal(saved, true);
   assert.equal(refreshStarted, 1);
+  // UI-11 (owner): the gallery updates in the background (mounted, same scroll), never behind the Loading page.
+  assert.equal(refreshOptions?.preserveScroll, true);
   assert.equal(context.state.view.manual_version_links.child, 'parent');
   resolveRefresh(true);
   await marking;

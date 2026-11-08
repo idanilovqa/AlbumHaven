@@ -36787,7 +36787,7 @@ async function ignoreAlbumVersion(albumKey) {
       state.modalReleaseIndex = Math.min(releaseSet.selectedIndex, Math.max(0, state.modalReleases.length - 1));
       renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
     }
-    await fetchAndRender(buildApiUrl(state.view), false);
+    await refreshGalleryAfterVersionChange();
     showToast('Release separated. The rule is listed in Settings › Rules.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to ignore album version.', error);
@@ -36812,11 +36812,17 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
 }
 
+// UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
+// the mounted gallery and its scroll stay; no Loading page.
+function refreshGalleryAfterVersionChange() {
+  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+}
+
 function scheduleVersionGalleryRefresh() {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserTimeout(() => {
       Promise.resolve()
-        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .then(() => refreshGalleryAfterVersionChange())
         .catch((error) => {
           console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
         });
@@ -36902,7 +36908,7 @@ async function revertVersionException(albumKey) {
       }, { trackSidebarReveal: false });
     }
     renderUtilityModalContent();
-    await fetchAndRender(buildApiUrl(state.view), false);
+    await refreshGalleryAfterVersionChange();
     showToast('Rule reverted.', 'success', 2400);
     return true;
   } catch (error) {

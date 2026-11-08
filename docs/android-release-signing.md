@@ -50,7 +50,7 @@ merge, and stable cannot be promoted before it.
    plain git (no `actions/checkout` post-job step runs git in it later) and
    runs `assemble<Channel>Release` with the allocated version and the channel's
    certificate digest compiled in as the update trust. The promoted source is
-   untrusted, so Gradle runs only in a container (`ghcr.io/cirruslabs/android-sdk:36`
+   untrusted, so Gradle runs only in a container (`ghcr.io/cirruslabs/android-sdk:36-ndk`
    pinned by digest: OpenJDK 21, platform 36, build-tools 36.0.0) as an
    unprivileged user without capabilities, which sees only the checkout: no
    runner token or environment, no sudo, no Docker socket and no Actions cache

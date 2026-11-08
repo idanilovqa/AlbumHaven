@@ -210,16 +210,9 @@ jobs:
           git -C source -c advice.detachedHead=false checkout --quiet FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = "$COMMIT"
 
-      # The decoders are native code. The image has no NDK or CMake and its SDK is read-only to the
-      # build user, so the runner's SDK manager installs the pinned ones (no source runs here) and
-      # the container sees them read-only in its own SDK.
-      - name: Install the pinned NDK and CMake
-        run: |
-          set -euo pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.3.13750724" "cmake;3.31.6" > /dev/null
-
-      # ghcr.io/cirruslabs/android-sdk:36 (Ubuntu 24.04, OpenJDK 21, platforms;android-36 and
-      # build-tools 36.0.0), pinned by digest. Gradle writes only inside the checkout and the
+      # ghcr.io/cirruslabs/android-sdk:36-ndk (Ubuntu 24.04, OpenJDK 21, platforms;android-36,
+      # build-tools 36.0.0 and NDK 27.3.13750724 for the native audio decoders, built with the
+      # NDK's own ndk-build), pinned by digest. Gradle writes only inside the checkout and the
       # container's own /tmp, so nothing outlives the container except build outputs.
       - name: Assemble the release APK in an isolated container
         env:
@@ -231,9 +224,7 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges
           --env HOME=/tmp --env GRADLE_USER_HOME=/tmp/gradle
           --volume "$GITHUB_WORKSPACE/source:/source" --workdir /source/apps/android-shell
-          --volume "$ANDROID_HOME/ndk/27.3.13750724:/opt/android-sdk-linux/ndk/27.3.13750724:ro"
-          --volume "$ANDROID_HOME/cmake/3.31.6:/opt/android-sdk-linux/cmake/3.31.6:ro"
-          ghcr.io/cirruslabs/android-sdk@sha256:f9b3ea9ed2b5fc9522adae82c7b4622ab7aa54207ef532c8e615a347dca08f31
+          ghcr.io/cirruslabs/android-sdk@sha256:dea0b3ff418657460823682cdc0e1b8af63596645f13f816be2838f7ba41b3cd
           ./gradlew --no-daemon --console=plain "assemble${FLAVOR}Release"
           "-PalbumHavenVersionCode=$VERSION_CODE"
           "-PalbumHavenVersionName=$VERSION_NAME"

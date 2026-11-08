@@ -942,6 +942,8 @@ function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
   owner.summary = null;
+  owner.rememberedTotal = null;
+  owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   return owner;
@@ -972,6 +974,54 @@ function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
   };
 }
 
+const LASTFM_TOTAL_STORAGE_PREFIX = 'albumHaven.lastfmTotal.';
+
+function readRememberedLastfmTotal(username) {
+  try {
+    const stored = localStorage.getItem(LASTFM_TOTAL_STORAGE_PREFIX + username);
+    const total = stored === null ? NaN : Number(stored);
+    return Number.isInteger(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastfmTotal(username, total) {
+  if (total == null) return;
+  try {
+    localStorage.setItem(LASTFM_TOTAL_STORAGE_PREFIX + username, String(total));
+  } catch {
+    // Remembering is a convenience; the next refresh shows the total anyway.
+  }
+}
+
+function paintLastfmTotal(owner) {
+  const node = document.querySelector('#utility-modal [data-lastfm-total]');
+  if (node) node.textContent = `LastFM Total: ${formatLastfmTotal(owner)}`;
+}
+
+// Asking Last.fm takes seconds: the page shows the last known total at once
+// and this replaces only that number when the fresh one arrives.
+async function refreshLastfmTotal(owner, requestGeneration, username) {
+  const isCurrent = () => state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration;
+  owner.refreshingTotal = true;
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles?refresh_total=1', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    const total = data.lastfm_total == null ? NaN : Number(data.lastfm_total);
+    if (!response.ok || !data.ok || !Number.isInteger(total) || total < 0 || !isCurrent() || !owner.summary) return;
+    owner.summary = { ...owner.summary, lastfm_total: total };
+    rememberLastfmTotal(username, total);
+  } catch (error) {
+    console.warn('[AlbumHaven][Integrations] Failed to refresh the Last.fm total.', error);
+  } finally {
+    if (isCurrent()) {
+      owner.refreshingTotal = false;
+      paintLastfmTotal(owner);
+    }
+  }
+}
+
 async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
   const owner = ensureLastfmScrobbleState();
   if (!lastfm?.connected) {
@@ -980,6 +1030,9 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
   }
   if (owner.loading && !replace) return owner.loadPromise;
   const requestGeneration = ++owner.requestGeneration;
+  const username = String(lastfm.username || '');
+  owner.rememberedTotal = readRememberedLastfmTotal(username);
+  owner.refreshingTotal = false;
   owner.loading = true;
   renderUtilityModalContent();
   const loadPromise = (async () => {
@@ -988,7 +1041,11 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
-        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        const summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
+        else rememberLastfmTotal(username, summary.lastfm_total);
+        owner.summary = summary;
+        if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
       }
       return owner.summary;
     } catch (error) {

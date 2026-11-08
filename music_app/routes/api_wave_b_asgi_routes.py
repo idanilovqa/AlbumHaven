@@ -243,39 +243,49 @@ def _safe_lastfm_connection_error(error: LastfmError) -> str:
     return "Last.fm rejected the connection."
 
 
-# The Last.fm total is a live API call (seconds over the internet); opening
-# Settings > Integrations waited for it every time. A short per-account cache
-# keeps reopening instant; the local listen counts below are always fresh.
+# The Last.fm total is a live API call (seconds over the internet). Settings >
+# Integrations answers at once with the last total this server remembers (and
+# whether it is still current); the page then asks for a refresh separately and
+# updates only that number. The local listen counts are always fresh.
 _LASTFM_TOTAL_TTL_SECONDS = 300.0
 _LASTFM_TOTAL_CACHE: dict[int, tuple[float, int | None]] = {}
 
 
-def _cached_lastfm_total_scrobbles(config: dict[str, Any], *, account_id: int, session: object) -> int | None:
+def _lastfm_total_scrobbles(
+    config: dict[str, Any], *, account_id: int, session: object, refresh: bool,
+) -> tuple[int | None, bool]:
+    """Return (total, current). Only ``refresh`` contacts Last.fm, and only once per window."""
     import time
 
     cached = _LASTFM_TOTAL_CACHE.get(int(account_id))
     now = time.monotonic()
-    if cached is not None and now - cached[0] < _LASTFM_TOTAL_TTL_SECONDS:
-        return cached[1]
+    current = cached is not None and now - cached[0] < _LASTFM_TOTAL_TTL_SECONDS
+    if current or not refresh:
+        return (cached[1] if cached is not None else None), current
     try:
         total = get_lastfm_total_scrobbles(config, session=session)
     except LastfmError:
-        return cached[1] if cached is not None else None
+        return (cached[1] if cached is not None else None), False
     _LASTFM_TOTAL_CACHE[int(account_id)] = (now, total)
-    return total
+    return total, True
 
 
 def _lastfm_scrobble_summary(
-    config: dict[str, Any], *, account_id: int, library_id: int, session: object | None,
+    config: dict[str, Any], *, account_id: int, library_id: int, session: object | None, refresh_total: bool = False,
 ) -> JsonDict:
     counts = build_listen_history_status_counts(
         config, account_id=account_id, library_id=library_id,
     )
-    lastfm_total = _cached_lastfm_total_scrobbles(config, account_id=account_id, session=session) if session is not None else None
+    lastfm_total, lastfm_total_current = (
+        _lastfm_total_scrobbles(config, account_id=account_id, session=session, refresh=refresh_total)
+        if session is not None
+        else (None, True)
+    )
     return {
         "scrobbled": int(counts["listen_history_count"]),
         "pending": int(counts["pending_scrobble_count"]),
         "lastfm_total": lastfm_total,
+        "lastfm_total_current": lastfm_total_current,
     }
 
 
@@ -432,6 +442,7 @@ async def utilities_lastfm_scrobbles(request: Request) -> JSONResponse:
         account_id=scope.account_id,
         library_id=scope.library_id,
         session=session,
+        refresh_total=request.query_params.get("refresh_total") == "1",
     )
     can_submit = allowed_actions_for_request(
         request, ("integration.lastfm.scrobbles.submit",),
@@ -529,6 +540,7 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
             account_id=scope.account_id,
             library_id=scope.library_id,
             session=session,
+            refresh_total=True,
         )
     except Exception:
         error = "Album Haven could not submit pending scrobbles to Last.fm."

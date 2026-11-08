@@ -49155,10 +49155,12 @@ function isMobileClient() {
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function currentClientProfile() { return window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop'); }
+// Owner (11-08 evening): the Settings page opens with its section's title; a generic "Settings" first flashed.
+function mobileUtilityPageTitle() { return MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings'; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? mobileUtilityPageTitle() : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
@@ -49620,7 +49622,7 @@ function syncMobileUtilityContext() {
   const group = resolveMobileLoopSongGroup(descriptor, state.utility.loops || []);
   const song = group?.representativeLoop || group?.loops[0];
   descriptor.title = song ? song.title || song.name || 'Saved loops'
-    : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
+    : mobileUtilityPageTitle();
   descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year].filter(Boolean).join(' • ') : '';
   descriptor.loopCount = song ? `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}` : '';
   if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');

@@ -15096,7 +15096,7 @@ def test_problematic_files_search_filters_the_cached_complete_list_exactly():
     assert cached["initial_detail"] is None
 
 
-def test_problematic_files_invalidation_keeps_the_last_list_for_the_first_page_and_rewarms(monkeypatch):
+def test_problematic_files_invalidation_drops_the_last_list_and_rewarms(monkeypatch):
     from music_app.services import library_browse_postgres as browse
 
     database_url = "postgresql://album_haven_app@localhost/stale-first-page"
@@ -15125,17 +15125,10 @@ def test_problematic_files_invalidation_keeps_the_last_list_for_the_first_page_a
         timers[0][1](*timers[0][2])
         assert rewarmed == [cache_key]
 
-        repository = browse.PostgresLibraryBrowseRepository(
-            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
-            connect=lambda _url: (_ for _ in ()).throw(AssertionError("the stale page must not query Postgres")),
-        )
-        page = repository.build_problematic_files_page(limit=2)
-        assert [item["key"] for item in page["items"]] == ["album-0", "album-1"]
-        assert page["complete"] is False
-        assert page["projection_cache_status"] == "stale"
-
-        # A fresh complete list replaces the stale one.
-        repository._set_cached_utility_projection("problematic-files", {"items": []})
+        # A changed library may have merged or removed listed albums: the
+        # previous list is never served (FTC-UTIL-PROBLEMS-013/007 clicked a
+        # merged-away identity from it).
+        assert cache_key not in browse._UTILITY_PROJECTION_CACHE
         assert cache_key not in browse._UTILITY_PROJECTION_STALE
     finally:
         for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE,
@@ -15186,14 +15179,14 @@ def test_problematic_files_snapshot_is_stored_only_by_writer_instances(monkeypat
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/browse-only",
         "SHARED_LIBRARY_BROWSE_ONLY": True,
     })
-    browse_only._queue_problematic_files_snapshot_store(payload)
+    browse_only._queue_problematic_files_snapshot_store(payload, "fingerprint")
     assert submitted == []
 
     writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/writer"})
-    writer._queue_problematic_files_snapshot_store(payload)
+    writer._queue_problematic_files_snapshot_store(payload, "fingerprint")
     assert len(submitted) == 1
     stored = json.loads(submitted[0][1][0])
-    assert stored == {"items": [{"key": "a"}]}
+    assert stored == {"items": [{"key": "a"}], browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint"}
 
 
 def test_problematic_candidate_ids_are_computed_once_per_library_change():

@@ -144,7 +144,7 @@ object Resumption {
         val items = queue.items.mapIndexed { position, item ->
             val metadata = MediaMetadata.Builder()
                 .setTitle(item.title)
-                .setArtist(mediaCardArtistLine(item.artist, item.album))
+                .setArtist(mediaCardArtistLine(item.artist, item.album, item.year))
                 .setAlbumTitle(item.album)
                 .setArtworkUri(item.artworkUrl?.let(artworkUri))
                 .setDurationMs(item.durationMs.takeIf { it > 0 })
@@ -191,7 +191,7 @@ object Resumption {
             val ref = item.resumeToken?.let { issued.next() } ?: return@mapIndexedNotNull null
             position to QueueItem(
                 ref, item.title, item.artist, item.album, item.artworkUrl, item.durationMs,
-                item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken,
+                item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken, item.year,
             )
         }
         val currentIndex = kept.indexOfFirst { (position, _) -> position == targetIndex }

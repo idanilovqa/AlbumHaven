@@ -19,6 +19,7 @@ data class RestorableItem(
     val listenKey: String = "",
     val queueGroup: Int = 0,
     val resumeToken: String? = null,
+    val year: String = "",
 )
 
 /**
@@ -46,7 +47,7 @@ data class RestorableQueue(
                 snapshot.items.map { item ->
                     RestorableItem(
                         item.title, item.artist, item.album, item.artworkUrl, item.durationMs,
-                        item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken,
+                        item.trackNumber, item.listenKey, item.queueGroup, item.resumeToken, item.year,
                     )
                 },
             )
@@ -83,7 +84,8 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
                     .put("trackNumber", item.trackNumber)
                     .put("listenKey", item.listenKey)
                     .put("queueGroup", item.queueGroup)
-                    .put("resumeToken", item.resumeToken ?: JSONObject.NULL),
+                    .put("resumeToken", item.resumeToken ?: JSONObject.NULL)
+                    .apply { if (item.year.isNotEmpty()) put("year", item.year) },
             )
         }
         storage.write(
@@ -127,7 +129,8 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
 
     private fun decodeItem(raw: Any?): RestorableItem? {
         val item = raw as? JSONObject ?: return null
-        if (item.fieldNames() != ITEM_KEYS) return null
+        val fields = item.fieldNames()
+        if (fields != ITEM_KEYS && fields != ITEM_KEYS + "year") return null
         val artwork = when (val value = item.opt("artworkUrl")) {
             JSONObject.NULL -> null
             is String -> value.takeIf(QueueItem::isArtworkPath) ?: return null
@@ -148,6 +151,7 @@ class PlaybackRestoreStore(private val storage: RestoreStorage) {
             listenKey = (item.opt("listenKey") as? String)?.takeIf(QueueItem::isListenKey) ?: return null,
             queueGroup = (item.opt("queueGroup") as? Int)?.takeIf { it in 0..MAX_ITEMS } ?: return null,
             resumeToken = resumeToken,
+            year = if ("year" in fields) text(item.opt("year")) ?: return null else "",
         )
     }
 

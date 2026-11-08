@@ -2375,6 +2375,7 @@ function buildPlayerTrackPayload(track, album = null) {
     album: track.album || '',
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
+    year: String(album?.display_year || album?.year || track.year || '').trim(),
   };
 }
 

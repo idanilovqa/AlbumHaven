@@ -12,10 +12,9 @@ enum class SystemControl { PLAY_PAUSE, STOP, SEEK_IN_ITEM, PREVIOUS_ITEM, NEXT_I
  * The line under the title on system media cards. Android's card has no album line, so the
  * album joins the artist ("Artist · Album") unless it is blank or the same as the artist.
  */
-fun mediaCardArtistLine(artist: String, album: String): String =
-    if (album.isBlank() || album.equals(artist, ignoreCase = true)) artist
-    else if (artist.isBlank()) album
-    else "$artist · $album"
+fun mediaCardArtistLine(artist: String, album: String, year: String = ""): String =
+    listOf(artist, album.takeUnless { it.equals(artist, ignoreCase = true) }.orEmpty(), year)
+        .filter(String::isNotBlank).joinToString(" · ")
 
 /**
  * One playlist entry as system media controls show it; [artist] is the card's line under the
@@ -73,7 +72,7 @@ object SessionMapping {
             SessionItem(
                 uid = "${snapshot.queueRevision}:$position",
                 title = item.title,
-                artist = mediaCardArtistLine(item.artist, item.album),
+                artist = mediaCardArtistLine(item.artist, item.album, item.year),
                 album = item.album,
                 artworkUri = item.artworkUrl?.let { origin + it },
                 durationMs = item.durationMs,
@@ -132,7 +131,7 @@ object SessionMapping {
                 SessionItem(
                     uid = "restored:$position",
                     title = item.title,
-                    artist = mediaCardArtistLine(item.artist, item.album),
+                    artist = mediaCardArtistLine(item.artist, item.album, item.year),
                     album = item.album,
                     artworkUri = item.artworkUrl?.let { queue.origin + it },
                     durationMs = item.durationMs,

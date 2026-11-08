@@ -23,7 +23,7 @@ class PlaybackRestoreStoreTest {
     private val items = listOf(
         QueueItem(
             "opaque-ref-secret-a", "Signal A", "Android Acceptance", "Playback Ownership", "/playback/artwork/rt1.a", 180_000,
-            trackNumber = "1", listenKey = "lk-a", resumeToken = "rt1.a",
+            trackNumber = "1", listenKey = "lk-a", resumeToken = "rt1.a", year = "1999",
         ),
         QueueItem(
             "opaque-ref-secret-b", "Signal B", "Android Acceptance", "Playback Ownership", null, 120_000,
@@ -50,7 +50,7 @@ class PlaybackRestoreStoreTest {
             RestorableQueue(
                 origin, TEST_CLIENT_ID, 6, 1, 42_000,
                 listOf(
-                    RestorableItem("Signal A", "Android Acceptance", "Playback Ownership", "/playback/artwork/rt1.a", 180_000, "1", "lk-a", 0, "rt1.a"),
+                    RestorableItem("Signal A", "Android Acceptance", "Playback Ownership", "/playback/artwork/rt1.a", 180_000, "1", "lk-a", 0, "rt1.a", "1999"),
                     RestorableItem("Signal B", "Android Acceptance", "Playback Ownership", null, 120_000, "2", "lk-b", 1, null),
                 ),
             ),

@@ -43,6 +43,8 @@ data class QueueItem(
     val listenKey: String,
     val queueGroup: Int = 0,
     val resumeToken: String? = null,
+    /** The album's release year as the web shows it; empty when unknown. */
+    val year: String = "",
 ) {
     /** The track to stream; a re-encoded file changes its duration, and with it the key it is kept under. */
     fun pcmTrack() = PcmTrack(playbackRef, durationMs / 1000.0, cacheKey = "$listenKey:$durationMs")

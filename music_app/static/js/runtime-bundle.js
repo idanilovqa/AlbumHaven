@@ -11700,6 +11700,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.loops.v2": "optional",
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
+    "playback.album_details.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "downloads.link.v1": "optional",
@@ -11920,6 +11921,7 @@ const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1'
 // The shell persists each item's path-free resume token, so its media card can resume playback
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
+const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 // How long a seek outlasts positions Android sent before it took the seek, and how near the
@@ -12075,6 +12077,7 @@ function androidNativeListenKey(item) {
 // The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
 function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent = false) {
   const resumable = hasAndroidCapability(ANDROID_NATIVE_RESUMPTION_CAPABILITY);
+  const albumDetails = hasAndroidCapability(ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY);
   const payload = {
     queueRevision: revision,
     items: queueWindow.items.map((item, index) => ({
@@ -12089,6 +12092,7 @@ function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSecond
       trackNumber: androidNativeText(item.trackNumber),
       queueGroup: queueWindow.groups[index],
       ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
+      ...(albumDetails && androidNativeText(item.year) ? { year: androidNativeText(item.year).slice(0, 32) } : {}),
     })),
     currentIndex: queueWindow.currentIndex,
     positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
@@ -37797,6 +37801,7 @@ function buildPlayerTrackPayload(track, album = null) {
     album: track.album || '',
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
+    year: String(album?.display_year || album?.year || track.year || '').trim(),
   };
 }
 

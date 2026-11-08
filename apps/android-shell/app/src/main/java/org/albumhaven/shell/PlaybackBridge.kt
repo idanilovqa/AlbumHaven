@@ -95,7 +95,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
     private fun parseItem(raw: Any?): QueueItem? {
         val item = raw as? JSONObject ?: return null
         val fields = item.fieldNames()
-        if (fields != ITEM_KEYS && fields != ITEM_KEYS + "resumeToken") return null
+        if (!fields.containsAll(ITEM_KEYS) || !OPTIONAL_ITEM_KEYS.containsAll(fields - ITEM_KEYS)) return null
         val ref = item.opt("playbackRef") as? String ?: return null
         if (!QueueItem.isPlaybackRef(ref)) return null
         val title = text(item.opt("title")) ?: return null
@@ -116,7 +116,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         } else {
             null
         }
-        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken)
+        val year = if ("year" in fields) text(item.opt("year"))?.takeIf { it.length <= MAX_YEAR_CHARS } ?: return null else ""
+        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken, year)
     }
 
     private fun loopRange(json: JSONObject): LoopRange? {
@@ -154,8 +155,12 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
          * the system media card can resume playback after the session, the process or the device ended.
          */
         const val RESUMPTION_CAPABILITY = "playback.resumption.v1"
+
+        /** Queue items may carry the album's `year`, which the media card shows after the album. */
+        const val ALBUM_DETAILS_CAPABILITY = "playback.album_details.v1"
         val CAPABILITIES = listOf(
             NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY, RESUMPTION_CAPABILITY,
+            ALBUM_DETAILS_CAPABILITY,
         )
 
         private const val LOAD_QUEUE = "playback.loadQueue"
@@ -182,6 +187,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private val ITEM_KEYS = setOf(
             "playbackRef", "listenKey", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber", "queueGroup",
         )
+        private val OPTIONAL_ITEM_KEYS = setOf("resumeToken", "year")
+        private const val MAX_YEAR_CHARS = 32
 
         fun snapshotJson(snapshot: NativePlaybackSnapshot): JSONObject = JSONObject()
             .put("state", snapshot.state.wire)

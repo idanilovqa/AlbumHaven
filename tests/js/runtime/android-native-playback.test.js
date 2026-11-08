@@ -146,6 +146,21 @@ test('a negotiated native shell routes a start through one reference batch and a
   assert.equal(api.getAndroidNativePlaybackClientId(), handshakePayload.playback.clientId);
 });
 
+test('the album year reaches only an album-details-capable shell', async () => {
+  const dated = tracks.map(track => ({ ...track, year: '1999' }));
+  const current = createHarness();
+  await current.api.start(dated[0]);
+  assert.equal(commands(current.bridge, 'playback.loadQueue')[0].payload.items[0].year, '1999');
+
+  const withoutDetails = {
+    ...handshakePayload,
+    capabilities: handshakePayload.capabilities.filter(name => name !== 'playback.album_details.v1'),
+  };
+  const older = createHarness({ respond: message => (message.name === 'bridge.handshake' ? withoutDetails : null) });
+  await older.api.start(dated[0]);
+  assert.ok(commands(older.bridge, 'playback.loadQueue')[0].payload.items.every(item => !('year' in item)));
+});
+
 test('resume tokens reach only a resumption-capable shell and artwork needs a valid token', async () => {
   const withoutResumption = {
     ...handshakePayload,

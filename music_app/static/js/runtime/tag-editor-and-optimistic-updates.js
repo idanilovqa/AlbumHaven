@@ -2094,22 +2094,29 @@ function renderTrackModalRelease(album) {
   const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
+      // Folders open in File Explorer only from a browser on the computer running Album Haven; elsewhere the
+      // numbered folder buttons stay visible but disabled, so every copy is still identified.
+      const canOpenFolders = !window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.files.open_location');
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
         actionsPlacement: 'inline',
-        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderActionButton({
-          icon: 'folder',
-          badge: String(index + 1),
-          ariaLabel: `Open folder ${index + 1}`,
-          className: 'track-modal-duplicate-folder',
-          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
-          attributes: {
-            'data-open-track-modal-duplicate-folder': '1',
-            'data-album-key': resolvedAlbumKey,
-            'data-duplicate-source-index': String(index),
-          },
-        })).join(''),
+        actionsHtml: duplicateSources.map((source, index) => {
+          const folder = String(source.folder_path || source.folder_name || `Folder ${index + 1}`);
+          return ButtonComponent.renderActionButton({
+            icon: 'folder',
+            badge: String(index + 1),
+            ariaLabel: canOpenFolders ? `Open folder ${index + 1}` : `Folder ${index + 1}`,
+            className: 'track-modal-duplicate-folder',
+            title: canOpenFolders ? folder : `${folder} (folders open only on the computer running Album Haven)`,
+            disabled: !canOpenFolders,
+            attributes: canOpenFolders ? {
+              'data-open-track-modal-duplicate-folder': '1',
+              'data-album-key': resolvedAlbumKey,
+              'data-duplicate-source-index': String(index),
+            } : { 'data-duplicate-source-index': String(index) },
+          });
+        }).join(''),
       });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {

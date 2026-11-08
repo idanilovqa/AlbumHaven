@@ -2730,6 +2730,7 @@ function renderCoverLookupModal() {
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
+  if (typeof markSecondArtboxDuplicatePictures === 'function') markSecondArtboxDuplicatePictures(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();

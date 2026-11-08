@@ -230,3 +230,79 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
   }
   return false;
 }
+
+// UI-14 (owner): the second artbox cannot take the same picture as the album cover, even from another source
+// or size. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
+// well under a millisecond) and compared with the album cover's; a near-identical picture is dimmed and
+// cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
+const ARTBOX_DUPLICATE_MAX_DISTANCE = 6;
+const artboxPictureHashes = new Map();
+
+function computeImageDHash(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 9;
+  canvas.height = 8;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(image, 0, 0, 9, 8);
+  let pixels;
+  try { pixels = context.getImageData(0, 0, 9, 8).data; } catch (_error) { return null; }
+  const grey = (x, y) => { const i = (y * 9 + x) * 4; return pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114; };
+  let bits = '';
+  for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) bits += grey(x, y) > grey(x + 1, y) ? '1' : '0';
+  return bits;
+}
+
+function dHashDistance(left, right) {
+  let distance = 0;
+  for (let index = 0; index < 64; index += 1) if (left[index] !== right[index]) distance += 1;
+  return distance;
+}
+
+function hashArtboxPicture(url) {
+  if (!url) return Promise.resolve(null);
+  if (!artboxPictureHashes.has(url)) {
+    artboxPictureHashes.set(url, new Promise((resolve) => {
+      const image = new Image();
+      image.decoding = 'async';
+      image.onload = () => resolve(computeImageDHash(image));
+      image.onerror = () => resolve(null);
+      image.src = url;
+    }));
+  }
+  return artboxPictureHashes.get(url);
+}
+
+function hashLoadedPreview(image) {
+  const url = image.currentSrc || image.src;
+  if (!url) return Promise.resolve(null);
+  if (!artboxPictureHashes.has(url) && image.complete && image.naturalWidth > 0) {
+    artboxPictureHashes.set(url, Promise.resolve(computeImageDHash(image)));
+  }
+  return artboxPictureHashes.has(url)
+    ? artboxPictureHashes.get(url)
+    : new Promise((resolve) => image.addEventListener('load', () => resolve(hashLoadedPreview(image)), { once: true }));
+}
+
+function markSecondArtboxDuplicatePictures(body) {
+  const modal = state.coverLookup?.modal;
+  if (!body?.querySelectorAll || !modal?.artboxSlot || !modal.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
+  const coverUrl = buildAlbumDisplayCoverUrl(modal.album);
+  void hashArtboxPicture(coverUrl).then((coverHash) => {
+    if (!coverHash) return;
+    body.querySelectorAll('.cover-lookup-art-card:not(.is-disabled) .cover-lookup-art-preview img').forEach((image) => {
+      void hashLoadedPreview(image).then((hash) => {
+        if (!hash || dHashDistance(hash, coverHash) > ARTBOX_DUPLICATE_MAX_DISTANCE) return;
+        const card = image.closest('.cover-lookup-art-card');
+        if (!card || !card.isConnected || card.classList.contains('is-active')) return;
+        card.classList.add('is-disabled');
+        card.setAttribute('aria-disabled', 'true');
+        card.setAttribute('role', 'group');
+        card.removeAttribute('tabindex');
+        ['data-select-local-cover', 'data-select-remote-cover', 'data-select-pasted-cover'].forEach((name) => card.removeAttribute(name));
+        const label = card.querySelector('.cover-lookup-art-action-label');
+        if (label) label.textContent = 'Same picture as the album cover';
+      });
+    });
+  });
+}

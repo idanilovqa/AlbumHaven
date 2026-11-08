@@ -1,5 +1,5 @@
 /* Responsive shell navigation. Existing components retain their data and event owners. */
-const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false, titleBeforePages: null };
 const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
@@ -39,7 +39,12 @@ function syncMobilePageShell() {
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
+    if (mobilePageState.titleBeforePages === null) mobilePageState.titleBeforePages = document.title;
     document.title = `${active.title} — Album Haven`;
+  } else if (mobilePageState.titleBeforePages !== null) {
+    // Owner (11-08): the tab must never keep a closed page's name (it stayed "Testimony" after browsing on).
+    document.title = mobilePageState.titleBeforePages;
+    mobilePageState.titleBeforePages = null;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   // Album sources placed in the shared page header (large cover layout) belong to the album page only.

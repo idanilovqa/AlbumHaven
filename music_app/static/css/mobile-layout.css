@@ -414,13 +414,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */
-.mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
-/* Library navigation modes (Artists / Loose Tracks): icon buttons at the end of the desktop panel header. */
-.shell-navigation-rail .sidebar-top:has(.mobile-artists-mode) { display: flex; align-items: center; gap: 6px; }
-.mobile-artists-mode { display: flex; gap: 4px; margin: 0 0 0 auto; }
-.mobile-artists-mode-button span { display: none; }
-.mobile-artists-mode-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
-.mobile-artists-mode-button[aria-pressed="true"] { color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
+/* Owner rule: the web navigation-tree header has no buttons. The Artists / Loose Tracks mode pills belong to
+   the mobile drawer only; on web, Loose Tracks is the one side-bar button under Artist Tree. */
+.mobile-artists-mode, .mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
 /* Bottom sheets (mobile Artist info, Cover Look Up) slide up from the bottom edge when they open.
    `translate` leaves `transform` free for a sheet's own drag offset. */
 @keyframes bottom-sheet-enter { from { translate: 0 100%; } }

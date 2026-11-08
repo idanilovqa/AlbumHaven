@@ -52,6 +52,11 @@ export class ArtistPageSettingsActions {
 
   async openLibraryWideNonAlbumTracks(options = {}) {
     const timeout = options.timeout || 10000;
+    // On web, library-wide Loose Tracks is the side-bar button under Artist Tree (shown while the tree is folded).
+    const foldTree = this.artistPageSettings.page.getByRole('button', { name: 'Collapse Artist Tree', exact: true });
+    if (!(await this.artistPageSettings.libraryWideNonAlbumTracksButton.count()) && await foldTree.isVisible()) {
+      await foldTree.click();
+    }
     await expect(this.artistPageSettings.libraryWideNonAlbumTracksButton).toBeEnabled({ timeout });
     await this.artistPageSettings.libraryWideNonAlbumTracksButton.click({ noWaitAfter: true });
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });

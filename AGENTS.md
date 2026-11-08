@@ -35,7 +35,10 @@ operate, or contribute to the application.
   dark), switch rows have no hover fill, checkbox hover uses neutral control
   colors, and buttons share visibly disabled states. Keep light-theme alerts
   readable without changing approved dark-theme alerts; do not add page-local
-  copies or overrides of these rules.
+  copies or overrides of these rules. Never add buttons to the web
+  navigation-tree header; a new side-bar entry goes vertically under the
+  existing side-bar buttons in their style. Never place the same control in
+  two places, and never render an empty or icon-less button.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named

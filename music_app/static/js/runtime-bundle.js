@@ -35285,7 +35285,22 @@ function isInstrumentalVariant(album) {
   return /instrumental/i.test(name);
 }
 
+// Release title case, matching the server's title_case_tag_value: capitalise each
+// word, keep all-caps (CD, MTV) and inner-capital words (iTunes) as tagged.
+function titleCaseReleaseText(text) {
+  return String(text || '').replace(/\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
+    const letters = word.replace(/['’]/g, '');
+    if (letters.length > 1 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return word;
+    if (word.length > 1 && /\p{Lu}/u.test(word.slice(1))) return word;
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  });
+}
+
 function extractVariantLabel(album, baseName, isFirst) {
+  return titleCaseReleaseText(buildVariantLabel(album, baseName, isFirst));
+}
+
+function buildVariantLabel(album, baseName, isFirst) {
   const yearSuffix = album.year ? ` - ${album.year}` : '';
   const instrumental = isInstrumentalVariant(album);
 

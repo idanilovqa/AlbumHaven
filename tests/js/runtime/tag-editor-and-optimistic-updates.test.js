@@ -486,6 +486,31 @@ test('track modal cover transition hides pending image chrome over a blank place
   );
 }
 
+test('version tabs print edition names in release title case without changing the tags', () => {
+  const original = { key: 'original', name: 'My Life in the Bush of Ghosts', album_artist: 'Brian Eno', year: 1981 };
+  const remaster = {
+    key: 'remaster',
+    name: 'My Life in the Bush of Ghosts',
+    album_artist: 'Brian Eno',
+    year: 2006,
+    edition: '2005 remaster',
+  };
+  const suffixed = {
+    key: 'suffixed',
+    name: 'My Life in the Bush of Ghosts (deluxe edition of the MTV iTunes cd)',
+    album_artist: 'Brian Eno',
+    year: 2010,
+  };
+  const context = loadHelper([original, remaster, suffixed]);
+  const releaseSet = context.getAlbumReleaseSet(remaster);
+
+  assert.deepEqual(
+    Array.from(releaseSet.releases, (item) => item.tabLabel),
+    ['Original - 1981', 'Deluxe Edition Of The MTV iTunes Cd - 2010', '2005 Remaster - 2006'],
+  );
+  assert.equal(remaster.edition, '2005 remaster');
+});
+
 test('openTagEditor orders a copied track list by disc, track number, and natural filename', () => {
   const originalTracks = [
     { key: 'disc-two', path: 'C:\\Music\\Artist\\Album\\01 - Disc Two.mp3', disc_number: 2, track_number: 1 },

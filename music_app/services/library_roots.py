@@ -305,6 +305,17 @@ def library_root_cache_identity(config: dict[str, object]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def library_root_cache_identities(config: dict[str, object]) -> frozenset[str]:
+    """Every identity a snapshot of these same roots may carry.
+
+    Builds before Library Data Corrections left the hash also included the
+    corrections setting; a slot still on such a build publishes that form, and
+    a browse slot that accepted only the new form found no snapshot at all.
+    """
+    legacy = json.dumps(dict(load_library_root_settings(config)), sort_keys=True, separators=(",", ":"))
+    return frozenset({library_root_cache_identity(config), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
+
+
 def resolve_configured_media_path(
     config: dict[str, object],
     raw_path: str,

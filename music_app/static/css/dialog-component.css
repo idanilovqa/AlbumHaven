@@ -42,3 +42,7 @@
 #app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
 #app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }
 #app-form-error:empty { display: none; }
+/* Every app-form dialog closes from the shared X at the end of its title row. */
+#app-form-modal .app-form-header { display: flex; align-items: flex-start; gap: 10px; flex: 0 0 auto; }
+#app-form-modal .app-form-header > .confirm-modal-title { flex: 1 1 auto; min-width: 0; }
+#app-form-modal .app-form-close { flex: 0 0 auto; margin: -6px -6px 0 0; }

@@ -2272,3 +2272,18 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
+
+test('INT-007: an album already marked as a version is selected in Mark As A Version', () => {
+  const { context } = loadHelper();
+  context.state.view.manual_version_links = { 'helloween::remaster': 'helloween::original', 'other::x': 'other::y' };
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::original')], ['helloween::remaster']);
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::remaster')], ['helloween::original']);
+  const html = context.buildVersionPickerListHtml(
+    [{ key: 'helloween::remaster', name: 'Helloween' }, { key: 'helloween::live', name: 'Helloween' }],
+    context.getLinkedVersionKeys('helloween::original'),
+  );
+  assert.match(html, /version-picker-option is-active" type="button" data-version-picker-target="helloween::remaster" aria-pressed="true"/);
+  assert.match(html, /version-picker-option" type="button" data-version-picker-target="helloween::live" aria-pressed="false"/);
+  const template = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../music_app/templates/partials/app-form-modal.html'), 'utf8');
+  assert.match(template, /action_button\('Close', class_name='app-form-close', id='app-form-close'/);
+});

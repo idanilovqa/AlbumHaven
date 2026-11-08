@@ -96,6 +96,8 @@ function showAppFormDialog(options = {}) {
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
   listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  const closeButton = get('close');
+  if (closeButton) listen(closeButton, 'click', () => finish(null));
   listen(modal, 'keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
     if (event.key !== 'Tab') return;

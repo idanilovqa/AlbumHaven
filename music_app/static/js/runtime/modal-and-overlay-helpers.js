@@ -149,10 +149,24 @@ function getVersionPickerCandidates(sourceAlbum) {
     .sort(compareAlbumVariants);
 }
 
-function buildVersionPickerListHtml(candidates) {
+// Albums already linked as versions of this album (either direction of the {version: album} map).
+function getLinkedVersionKeys(albumKey) {
+  const view = typeof state === 'undefined' ? null : state.view;
+  const links = view?.manual_version_links && typeof view.manual_version_links === 'object'
+    ? view.manual_version_links : {};
+  const key = String(albumKey || '');
+  const linked = new Set();
+  if (!key) return linked;
+  if (links[key]) linked.add(String(links[key]));
+  Object.entries(links).forEach(([version, target]) => { if (String(target) === key) linked.add(String(version)); });
+  return linked;
+}
+
+function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
   if (!candidates.length) return '<div class="version-picker-empty">No other album of this name shares at least half of its tracks.</div>';
+  // INT-007 (owner): an album already marked as a version shows as selected.
   return candidates.map((item) => `
-    <button class="version-picker-option" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="false">
+    <button class="version-picker-option${linkedKeys.has(String(item.key || '')) ? ' is-active' : ''}" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="${linkedKeys.has(String(item.key || '')) ? 'true' : 'false'}">
       <span class="version-picker-option-cover">
         ${item.cover_path
           ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
@@ -170,6 +184,7 @@ function buildVersionPickerListHtml(candidates) {
 function openVersionPickerModal(album) {
   if (!album) return Promise.resolve(null);
   let selectedKey = '';
+  let savedKey = '';
   let onPick = null;
   return showAppFormDialog({
     title: 'Mark As A Version',
@@ -183,7 +198,11 @@ function openVersionPickerModal(album) {
         const list = content.querySelector?.('[data-version-picker-list]');
         if (!list) return;
         list.removeAttribute('aria-busy');
-        list.innerHTML = buildVersionPickerListHtml(candidates);
+        const linked = getLinkedVersionKeys(album.key);
+        list.innerHTML = buildVersionPickerListHtml(candidates, linked);
+        // The saved link is the starting selection; Save turns on only for a different choice.
+        savedKey = candidates.map((item) => String(item.key || '')).find((key) => linked.has(key)) || '';
+        selectedKey = savedKey;
       });
       onPick = (event) => {
         const option = event.target.closest?.('[data-version-picker-target]');
@@ -193,7 +212,7 @@ function openVersionPickerModal(album) {
           node.classList.toggle('is-active', node === option);
           node.setAttribute('aria-pressed', node === option ? 'true' : 'false');
         });
-        controls.setSubmitEnabled(Boolean(selectedKey));
+        controls.setSubmitEnabled(Boolean(selectedKey) && selectedKey !== savedKey);
       };
       content.addEventListener('click', onPick);
     },

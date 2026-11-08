@@ -5,7 +5,8 @@ const { test, expect } = require('@playwright/test');
 const repositoryRoot = path.resolve(__dirname, '../..');
 
 async function mountAnchoredCalendar(page) {
-  const modal = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/partials/app-form-modal.html'), 'utf8');
+  const modal = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/partials/app-form-modal.html'), 'utf8')
+    .replace(/{%[^]*?%}|{{[^]*?}}/g, '');
   await page.setViewportSize({ width: 900, height: 640 });
   await page.setContent(`<!doctype html><html><body>
     <main class="shell-main-surface"><button id="period" style="position:fixed;left:160px;top:355px;height:32px">Period</button></main>

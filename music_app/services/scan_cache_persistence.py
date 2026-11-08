@@ -21,6 +21,7 @@ from music_app.services.cache import (
     serialize_file_entry,
     serialize_relation_views,
 )
+from music_app.services.empty_local_album_retirement import retire_vacated_local_albums
 from music_app.services.library import (
     album_separate_release_key,
     build_albums_from_file_cache,
@@ -410,7 +411,7 @@ class PostgresScanCacheAdapter:
                 _upsert_local_album_featured_artist_sql(),
                 featured_artist_rows,
             )
-            _execute_set_based_batches(connection, _upsert_local_track_sql(), track_rows)
+            _upsert_local_tracks_and_retire_vacated_albums(connection, track_rows)
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_file_sql(),
@@ -1749,11 +1750,7 @@ class PostgresScanCacheAdapter:
                     "source": _SOURCE,
                 },
             )
-            _execute_set_based_batches(
-                connection,
-                _upsert_local_track_sql(),
-                track_rows,
-            )
+            _upsert_local_tracks_and_retire_vacated_albums(connection, track_rows)
             _execute_set_based_batches(
                 connection,
                 _upsert_local_track_file_sql(),
@@ -1970,14 +1967,31 @@ def _execute_set_based_batches(
     connection: Any,
     sql: str,
     rows: list[dict[str, object]],
-) -> None:
+) -> list[Any]:
+    """Run `sql` once per batch; return each batch's cursor."""
+    cursors = []
     for batch_start in range(0, len(rows), _PIPELINE_BATCH_SIZE):
         batch_end = min(batch_start + _PIPELINE_BATCH_SIZE, len(rows))
         batch = [
             _jsonb_compatible(row)
             for row in rows[batch_start:batch_end]
         ]
-        connection.execute(sql, {"rows": _jsonb(batch)})
+        cursors.append(connection.execute(sql, {"rows": _jsonb(batch)}))
+    return cursors
+
+
+def _upsert_local_tracks_and_retire_vacated_albums(
+    connection: Any,
+    track_rows: list[dict[str, object]],
+) -> None:
+    """Upsert scanned tracks, then retire album rows the moves emptied."""
+    retire_vacated_local_albums(connection, {
+        int(_row_mapping(row)["vacated_album_id"])
+        for cursor in _execute_set_based_batches(
+            connection, _upsert_local_track_sql(), track_rows
+        )
+        for row in cursor.fetchall()
+    })
 
 
 def _jsonb_compatible(value: object) -> object:
@@ -6057,7 +6071,8 @@ def _upsert_local_track_sql() -> str:
             duration_seconds integer,
             metadata jsonb
           )
-        )
+        ),
+        upserted_tracks as (
         insert into library.local_tracks (
           library_id, album_id, artist_id, track_key, title, disc_number, track_number, duration_seconds, metadata
         )
@@ -6104,7 +6119,17 @@ def _upsert_local_track_sql() -> str:
             excluded.track_number,
             excluded.duration_seconds,
             library.local_tracks.metadata || excluded.metadata
-          );
+          )
+        returning library.local_tracks.id, library.local_tracks.album_id
+        )
+        -- The outer read shares the statement snapshot, so it sees each
+        -- updated track's album before this upsert moved it.
+        select distinct previous_track.album_id as vacated_album_id
+        from upserted_tracks
+        join library.local_tracks as previous_track
+          on previous_track.id = upserted_tracks.id
+        where previous_track.album_id is not null
+          and previous_track.album_id is distinct from upserted_tracks.album_id;
     """
 
 

@@ -514,11 +514,9 @@ def test_mixed_media_and_exception_failure_compensates_media_before_returning(
 
     def apply_repairs(raw_path, repairs):
         normalized = dict(repairs)
-        changed = media_title[raw_path] != normalized["title"]
-        if changed:
-            media_writes.append(normalized)
+        media_writes.append(normalized)
         media_title[raw_path] = normalized["title"]
-        return raw_path, changed, list(normalized) if changed else []
+        return raw_path, True, list(normalized)
 
     result = handle_edit_tags_request(
         album={
@@ -746,11 +744,10 @@ def test_concurrent_album_rename_failure_compensates_every_successful_media_writ
         if raw_path == second_path and destination == "New Album":
             assert first_write_completed.wait(timeout=1.0)
             raise RuntimeError("second write failed")
-        changed = media_albums[raw_path] != destination
         media_albums[raw_path] = destination
         if raw_path == first_path and destination == "New Album":
             first_write_completed.set()
-        return raw_path, changed, list(repairs) if changed else []
+        return raw_path, True, list(repairs)
 
     result = handle_edit_tags_request(
         album={
@@ -822,13 +819,11 @@ def test_partial_year_write_failure_compensates_with_precise_previous_release_da
 
     def apply_repairs(raw_path, repairs):
         normalized_repairs = dict(repairs)
-        changed = media_release_dates[raw_path] != normalized_repairs["year"]
-        if changed:
-            media_writes.append((raw_path, normalized_repairs))
+        media_writes.append((raw_path, normalized_repairs))
         if raw_path == second_path and normalized_repairs == {"year": "2014"}:
             raise RuntimeError("second year write failed")
         media_release_dates[raw_path] = normalized_repairs["year"]
-        return raw_path, changed, list(normalized_repairs) if changed else []
+        return raw_path, True, list(normalized_repairs)
 
     changed_files, skipped_files, failure = edit_workflows_module._run_edit_jobs(
         album={
@@ -1576,21 +1571,34 @@ def test_album_rename_releases_reservation_when_no_changes_remain(config):
     assert lease.released is True
 
 
-def _album_rename_jobs(config):
-    paths = [
+def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monkeypatch):
+    monkeypatch.setattr(edit_workflows_module, "sleep", lambda _seconds: None)
+    first, second = (
         str((config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / f"{index:02} track.mp3").resolve())
         for index in (1, 2)
-    ]
-    return paths, [
-        (path, {"path": path, "album": "Ремиксы"}, {"album": "Ремиксы 2"})
-        for path in paths
-    ]
+    )
+    albums = {first: "Ремиксы", second: "Ремиксы"}
+    held_restores = 2
 
+    def apply_repairs(path, repairs):
+        nonlocal held_restores
+        if path == second:
+            raise RuntimeError("second write failed")
+        if repairs["album"] == "Ремиксы" and held_restores:
+            held_restores -= 1
+            try:
+                raise PermissionError("file is in use")
+            except PermissionError as exc:
+                raise RuntimeError(f"Could not save tags for {path}: {exc}") from exc
+        albums[path] = repairs["album"]
+        return path, True, ["album"]
 
-def _run_album_rename(config, apply_repairs, jobs):
-    return edit_workflows_module._run_edit_jobs(
-        album={"name": "Ремиксы", "album_artist": "ДДТ", "tracks": [{"path": path} for path, _entry, _repairs in jobs]},
-        repair_jobs=jobs,
+    _changed, _skipped, failure = edit_workflows_module._run_edit_jobs(
+        album={"name": "Ремиксы", "album_artist": "ДДТ", "tracks": [{"path": first}, {"path": second}]},
+        repair_jobs=[
+            (path, {"path": path, "album": "Ремиксы"}, {"album": "Ремиксы 2"})
+            for path in (first, second)
+        ],
         config=config,
         logger=_logger_stub(),
         apply_repairs_worker=apply_repairs,
@@ -1602,45 +1610,6 @@ def _run_album_rename(config, apply_repairs, jobs):
         failure_prefix="Failed to edit tags for",
         edit_write_workers=1,
     )
-
-
-def test_failed_edit_reports_recovery_pending_when_a_restored_file_keeps_the_new_album(config, monkeypatch):
-    monkeypatch.setattr(edit_workflows_module, "sleep", lambda _seconds: None)
-    (first, second), jobs = _album_rename_jobs(config)
-    albums = {first: "Ремиксы", second: "Ремиксы"}
-
-    def apply_repairs(path, repairs):
-        if path == second:
-            raise RuntimeError("second write failed")
-        if repairs["album"] == "Ремиксы":
-            return path, True, ["album"]  # claims the restore, but the file keeps the new album
-        changed = albums[path] != repairs["album"]
-        albums[path] = repairs["album"]
-        return path, changed, ["album"] if changed else []
-
-    _changed, _skipped, failure = _run_album_rename(config, apply_repairs, jobs)
-
-    assert albums[first] == "Ремиксы 2"
-    assert failure["edit_outcome"] == "recovery_pending"
-    assert "restored tag values did not persist" in failure["error"]
-
-
-def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monkeypatch):
-    monkeypatch.setattr(edit_workflows_module, "sleep", lambda _seconds: None)
-    (first, second), jobs = _album_rename_jobs(config)
-    albums = {first: "Ремиксы", second: "Ремиксы"}
-    locked_restores = [PermissionError("file is in use"), PermissionError("file is in use")]
-
-    def apply_repairs(path, repairs):
-        if path == second:
-            raise RuntimeError("second write failed")
-        if repairs["album"] == "Ремиксы" and locked_restores:
-            raise locked_restores.pop()
-        changed = albums[path] != repairs["album"]
-        albums[path] = repairs["album"]
-        return path, changed, ["album"] if changed else []
-
-    _changed, _skipped, failure = _run_album_rename(config, apply_repairs, jobs)
 
     assert albums == {first: "Ремиксы", second: "Ремиксы"}
     assert failure["edit_outcome"] == "failed_rolled_back"

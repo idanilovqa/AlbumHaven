@@ -4720,17 +4720,6 @@ def test_asgi_edit_tags_disconnect_after_commit_recovers_completed_task(
     assert payload["destination_artist"] == "Overhead"
 
 
-def _restore_writer(applied_repairs):
-    """A writer that changes a file once; re-applying the same values is a no-op."""
-    def write(path, repairs):
-        change = (path, dict(repairs))
-        changed = change not in applied_repairs
-        if changed:
-            applied_repairs.append(change)
-        return path, changed, list(repairs) if changed else []
-    return write
-
-
 def test_selected_postgres_media_compensation_is_path_scoped_and_restores_exception(
     asgi_app,
     monkeypatch,
@@ -4745,7 +4734,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
     monkeypatch.setattr(
         asgi_routes,
         "_apply_repairs_worker",
-        _restore_writer(applied_repairs),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
     )
     monkeypatch.setattr(
         asgi_routes,

@@ -38,24 +38,20 @@ def restore_media_tag_values(
     path: str,
     previous_values: dict[str, str],
 ) -> None:
-    """Write previous tag values back and prove the file holds them.
+    """Write previous tag values back; the writer reads them back and raises on a mismatch.
 
-    Re-applying the same values must change nothing; a watcher or player
-    holding the file briefly is retried before the restore counts as failed.
+    A file that a watcher or player holds for a moment fails with an OS error,
+    so that restore is retried before it counts as failed.
     """
-    error: Exception
     for attempt in range(_RESTORE_ATTEMPTS):
         try:
             apply_repairs_worker(path, previous_values)
-            _path, still_changed, _fields = apply_repairs_worker(path, previous_values)
-            if not still_changed:
-                return
-            error = RuntimeError(f"{path}: restored tag values did not persist")
-        except OSError as exc:
-            error = exc
-        if attempt + 1 < _RESTORE_ATTEMPTS:
-            sleep(_RESTORE_RETRY_SECONDS * (2 ** attempt))
-    raise error
+            return
+        except Exception as exc:
+            transient = isinstance(exc, OSError) or isinstance(exc.__cause__, OSError)
+            if not transient or attempt + 1 == _RESTORE_ATTEMPTS:
+                raise
+        sleep(_RESTORE_RETRY_SECONDS * (2 ** attempt))
 
 
 def previous_tag_values(entry: JsonDict, fields) -> dict[str, str]:

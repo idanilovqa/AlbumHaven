@@ -8,6 +8,8 @@ import {
 
 // The bar may trail its label by one rounding step while it glides.
 const FILL_TOLERANCE_PERCENT = 1.5;
+// The app document paints this stage on its first frame (index.html).
+const APP_STARTING_PERCENT = 50;
 
 async function expectContinuousColdLoad({ page, stepLogger }, testInfo) {
   const startupProgress = new StartupProgress(page);
@@ -34,10 +36,15 @@ async function expectContinuousColdLoad({ page, stepLogger }, testInfo) {
     const shown = samples.filter((sample) => sample.overlayVisible);
     const signInFrames = shown.filter((sample) => sample.path === '/login');
     const appFrames = shown.filter((sample) => sample.path !== '/login');
-    expect(signInFrames.length).toBeGreaterThan(0);
+    // A fast sign-in can navigate before its overlay is sampled; the app's first
+    // frame must still start at or above anything the sign-in page showed.
     expect(appFrames.length).toBeGreaterThan(0);
-    expect(appFrames[0].percent).toBeGreaterThanOrEqual(Math.max(...signInFrames.map((sample) => sample.percent)));
-    expect(Math.max(...appFrames.map((sample) => sample.percent))).toBeGreaterThanOrEqual(75);
+    expect(appFrames[0].percent).toBeGreaterThanOrEqual(
+      Math.max(APP_STARTING_PERCENT, ...signInFrames.map((sample) => sample.percent)),
+    );
+    // A fast app can pass its later stages between samples; it releases the
+    // overlay only after finishing, so the release frame must read 100%.
+    expect(samples.at(-1)).toMatchObject({ overlayVisible: false, percent: 100 });
     const regressions = shown.filter((sample, index) => index > 0 && sample.percent < shown[index - 1].percent);
     expect(regressions).toEqual([]);
   });

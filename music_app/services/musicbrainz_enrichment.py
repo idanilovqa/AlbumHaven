@@ -419,7 +419,12 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         if checked:
             _settle_shared_albums(scored, albums, mirror)
             decision = decide(scored, local_name)
-        unscored = [candidate for candidate in pool.values() if proven(candidate) and candidate.get("albums") is None]
+        if decision["classification"] == "ambiguous" and _compare_capped_albums(
+                decision["candidates"][:2], albums, mirror, keep=max(1, reserve)):
+            # The margin can fail only because tracklists were capped (Alice Cooper:
+            # 19 albums to 7, 11 of them compared on the year alone).
+            decision = decide(scored, local_name)
+        unscored =[candidate for candidate in pool.values() if proven(candidate) and candidate.get("albums") is None]
         if decision["classification"] == "matched" and unscored:
             # The budget ran out before a candidate found through an album was scored:
             # it could hold the same albums, so never decide early. Same-named
@@ -647,6 +652,24 @@ def _match_box_set_discs(candidate, albums, local_name, mirror) -> None:
                     best, best_rank = entry, rank
         if best:
             candidate["albums"][index] = best
+
+
+def _compare_capped_albums(candidates, albums, mirror, *, keep: int) -> bool:
+    """Compare the leading candidates' remaining agreeing albums with their tracks,
+    keeping ``keep`` requests (the album searches, the final artist lookup). True
+    when any album was compared."""
+    compared = False
+    for candidate in candidates:
+        for index, evidence in enumerate(candidate["albums"]):
+            if evidence["level"] != "agree":
+                continue
+            if mirror.remaining <= keep:
+                return compared
+            fetched = _fetch_tracks(evidence, albums[index], mirror)
+            if fetched is None:
+                return compared
+            compared = compared or fetched
+    return compared
 
 
 def _settle_shared_albums(candidates, albums, mirror) -> None:

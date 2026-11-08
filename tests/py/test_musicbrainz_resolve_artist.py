@@ -355,6 +355,18 @@ def test_new_credit_evidence_scores_an_artist_again_with_its_discs():
     assert "albums" not in entry and "discs_checked" not in entry
 
 
+def test_a_margin_short_only_of_capped_tracklists_compares_the_rest_before_deciding():
+    """Alice Cooper: 12 albums to 6, but only 8 of the 12 had their tracks compared."""
+    german = [f"German {index}" for index in range(12)]
+    trance = [f"Trance {index}" for index in range(6)]
+    client, _calls = _client({GERMAN: german, TRANCE: trance})
+
+    outcome = resolve_artist(_context(*german, *trance), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+
+
 def test_a_special_purpose_artist_is_never_a_candidate():
     various = "89ad4ac3-39f7-470e-963a-56509c546377"
     client, _calls = _client({various: ["Kingdom of the Night"]}, search=[],

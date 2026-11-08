@@ -243,18 +243,35 @@ def _safe_lastfm_connection_error(error: LastfmError) -> str:
     return "Last.fm rejected the connection."
 
 
+# The Last.fm total is a live API call (seconds over the internet); opening
+# Settings > Integrations waited for it every time. A short per-account cache
+# keeps reopening instant; the local listen counts below are always fresh.
+_LASTFM_TOTAL_TTL_SECONDS = 300.0
+_LASTFM_TOTAL_CACHE: dict[int, tuple[float, int | None]] = {}
+
+
+def _cached_lastfm_total_scrobbles(config: dict[str, Any], *, account_id: int, session: object) -> int | None:
+    import time
+
+    cached = _LASTFM_TOTAL_CACHE.get(int(account_id))
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _LASTFM_TOTAL_TTL_SECONDS:
+        return cached[1]
+    try:
+        total = get_lastfm_total_scrobbles(config, session=session)
+    except LastfmError:
+        return cached[1] if cached is not None else None
+    _LASTFM_TOTAL_CACHE[int(account_id)] = (now, total)
+    return total
+
+
 def _lastfm_scrobble_summary(
     config: dict[str, Any], *, account_id: int, library_id: int, session: object | None,
 ) -> JsonDict:
     counts = build_listen_history_status_counts(
         config, account_id=account_id, library_id=library_id,
     )
-    lastfm_total = None
-    if session is not None:
-        try:
-            lastfm_total = get_lastfm_total_scrobbles(config, session=session)
-        except LastfmError:
-            lastfm_total = None
+    lastfm_total = _cached_lastfm_total_scrobbles(config, account_id=account_id, session=session) if session is not None else None
     return {
         "scrobbled": int(counts["listen_history_count"]),
         "pending": int(counts["pending_scrobble_count"]),
@@ -427,6 +444,7 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
     config = _app_config(request)
     logger = _app_logger(request)
     scope = await history_scope_for_request(request)
+    _LASTFM_TOTAL_CACHE.pop(int(scope.account_id), None)
     retry_summary = {
         "pending_before": 0,
         "attempted": 0,
@@ -620,6 +638,7 @@ async def utilities_local_playlist_import_execute() -> JSONResponse:
 @router.post("/utilities/integrations/lastfm")
 async def utilities_lastfm_settings(request: Request) -> JSONResponse:
     history_scope = await history_scope_for_request(request)
+    _LASTFM_TOTAL_CACHE.pop(int(history_scope.account_id), None)
     owner = {"account_id": history_scope.account_id, "library_id": history_scope.library_id}
     config = _app_config(request)
     logger = _app_logger(request)

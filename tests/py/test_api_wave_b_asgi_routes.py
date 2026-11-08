@@ -2368,3 +2368,29 @@ def _authorize_loop_fixture(monkeypatch):
         library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
     async def resolve_actor(_request): return actor
     monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)
+
+
+def test_lastfm_total_is_fetched_once_per_window_and_kept_through_a_failure(monkeypatch):
+    """Settings > Integrations waited ~2.3 s on the live Last.fm total every time."""
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    calls = []
+
+    def total(_config, *, session):
+        calls.append(session)
+        if len(calls) > 1:
+            raise routes.LastfmError("offline")
+        return 1234
+
+    monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", total)
+    routes._LASTFM_TOTAL_CACHE.pop(987, None)
+    try:
+        assert routes._cached_lastfm_total_scrobbles({}, account_id=987, session="s") == 1234
+        assert routes._cached_lastfm_total_scrobbles({}, account_id=987, session="s") == 1234
+        assert len(calls) == 1
+        # An expired entry refreshes; a failed refresh keeps the last known total.
+        routes._LASTFM_TOTAL_CACHE[987] = (0.0, 1234)
+        assert routes._cached_lastfm_total_scrobbles({}, account_id=987, session="s") == 1234
+        assert len(calls) == 2
+    finally:
+        routes._LASTFM_TOTAL_CACHE.pop(987, None)

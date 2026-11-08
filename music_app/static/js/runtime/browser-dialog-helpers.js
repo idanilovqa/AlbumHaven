@@ -49,6 +49,8 @@ function showAppFormDialog(options = {}) {
     finally { submitting = false; syncSubmit(); }
   };
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  const description = get('description');
+  if (description) { description.textContent = options.description || ''; description.hidden = !options.description; }
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = options.mode === 'reading'; cancel.hidden = false;
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }

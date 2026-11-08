@@ -2646,6 +2646,8 @@ function showAppFormDialog(options = {}) {
     finally { submitting = false; syncSubmit(); }
   };
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  const description = get('description');
+  if (description) { description.textContent = options.description || ''; description.hidden = !options.description; }
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = options.mode === 'reading'; cancel.hidden = false;
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
@@ -12200,7 +12202,7 @@ function showAlbumCardContextMenu(x, y, album) {
     )),
     isMarkedVersion
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+      : (getVersionPickerCandidates(album).length ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>' : ''),
     ...separateItems,
   ].join('');
   menu.hidden = false;
@@ -12240,17 +12242,49 @@ function showArtistTreeContextMenu(x, y, artist) {
   }
 }
 
+// Version identity ignores case, accents, punctuation and bracketed edition notes:
+// "Helloween", "Helloween (Remastered 2006)" and "HELLOWEEN [Deluxe]" are one title.
+function normalizeVersionTitle(value) {
+  return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+    .replace(/[([][^)\]]*[)\]]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+// Versions share at least half of their tracks (by normalized title, against the shorter tracklist).
+function tracklistsShareHalf(leftTitles, rightTitles) {
+  const left = new Set(leftTitles.map(normalizeVersionTitle).filter(Boolean));
+  const right = new Set(rightTitles.map(normalizeVersionTitle).filter(Boolean));
+  if (!left.size || !right.size) return false;
+  let shared = 0;
+  left.forEach((title) => { if (right.has(title)) shared += 1; });
+  return shared / Math.min(left.size, right.size) >= 0.5;
+}
+
+async function filterVersionCandidatesByTracklist(sourceAlbum, candidates) {
+  const titlesOf = async (album) => {
+    const details = await fetchTrackModalAlbumDetails(album?.key, { albumId: album?.album_id });
+    return (Array.isArray(details?.tracks) ? details.tracks : []).map((track) => track?.title || '');
+  };
+  const sourceTitles = await titlesOf(sourceAlbum);
+  const checks = await Promise.all(candidates.map(async (candidate) => {
+    try { return tracklistsShareHalf(sourceTitles, await titlesOf(candidate)); } catch (_error) { return false; }
+  }));
+  return candidates.filter((_candidate, index) => checks[index]);
+}
+
 function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
+  const sourceTitle = normalizeVersionTitle(sourceAlbum?.name);
   const sourceArtists = new Set(
     (Array.isArray(sourceAlbum?.artists) ? sourceAlbum.artists : [sourceAlbum?.album_artist])
       .map((value) => String(value || '').trim())
       .filter(Boolean),
   );
   const seen = new Set();
+  if (!sourceTitle) return [];
   return flattenVisibleAlbums()
     .filter((item) => (
       String(item?.key || '') !== sourceKey
+      && normalizeVersionTitle(item?.name) === sourceTitle
       && (Array.isArray(item?.artists) ? item.artists : [item?.album_artist])
         .map((value) => String(value || '').trim())
         .filter(Boolean)
@@ -12266,7 +12300,7 @@ function getVersionPickerCandidates(sourceAlbum) {
 }
 
 function buildVersionPickerListHtml(candidates) {
-  if (!candidates.length) return '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
+  if (!candidates.length) return '<div class="version-picker-empty">No other album of this name shares at least half of its tracks.</div>';
   return candidates.map((item) => `
     <button class="version-picker-option" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="false">
       <span class="version-picker-option-cover">
@@ -12289,10 +12323,18 @@ function openVersionPickerModal(album) {
   let onPick = null;
   return showAppFormDialog({
     title: 'Mark As A Version',
+    description: `Select another album that is a version of ${String(album.name || 'this album')}.`,
     submitLabel: 'Save',
     submitEnabled: false,
-    contentHtml: `<div class="version-picker-list" data-version-picker-list>${buildVersionPickerListHtml(getVersionPickerCandidates(album))}</div>`,
+    contentHtml: '<div class="version-picker-list" data-version-picker-list aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></div>',
     onMount(content, controls) {
+      // Only same-name albums that share at least half of their tracks are offered.
+      void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((candidates) => {
+        const list = content.querySelector?.('[data-version-picker-list]');
+        if (!list) return;
+        list.removeAttribute('aria-busy');
+        list.innerHTML = buildVersionPickerListHtml(candidates);
+      });
       onPick = (event) => {
         const option = event.target.closest?.('[data-version-picker-target]');
         if (!option) return;

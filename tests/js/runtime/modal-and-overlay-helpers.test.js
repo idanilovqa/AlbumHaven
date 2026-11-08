@@ -2121,37 +2121,51 @@ test('gallery album menu offers Separate release for versions, not for unversion
   assert.doesNotMatch(menu.innerHTML, /Separate release/);
 });
 
-test('Mark As A Version uses the shared app-form dialog with no instruction sentence', async () => {
+test('Mark As A Version offers only same-name albums sharing half their tracks, under an explanatory line', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
   const calls = [];
+  const tracks = {
+    a: ['Starlight', 'Murderer', 'Warrior', 'Victim of Fate'],
+    b: ['Starlight', 'Murderer (Remastered)', 'Warrior', 'Cry for Freedom'],
+    c: ['Walls of Jericho', 'Ride the Sky'],
+  };
   const context = vm.createContext({
     escapeHtml: (value) => String(value ?? ''),
     buildAlbumDisplayCoverUrl: () => '/cover',
     compareAlbumVariants: () => 0,
     flattenVisibleAlbums: () => [
-      { key: 'a', name: 'Hilda: Season 2', album_artist: 'Ryan Carlson' },
-      { key: 'b', name: 'Hilda: Season 1', album_artist: 'Ryan Carlson', year: '2018' },
+      { key: 'a', name: 'Helloween', album_artist: 'Helloween' },
+      { key: 'b', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: '2006' },
+      { key: 'c', name: 'HELLOWEEN [Bonus]', album_artist: 'Helloween' },
+      { key: 'd', name: 'Walls of Jericho', album_artist: 'Helloween' },
     ],
+    fetchTrackModalAlbumDetails: async (key) => ({ tracks: (tracks[key] || []).map((title) => ({ title })) }),
     markAlbumVersion: async (child, parent) => { calls.push(['mark', child, parent]); },
     showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
   });
   vm.runInContext(source, context);
-  await context.openVersionPickerModal({ key: 'a', name: 'Hilda: Season 2', album_artist: 'Ryan Carlson' });
+  const helloween = { key: 'a', name: 'Helloween', album_artist: 'Helloween' };
+  assert.deepEqual(Array.from(context.getVersionPickerCandidates(helloween), (item) => item.key), ['b', 'c'], 'only albums of the same name');
+  assert.deepEqual(Array.from(context.getVersionPickerCandidates({ key: 'x', name: 'Keeper of the Seven Keys', album_artist: 'Helloween' })), []);
+  await context.openVersionPickerModal(helloween);
   const options = calls[0][1];
   assert.equal(options.title, 'Mark As A Version');
+  assert.equal(options.description, 'Select another album that is a version of Helloween.');
   assert.equal(options.submitEnabled, false);
-  assert.doesNotMatch(options.contentHtml, /should own|Choose which/);
-  assert.match(options.contentHtml, /data-version-picker-target="b"/);
-  assert.doesNotMatch(options.contentHtml, /data-version-picker-target="a"/);
   let enabled = false;
   const listeners = {};
   const option = { getAttribute: () => 'b', classList: { toggle() {} }, setAttribute() {} };
+  const list = { innerHTML: '', removeAttribute() {} };
   const content = {
     addEventListener: (name, handler) => { listeners[name] = handler; },
     removeEventListener: (name) => { delete listeners[name]; },
+    querySelector: () => list,
     querySelectorAll: () => [option],
   };
   options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(list.innerHTML, /data-version-picker-target="b"/, 'shares 3 of 4 tracks');
+  assert.doesNotMatch(list.innerHTML, /data-version-picker-target="c"/, 'same name, different tracks');
   listeners.click({ target: { closest: () => option } });
   assert.equal(enabled, true);
   await options.onSubmit();

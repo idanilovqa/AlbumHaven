@@ -172,3 +172,60 @@ def test_worker_forwards_deleted_subtree_without_filesystem_discovery():
         "subtree_paths": ["library/artist"], "context_changed": True,
     })]
     assert worker._wake.is_set()
+
+
+def _touch(*paths):
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"audio")
+
+
+def test_multi_folder_albums_get_a_truthful_local_art_folder(tmp_path):
+    root = tmp_path / "music"
+    other_root = tmp_path / "new"
+    config = {"_library_root_paths_snapshot": (root, other_root)}
+    album = root / "Magenta" / "2016 - Sign of IV"
+    discs = [album / "cd1" / "01.mp3", album / "cd2 (bonus)" / "01.mp3"]
+    copy_a = [other_root / "Prog" / "Hot Rats" / f"0{n}.mp3" for n in range(1, 4)]
+    copy_b = [root / "Zappa" / "1969 - Hot Rats" / "01.mp3"]
+    loose = [root / "track.mp3"]
+    _touch(*discs, *copy_a, *copy_b, *loose)
+
+    key = lambda path: Path(inventory.root_key(path))
+    assert inventory.local_inventory_root_for_tracks(config, [str(p) for p in discs]) == key(album)
+    assert inventory.local_inventory_root_for_tracks(config, [str(p) for p in copy_a + copy_b]) == key(copy_a[0].parent)
+    assert inventory.local_inventory_root_for_tracks(config, [str(p) for p in loose]) is None, "never a whole library root"
+    assert inventory.local_inventory_root_for_tracks(config, [str(root / "gone" / "01.mp3")]) is None
+
+
+@pytest.mark.parametrize(("files_exist", "fallback", "expected"), [
+    (True, Path("album"), ("publish", Path("album"))),
+    (True, None, ("defer", {"delay_seconds": 3600, "error": None})),
+    (False, None, ("defer", {})),
+])
+def test_unresolved_context_reports_storage_unavailable_only_when_files_are_missing(monkeypatch, files_exist, fallback, expected):
+    from music_app.services import cover_workflow
+
+    calls = []
+    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
+    worker._wake.set()
+    worker.repository.next_context = lambda **kwargs: {
+        "context_key": "context", "revision": 4, "track_paths": ["a/cd1/01.mp3", "a/cd2/01.mp3"], "foreground_requested": True,
+    }
+
+    def publish(key, revision, root, **kwargs):
+        calls.append(("publish", root))
+        worker._stop.set()
+
+    def defer(key, revision, **kwargs):
+        calls.append(("defer", kwargs))
+        worker._stop.set()
+
+    worker.repository.publish_context = publish
+    worker.repository.defer_context = defer
+    monkeypatch.setattr(cover_workflow, "resolve_album_root_from_track_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(inventory, "local_inventory_root_for_tracks", lambda config, paths: fallback)
+    monkeypatch.setattr(inventory, "local_inventory_tracks_exist", lambda paths: files_exist)
+    worker._run()
+
+    assert calls == [expected]

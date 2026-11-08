@@ -66,19 +66,19 @@ def _reference(ffmpeg: str, path: Path) -> array:
 
 @pytest.fixture(scope="module")
 def android_decoder_tool(tmp_path_factory) -> Path:
-    cmake = shutil.which("cmake")
+    make = shutil.which("make")
     compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-    if os.name == "nt" or cmake is None or compiler is None:
-        message = "the Android decoder gate builds a POSIX host tool with cmake and a C compiler"
+    if os.name == "nt" or make is None or compiler is None:
+        message = "the Android decoder gate builds a POSIX host tool with make and a C compiler"
         if os.environ.get("CI"):
             pytest.fail(message)
         pytest.skip(f"{message}; CI runs it")
     build = tmp_path_factory.mktemp("android-decoders")
-    for command in (
-        [cmake, "-S", str(ANDROID_DECODER_SOURCE), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release"],
-        [cmake, "--build", str(build), "--parallel"],
-    ):
-        subprocess.run(command, check=True, capture_output=True)
+    subprocess.run(
+        [make, "-C", str(ANDROID_DECODER_SOURCE), f"BUILD={build}", f"CC={compiler}", f"-j{os.cpu_count() or 2}"],
+        check=True,
+        capture_output=True,
+    )
     return build / "ah-decode-tool"
 
 

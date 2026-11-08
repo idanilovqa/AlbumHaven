@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "org.albumhaven.playback"
     compileSdk = 36
-    // CI runners and developers build the decoders with this exact NDK and CMake.
+    // CI, the release container (cirruslabs/android-sdk:36-ndk) and developers use this exact NDK.
     ndkVersion = "27.3.13750724"
 
     defaultConfig {
@@ -19,10 +19,10 @@ android {
         }
     }
 
+    // ndk-build comes with the NDK, so building the decoders needs no CMake.
     externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.31.6"
+        ndkBuild {
+            path = file("src/main/cpp/Android.mk")
         }
     }
 

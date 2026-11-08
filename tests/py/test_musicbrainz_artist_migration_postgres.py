@@ -16,6 +16,7 @@ MIGRATION_PATH = MIGRATIONS_ROOT / MIGRATION_NAME
 DISCOGS_MIGRATION_NAME = "0172_add_musicbrainz_artist_discogs_link.sql"
 RECHECK_MIGRATION_NAME = "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql"
 MATCHER_VERSION_MIGRATION_NAME = "0174_add_musicbrainz_matcher_version_and_credit_name.sql"
+ALBUM_EVIDENCE_MIGRATION_NAME = "0175_add_musicbrainz_match_album_evidence.sql"
 
 
 def apply_delivery_migrations(connection) -> None:
@@ -97,7 +98,8 @@ def test_delivery_1_migration_is_next_and_lexically_ordered():
     names = sorted(path.name for path in MIGRATIONS_ROOT.glob("*.sql") if path.is_file())
 
     assert MIGRATION_NAME in names
-    assert names[-4:] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME, RECHECK_MIGRATION_NAME, MATCHER_VERSION_MIGRATION_NAME]
+    assert names[-5:] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME, RECHECK_MIGRATION_NAME, MATCHER_VERSION_MIGRATION_NAME,
+                          ALBUM_EVIDENCE_MIGRATION_NAME]
     # 0112 is the ported Problematic Files path projection, also a reserved number.
     assert names[names.index(MIGRATION_NAME) - 1].startswith("0112_")
 

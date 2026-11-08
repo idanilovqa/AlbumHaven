@@ -107,7 +107,9 @@ def load_release_candidates(connection, album, support_state, *, resolved_releas
     # (Helloween 1985 and 2021 share a title, not songs). Manual links still group regardless.
     selected_id = album.get('album_id') or next(
         (candidate['album_id'] for candidate in candidates if candidate['key'] == key), None)
-    titles = _track_titles_by_album(connection, {candidate['album_id'] for candidate in candidates if candidate['album_id']} | ({selected_id} if selected_id else set()))
+    others = {candidate['album_id'] for candidate in candidates if candidate['album_id'] and candidate['album_id'] != selected_id}
+    # Nothing to compare (no other release): skip the tracklist read.
+    titles = _track_titles_by_album(connection, others | {selected_id}) if selected_id and others else {}
     for candidate in candidates:
         candidate['shares_tracks'] = bool(selected_id) and (
             candidate['album_id'] == selected_id

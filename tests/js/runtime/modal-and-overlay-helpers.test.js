@@ -774,10 +774,39 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false, 'the button stays enabled for the whole library');
   // Opening Loose Tracks resolves the whole library without repeating the probe.
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), ['Art Zoyd', '']);
+  // The query-scoped request never depends on the auto-selected artist.
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null, '']);
   assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', '']);
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+});
+
+test('a search starts its Loose Tracks request with the search and the indicator reuses it', async () => {
+  // The follow-up used to start only after the gallery committed: a second
+  // round trip (~0.5 s synthetic, 1-2 s real library) before the search settled.
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&q=${encodeURIComponent(view.query || '')}`
+    + `&artist=${encodeURIComponent(view.selected_artist || '')}&category=main_library`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [{ path: 'C:/Music/x.mp3', title: 'Match' }] }) };
+  };
+  // The search request itself (no artist yet) starts the prefetch.
+  context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&q=neal&category=main_library&gallery_scope=all');
+  assert.equal(requested.length, 1);
+  // The committed view auto-selected an artist; the indicator reuses the request.
+  context.state.view = { query: 'neal', selected_artist: 'Neal Morse' };
+  context.buildApiUrl = (view) => `/view-data?surface=albums&q=${encodeURIComponent(view.query || '')}`
+    + `&artist=${encodeURIComponent(view.selected_artist || '')}&category=main_library&gallery_scope=all`;
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 1);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), true);
+  // Non-search requests never prefetch.
+  context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&category=main_library');
+  assert.equal(requested.length, 1);
 });
 
 test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {

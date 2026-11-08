@@ -6341,6 +6341,7 @@ for (const status of ['pending', 'running']) {
   });
   const savedCover = { id: 'saved-cover', url: 'https://covers.example/saved.jpg' };
   const stagedCover = { id: 'staged-cover', filename: 'staged.png', object_url: 'blob:staged-cover' };
+  context.state.coverLookup.modal.localInventoryLoaded = true; // UI-3: nothing is selected before LOCAL loads
   assert.match(context.buildCoverLookupCard(savedCover, 'saved-remote'), /cover-lookup-art-card is-active/);
 
   context.state.coverLookup.modal.pendingPastedImageId = stagedCover.id;
@@ -8017,14 +8018,16 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
   assert.match(html, /<\/div> <div class="cover-lookup-gallery">/, 'the LOCAL gallery keeps its place under the heading');
 });
 
-require('node:test')('UI-3: a linked remote cover reads Selected only when the album has no local cover file', () => {
+require('node:test')('UI-3: a linked remote cover reads Selected only after LOCAL loaded without an active local file', () => {
   const context = loadHelper({ escapeHtml: value => String(value ?? '') });
   Object.assign(context.state.coverLookup.modal, {
     selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '', activeLocalSelectionPath: '',
-    album: { key: 'a', cover_path: 'C:/Music/A/cover.jpg' },
+    album: { key: 'a', cover_path: 'C:/Music/A/cover.jpg' }, localInventoryLoaded: false,
   });
   const card = () => context.buildCoverLookupCard({ id: 'r', source: 'apple', album: 'A' }, 'saved-remote');
-  assert.doesNotMatch(card(), /\bis-active\b/, 'before LOCAL lists the album cover, nothing is selected');
-  context.state.coverLookup.modal.album = { key: 'a', cover_path: '' };
-  assert.match(card(), /\bis-active\b/, 'a remote-only album shows its linked remote cover as selected');
+  assert.doesNotMatch(card(), /\bis-active\b/, 'before LOCAL loads, nothing is selected');
+  context.state.coverLookup.modal.localInventoryLoaded = true;
+  assert.match(card(), /\bis-active\b/, 'with no active local file, the linked remote cover is selected');
+  context.state.coverLookup.modal.activeLocalSelectionPath = 'C:/Music/A/cover.jpg';
+  assert.doesNotMatch(card(), /\bis-active\b/, 'an active local file keeps the selection');
 });

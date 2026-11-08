@@ -295,10 +295,10 @@ class BridgeControllerTest {
         assertTrue(ok(send(sandbox, command("playback.next", """{"queueRevision":2}"""))))
         assertTrue(ok(send(sandbox, command("playback.previous", """{"queueRevision":2}"""))))
         assertTrue(
-            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":48000}"""))),
+            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":44100,"sampleRate":44100}"""))),
         )
         assertTrue(
-            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":48000,"kind":"long-loop"}"""))),
+            ok(send(sandbox, command("playback.setLoop", """{"queueRevision":2,"startFrame":0,"endFrame":96000,"sampleRate":96000,"kind":"long-loop"}"""))),
         )
         assertTrue(ok(send(sandbox, command("playback.clearLoop", """{"queueRevision":2}"""))))
         assertTrue(ok(send(sandbox, load(revision = 3, keepCurrent = "true"))))
@@ -332,11 +332,16 @@ class BridgeControllerTest {
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"resumeToken\":null") + "]"),
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"resumeToken\":\"\"") + "]"),
             load(keepCurrent = "1"),
-            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"kind":"loop"}"""),
+            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"sampleRate":48000,"kind":"loop"}"""),
+            // Loop points are counted at the track's own rate, which every loop names.
+            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000}"""),
+            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"sampleRate":0}"""),
+            command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"sampleRate":384000}"""),
             load(items = "[" + List(PlaybackBridge.MAX_QUEUE_ITEMS + 1) { item }.joinToString(",") + "]"),
             load(currentIndex = 1),
             load(positionMs = "-1"),
-            load(loop = """{"startFrame":10,"endFrame":10}"""),
+            load(loop = """{"startFrame":10,"endFrame":10,"sampleRate":48000}"""),
+            load(loop = """{"startFrame":10,"endFrame":20}"""),
             load(autoplay = "\"yes\""),
             load(revision = 0),
             command("playback.loadQueue", """{"queueRevision":1}"""),

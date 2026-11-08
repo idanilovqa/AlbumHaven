@@ -1025,7 +1025,7 @@ class NativePlaybackControllerTest {
         harness.load(1, long)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
         // 0.5 s to 3.5 s at 48 kHz, named short by the web.
-        harness.controller.setLoop(1, LoopRange48k(24_000, 168_000, LoopKind.SHORT))
+        harness.controller.setLoop(1, LoopRange(24_000, 168_000, RATE, LoopKind.SHORT))
         harness.runUntil { harness.events.count { it is NativePlaybackEvent.LoopWrapped } == 2 }
         val sent = harness.server.texts.map(::JSONObject)
         val loopOpens = sent.filter { it.getString("type") == "open" && it.getString("role") == "continuity" }
@@ -1033,6 +1033,26 @@ class NativePlaybackControllerTest {
         val runs = harness.sinks.last().runs()
         assertEquals(listOf(Run(3, 0, 168_000), Run(3, 24_000, 144_000)), runs.take(2))
         assertTrue(sent.none { it.getString("type") == "promote" })
+    }
+
+    @Test
+    fun loopPointsCountedAtAnotherRateWaitAndTheTracksOwnRateIsReported() {
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(RATE, harness.controller.snapshot.sampleRate)
+
+        // Counted at 44.1 kHz for a 48 kHz track: no loop opens until the web recounts it.
+        harness.controller.setLoop(1, LoopRange(44_100, 88_200, 44_100, LoopKind.LONG))
+        repeat(50) { harness.step() }
+        fun loopOpens() = harness.server.texts.map(::JSONObject)
+            .filter { it.getString("type") == "open" && it.getString("role") == "continuity" }
+        assertEquals(emptyList<Long>(), loopOpens().map { it.getLong("startFrame") })
+
+        harness.controller.setLoop(1, LoopRange(48_000, 96_000, RATE, LoopKind.LONG))
+        harness.runUntil { loopOpens().isNotEmpty() }
+        assertEquals(listOf(48_000L), loopOpens().map { it.getLong("startFrame") })
     }
 
     @Test

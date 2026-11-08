@@ -224,7 +224,7 @@ test('native events drive the existing player facade callbacks and stale revisio
 test('transport commands name the applied revision and continuity reuses the native queue', async () => {
   const { api, bridge } = createHarness();
   await api.start(tracks[0]);
-  bridge.event('playback.state', state(1, 'playing'));
+  bridge.event('playback.state', { ...state(1, 'playing'), sampleRate: 44100 });
 
   await api.pause();
   assert.equal(api.snapshot().paused, true);
@@ -240,7 +240,7 @@ test('transport commands name the applied revision and continuity reuses the nat
   assert.deepEqual(commands(bridge, 'playback.play').map(message => message.payload), [{ queueRevision: 1 }]);
   assert.deepEqual(commands(bridge, 'playback.seek').map(message => message.payload), [{ queueRevision: 1, positionMs: 42500 }]);
   assert.deepEqual(commands(bridge, 'playback.setLoop').map(message => message.payload),
-    [{ queueRevision: 1, startFrame: 480000, endFrame: 960000, kind: 'long-loop' }]);
+    [{ queueRevision: 1, startFrame: 441000, endFrame: 882000, sampleRate: 44100, kind: 'long-loop' }]);
   assert.deepEqual(commands(bridge, 'playback.clearLoop').map(message => message.payload), [{ queueRevision: 1 }]);
   assert.equal(commands(bridge, 'playback.stop').length, 1);
   assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
@@ -365,10 +365,31 @@ test('the native queue starts at the album\'s first track so Android\'s previous
 test('a loop names the web\'s kind so Android replays a short loop from retained PCM', async () => {
   const { api, bridge } = createHarness();
   await api.start(tracks[0]);
-  bridge.event('playback.state', state(1, 'playing'));
+  bridge.event('playback.state', { ...state(1, 'playing'), sampleRate: 96000 });
   await api.continuity(tracks[0], { kind: 'short-loop', startSeconds: 1.3, endSeconds: 6.3 });
   assert.deepEqual(commands(bridge, 'playback.setLoop').map(message => message.payload),
-    [{ queueRevision: 1, startFrame: 62400, endFrame: 302400, kind: 'short-loop' }]);
+    [{ queueRevision: 1, startFrame: 124800, endFrame: 604800, sampleRate: 96000, kind: 'short-loop' }]);
+});
+
+test('loop points wait for the track\'s own rate and follow it when Android reports another', async () => {
+  const { api, bridge } = createHarness();
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'loading'));
+  await api.continuity(tracks[0], { kind: 'long-loop', startSeconds: 2, endSeconds: 9 });
+  assert.equal(commands(bridge, 'playback.setLoop').length, 0, 'no rate, no loop points');
+
+  bridge.event('playback.state', { ...state(1, 'playing'), sampleRate: 44100 });
+  bridge.event('playback.position', { ...state(1, 'playing', 500), sampleRate: 44100 });
+  bridge.event('playback.position', { ...state(1, 'playing', 900), sampleRate: 88200 });
+  await settle();
+  assert.deepEqual(commands(bridge, 'playback.setLoop').map(message => message.payload), [
+    { queueRevision: 1, startFrame: 88200, endFrame: 396900, sampleRate: 44100, kind: 'long-loop' },
+    { queueRevision: 1, startFrame: 176400, endFrame: 793800, sampleRate: 88200, kind: 'long-loop' },
+  ]);
+  api.setLoop(false);
+  bridge.event('playback.position', { ...state(1, 'playing', 1200), sampleRate: 48000 });
+  await settle();
+  assert.equal(commands(bridge, 'playback.setLoop').length, 2, 'a cleared loop is not sent again');
 });
 
 test('held references are reused and an expired one is fetched again', async () => {

@@ -11715,7 +11715,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.native.v1": "optional",
     "playback.webview.v1": "optional",
     "playback.queue.v1": "optional",
-    "playback.loops.v1": "optional",
+    "playback.loops.v2": "optional",
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "sandbox.select.v1": "optional",
@@ -11924,11 +11924,11 @@ const ANDROID_NATIVE_PLAYBACK_CAPABILITY = 'playback.native.v1';
 // `queueGroup`, so groups need no capability.
 const ANDROID_NATIVE_QUEUE_CAPABILITY = 'playback.queue.v1';
 // `playback.setLoop` with the web's loop kind, and `playback.clearLoop`.
-const ANDROID_NATIVE_LOOPS_CAPABILITY = 'playback.loops.v1';
+// Loop points travel in frames of the track at the sample rate Android reports for it.
+const ANDROID_NATIVE_LOOPS_CAPABILITY = 'playback.loops.v2';
 const ANDROID_NATIVE_QUEUE_LIMIT = 100;
 const ANDROID_NATIVE_TEXT_LIMIT = 512;
 const ANDROID_NATIVE_MESSAGE_BUDGET_BYTES = 60 * 1024;
-const ANDROID_NATIVE_LOOP_RATE = 48000;
 const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 // A cached reference is reused only while it stays valid well past a long track.
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
@@ -11960,6 +11960,11 @@ const androidNativePlayback = {
   firstFrameNotified: false,
   referenceRetried: false,
   loopKind: null,
+  // The loop the web asked for, in seconds, and the rate it was last sent at; Android counts loop
+  // points in the current track's own frames, so a loop waits until that rate is known.
+  loop: null,
+  // The current item's sample rate, as Android last reported it; 0 until it knows.
+  sampleRate: 0,
   mode: 'stopped',
   lastError: null,
   // `owned` follows Android's claim events; `ownerIntent` covers a start whose claim is pending.
@@ -12173,6 +12178,8 @@ async function startAndroidNativePlaybackTrack(track, {
   native.streamId += 1;
   native.firstFrameNotified = false;
   native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
   native.lastError = null;
   if (!referenceRetry) native.referenceRetried = false;
   Object.assign(native.snapshot, {
@@ -12255,6 +12262,8 @@ function adoptAndroidNativePlayback(persistedState) {
   native.firstFrameNotified = live.state === 'playing';
   native.referenceRetried = false;
   native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
   native.lastError = null;
   native.ownerIntent = playing;
   if (live.state === 'playing') native.ownership = 'owned';
@@ -12365,19 +12374,45 @@ async function scheduleAndroidNativeContinuity(track, options = {}) {
   }
   // Without native loops the loop stays off, as when the web cannot schedule one.
   if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return null;
-  const startFrame = Math.round(Math.max(0, Number(options.startSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
-  const endFrame = Math.round(Math.max(0, Number(options.endSeconds) || 0) * ANDROID_NATIVE_LOOP_RATE);
-  if (endFrame <= startFrame) return null;
+  const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
+  const endSeconds = Math.max(0, Number(options.endSeconds) || 0);
+  if (endSeconds <= startSeconds) return null;
   native.loopKind = kind;
+  native.loop = { kind, startSeconds, endSeconds, sentRate: 0 };
+  await sendAndroidNativeLoop();
+  return androidNativeCurrentRole();
+}
+
+// Sends the loop in frames of the current track at its reported rate; until Android reports the
+// rate, the loop waits and goes out with the first report.
+async function sendAndroidNativeLoop() {
+  const native = androidNativePlayback;
+  const loop = native.loop;
+  const sampleRate = native.sampleRate;
+  if (!loop || !sampleRate || loop.sentRate === sampleRate) return;
+  const startFrame = Math.round(loop.startSeconds * sampleRate);
+  const endFrame = Math.round(loop.endSeconds * sampleRate);
+  if (endFrame <= startFrame) return;
+  loop.sentRate = sampleRate;
   // The web's kind decides retained replay exactly, as its worklet's `set-loop` does.
   await sendAndroidNativeTransport('playback.setLoop', {
-    queueRevision: native.appliedRevision, startFrame, endFrame, kind,
+    queueRevision: native.appliedRevision, startFrame, endFrame, sampleRate, kind: loop.kind,
   });
-  return androidNativeCurrentRole();
+}
+
+// Every snapshot names the current item's rate once Android knows it.
+function noteAndroidNativeSampleRate(payload) {
+  const native = androidNativePlayback;
+  const rate = Number(payload?.sampleRate);
+  native.sampleRate = Number.isInteger(rate) && rate > 0 ? rate : 0;
+  if (native.loop && native.sampleRate && native.loop.sentRate !== native.sampleRate) {
+    void sendAndroidNativeLoop().catch(() => {});
+  }
 }
 
 function clearAndroidNativeLoop() {
   androidNativePlayback.loopKind = null;
+  androidNativePlayback.loop = null;
   if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return;
   void sendAndroidNativeTransport('playback.clearLoop', {
     queueRevision: androidNativePlayback.appliedRevision,
@@ -12399,6 +12434,8 @@ async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot 
   native.items = [];
   native.index = 0;
   native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
   if (!preserveError) {
     native.mode = 'stopped';
     native.lastError = null;
@@ -12685,6 +12722,7 @@ function registerAndroidNativePlaybackEvents() {
       // Events echo the applied revision so a replaced or stopped queue cannot overwrite newer state.
       const applied = androidNativePlayback.appliedRevision;
       if (!applied || payload.queueRevision !== applied) return;
+      noteAndroidNativeSampleRate(payload);
       handler(payload);
     });
   }

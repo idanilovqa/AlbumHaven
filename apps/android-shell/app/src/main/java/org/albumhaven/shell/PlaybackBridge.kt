@@ -3,7 +3,7 @@ package org.albumhaven.shell
 import org.albumhaven.shell.playback.CommandResult
 import org.albumhaven.shell.playback.CommandSource
 import org.albumhaven.shell.playback.LoopKind
-import org.albumhaven.shell.playback.LoopRange48k
+import org.albumhaven.shell.playback.LoopRange
 import org.albumhaven.shell.playback.NativePlaybackEvent
 import org.albumhaven.shell.playback.NativePlaybackPort
 import org.albumhaven.shell.playback.NativePlaybackSnapshot
@@ -84,7 +84,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         val position = nonNegativeLong(payload.opt("positionMs")) ?: return null
         val loop = when (val raw = payload.opt("loop")) {
             JSONObject.NULL -> null
-            is JSONObject -> if (raw.fieldNames() == setOf("startFrame", "endFrame")) loopRange(raw) ?: return null else return null
+            is JSONObject -> if (raw.fieldNames() == LOOP_KEYS) loopRange(raw) ?: return null else return null
             else -> return null
         }
         val autoplay = payload.opt("autoplay") as? Boolean ?: return null
@@ -119,10 +119,11 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken)
     }
 
-    private fun loopRange(json: JSONObject): LoopRange48k? {
+    private fun loopRange(json: JSONObject): LoopRange? {
         val start = nonNegativeLong(json.opt("startFrame")) ?: return null
         val end = nonNegativeLong(json.opt("endFrame")) ?: return null
-        return if (end > start) LoopRange48k(start, end) else null
+        val rate = positiveLong(json.opt("sampleRate"))?.takeIf { it <= MAX_SAMPLE_RATE }?.toInt() ?: return null
+        return if (end > start) LoopRange(start, end, rate) else null
     }
 
     private fun text(value: Any?): String? = (value as? String)?.takeIf(QueueItem::isDisplayText)
@@ -139,7 +140,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         /** Android plays, holds the claim and sends every listen write; the web sends none. */
         const val NATIVE_CAPABILITY = "playback.native.v1"
         const val QUEUE_CAPABILITY = "playback.queue.v1"
-        const val LOOPS_CAPABILITY = "playback.loops.v1"
+        /** Loop points are frames of the track at the `sampleRate` Android reported for it. */
+        const val LOOPS_CAPABILITY = "playback.loops.v2"
 
         /**
          * Playback lives in a media session that outlasts the document: a same-origin reload
@@ -172,7 +174,9 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
 
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
-        private val SET_LOOP_KEYS = setOf("queueRevision", "startFrame", "endFrame")
+        private val LOOP_KEYS = setOf("startFrame", "endFrame", "sampleRate")
+        private val SET_LOOP_KEYS = LOOP_KEYS + "queueRevision"
+        private const val MAX_SAMPLE_RATE = 192_000L
 
         /** `queueGroup` numbers the web playback queues (albums) in order; it never decreases along the queue. */
         private val ITEM_KEYS = setOf(
@@ -186,6 +190,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
             .put("currentIndex", snapshot.currentIndex ?: JSONObject.NULL)
             .put("positionMs", snapshot.positionMs)
             .put("durationMs", snapshot.durationMs)
+            .apply { snapshot.sampleRate?.let { put("sampleRate", it) } }
 
         /** The bridge event name and payload; every payload echoes the applied queue revision. */
         fun encode(event: NativePlaybackEvent): Pair<String, JSONObject> {

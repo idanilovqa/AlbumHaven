@@ -11,7 +11,7 @@
       "capabilities": [
         "playback.native.v1",
         "playback.queue.v1",
-        "playback.loops.v1",
+        "playback.loops.v2",
         "playback.media_session.v1",
         "playback.resumption.v1",
         "updates.manual.v1"
@@ -26,7 +26,7 @@
       "capabilities": [
         "playback.native.v1",
         "playback.queue.v1",
-        "playback.loops.v1",
+        "playback.loops.v2",
         "playback.media_session.v1",
         "playback.resumption.v1",
         "updates.manual.v1"

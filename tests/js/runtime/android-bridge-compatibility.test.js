@@ -48,7 +48,7 @@ function capabilitiesFor({ name, payload }) {
   if (name === 'sandbox.select') return ['sandbox.select.v1'];
   if (name.startsWith('updates.')) return ['updates.manual.v1'];
   if (name === 'files.save') return ['files.save.v1'];
-  if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v1'];
+  if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v2'];
   if (name === 'playback.loadQueue' && payload.keepCurrent) return ['playback.native.v1', 'playback.queue.v1'];
   if (name.startsWith('playback.')) return ['playback.native.v1'];
   return [`unknown command ${name}`];
@@ -204,6 +204,12 @@ async function exerciseSite(handshake) {
     // The web queue changes under Android: the new successor replaces the queue around the playing item.
     context.state.player.playbackQueue = { tracks: [tracks[0], tracks[2]], currentIndex: 0 };
     await api.continuity(tracks[2]);
+    // Android reports the playing track's rate, which loop points are counted in.
+    const queueRevision = commands(bridge, 'playback.loadQueue').at(-1).payload.queueRevision;
+    bridge.onmessage({ data: JSON.stringify({
+      protocol: 1, id: 'state-event', type: 'event', name: 'playback.state',
+      payload: { ...readJson('v1.json').stateEvent.payload, queueRevision, state: 'playing', sampleRate: 44100 },
+    }) });
     await api.continuity(tracks[0], { kind: 'long-loop', startSeconds: 10, endSeconds: 20 });
     api.setLoop(false);
     await api.pause();
@@ -215,7 +221,7 @@ async function exerciseSite(handshake) {
     assert.ok(load.payload.items.every(item => ('resumeToken' in item) === has('playback.resumption.v1')));
     assert.equal(commands(bridge, 'playback.loadQueue').length, has('playback.queue.v1') ? 2 : 1);
     for (const name of ['playback.setLoop', 'playback.clearLoop']) {
-      assert.equal(commands(bridge, name).length, has('playback.loops.v1') ? 1 : 0, name);
+      assert.equal(commands(bridge, name).length, has('playback.loops.v2') ? 1 : 0, name);
     }
     for (const name of ['playback.pause', 'playback.play', 'playback.seek', 'playback.stop']) {
       assert.equal(commands(bridge, name).length >= 1, true, name);

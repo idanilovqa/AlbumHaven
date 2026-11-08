@@ -14,7 +14,7 @@ interface NativePlaybackPort {
     fun next(queueRevision: Long): CommandResult
     fun previous(queueRevision: Long): CommandResult
     fun seek(queueRevision: Long, positionMs: Long): CommandResult
-    fun setLoop(queueRevision: Long, range: LoopRange48k?): CommandResult
+    fun setLoop(queueRevision: Long, range: LoopRange?): CommandResult
 
     /** A document negotiated the bridge: it refreshes expiring references, and its first start finds warm connections. */
     fun documentAttached()
@@ -36,7 +36,7 @@ class ControllerPlaybackPort(
     override fun next(queueRevision: Long) = controller().next(queueRevision)
     override fun previous(queueRevision: Long) = controller().previous(queueRevision)
     override fun seek(queueRevision: Long, positionMs: Long) = controller().seek(queueRevision, positionMs)
-    override fun setLoop(queueRevision: Long, range: LoopRange48k?) = controller().setLoop(queueRevision, range)
+    override fun setLoop(queueRevision: Long, range: LoopRange?) = controller().setLoop(queueRevision, range)
 
     override fun documentAttached() {
         attachment(true)

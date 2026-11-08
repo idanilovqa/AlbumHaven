@@ -74,22 +74,15 @@ enum class LoopKind(val wire: String) {
     }
 }
 
-/** A loop range on the bridge's fixed 48 kHz media timeline; [kind] is the web's when it names one. */
-data class LoopRange48k(val startFrame: Long, val endFrame: Long, val kind: LoopKind? = null) {
-    fun toTrackFrames(sampleRate: Int): Pair<Long, Long> =
-        convert(startFrame, sampleRate) to convert(endFrame, sampleRate)
-
+/**
+ * A loop range in frames of the track at [sampleRate], the rate Android reported for it, so every
+ * loop point lands on the exact sample the web chose; [kind] is the web's when it names one.
+ */
+data class LoopRange(val startFrame: Long, val endFrame: Long, val sampleRate: Int, val kind: LoopKind? = null) {
     /** Replayed from retained PCM: the web's kind, or the worklet's own rule of at most five seconds. */
     val short: Boolean
         get() = kind?.let { it == LoopKind.SHORT }
-            ?: (endFrame - startFrame <= PcmEngineConfig.SHORT_LOOP_MAX_SECONDS.toLong() * BRIDGE_RATE)
-
-    private fun convert(frame: Long, sampleRate: Int): Long =
-        if (sampleRate == BRIDGE_RATE) frame else (frame.toDouble() * sampleRate / BRIDGE_RATE).roundToLong()
-
-    companion object {
-        const val BRIDGE_RATE = 48_000
-    }
+            ?: (endFrame - startFrame <= PcmEngineConfig.SHORT_LOOP_MAX_SECONDS.toLong() * sampleRate)
 }
 
 /**
@@ -101,7 +94,7 @@ data class QueueLoad(
     val items: List<QueueItem>,
     val currentIndex: Int,
     val positionMs: Long,
-    val loop: LoopRange48k?,
+    val loop: LoopRange?,
     val autoplay: Boolean,
     val keepCurrent: Boolean = false,
 )
@@ -130,6 +123,8 @@ data class NativePlaybackSnapshot(
     val durationMs: Long,
     /** The applied queue's display metadata, for system media controls; never sent to the web. */
     val items: List<QueueItem> = emptyList(),
+    /** The current item's own sample rate once Android knows it; loop points are counted in it. */
+    val sampleRate: Int? = null,
 )
 
 /** Who asked for a change: the web document, or Android's own media controls, focus and routes. */
@@ -253,7 +248,7 @@ class NativePlaybackController(
 
     /** The exact frame a paused stream lapsed at, so the stream reopened for [heldPositionMs] resumes on it. */
     private var heldFrame: HeldFrame? = null
-    private var loop: LoopRange48k? = null
+    private var loop: LoopRange? = null
     private var wantPlay = false
 
     private var engine: NativePcmEngine? = null
@@ -342,7 +337,7 @@ class NativePlaybackController(
         return revisioned(queueRevision, from) { step(-1, start) }
     }
 
-    fun setLoop(queueRevision: Long, range: LoopRange48k?) = revisioned(queueRevision) { applyLoop(range) }
+    fun setLoop(queueRevision: Long, range: LoopRange?) = revisioned(queueRevision) { applyLoop(range) }
 
     /**
      * Fades the output out at once and pauses on the next frame it holds; [silenceAtOnce] cuts it
@@ -1030,16 +1025,16 @@ class NativePlaybackController(
         return true
     }
 
-    private fun applyLoop(range: LoopRange48k?) {
+    private fun applyLoop(range: LoopRange?) {
         loop = range
         val current = engine?.takeIf { loaded } ?: return
         val rate = sink?.sampleRate ?: return
         if (range == null) current.clearLoop() else applyEngineLoop(current, range, rate)
     }
 
-    private fun applyEngineLoop(current: NativePcmEngine, range: LoopRange48k, rate: Int) {
-        val (start, end) = range.toTrackFrames(rate)
-        if (end > start) current.setLoop(start, end, range.short)
+    /** A loop counted at another rate waits: the web recounts it once it hears this track's rate. */
+    private fun applyEngineLoop(current: NativePcmEngine, range: LoopRange, rate: Int) {
+        if (range.sampleRate == rate) current.setLoop(range.startFrame, range.endFrame, range.short)
     }
 
     /** Stops the item's stream and discards its unplayed PCM, so nothing more of it is heard. */
@@ -1297,7 +1292,14 @@ class NativePlaybackController(
         positionMs = positionMs(),
         durationMs = queue.getOrNull(index)?.durationMs ?: 0,
         items = queue,
+        sampleRate = currentSampleRate(),
     ).also { snapshot = it }
+
+    /** The current item's rate: its output's once it was heard, or the rate the server named for it. */
+    private fun currentSampleRate(): Int? {
+        val item = queue.getOrNull(index) ?: return null
+        return sink?.sampleRate?.takeIf { loaded && firstFrameHeard } ?: rates[item.playbackRef]
+    }
 
     private fun emit(build: (NativePlaybackSnapshot) -> NativePlaybackEvent) {
         measureListening()

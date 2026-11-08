@@ -1621,15 +1621,19 @@ def test_retirement_carries_ratings_then_deletes_only_unowned_empty_albums():
     connection = SimpleNamespace(execute=lambda sql, params: executed.append((sql, params)))
     retirement.retire_vacated_local_albums(connection, [(5, 8)])
 
-    (carry_sql, _), (delete_sql, params) = executed
+    (carry_sql, _), (disc_carry_sql, _), (delete_sql, params) = executed
     assert params == {"album_ids": [5], "successor_ids": [8]}
-    carry, delete = _normalized_sql(carry_sql), _normalized_sql(delete_sql)
+    carry, disc_carry = _normalized_sql(carry_sql), _normalized_sql(disc_carry_sql)
+    delete = _normalized_sql(delete_sql)
     assert "on conflict (account_id, library_id, album_key) do nothing" in carry
-    assert "rating.provenance" in carry
+    assert "on conflict (account_id, library_id, album_key, disc_key) do nothing" in disc_carry
+    assert "rating.provenance" in carry and "rating.provenance" in disc_carry
     assert "carried.rating is not distinct from rating.rating" in delete
+    assert "and carried.disc_key = rating.disc_key" in delete
     for name, clause in retirement.RETIREMENT_GUARDS:
-        assert (_normalized_sql(clause) in delete) is (name != "rating")
-        assert (_normalized_sql(clause) in carry) is (name != "rating")
+        rating_guard = name in {"rating", "disc_rating"}
+        for sql in (delete, carry, disc_carry):
+            assert (_normalized_sql(clause) in sql) is not rating_guard
 
 
 def test_set_based_track_file_sql_preserves_scoped_upsert_contract():

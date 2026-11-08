@@ -569,7 +569,6 @@ test('FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that di
       expect(status.scan_in_progress).toBe(false);
       fixture = await createWatchedAlbumFixture({
         artist, album, year, trackTitles, discNumbers, discSubtitles,
-        ownedDirectoryName: 'watcher-disc-subtitle-search',
         context,
         managedAppLifecycle,
       });

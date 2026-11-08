@@ -6282,6 +6282,10 @@ def test_live_search_finds_an_album_by_its_disc_subtitle(monkeypatch, tmp_path):
             1.0,
             observed_library_root_ids={"disc-subtitle-root"},
         )
+        # A full scan publishes its relation views before search is served.
+        from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+        assert ensure_relation_projection_ready(config, connect=isolatedPostgres._connect).get("ready")
         browse_repository = PostgresLibraryBrowseRepository(config, connect=isolatedPostgres._connect)
 
         def album_names(query: str) -> list[str]:

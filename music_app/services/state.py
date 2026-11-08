@@ -726,8 +726,12 @@ def ensure_runtime_relation_projection_ready(
     library_state["relation_projection_duration_ms"] = float(
         result.get("duration_ms") or 0.0
     )
-    if (result.get("ready") and not app.config.get("SHARED_LIBRARY_BROWSE_ONLY")
-            and str(app.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()):
+    if not (result.get("ready") and str(app.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()):
+        return result
+    if app.config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+        # Read-only Settings projections; the gallery projection is the writer's job.
+        PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
+    else:
         from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
         try:
             ensure_gallery_projection_ready(app.config, cancel_requested=cancel_requested)

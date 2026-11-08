@@ -1577,3 +1577,32 @@ def test_remote_progress_gallery_does_not_read_local_inventory(tmp_path, monkeyp
     assert "local_covers" not in payload
     assert "other_art" not in payload
     assert payload["candidate_snapshot"]["candidates"] == [{"id": "saved"}]
+
+
+def test_disc_album_accepts_the_shared_album_folder_cover_but_not_a_sibling_disc(config, tmp_path: Path):
+    # UI-2 (owner): Album/cover.jpg beside CD1..CD4 is listed by Cover Look Up for an album holding one disc,
+    # so Save must accept it; another disc's art stays out.
+    library_root = (tmp_path / "Library").resolve()
+    album_folder = (library_root / "Artist" / "Box Set").resolve()
+    track_path = (album_folder / "CD1" / "01.mp3").resolve()
+    shared_cover = (album_folder / "cover.jpg").resolve()
+    sibling_cover = (album_folder / "CD2" / "front.jpg").resolve()
+    artist_cover = (library_root / "Artist" / "artist.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    (album_folder / "CD2" / "01.mp3").write_bytes(b"track")
+    for image in (shared_cover, sibling_cover, artist_cover):
+        image.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    assert validate_local_cover_source(
+        config, context.album_root, str(shared_cover), track_paths=context.track_paths,
+    ) == shared_cover
+    for outside in (sibling_cover, artist_cover):
+        with pytest.raises(ValueError, match="outside the album folder"):
+            validate_local_cover_source(config, context.album_root, str(outside), track_paths=context.track_paths)

@@ -281,6 +281,20 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
+def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_root: Path) -> bool:
+    """UI-2 (owner): art beside the disc folders (Album/cover.jpg next to CD1..CD4) belongs to every disc.
+
+    Cover Look Up lists it for an album that holds only some of those discs, so Save accepts it too. Only
+    images directly in that shared album folder qualify (at album depth for its library layout), never a
+    sibling disc's art or an artist folder's."""
+    shared = disc_root.parent
+    return (
+        is_disc_like_folder(disc_root)
+        and image.parent == shared
+        and _is_valid_album_root(config, shared, enforce_layout_depth=True)
+    )
+
+
 def validate_local_cover_source(
     config: dict[str, object],
     album_root: Path,
@@ -296,10 +310,9 @@ def validate_local_cover_source(
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(resolved_album_root)
-    except Exception as exc:
-        raise ValueError("Selected image is outside the album folder") from exc
+    if not (_is_path_within(resolved, resolved_album_root)
+            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)):
+        raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
     if is_managed_preview_path(resolved):

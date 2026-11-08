@@ -300,6 +300,15 @@ under through a release credit ("credited as 3 Crows"). Adding columns with a
 constant default does not rewrite the table. Rollback stops the readers and drops
 both columns; the next backfill then treats every row as version 1 again.
 
+Migration `0175_add_musicbrainz_match_album_evidence.sql` adds the nullable
+`album_evidence` array to `library.local_artist_musicbrainz_matches`. Matcher
+version 3 writes the albums a later data-correction list can propose fixing: every
+agreeing album of an artist matched under another credited name, and every album
+that matched one disc of a multi-disc release (a box-set disc or a bonus EP tagged
+as its own album), each with the MusicBrainz release group, release, disc and
+agreeing signals. Existing rows stay null until their re-check. Adding a nullable
+column does not rewrite the table. Rollback drops the column.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

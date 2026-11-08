@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_enrichment import resolve_artist
-from tests.py.musicbrainz_test_mirror import OK, albums, release_groups_payload, release_paths
+from tests.py.musicbrainz_test_mirror import OK, albums, group_id, release_groups_payload, release_paths
 
 
 GERMAN = "00000000-0000-4000-8000-000000000011"
@@ -12,7 +12,8 @@ TRANCE = "00000000-0000-4000-8000-000000000012"
 OTHER = "00000000-0000-4000-8000-000000000013"
 
 
-def _client(release_groups, *, artists=None, search=None, fail_browse=False):
+def _client(release_groups, *, artists=None, search=None, fail_browse=False, releases=None, discs=None,
+            lookups=None):
     calls: list[str] = []
     artists = artists or {
         GERMAN: {"id": GERMAN, "name": "Axxis", "type": "Group", "country": "DE",
@@ -21,7 +22,7 @@ def _client(release_groups, *, artists=None, search=None, fail_browse=False):
         OTHER: {"id": OTHER, "name": "Axis Mundi", "type": "Group"},
     }
     # Search results carry the display facts, as on the mirror.
-    search = search or [
+    search = search if search is not None else [
         {"id": GERMAN, "name": "Axxis", "score": 100, "type": "Group", "country": "DE",
          "disambiguation": "German hard rock band"},
         {"id": TRANCE, "name": "Axxis", "score": 100, "type": "Group", "disambiguation": "trance duo"},
@@ -40,7 +41,7 @@ def _client(release_groups, *, artists=None, search=None, fail_browse=False):
             artist = query["artist"][0]
             return release_groups_payload(artist, release_groups.get(artist, []),
                                           offset=int(query.get("offset", ["0"])[0])), OK
-        answered = release_paths(url)
+        answered = release_paths(url, releases=releases, discs=discs, lookups=lookups)
         if answered is not None:
             return answered
         mbid = parsed.path.rsplit("/", 1)[-1]
@@ -216,7 +217,7 @@ def test_a_stale_stored_mbid_is_ignored_rather_than_failing_the_lookup():
 def test_a_spent_request_budget_never_accepts_before_every_candidate_is_scored(monkeypatch):
     from music_app.services import musicbrainz_enrichment
 
-    # Room for the search and the first candidate only; the second is never scored.
+    # Room for the search only: no candidate is ever scored, which is not "not found".
     monkeypatch.setattr(musicbrainz_enrichment, "_MAX_REQUESTS_PER_ARTIST", 4)
     client, _calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Kingdom of the Night"]})
 
@@ -224,3 +225,157 @@ def test_a_spent_request_budget_never_accepts_before_every_candidate_is_scored(m
 
     assert outcome["classification"] == "ambiguous"
     assert {candidate["artist_mbid"] for candidate in outcome["candidates"]} == {GERMAN, TRANCE}
+
+
+CELESTE = [f"00000000-0000-4000-8000-0000000001{index:02d}" for index in range(6)]
+
+
+def _release(artist_mbid, artist_name, title, *, credit=None, release_mbid="00000000-0000-4000-8000-00000000a001"):
+    return {"id": release_mbid, "title": title, "date": "2000", "track-count": 2,
+            "release-group": {"id": group_id(artist_mbid, title), "title": title},
+            "artist-credit": [{"name": credit or artist_name, "artist": {"id": artist_mbid, "name": artist_name}}]}
+
+
+def test_a_crowded_name_searches_the_albums_before_scoring_its_namesakes():
+    """Celeste, Karma, Zodiac: six same-named artists spent the budget before the album search."""
+    right = CELESTE[-1]
+    artists = {mbid: {"id": mbid, "name": "Celeste"} for mbid in CELESTE}
+    client, calls = _client({right: ["Pleine Lune"]}, artists=artists,
+                            search=[{"id": mbid, "name": "Celeste", "score": 100} for mbid in CELESTE],
+                            releases={"Pleine Lune": [_release(right, "Celeste", "Pleine Lune")]})
+
+    outcome = resolve_artist({"local_artist_id": 9, "local_name": "Celeste", "albums": albums("Pleine Lune")},
+                             client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == right
+    first_album_search = next(index for index, url in enumerate(calls) if "/release/?" in url)
+    first_browse = next(index for index, url in enumerate(calls) if "/release-group?" in url)
+    assert first_album_search < first_browse, "the album search runs before any namesake is scored"
+    assert sum("/release-group?" in url for url in calls) == 1, "the credited artist decides; no namesake is browsed"
+
+
+def test_namesakes_left_unscored_never_block_an_album_proven_winner(monkeypatch):
+    """Shamaani Duo: one proven candidate stayed Multiple because namesakes went unscored."""
+    from music_app.services import musicbrainz_enrichment
+
+    monkeypatch.setattr(musicbrainz_enrichment, "_MAX_NAME_ONLY_CANDIDATES", 1)
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Dancefloor Mix"]})
+
+    outcome = resolve_artist(_context("Kingdom of the Night"), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+
+
+def test_a_credited_release_counts_even_when_browsing_stopped_before_its_group():
+    """Tower of Power: the credited release's group was not on the browsed pages."""
+    client, _calls = _client({GERMAN: []}, search=[],
+                             releases={"Kingdom of the Night": [_release(GERMAN, "Axxis", "Kingdom of the Night")]})
+
+    outcome = resolve_artist(_context("Kingdom of the Night"), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+
+
+def test_a_matched_sibling_and_its_box_set_discs_settle_an_artist_without_release_groups():
+    """Devin Townsend Project: three bonus discs of "Contain Us" beside the matched
+    "The Devin Townsend Project"."""
+    box_set = {"id": "00000000-0000-4000-8000-00000000b001", "title": "Contain Us", "date": "2000",
+               "release-group": {"id": group_id(GERMAN, "Contain Us")},
+               "media": [{"position": 1, "title": "Ki", "track-count": 13},
+                         {"position": 5, "title": "Stuff That Was Almost Stuff", "track-count": 2},
+                         {"position": 7, "title": "Dinosaurs", "format": '10" Vinyl', "track-count": 2}]}
+    client, calls = _client({GERMAN: ["Contain Us", "Ki"]}, search=[], discs={GERMAN: [box_set]})
+    context = {"local_artist_id": 8, "local_name": "Axxis Project",
+               "albums": albums("Stuff That Was Almost Stuff", 'Contain Us 10"'),
+               "sibling_matches": [{"mbid": GERMAN, "name": "The Axxis Project", "canonical_name": "Axxis"}]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+    assert {item["disc_position"] for item in outcome["album_evidence"]} == {5, 7}
+    assert sum("inc=media+release-groups" in url for url in calls) == 1
+
+
+def test_a_sibling_whose_albums_belong_elsewhere_is_not_chosen_by_name():
+    """Owner: "Alan Parsons Project" holds Alan Parsons' solo album, not the Project's."""
+    client, _calls = _client({GERMAN: ["Other Album"], OTHER: ["The Secret"]}, search=[],
+                             releases={"The Secret": [_release(OTHER, "Axis Mundi", "The Secret")]})
+    context = {"local_artist_id": 5, "local_name": "Axis Mundi Project", "albums": albums("The Secret"),
+               "sibling_matches": [{"mbid": GERMAN, "name": "The Axis Mundi Project", "canonical_name": "Axxis"}]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == OTHER
+    assert outcome["credit_name"] == "Axis Mundi Project"
+    assert outcome["album_evidence"][0]["local_title"] == "The Secret"
+    assert set(outcome["album_evidence"][0]["signals"]) == {"year", "track_count", "track_list", "durations"}
+
+
+def test_a_last_fm_album_identifier_counts_only_when_its_title_agrees():
+    release_mbid = "00000000-0000-4000-8000-00000000c001"
+    lookup = {**_release(GERMAN, "Axxis", "Kingdom of the Night", release_mbid=release_mbid),
+              "media": [{"track-count": 2}]}
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**albums("Kingdom of the Night")[0], "lastfm_release_mbid": release_mbid}]}
+
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"]}, search=[], lookups={release_mbid: lookup})
+    outcome = resolve_artist(context, client=client)
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+
+    elsewhere = {**lookup, "release-group": {"id": group_id(GERMAN, "Unrelated"), "title": "Unrelated"},
+                 "title": "Unrelated"}
+    client, _calls = _client({GERMAN: ["Kingdom of the Night"]}, search=[], lookups={release_mbid: elsewhere})
+    assert resolve_artist(context, client=client)["classification"] == "not_found"
+
+
+def test_last_fm_album_identifiers_never_spend_a_large_discography_s_budget():
+    titles = [f"Album {index}" for index in range(20)]
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "lastfm_release_mbid": f"00000000-0000-4000-8000-{index:012d}"}
+                          for index, album in enumerate(albums(*titles))]}
+    client, calls = _client({GERMAN: titles}, search=[{"id": GERMAN, "name": "Axxis", "score": 100}])
+
+    assert resolve_artist(context, client=client)["classification"] == "found"
+    assert sum("inc=release-groups+artist-credits" in url for url in calls) == 6
+
+
+def test_new_credit_evidence_scores_an_artist_again_with_its_discs():
+    from music_app.services.musicbrainz_enrichment import _add_release_credits
+
+    entry = {"mbid": GERMAN, "credits": {}, "releases": {}, "albums": [], "discs_checked": True}
+    _add_release_credits(lambda candidate, origin: entry, 0,
+                         {"credits": [{"name": "Axxis", "artist_mbid": GERMAN, "artist_name": "Axxis"}]})
+
+    assert "albums" not in entry and "discs_checked" not in entry
+
+
+def test_a_special_purpose_artist_is_never_a_candidate():
+    various = "89ad4ac3-39f7-470e-963a-56509c546377"
+    client, _calls = _client({various: ["Kingdom of the Night"]}, search=[],
+                             releases={"Kingdom of the Night": [_release(various, "Various Artists",
+                                                                         "Kingdom of the Night")]})
+
+    assert resolve_artist(_context("Kingdom of the Night"), client=client)["classification"] == "not_found"
+
+
+def test_a_bonus_disc_tagged_as_its_own_album_is_kept_as_disc_evidence():
+    """65daysofstatic: "Bonus EP" is disc 2 of "Silent Running", tagged as a separate album."""
+    release = {"id": "00000000-0000-4000-8000-00000000d001", "title": "Silent Running", "date": "2000",
+               "release-group": {"id": group_id(GERMAN, "Silent Running")},
+               "media": [{"position": 1, "title": "", "track-count": 2},
+                         {"position": 2, "title": "", "track-count": 2}]}
+    client, _calls = _client({GERMAN: ["Silent Running"], TRANCE: []}, discs={GERMAN: [release]})
+
+    outcome = resolve_artist(_context("Silent Running", "Bonus EP"), client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+    assert "credit_name" not in outcome
+    assert [(item["local_title"], item["disc_position"], item["release_mbid"]) for item in outcome["album_evidence"]] == [
+        ("Bonus EP", 2, "00000000-0000-4000-8000-00000000d001")]

@@ -31,11 +31,15 @@ def release_groups_payload(artist_mbid: str, titles: list[str], *, year: int = Y
         {"id": group_id(artist_mbid, title), "title": title, "first-release-date": str(year)} for title in page]}
 
 
-def release_paths(url: str, *, releases: dict[str, list[dict]] | None = None):
-    """Answer release search, release-group release lists and release tracklists.
+def release_paths(url: str, *, releases: dict[str, list[dict]] | None = None,
+                  discs: dict[str, list[dict]] | None = None, lookups: dict[str, dict] | None = None):
+    """Answer release search, release-group release lists, an artist's releases with
+    their discs, release lookups and release tracklists.
 
     ``releases`` maps a release search's title to its results; anything else
-    searched finds nothing. Every release group has one release with the shared tracks.
+    searched finds nothing. ``discs`` maps an artist to its releases with media, and
+    ``lookups`` a release MBID to its lookup payload. Every release group has one
+    release with the shared tracks.
     """
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
@@ -43,6 +47,12 @@ def release_paths(url: str, *, releases: dict[str, list[dict]] | None = None):
         text = query["query"][0]
         found = next((items for title, items in (releases or {}).items() if title in text), [])
         return {"count": len(found), "releases": found}, OK
+    if parsed.path.endswith("/release") and "artist" in query:
+        found = (discs or {}).get(query["artist"][0], [])
+        return {"release-count": len(found), "releases": found}, OK
+    if "/release/" in parsed.path and "release-groups" in query.get("inc", [""])[0]:
+        payload = (lookups or {}).get(parsed.path.rsplit("/", 1)[-1])
+        return (payload, OK) if payload else (None, {"status": "network", "http_status": 404, "cache_hit": False})
     if parsed.path.endswith("/release"):
         group = query["release-group"][0]
         return {"releases": [{"id": group, "date": str(YEAR), "media": [{"track-count": len(TRACKS)}]}]}, OK

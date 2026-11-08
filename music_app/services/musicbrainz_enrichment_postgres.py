@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
@@ -13,8 +14,13 @@ _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _JOB_KIND = "musicbrainz_artist_enrichment"
 _OWNER_SYNC_REASON = "library_menu_sync"
 # The album-evidence matcher. Automatic rows decided by an older version are
-# re-checked by the next backfill (migration 0174).
-MATCHER_VERSION = 2
+# re-checked by the next backfill (migration 0174). Version 3 adds box-set discs,
+# matched siblings, Last.fm album identifiers and per-album assignment.
+MATCHER_VERSION = 3
+# Local "artists" that name no artist: never matched, never a problem.
+_PLACEHOLDER_ARTIST_NAMES = ("various artists", "various artist", "various", "va", "v.a.", "v/a",
+                             "unknown", "unknown artist", "[unknown]", "artist unknown")
+_NOT_PLACEHOLDER_ARTIST_SQL = "lower(btrim(artists.name)) <> all(%(placeholder_names)s::text[])"
 # Delivery 1 enriches album artists only: an artist that owns a local album with
 # tracks. Track-only artists (Various Artists or guest credits) get their
 # identity from release tracklists in the album-identity delivery.
@@ -34,6 +40,7 @@ _PRESENT_ALBUM_ARTIST_SQL = """exists (
           where owned_albums.library_id = artists.library_id
             and owned_albums.artist_id = artists.id
         )"""
+_ALBUM_SIGNALS = frozenset({"year", "track_count", "track_list", "durations"})
 _MAX_ALIASES = 24
 _MAX_CANDIDATES = 25
 _MAX_TAGS = 64
@@ -95,9 +102,56 @@ class MusicBrainzEnrichmentPostgresRepository:
             # a cool-off; the owner's explicit sync re-tries it immediately.
             "retry_recent_unresolved": reason == _OWNER_SYNC_REASON,
             "matcher_version": MATCHER_VERSION,
+            "placeholder_names": list(_PLACEHOLDER_ARTIST_NAMES),
         }
         sql = _active_library_cte() + """
-            , eligible_artists as (
+            , placeholder_artists as (
+              select artists.id as local_artist_id, active_library.library_id
+              from active_library
+              join library.local_artists artists
+                on artists.library_id = active_library.library_id
+              where not (""" + _NOT_PLACEHOLDER_ARTIST_SQL + """)
+            ), retired_candidates as (
+              delete from library.local_artist_musicbrainz_candidates candidates
+              using placeholder_artists
+              where candidates.library_id = placeholder_artists.library_id
+                and candidates.local_artist_id = placeholder_artists.local_artist_id
+                and not exists (
+                  select 1 from library.local_artist_musicbrainz_matches manual
+                  where manual.library_id = candidates.library_id
+                    and manual.local_artist_id = candidates.local_artist_id
+                    and manual.decision_source = 'manual')
+              returning 1
+            ), retired_matches as (
+              -- "Various" or "Unknown Artist" is no artist identity: an automatic
+              -- outcome for one is withdrawn, an owner's own choice is kept.
+              update library.local_artist_musicbrainz_matches matches
+              set state = 'not_found', artist_mbid = null, confidence = 0, credit_name = null,
+                  album_evidence = null, selected_at = null, last_verified_at = null,
+                  evidence_summary = 'Not an artist: a display name such as Various Artists.',
+                  updated_at = %(observed_at)s
+              from placeholder_artists
+              where matches.library_id = placeholder_artists.library_id
+                and matches.local_artist_id = placeholder_artists.local_artist_id
+                and matches.decision_source <> 'manual'
+                and (matches.state <> 'not_found' or matches.artist_mbid is not null)
+              returning 1
+            ), retired_problems as (
+              update library.metadata_enrichment_problems problems
+              set lifecycle_state = 'resolved', resolved_at = %(observed_at)s,
+                  resolution_source = 'not_an_artist'
+              from placeholder_artists
+              where problems.library_id = placeholder_artists.library_id
+                and problems.local_artist_id = placeholder_artists.local_artist_id
+                and problems.target_kind = 'artist'
+                and problems.lifecycle_state = 'active'
+                and not exists (
+                  select 1 from library.local_artist_musicbrainz_matches manual
+                  where manual.library_id = problems.library_id
+                    and manual.local_artist_id = problems.local_artist_id
+                    and manual.decision_source = 'manual')
+              returning 1
+            ), eligible_artists as (
               select distinct artists.id as local_artist_id, active_library.library_id
               from active_library
               join library.local_artists artists
@@ -106,6 +160,7 @@ class MusicBrainzEnrichmentPostgresRepository:
                 on matches.library_id = active_library.library_id
                and matches.local_artist_id = artists.id
               where """ + _PRESENT_ALBUM_ARTIST_SQL + """
+                and """ + _NOT_PLACEHOLDER_ARTIST_SQL + """
                 and (
                   matches.id is null
                   or (
@@ -250,6 +305,7 @@ class MusicBrainzEnrichmentPostgresRepository:
               artists.name as local_name,
               coalesce(albums.album_titles, array[]::text[]) as album_titles,
               coalesce(album_evidence.albums, '[]'::json) as albums,
+              coalesce(siblings.sibling_matches, '[]'::json) as sibling_matches,
               remote.canonical_name as existing_canonical_name,
               coalesce(identifiers.hinted_artist_mbids, array[]::text[])
                 as hinted_artist_mbids,
@@ -285,10 +341,14 @@ class MusicBrainzEnrichmentPostgresRepository:
             left join lateral (
               -- Album evidence: year, and track titles and durations in order.
               select json_agg(json_build_object(
-                       'title', album_rows.title, 'year', album_rows.release_year,
+                       'id', album_rows.id, 'title', album_rows.title, 'year', album_rows.release_year,
+                       'lastfm_release_mbid', album_rows.lastfm_release_mbid,
                        'tracks', album_rows.tracks) order by album_rows.title) as albums
               from (
-                select local_albums.title, local_albums.release_year,
+                select local_albums.id, local_albums.title, local_albums.release_year,
+                       -- An album-level identifier counts only once its title agrees.
+                       case when local_albums.evidence_source = 'lastfm.public.albums'
+                            then local_albums.mbid::text end as lastfm_release_mbid,
                        coalesce(json_agg(json_build_object(
                          'title', tracks.title, 'duration_seconds', tracks.duration_seconds)
                          order by coalesce(nullif(tracks.disc_number, 0), 1), tracks.track_number, tracks.title)
@@ -300,8 +360,36 @@ class MusicBrainzEnrichmentPostgresRepository:
                 where local_albums.library_id = active_library.library_id
                   and local_albums.artist_id = artists.id
                 group by local_albums.id, local_albums.title, local_albums.release_year
+                -- An album row a rescan left without tracks is no evidence.
+                having count(tracks.id) > 0
               ) album_rows
             ) album_evidence on true
+            left join lateral (
+              -- Matched local artists under another spelling of this name ("The
+              -- Devin Townsend Project", "Chick Corea"): their MBID is a candidate,
+              -- still decided on this artist's own albums.
+              select json_agg(json_build_object(
+                       'local_artist_id', sibling_rows.id, 'name', sibling_rows.name,
+                       'mbid', sibling_rows.artist_mbid, 'canonical_name', sibling_rows.canonical_name)
+                     ) as sibling_matches
+              from (
+                select siblings.id, siblings.name, sibling_matches.artist_mbid::text as artist_mbid,
+                       sibling_remote.canonical_name
+                from library.local_artists siblings
+                join library.local_artist_musicbrainz_matches sibling_matches
+                  on sibling_matches.library_id = siblings.library_id
+                 and sibling_matches.local_artist_id = siblings.id
+                 and sibling_matches.state = 'matched'
+                 and sibling_matches.artist_mbid is not null
+                left join integration.musicbrainz_artists sibling_remote
+                  on sibling_remote.mbid = sibling_matches.artist_mbid
+                where siblings.library_id = active_library.library_id
+                  and siblings.id <> artists.id
+                  and """ + _loose_name_key_sql("siblings.name") + """ = """ + _loose_name_key_sql("artists.name") + """
+                order by siblings.id
+                limit 5
+              ) sibling_rows
+            ) siblings on true
             left join lateral (
               -- A stored local artist MBID (Last.fm) is a search hint, not embedded evidence.
               select array[artists.mbid::text] as hinted_artist_mbids
@@ -483,6 +571,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         evidence_summary: str,
         observed_at: datetime,
         credit_name: str | None = None,
+        album_evidence: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
@@ -495,6 +584,7 @@ class MusicBrainzEnrichmentPostgresRepository:
             "evidence_summary": _bounded_text(evidence_summary, 2048, required=True),
             "observed_at": _aware_utc(observed_at),
             "credit_name": _bounded_text(credit_name, 512) or None,
+            "album_evidence": _album_evidence(album_evidence),
             "matcher_version": MATCHER_VERSION,
             **_projection_params(projection),
             **_alias_array_params(aliases),
@@ -659,6 +749,15 @@ def _connect(database_url: str) -> Any:
 def _transaction(connection: Any) -> Any:
     transaction = getattr(connection, "transaction", None)
     return transaction() if callable(transaction) else nullcontext()
+
+
+def _loose_name_key_sql(column: str) -> str:
+    """A name without case, accents, a leading article or punctuation. Only finds
+    sibling candidates; the matcher compares their names with its own keys."""
+    return (
+        "regexp_replace(regexp_replace(regexp_replace(normalize(lower(" + column + "), NFKD), "
+        "'[\\u0300-\\u036f]', '', 'g'), '^(the|a|an)[^[:alnum:]]+', ''), '[^[:alnum:]]+', '', 'g')"
+    )
 
 
 def _active_library_cte() -> str:
@@ -1208,6 +1307,33 @@ _PROVIDER_PROBLEM_REASONS = {
 }
 
 
+def _album_evidence(evidence: object) -> str | None:
+    """The albums behind a credited-name or disc match, as stored JSON."""
+    if not isinstance(evidence, list):
+        return None
+    rows = []
+    for item in evidence[:64]:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append({
+            "local_album_id": _integer(item.get("local_album_id")) or None,
+            "local_title": _bounded_text(item.get("local_title"), 512) or None,
+            "release_group_mbid": _optional_mbid(item.get("release_group_mbid")),
+            "release_mbid": _optional_mbid(item.get("release_mbid")),
+            "disc_position": _integer(item.get("disc_position")) or None,
+            "signals": sorted({str(signal) for signal in item.get("signals") or ()
+                               if str(signal) in _ALBUM_SIGNALS}),
+        })
+    return json.dumps(rows) if rows else None
+
+
+def _optional_mbid(value: object) -> str | None:
+    try:
+        return _mbid(value) if value else None
+    except ValueError:
+        return None
+
+
 def _provider_problem_reason(classification: object) -> str | None:
     return _PROVIDER_PROBLEM_REASONS.get(str(classification or ""))
 
@@ -1539,7 +1665,7 @@ def _automatic_outcome_sql() -> str:
             library_id, local_artist_id, artist_mbid, state, decision_source,
             confidence, evidence_summary, selected_at, last_verified_at,
             provider_classification, provider_observed_at, first_observed_at,
-            last_observed_at, created_at, updated_at, credit_name
+            last_observed_at, created_at, updated_at, credit_name, album_evidence
           )
           select active_artist.library_id, active_artist.id,
                  (select mbid from upsert_artist), %(match_state)s, 'automatic',
@@ -1548,13 +1674,15 @@ def _automatic_outcome_sql() -> str:
                  case when %(match_state)s = 'matched' then %(observed_at)s else null end,
                  %(provider_state)s, %(observed_at)s, %(observed_at)s,
                  %(observed_at)s, %(observed_at)s, %(observed_at)s,
-                 case when %(match_state)s = 'matched' then %(credit_name)s else null end
+                 case when %(match_state)s = 'matched' then %(credit_name)s else null end,
+                 case when %(match_state)s = 'matched' then %(album_evidence)s::jsonb else null end
           from active_artist
           where active_artist.is_present or %(provider_state)s = 'not_present'
           on conflict (library_id, local_artist_id) do update
           set artist_mbid = excluded.artist_mbid,
               state = excluded.state,
               credit_name = excluded.credit_name,
+              album_evidence = excluded.album_evidence,
               confidence = excluded.confidence,
               evidence_summary = excluded.evidence_summary,
               selected_at = excluded.selected_at,

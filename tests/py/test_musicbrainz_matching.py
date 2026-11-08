@@ -12,6 +12,7 @@ from music_app.services.musicbrainz_evidence import (
     candidate_name_keys,
     decide,
     name_keys,
+    name_relation,
     title_agreement,
     title_keys,
 )
@@ -50,9 +51,13 @@ def test_approved_artist_matching_matrix(case):
     assert (result.get("selected") or {}).get("mbid") == case.get("expected_mbid")
 
 
-def _candidate(mbid, levels, *, name=True, credit=False, score=100):
-    return {"mbid": mbid, "score": score, "name_agrees": name, "credit_agrees": credit,
-            "albums": [{"level": level, "signals": set()} for level in levels]}
+FULL = {"year", "track_count", "track_list", "durations"}
+
+
+def _candidate(mbid, levels, *, name=True, credit=False, score=100, signals=(), canonical=None, sibling=False):
+    return {"mbid": mbid, "score": score, "name_agrees": name, "credit_agrees": credit, "sibling": sibling,
+            "canonical_name": canonical or mbid,
+            "albums": [{"level": level, "signals": set(signals)} for level in levels]}
 
 
 def test_a_strong_single_album_wins_when_the_runner_up_has_no_agreeing_album():
@@ -75,8 +80,8 @@ def test_a_runner_up_with_agreeing_albums_loses_only_to_twice_the_score_and_two_
 
 
 @pytest.mark.parametrize(("winner", "runner"), [
-    (["strong", "agree"], ["agree"]),                                # twice the score, one more album
-    (["strong", "strong", "agree"], ["strong", "agree", "agree"]),   # neither twice nor two more
+    (["strong", "agree", None], [None, None, "agree"]),                  # twice the score, one more album
+    (["strong", "strong", None, None], [None, None, "strong", "strong"]),  # same-name bands, albums split
 ])
 def test_an_undecided_margin_stays_multiple_matches(winner, runner):
     result = decide([_candidate("first", winner), _candidate("second", runner)])
@@ -111,9 +116,112 @@ def test_a_release_credited_under_the_local_name_needs_its_credit_and_tracks():
     assert decide([credited])["classification"] == "matched"
 
     elsewhere = _candidate("erik-mongrain", ["strong"], name=False, credit=False)
-    result = decide([elsewhere])
-    assert result["classification"] == "unconfirmed", "albums alone never accept another name"
+    result = decide([elsewhere], "Fleetwood")
+    assert result["classification"] == "unconfirmed", "one album under an unrelated name is offered, not accepted"
     assert [candidate["mbid"] for candidate in result["candidates"]] == ["erik-mongrain"]
+
+
+def test_an_album_two_candidates_agree_on_goes_to_the_stronger_evidence():
+    # Etherna, Ibis, Odyssey: one band holds both albums, a namesake shares one title only.
+    full = _candidate("full", ["strong", "strong"], signals=FULL)
+    subset = _candidate("subset", [None, "agree"], signals={"year"})
+
+    result = decide([subset, full], "Etherna")
+
+    assert result["classification"] == "matched"
+    assert result["selected"]["mbid"] == "full"
+
+
+def test_equal_evidence_on_the_same_album_proves_neither_and_tracks_break_the_tie():
+    tied = decide([_candidate("first", ["strong"], signals={"year", "track_count"}),
+                   _candidate("second", ["strong"], signals={"year", "track_count"})], "Oasis")
+    assert tied["classification"] == "ambiguous"
+
+    broken = decide([_candidate("first", ["strong"], signals=FULL),
+                     _candidate("second", ["strong"], signals={"year", "track_count"})], "Oasis")
+    assert broken["classification"] == "matched"
+    assert broken["selected"]["mbid"] == "first"
+
+
+def test_albums_decide_another_name_on_two_strong_albums_or_one_confirmed_album_of_a_related_name():
+    # PFM: two strong albums under "Premiata Forneria Marconi".
+    two = decide([_candidate("pfm", ["strong", "strong"], name=False, canonical="Premiata Forneria Marconi")], "PFM")
+    assert two["classification"] == "matched"
+
+    # Eric Mongrain's one album, tracks confirmed, under "Erik Mongrain".
+    spelling = decide([_candidate("erik", ["strong"], name=False, signals=FULL, canonical="Erik Mongrain")],
+                      "Eric Mongrain")
+    assert spelling["classification"] == "matched"
+
+    unconfirmed_tracks = decide([_candidate("erik", ["strong"], name=False, signals={"year", "track_count"},
+                                            canonical="Erik Mongrain")], "Eric Mongrain")
+    assert unconfirmed_tracks["classification"] == "unconfirmed"
+
+
+def test_alan_parsons_project_goes_to_the_artist_its_album_belongs_to():
+    """Owner: albums decide which of The Alan Parsons Project and Alan Parsons a tag is."""
+    solo = _candidate("alan-parsons", ["strong"], name=False, signals=FULL, canonical="Alan Parsons")
+    project = _candidate("the-alan-parsons-project", [None], canonical="The Alan Parsons Project")
+
+    result = decide([project, solo], "Alan Parsons Project")
+
+    assert result["classification"] == "matched"
+    assert result["selected"]["mbid"] == "alan-parsons"
+
+
+def test_a_collaboration_is_never_given_to_one_of_its_artists():
+    member = _candidate("menken", ["strong", "strong"], name=False, signals=FULL, canonical="Alan Menken")
+
+    result = decide([member], "Alan Menken & Howard Ashman")
+
+    assert result["classification"] == "unconfirmed"
+
+
+def test_an_album_credited_to_several_artists_never_goes_to_one_of_them_under_another_name():
+    # "John Petrucci & Jordan Rudess": MusicBrainz credits Petrucci and Rudess jointly.
+    member = _candidate("petrucci", ["strong", "strong"], name=False, signals=FULL, canonical="John Petrucci")
+    member["joint_credit"] = True
+    assert decide([member], "Petrucci Rudess Duets")["classification"] == "unconfirmed"
+
+    # AC/DC is one MusicBrainz artist: its separator never makes it a collaboration.
+    band = _candidate("acdc", ["strong"], canonical="AC/DC")
+    assert decide([band], "AC/DC")["classification"] == "matched"
+
+
+def test_a_matched_sibling_needs_only_its_album_evidence():
+    # "Devin Townsend Project" beside the matched "The Devin Townsend Project".
+    sibling = _candidate("dtp", ["strong", "strong", "strong"], name=False, sibling=True, canonical="Devin Townsend")
+
+    assert decide([sibling], "Devin Townsend Project")["classification"] == "matched"
+
+
+def test_a_single_matched_sibling_is_accepted_when_no_album_points_elsewhere():
+    # "Chick_Corea" beside the matched "Chick Corea", its albums not on MusicBrainz.
+    sibling = _candidate("corea", [None], sibling=True, canonical="Chick Corea")
+    assert decide([sibling], "Chick_Corea")["classification"] == "matched"
+
+    elsewhere = _candidate("other", ["strong"], name=False, canonical="Somebody Else")
+    result = decide([sibling, elsewhere], "Chick_Corea")
+    assert (result.get("selected") or {}).get("mbid") != "corea", "an album pointing elsewhere outweighs the sibling"
+
+
+def test_special_purpose_artists_are_never_a_match():
+    various = _candidate("89ad4ac3-39f7-470e-963a-56509c546377", ["strong", "strong"], signals=FULL)
+
+    assert decide([various], "Various")["classification"] == "not_found"
+
+
+@pytest.mark.parametrize(("local", "candidate", "expected"), [
+    ("Alan Parsons Project", "Alan Parsons", "contains"),
+    ("Калугин Сергей", "Сергей Калугин", "spelling"),
+    ("Aldo Taliapietra", "Aldo Tagliapietra", "spelling"),
+    ("Alan Menken & Howard Ashman", "Alan Menken", "collaboration"),
+    ("Наталья Маркова и группа Двуречье", "Наталья Маркова и Двуречье", "spelling"),
+    ("Hiromi", "上原ひろみ", "different"),
+    ("The Devin Townsend Project", "Devin Townsend Project", "same"),
+])
+def test_name_relation(local, candidate, expected):
+    assert name_relation(local, {"canonical_name": candidate}) == expected
 
 
 @pytest.mark.parametrize(("local", "remote", "expected"), [

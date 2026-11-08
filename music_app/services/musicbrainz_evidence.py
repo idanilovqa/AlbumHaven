@@ -199,30 +199,104 @@ def album_level(title: str | None, signals: set[str]) -> str | None:
     return "title" if title == "exact" else None
 
 
+# MusicBrainz's special-purpose artists name no artist; never a match.
+SPECIAL_PURPOSE_ARTISTS = frozenset({
+    "89ad4ac3-39f7-470e-963a-56509c546377",  # Various Artists
+    "125ec42a-7229-4250-afc5-e057484327fe",  # [unknown]
+})
+_COLLABORATION = re.compile(
+    r"\s(?:&|and|und|et|y|и|with|feat\.?|ft\.?|featuring|vs\.?|x|meets|\+|-|–)\s|,\s|/|;|×|\s·\s", re.IGNORECASE)
+_LEVEL_RANK = {"strong": 2, "agree": 1}
+
+
+def name_relation(local_name: object, candidate: dict[str, object]) -> str:
+    """How a candidate's name relates to the local name: "same", "spelling" (a near or
+    reordered spelling), "contains" (one name inside the other), "collaboration" (the
+    local name joins several artists and the candidate is only one of them) or "different"."""
+    local_keys = name_keys(local_name)
+    candidate_keys = candidate_name_keys(candidate)
+    if local_keys & candidate_keys:
+        return "same"
+    local = fold(local_name)
+    names = [fold(candidate.get("canonical_name"))] + [
+        fold(alias.get("name")) for alias in candidate.get("aliases") or [] if isinstance(alias, dict)]
+    names = [name for name in names if name]
+    if any(sorted(name.split()) == sorted(local.split()) or SequenceMatcher(None, local, name).ratio() >= 0.85
+           for name in names):
+        return "spelling"
+    if _COLLABORATION.search(str(local_name or "")):
+        return "collaboration"
+    if any(re.search(rf"\b{re.escape(name)}\b", local) or re.search(rf"\b{re.escape(local)}\b", name)
+           for name in names if local):
+        return "contains"
+    return "different"
+
+
+def album_rank(album: dict[str, object]) -> tuple[int, int, int]:
+    """How strongly one album agrees: level, then how many signals, then track-level ones."""
+    signals = set(album.get("signals") or ())
+    return (_LEVEL_RANK.get(str(album.get("level")), 0), len(signals),
+            len(signals & {"track_list", "durations"}))
+
+
+def assign_albums(candidates: list[dict[str, object]]) -> None:
+    """Give each local album to the one candidate with strictly the strongest evidence on it.
+
+    Two candidates agreeing equally on the same album prove neither: the album is
+    shared and counts for no one. Sets ``assigned`` on every album entry.
+    """
+    album_count = max((len(candidate.get("albums") or []) for candidate in candidates), default=0)
+    for index in range(album_count):
+        entries = [candidate["albums"][index] for candidate in candidates
+                   if index < len(candidate.get("albums") or [])]
+        for entry in entries:
+            entry["assigned"] = False
+        agreeing = sorted((entry for entry in entries if _LEVEL_RANK.get(str(entry.get("level")), 0)),
+                          key=album_rank, reverse=True)
+        if agreeing and (len(agreeing) == 1 or album_rank(agreeing[0]) > album_rank(agreeing[1])):
+            agreeing[0]["assigned"] = True
+
+
+def contested_albums(candidates: list[dict[str, object]]) -> set[int]:
+    """Albums on which more than one candidate agrees."""
+    counts: dict[int, int] = {}
+    for candidate in candidates:
+        for index, album in enumerate(candidate.get("albums") or []):
+            if _LEVEL_RANK.get(str(album.get("level")), 0):
+                counts[index] = counts.get(index, 0) + 1
+    return {index for index, count in counts.items() if count > 1}
+
+
 def candidate_score(albums: list[dict[str, object]]) -> tuple[int, int, int]:
-    """(score, agreeing albums, strong albums) over a candidate's best evidence per local album."""
-    strong = sum(album.get("level") == "strong" for album in albums)
-    agreeing = sum(album.get("level") in {"strong", "agree"} for album in albums)
+    """(score, agreeing albums, strong albums) over the albums assigned to a candidate."""
+    held = [album for album in albums if album.get("assigned", True)]
+    strong = sum(album.get("level") == "strong" for album in held)
+    agreeing = sum(album.get("level") in {"strong", "agree"} for album in held)
     return 2 * strong + (agreeing - strong), agreeing, strong
 
 
-def decide(candidates: list[dict[str, object]]) -> dict[str, object]:
+def decide(candidates: list[dict[str, object]], local_name: object = "") -> dict[str, object]:
     """Accept one candidate only on decisive album evidence.
 
-    Each candidate carries ``albums`` (its evidence per local album),
-    ``name_agrees`` and ``credit_agrees``. Only candidates whose name agrees, or
-    whose agreeing releases are all credited under the local name with
-    track-level agreement, may win. The winner needs a strong album; the
-    runner-up must have no agreeing album, or the winner must score at least
-    twice as much with at least two more agreeing albums. A candidate found only
-    through same-titled albums is offered for confirmation, never accepted.
+    Each candidate carries ``albums`` (its evidence per local album), and may carry
+    ``name_agrees``, ``credit_agrees`` and ``sibling`` (an already matched local
+    artist with this name). Albums go to the candidate with the strongest evidence
+    on them. The winner holds a strong album, and the runner-up holds no album, or
+    the winner holds twice its score with two more albums. The winner then needs
+    its name, a credit or a sibling to agree; or two strong albums; or, for an
+    artist with one local album, a strong album with its tracks confirmed and a
+    name that is a spelling or a part of the local one. When no album agrees with
+    anyone, a single matched sibling is accepted: its own albums proved it. A name
+    alone never decides; a collaboration ("A & B") is never given to one of its artists.
     """
+    candidates = [candidate for candidate in candidates
+                  if str(candidate.get("mbid") or "").lower() not in SPECIAL_PURPOSE_ARTISTS]
+    assign_albums(candidates)
     for candidate in candidates:
         candidate["evidence"] = candidate_score(candidate.get("albums") or [])
     ranked = sorted(candidates, key=lambda candidate: (candidate["evidence"], int(candidate.get("score") or 0)),
                     reverse=True)
-    eligible = [candidate for candidate in ranked if candidate.get("name_agrees") or candidate.get("credit_agrees")]
-    contenders = [candidate for candidate in eligible if candidate["evidence"][1] > 0]
+    contenders = [candidate for candidate in ranked if candidate["evidence"][1] > 0]
     if contenders:
         winner = contenders[0]
         runner = contenders[1] if len(contenders) > 1 else None
@@ -231,12 +305,28 @@ def decide(candidates: list[dict[str, object]]) -> dict[str, object]:
             and winner["evidence"][1] - runner["evidence"][1] >= 2
         )
         if winner["evidence"][2] >= 1 and decisive:
-            return {"classification": "matched", "selected": winner, "candidates": ranked}
-        return {"classification": "ambiguous" if len(contenders) > 1 else "unconfirmed", "candidates": contenders}
-    elsewhere = [candidate for candidate in ranked if candidate not in eligible and candidate["evidence"][2] > 0]
-    if elsewhere:
-        # Albums point to an artist named differently (a misspelt tag, another alias).
-        return {"classification": "unconfirmed", "candidates": elsewhere[:3]}
+            relation = name_relation(local_name, winner)
+            if winner.get("joint_credit") and relation != "same":
+                # MusicBrainz credits the album to several artists ("Petrucci & Rudess"):
+                # the local artist is that collaboration, not this one member.
+                relation = "collaboration"
+            albums = winner.get("albums") or []
+            tracks_confirmed = any(
+                album.get("assigned", True) and album.get("level") == "strong"
+                and set(album.get("signals") or ()) & {"track_list", "durations"} for album in albums)
+            if (winner.get("name_agrees") or winner.get("credit_agrees") or winner.get("sibling")
+                    or (relation != "collaboration" and (
+                        winner["evidence"][2] >= 2
+                        or (len(albums) == 1 and tracks_confirmed and relation in {"spelling", "contains"})))):
+                return {"classification": "matched", "selected": winner, "candidates": ranked}
+            return {"classification": "unconfirmed", "candidates": contenders[:3]}
+        return {"classification": "ambiguous" if runner else "unconfirmed", "candidates": contenders}
+    siblings = {str(candidate.get("mbid")): candidate for candidate in ranked if candidate.get("sibling")}
+    if len(siblings) == 1:
+        # The same artist under another tag spelling ("Chick_Corea"), already matched
+        # on its albums, and no album here points anywhere else.
+        return {"classification": "matched", "selected": next(iter(siblings.values())), "candidates": ranked,
+                "sibling_only": True}
     named = [candidate for candidate in ranked if candidate.get("name_agrees")]
     if len(named) == 1:
         return {"classification": "unconfirmed", "candidates": named}

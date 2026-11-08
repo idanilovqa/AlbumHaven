@@ -45,13 +45,17 @@ MATCHED = {
     "Yaruga": "4b85a5c7-6c87-45b4-bf4f-afc38b51a5c8",              # local "ЯRuGa"
     "Dimitris Mystakidis": "ca9e03bb-1008-44ef-955f-60f4b4da0208", # "Morso" and "Μόρσο"
 }
-# Never accepted, each with the artist the owner is asked to confirm.
-UNCONFIRMED = {
-    "Alan Parsons Project": "Alan Parsons",          # "The Secret" is his solo album
-    "Devin Townsend Project": "Devin Townsend Project",  # box-set discs, not release groups
-    "Eric Mongrain": "Erik Mongrain",                # misspelt tag: albums alone never accept another name
-    "Birgir": "Birgir Steinn Stefansson",            # credited under the full name, not "Birgir"
-}
+# Matched by their albums under another name (matcher 3, owner review 3): the
+# local name is kept as the credited name, with the albums that proved it.
+MATCHED.update({
+    "Alan Parsons Project": "9774cfd1-8862-42bd-919e-156c31f079b4",   # "The Secret" is Alan Parsons' solo album
+    "Eric Mongrain": "e1626c85-984c-4a25-a9fd-40c6ac28b181",          # misspelt tag of Erik Mongrain
+    "Birgir": "9eda4c69-9b20-4298-82f9-0eaa43697713",                 # Birgir Steinn Stefansson
+    "Devin Townsend Project": "b00cb756-0259-4a50-bbcb-ad22186c5518",  # box-set discs, matched sibling
+})
+CREDITED = {"3 Crows": "3 Crows", "Alan Parsons Project": "Alan Parsons Project",
+            "Eric Mongrain": "Eric Mongrain", "Birgir": "Birgir"}
+UNCONFIRMED: dict[str, str] = {}
 
 
 def _client():
@@ -74,7 +78,9 @@ def test_owner_named_artist(case):
     if case["case"] in MATCHED:
         assert outcome["classification"] == "found"
         assert outcome["artist"]["mbid"] == MATCHED[case["case"]]
-        assert outcome.get("credit_name") == ("3 Crows" if case["case"] == "3 Crows" else None)
+        assert outcome.get("credit_name") == CREDITED.get(case["case"])
+        if case["case"] in CREDITED:
+            assert outcome["album_evidence"], "a credited match keeps the albums that proved it"
     else:
         assert outcome["classification"] == "unconfirmed"
         assert [candidate["canonical_name"] for candidate in outcome["candidates"]][:1] == [UNCONFIRMED[case["case"]]]

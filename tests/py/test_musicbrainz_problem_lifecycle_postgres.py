@@ -657,3 +657,124 @@ def test_album_evidence_matcher_rechecks_older_rows_and_never_silently_replaces_
     assert match()["state"] == "conflict" and match()["mbid"] == GERMAN
     with isolatedPostgres._connect(setup_url) as connection:
         assert _active(connection, artist_id) == ["musicbrainz_artist_metadata_conflict"]
+
+
+def _add_artist(setup_url, library_id, artist_key, name, *, album_mbid=None):
+    with isolatedPostgres._connect(setup_url) as connection:
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name, metadata)"
+            " values (%s, %s, %s, '{}'::jsonb) returning id", (library_id, artist_key, name),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata, mbid, evidence_source)"
+            " values (%s, %s, %s, 'Contain Us', '{}'::jsonb, %s, %s) returning id",
+            (library_id, artist_id, f"{artist_key}-album", album_mbid,
+             "lastfm.public.albums" if album_mbid else None),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata)"
+            " values (%s, %s, %s, %s, 'Track', '{}'::jsonb)", (library_id, album_id, artist_id, f"{artist_key}-track"),
+        )
+    return artist_id, album_id
+
+
+def test_matcher_3_context_carries_siblings_and_album_identifiers_and_stores_credit_evidence(
+        monkeypatch: pytest.MonkeyPatch):
+    """0175: a credited or disc match keeps the albums that proved it; the context offers matched siblings."""
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, matched_id = _seed_present_artist(setup_url, "the-axxis")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_artists set name = 'The Àxxis' where id = %s", (matched_id,))
+    repository.record_automatic_outcome(
+        local_artist_id=matched_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz search evidence agreed.",
+        artist={"mbid": GERMAN, "canonical_name": "Axxis", "artist_type": "Group"},
+    )
+    album_mbid = "00000000-0000-4000-8000-00000000c001"
+    tag_id, tag_album_id = _add_artist(setup_url, library_id, "axxis-tag", "Axxis", album_mbid=album_mbid)
+
+    repository.enqueue_eligible_artists(reason="startup_backfill", observed_at=NOW)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("delete from ops.metadata_enrichment_jobs where local_artist_id <> %s", (tag_id,))
+    job = repository.claim_due_job(worker_id="worker-a", now=NOW, lease_duration=timedelta(minutes=5))
+    context = repository.load_artist_context(job_id=job["id"], worker_id="worker-a")
+
+    assert context["sibling_matches"] == [
+        {"local_artist_id": matched_id, "name": "The Àxxis", "mbid": GERMAN, "canonical_name": "Axxis"}]
+    assert context["albums"][0]["id"] == tag_album_id
+    assert context["albums"][0]["lastfm_release_mbid"] == album_mbid
+
+    evidence = [{"local_album_id": tag_album_id, "local_title": "Contain Us", "release_group_mbid": TRANCE,
+                 "release_mbid": album_mbid, "disc_position": 5, "signals": ["year", "track_count", "bogus"]}]
+    repository.record_automatic_outcome(
+        local_artist_id=tag_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz album evidence agreed.", credit_name="Axxis",
+        album_evidence=evidence, artist={"mbid": TRANCE, "canonical_name": "Axxis Duo", "artist_type": "Group"},
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        stored = connection.execute(
+            "select credit_name, album_evidence from library.local_artist_musicbrainz_matches"
+            " where local_artist_id = %s", (tag_id,)).fetchone()
+    assert stored["credit_name"] == "Axxis"
+    assert stored["album_evidence"] == [{
+        "local_album_id": tag_album_id, "local_title": "Contain Us", "release_group_mbid": TRANCE,
+        "release_mbid": album_mbid, "disc_position": 5, "signals": ["track_count", "year"]}]
+
+    # A match without album evidence (a plain name match) clears it.
+    repository.record_automatic_outcome(
+        local_artist_id=tag_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz search evidence agreed.",
+        artist={"mbid": TRANCE, "canonical_name": "Axxis", "artist_type": "Group"},
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select album_evidence from library.local_artist_musicbrainz_matches where local_artist_id = %s",
+            (tag_id,)).fetchone()["album_evidence"] is None
+
+
+def test_various_and_unknown_artists_are_never_queued_and_lose_automatic_outcomes(monkeypatch: pytest.MonkeyPatch):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, _artist_id = _seed_present_artist(setup_url, "real")
+    # The runtime role, so the retirement needs no privilege the app lacks.
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+        connect=lambda _url: isolatedPostgres._connect(runtime_url),
+    )
+    various_id, _ = _add_artist(setup_url, library_id, "various", "Various")
+    unknown_id, _ = _add_artist(setup_url, library_id, "unknown", " Unknown Artist ")
+    for artist_id in (various_id, unknown_id):
+        repository.replace_candidates(
+            local_artist_id=artist_id, match_state="ambiguous", observed_at=NOW,
+            evidence_summary="MusicBrainz candidates require manual review.",
+            candidates=[
+                {"artist_mbid": GERMAN, "canonical_name": "Various", "candidate_score": 1, "evidence_summary": "Name only"},
+                {"artist_mbid": TRANCE, "canonical_name": "Various", "candidate_score": 1, "evidence_summary": "Name only"},
+            ],
+        )
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _active(connection, various_id) == ["musicbrainz_artist_ambiguous"]
+
+    assert repository.enqueue_eligible_artists(reason="startup_backfill", observed_at=NOW) == {"enqueued_count": 1}
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        queued = {row["local_artist_id"] for row in connection.execute(
+            "select local_artist_id from ops.metadata_enrichment_jobs").fetchall()}
+        # The runtime role cannot delete match rows: the outcome becomes "not found".
+        remaining = connection.execute(
+            "select count(*) as count from library.local_artist_musicbrainz_matches"
+            " where local_artist_id = any(%s) and (state <> 'not_found' or artist_mbid is not null)",
+            ([various_id, unknown_id],)).fetchone()["count"]
+        candidates = connection.execute(
+            "select count(*) as count from library.local_artist_musicbrainz_candidates where local_artist_id = any(%s)",
+            ([various_id, unknown_id],)).fetchone()["count"]
+        assert various_id not in queued and unknown_id not in queued
+        assert remaining == 0 and candidates == 0
+        assert _active(connection, various_id) == [] and _active(connection, unknown_id) == []
+        resolved = connection.execute(
+            "select distinct resolution_source from library.metadata_enrichment_problems where local_artist_id = %s",
+            (various_id,)).fetchall()
+        assert [row["resolution_source"] for row in resolved] == ["not_an_artist"]

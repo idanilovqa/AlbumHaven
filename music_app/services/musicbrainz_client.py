@@ -427,7 +427,63 @@ class MusicBrainzClient:
             for medium in payload.get("media") or [] if isinstance(medium, dict)
             for track in medium.get("tracks") or [] if isinstance(track, dict)
         ]
-        return {"classification": "complete", "tracks": tracks}
+        return {"classification": "complete", "tracks": tracks, "release_id": release_id}
+
+    def browse_release_discs(self, mbid: object, *, max_pages: int = 3, page_size: int = 100) -> JsonDict:
+        """An artist's releases with their discs (title, position, format, track count),
+        so a local album can match one disc of a box set."""
+        normalized = _valid_mbid(mbid)
+        if not normalized:
+            return {"classification": "invalid_request", "releases": []}
+        releases: list[JsonDict] = []
+        for page in range(max(1, int(max_pages))):
+            query = urllib.parse.urlencode({"artist": normalized, "inc": "media release-groups", "fmt": "json",
+                                            "limit": page_size, "offset": page * page_size})
+            payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
+            if not isinstance(payload, dict):
+                return {"classification": _transport_classification(transport), "releases": releases,
+                        "transport": transport}
+            for raw in payload.get("releases") or []:
+                if not isinstance(raw, dict) or not _valid_mbid(raw.get("id")):
+                    continue
+                releases.append({
+                    "id": _valid_mbid(raw.get("id")), "title": _text(raw.get("title")),
+                    "date": _text(raw.get("date")) or None,
+                    "release_group_id": _valid_mbid((raw.get("release-group") or {}).get("id"))
+                    if isinstance(raw.get("release-group"), dict) else None,
+                    "discs": [{"position": _integer(medium.get("position")), "title": _text(medium.get("title")),
+                               "format": _text(medium.get("format")), "track_count": _integer(medium.get("track-count"))}
+                              for medium in raw.get("media") or [] if isinstance(medium, dict)],
+                })
+            if (page + 1) * page_size >= _integer(payload.get("release-count")):
+                break
+        return {"classification": "complete" if releases else "not_found", "releases": releases}
+
+    def lookup_release(self, release_mbid: object) -> JsonDict:
+        """One release with its release group and credited artists (a local album's
+        Last.fm identifier, checked against the album's own title before it counts)."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "release-groups artist-credits media", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        group = payload.get("release-group") if isinstance(payload.get("release-group"), dict) else {}
+        return {"classification": "complete", "release": {
+            "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
+            "track_count": sum(_integer(medium.get("track-count")) for medium in payload.get("media") or []
+                               if isinstance(medium, dict)),
+            "release_group_id": _valid_mbid(group.get("id")),
+            "release_group_title": _text(group.get("title")) or None,
+            "credits": [
+                {"name": _text(credit.get("name")), "artist_mbid": _valid_mbid(credit["artist"].get("id")),
+                 "artist_name": _text(credit["artist"].get("name"))}
+                for credit in payload.get("artist-credit") or []
+                if isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
+                and _valid_mbid(credit["artist"].get("id"))
+            ],
+        }}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

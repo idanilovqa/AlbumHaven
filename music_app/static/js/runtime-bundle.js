@@ -25978,6 +25978,7 @@ function renderUtilityModalContent(options = {}) {
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
+  els.overlay?.removeAttribute?.('data-utility-tab-pending');
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;
@@ -28600,6 +28601,9 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
     utilityCoverLoadSuspensionToken = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
   }
   deferActiveStartupViewForUtilityModal();
+  // Owner (11-08): Settings never flashes another section (mobile showed Problematic Files before Appearance).
+  // The shell still paints first; its body stays hidden until the requested section renders.
+  els.overlay.toggleAttribute?.('data-utility-tab-pending', els.overlay.getAttribute?.('data-active-tab') !== state.utility.activeTab);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (state.utility.activeTab === 'loops') {

@@ -1301,6 +1301,9 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
     utilityCoverLoadSuspensionToken = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
   }
   deferActiveStartupViewForUtilityModal();
+  // Owner (11-08): Settings never flashes another section (mobile showed Problematic Files before Appearance).
+  // The shell still paints first; its body stays hidden until the requested section renders.
+  els.overlay.toggleAttribute?.('data-utility-tab-pending', els.overlay.getAttribute?.('data-active-tab') !== state.utility.activeTab);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (state.utility.activeTab === 'loops') {

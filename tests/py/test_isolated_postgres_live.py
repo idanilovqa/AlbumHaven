@@ -6000,6 +6000,30 @@ def _seed_disc_rating_albums(fixture, albums=None):
         ).fetchone()
 
 
+def _clear_app_ratings(fixture):
+    # Publications seed missing ratings; clearing models a library from before.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from app.album_disc_ratings")
+        connection.execute("delete from app.album_ratings")
+
+
+def _album_rating_rows(setup_url):
+    with isolatedPostgres._connect(setup_url) as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                """
+                select app.album_ratings.album_key, app.album_ratings.rating, app.album_ratings.provenance,
+                       app.album_ratings.account_id = app.bootstrap_owners.account_id as is_owner
+                from app.album_ratings
+                cross join app.bootstrap_owners
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                order by album_key
+                """
+            ).fetchall()
+        ]
+
+
 def _disc_rating_rows(setup_url):
     with isolatedPostgres._connect(setup_url) as connection:
         return [
@@ -6027,6 +6051,7 @@ def test_live_explicit_import_seeds_only_the_owners_differing_consistent_disc_ra
     fixture = watcher_repair_inventory
     album = _seed_disc_rating_albums(fixture, {"All the Wars": (8, 8), "Mixed Bonus": (8, 9)})
     assert album["tag_rating"] == 5
+    _clear_app_ratings(fixture)
     service = PostgresAlbumRatingsService(fixture.config)
 
     first = service.import_missing_tag_ratings()
@@ -6050,6 +6075,7 @@ def test_live_import_never_overwrites_an_existing_disc_rating_row(watcher_repair
 
     fixture = watcher_repair_inventory
     album = _seed_disc_rating_albums(fixture)
+    _clear_app_ratings(fixture)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         connection.execute(
             """
@@ -6093,3 +6119,109 @@ def test_live_disc_rating_follows_an_album_key_rename(watcher_repair_inventory):
     assert [(row["album_key"], row["rating"]) for row in _disc_rating_rows(fixture.setup_url)] == [
         ("owner::renamed", 8),
     ]
+
+
+def test_live_every_publication_seeds_missing_ratings_and_never_overwrites_the_app(
+    watcher_repair_inventory,
+):
+    # sandbox6, 2026-10-27: a republication re-keyed albums without seeding.
+    fixture = watcher_repair_inventory
+    album = _seed_disc_rating_albums(fixture)
+
+    assert _album_rating_rows(fixture.setup_url) == [
+        {"album_key": album["album_key"], "rating": 5, "provenance": "file_tag_scan", "is_owner": True},
+    ]
+    assert _disc_rating_rows(fixture.setup_url) == [
+        {"album_key": album["album_key"], "disc_key": "2", "rating": 8,
+         "provenance": "file_tag_scan", "is_owner": True},
+    ]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update app.album_ratings set rating = null, provenance = 'explicit_clear'"
+        )
+        connection.execute(
+            "update app.album_disc_ratings set rating = 9, provenance = 'explicit_import'"
+        )
+    _seed_disc_rating_albums(fixture)
+
+    assert [(row["rating"], row["provenance"]) for row in _album_rating_rows(fixture.setup_url)] == [
+        (None, "explicit_clear"),
+    ]
+    assert [(row["rating"], row["provenance"]) for row in _disc_rating_rows(fixture.setup_url)] == [
+        (9, "explicit_import"),
+    ]
+
+
+def test_live_watcher_publication_imports_a_rating_tagged_outside_the_app(
+    watcher_repair_inventory,
+):
+    # sandbox6: Portal of I was tagged in another player and only the watcher saw it.
+    fixture = watcher_repair_inventory
+    first = {**fixture.entry("Owner/Portal/01.flac", album="Portal"), "album_rating": None}
+    second = {**fixture.entry("Owner/Portal/02.flac", album="Portal"), "track_number": 2, "album_rating": None}
+    fixture.seed(first, second)
+    assert _album_rating_rows(fixture.setup_url) == []
+
+    tagged = {**second, "album_rating": 6}
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={tagged["path"]: tagged},
+    )
+    # Another watcher event for the untagged member keeps the album's tag rating.
+    retitled = {**first, "title": "Retitled"}
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={retitled["path"]: retitled},
+    )
+
+    assert _album_rating_rows(fixture.setup_url) == [
+        {"album_key": "owner::portal", "rating": 6, "provenance": "file_tag_scan", "is_owner": True},
+    ]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute(
+            "select metadata -> 'tag_album_rating' as tag from library.local_albums where album_key = 'owner::portal'"
+        ).fetchone()["tag"] == 6
+
+
+def test_live_problematic_files_flags_an_app_rating_that_differs_from_the_file_tag(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    _seed_disc_rating_albums(
+        fixture, {"Differs": (5, 5), "Agrees": (5, 5), "Cleared": (5, 5), "Untagged": (5, 5)},
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # A good cover leaves the rating mismatch as the only problem to discover.
+        connection.execute(
+            "update library.local_albums set cover_path = 'cover.jpg', metadata = metadata"
+            " || '{\"local_cover_width\": 1200, \"local_cover_height\": 1200}'::jsonb"
+        )
+        connection.execute("update app.album_ratings set rating = 8 where album_key = 'owner::differs'")
+        connection.execute(
+            "update app.album_ratings set rating = null, provenance = 'explicit_clear'"
+            " where album_key = 'owner::cleared'"
+        )
+        connection.execute(
+            "update library.local_albums set metadata = metadata - 'tag_album_rating'"
+            " where album_key = 'owner::untagged'"
+        )
+        connection.execute("update app.album_ratings set rating = 3 where album_key = 'owner::untagged'")
+    invalidate_postgres_utility_projection_cache()
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+
+    items = repository.build_problematic_files_payload()["items"]
+    reasons = {item["name"]: item["problem_reasons"] for item in items}
+
+    assert reasons["Differs"] == ["File rating mismatch"]
+    assert not {"Agrees", "Cleared", "Untagged"} & set(reasons)
+    differs = next(item for item in items if item["name"] == "Differs")
+    detail = repository.build_problematic_file_detail_payload(differs["key"])
+    assert "File rating mismatch" in detail["problem_reasons"]
+    page = repository.build_problematic_files_page(limit=50)
+    assert "File rating mismatch" in next(
+        item for item in page["items"] if item["name"] == "Differs"
+    )["problem_reasons"]

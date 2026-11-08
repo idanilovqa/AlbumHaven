@@ -1712,7 +1712,6 @@ def test_scan_cancelled_during_postgres_publication_rolls_back_before_rating_see
         "scan_mode": "background",
     }
     connection = TransactionConnectionStub()
-    seed_calls = []
     config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
         "postgresql://album_haven_app@localhost/album_haven"
     )
@@ -1742,21 +1741,21 @@ def test_scan_cancelled_during_postgres_publication_rolls_back_before_rating_see
     monkeypatch.setattr(
         scan_cache_persistence.PostgresAlbumRatingsService,
         "seed_missing_album_ratings_in_transaction",
-        lambda _self, *args, **kwargs: seed_calls.append((args, kwargs)),
+        lambda _self, *args, **kwargs: None,
     )
 
     with pytest.raises(ScanCancelled):
         state_module.refresh_relation_views_for_state(
             library_state,
             config,
-            seed_missing_album_ratings=True,
+            final_scan_publication=True,
             expected_scan_generation=1,
         )
 
     assert connection.cancelled_during_publication is True
+    # Seeding shares the publication's transaction, so it rolls back with it.
     assert connection.rolled_back is True
     assert connection.commit_calls == 0
-    assert seed_calls == []
     assert library_state["scan_generation"] == 2
 
 
@@ -1782,7 +1781,7 @@ def test_committed_scan_generation_rejects_cancel_waiting_on_publication_lock(
         return "committed"
 
     def run_publication_guard():
-        results["publication"] = state_module._run_album_rating_seed_for_current_generation(
+        results["publication"] = state_module._run_scan_publication_commit_for_current_generation(
             library_state,
             7,
             seed_action,

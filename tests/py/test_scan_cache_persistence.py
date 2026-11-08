@@ -3709,27 +3709,57 @@ def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewri
     assert album_rows[0]["metadata"]["cover_revision"] == "exact-cover-sha256"
 
 
-def test_postgres_scan_cache_snapshot_does_not_seed_ratings_by_default(monkeypatch):
+def test_postgres_scan_cache_snapshot_seeds_missing_ratings_on_every_publication(monkeypatch):
+    # Owner decision 2026-11-08: a relation-only republication that re-keys
+    # albums must import their tag ratings like a scan does.
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
-    seed_calls = []
-    monkeypatch.setattr(
-        scan_cache_persistence.PostgresAlbumRatingsService,
-        "seed_missing_album_ratings_in_transaction",
-        lambda _self, *args, **kwargs: seed_calls.append((args, kwargs)),
-    )
     connection = FakeConnection()
+    seed_calls = []
+    for method in (
+        "seed_missing_album_ratings_in_transaction",
+        "seed_missing_album_disc_ratings_in_transaction",
+    ):
+        monkeypatch.setattr(
+            scan_cache_persistence.PostgresAlbumRatingsService,
+            method,
+            lambda _self, active_connection, candidates, *, source, method=method: seed_calls.append(
+                (method, active_connection is connection, connection.commit_calls, list(candidates), source)
+            ),
+        )
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: connection,
-        build_albums=lambda _file_cache, _selected_artists: [],
+        build_albums=lambda _file_cache, _selected_artists: [
+            SimpleNamespace(
+                key="big big train::the underfall yard::year::2021",
+                name="The Underfall Yard",
+                album_artist="Big Big Train",
+                artists=["Big Big Train"],
+                year=2021,
+                cover_path=None,
+                edition=None,
+                root_provenance=None,
+                album_rating=8,
+                tracks=[],
+            )
+        ],
     )
 
     adapter.save_snapshot(Path("unused.json"), {}, "root-identity", 5.0)
 
-    assert seed_calls == []
+    assert seed_calls == [
+        (
+            "seed_missing_album_ratings_in_transaction",
+            True,
+            0,
+            [{"album_key": "big big train::the underfall yard::year::2021", "tag_album_rating": 8}],
+            "file_tag_scan",
+        ),
+        ("seed_missing_album_disc_ratings_in_transaction", True, 0, [], "file_tag_scan"),
+    ]
 
 
 def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(monkeypatch):
@@ -3758,11 +3788,11 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         ]
         assert source == "file_tag_scan"
 
-    def guard(seed_action):
-        events.append("seed_guard_enter")
-        seed_action()
+    def guard(commit_action):
+        events.append("commit_guard_enter")
+        commit_action()
         assert connection.commit_calls == 1
-        events.append("seed_guard_exit")
+        events.append("commit_guard_exit")
 
     monkeypatch.setattr(
         scan_cache_persistence.PostgresAlbumRatingsService,
@@ -3806,17 +3836,16 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         {},
         "root-identity",
         5.0,
-        seed_missing_album_ratings=True,
-        album_rating_seed_guard=guard,
+        publication_commit_guard=guard,
     )
 
     assert events == [
         "album_inventory",
         "scan_snapshot",
-        "seed_guard_enter",
         "rating_seed",
         "disc_rating_seed",
-        "seed_guard_exit",
+        "commit_guard_enter",
+        "commit_guard_exit",
     ]
 
 
@@ -3848,8 +3877,6 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
             {},
             "root-identity",
             5.0,
-            seed_missing_album_ratings=True,
-            album_rating_seed_guard=lambda seed_action: seed_action(),
         )
 
     assert raised.value is seed_error

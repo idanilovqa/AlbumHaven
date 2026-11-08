@@ -442,7 +442,7 @@ def refresh_library_state(
                 library_state["scan_phase"] = "finalizing"
                 start_scan_stage(library_state, "relations")
         relation_refresh_options: dict[str, object] = {
-            "seed_missing_album_ratings": True,
+            "final_scan_publication": True,
             "expected_scan_generation": scan_generation,
             "publication_state": publication_state,
         }

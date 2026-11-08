@@ -130,8 +130,6 @@ class ScanCacheAdapter(Protocol):
         relation_views: dict[str, object] | None = None,
         relations_last_built: float | None = None,
         separate_release_keys: set[str] | None = None,
-        seed_missing_album_ratings: bool = False,
-        album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
         publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         expected_cover_mutation_revision: int | None = None,
@@ -484,10 +482,12 @@ class PostgresScanCacheAdapter:
                 synchronized_featured_album_keys = sorted(files_by_album)
                 featured_artist_rows = []
                 aggregate_rows = []
+                published_albums = []
                 for album_key, complete_cache in files_by_album.items():
                     complete_albums = self._build_albums(
                         _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
                     )
+                    published_albums.extend(complete_albums)
                     complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
                     _execute_pipeline_batches(connection, _upsert_local_artist_sql(), complete_artists)
                     member_names = _deduped_artist_names([
@@ -532,6 +532,7 @@ class PostgresScanCacheAdapter:
                     featured_artist_rows.extend(complete_featured)
                 _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
                 _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
+                _seed_missing_tag_ratings(connection, self._config, published_albums)
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
                 {
@@ -1627,8 +1628,6 @@ class PostgresScanCacheAdapter:
         relation_views: dict[str, object] | None = None,
         relations_last_built: float | None = None,
         separate_release_keys: set[str] | None = None,
-        seed_missing_album_ratings: bool = False,
-        album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
         publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         expected_cover_mutation_revision: int | None = None,
@@ -1867,34 +1866,11 @@ class PostgresScanCacheAdapter:
             )
             snapshot_payload[RELATION_PROJECTION_METADATA_KEY] = projection_metadata
             connection.execute(_save_scan_snapshot_sql(), {"scan_cache": _jsonb(snapshot_payload)})
-            if seed_missing_album_ratings:
-                if album_rating_seed_guard is None:
-                    raise RuntimeError(
-                        "Scan rating seeding requires a current-generation guard."
-                    )
-                def seed_and_commit_publication() -> None:
-                    ratings_service = PostgresAlbumRatingsService(self._config)
-                    ratings_service.seed_missing_album_ratings_in_transaction(
-                        connection,
-                        _tag_album_rating_candidates(albums),
-                        source="file_tag_scan",
-                    )
-                    ratings_service.seed_missing_album_disc_ratings_in_transaction(
-                        connection,
-                        tag_disc_rating_candidates(albums),
-                        source="file_tag_scan",
-                    )
-                    if before_commit is not None:
-                        before_commit(connection)
-                    connection.commit()
-
-                album_rating_seed_guard(seed_and_commit_publication)
-            elif publication_commit_guard is not None:
-                if before_commit is not None:
-                    before_commit(connection)
-                publication_commit_guard(connection.commit)
-            elif before_commit is not None:
+            _seed_missing_tag_ratings(connection, self._config, albums)
+            if before_commit is not None:
                 before_commit(connection)
+            if publication_commit_guard is not None:
+                publication_commit_guard(connection.commit)
         if repaired_cover_entries:
             committed_relation_state = dict(committed_relation_state or {})
             committed_relation_state["repaired_cover_entries"] = repaired_cover_entries
@@ -2680,6 +2656,22 @@ def _key(value: object) -> str:
 
 def _valid_tag_album_rating(value: object) -> int | None:
     return value if type(value) is int and 1 <= value <= 10 else None
+
+
+def _seed_missing_tag_ratings(
+    connection: Any,
+    config: dict[str, object],
+    albums: list[object],
+) -> None:
+    """Import file-tag ratings the owner has no app record for, in the
+    publication's transaction. App records, cleared ones included, win."""
+    ratings = PostgresAlbumRatingsService(config)
+    ratings.seed_missing_album_ratings_in_transaction(
+        connection, _tag_album_rating_candidates(albums), source="file_tag_scan",
+    )
+    ratings.seed_missing_album_disc_ratings_in_transaction(
+        connection, tag_disc_rating_candidates(albums), source="file_tag_scan",
+    )
 
 
 def _tag_album_rating_candidates(albums: list[object]) -> list[dict[str, object]]:

@@ -53,7 +53,8 @@
 .gallery-switch--tri .gallery-switch__track { width: 54px; flex-basis: 54px; }
 .gallery-switch--tri[data-switch-position="0"] { color: var(--appearance-muted, var(--muted)); }
 /* Owner: the middle (Separate) position has its own colour, distinct from the palette accent and the on colour. */
-.gallery-switch--tri[data-switch-position="1"] .gallery-switch__track { background: var(--gallery-switch-middle, #e0a33a); }
+/* ID-012 (owner, 11-08 evening): the middle position is blue, tinted toward the player theme so it stays distinct from Show. */
+.gallery-switch--tri[data-switch-position="1"] .gallery-switch__track { background: color-mix(in oklch, #4da3ff 72%, var(--appearance-play, #4bc173)); }
 .gallery-switch--tri[data-switch-position="1"] .gallery-switch__knob { transform: translateX(17px); }
 .gallery-switch--tri[data-switch-position="2"] .gallery-switch__track { background: var(--appearance-play, #4bc173); }
 .gallery-switch--tri[data-switch-position="2"] .gallery-switch__knob { transform: translateX(34px); }

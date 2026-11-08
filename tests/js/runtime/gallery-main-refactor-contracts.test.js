@@ -1982,5 +1982,5 @@ test('ID-012: each click on the Split Albums switch moves Show -> Separate -> Hi
     visited.push(state.splitAlbums);
   }
   assert.deepEqual(visited, ['separate', 'hide', 'show']);
-  assert.match(galleryMainCssSource, /data-switch-position="1"\] \.gallery-switch__track \{ background: var\(--gallery-switch-middle, #e0a33a\); \}/);
+  assert.match(galleryMainCssSource, /data-switch-position="1"\] \.gallery-switch__track \{ background: color-mix\(in oklch, #4da3ff 72%, var\(--appearance-play, #4bc173\)\); \}/);
 });

@@ -18671,6 +18671,61 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
     assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
 
 
+def test_live_targeted_publication_keeps_another_writers_album_change_queued(
+    watcher_repair_inventory, monkeypatch,
+):
+    from contextlib import contextmanager
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry('Owner/Album/01.flac')
+    other = fixture.entry('Other/Second/01.flac', artist='Other', album='Second')
+    fixture.seed(entry, other)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id, other_album_id = connection.execute(
+            "select tracks.library_id, tracks.album_id from library.local_track_files files "
+            "join library.local_tracks tracks on tracks.id=files.track_id where files.private_path=%s",
+            (other['path'],),
+        ).fetchone().values()
+    journaled = []
+    real_connect = fixture.adapter._connect
+
+    class AnotherWriterJournalsMidPublication:
+        """Commit another album's journal row right after the publication reads the journal."""
+
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def execute(self, sql, params=None):
+            result = self._connection.execute(sql, params)
+            if not journaled and 'local_relation_dirty_albums' in str(sql) and 'album_id>0' in str(sql):
+                journaled.append(True)
+                with isolatedPostgres._connect(fixture.setup_url) as writer:
+                    writer.execute('select library.mark_relation_album_dirty(%s,%s)', (library_id, other_album_id))
+            return result
+
+    @contextmanager
+    def connect(url):
+        with real_connect(url) as connection:
+            yield AnotherWriterJournalsMidPublication(connection)
+
+    monkeypatch.setattr(fixture.adapter, '_connect', connect)
+    result = fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: {**entry, 'title': 'Renamed'}},
+    )
+
+    assert journaled == [True]
+    assert result['inventory_mutation_revision'] > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        queued = connection.execute(
+            'select album_id from library.local_relation_dirty_albums where library_id=%s', (library_id,),
+        ).fetchall()
+    assert [row['album_id'] for row in queued] == [other_album_id]
+
+
 def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
     from music_app.services import library_browse_postgres as browse_module
 

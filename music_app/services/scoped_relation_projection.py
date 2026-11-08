@@ -494,17 +494,18 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     ids.update(row['album_id'] for row in old)
     keys.update(row['album_key'] for row in old)
     if not replay_pending:
+        # Album changes another writer journals after the read above stay queued
+        # for the next publication; only a library-wide change needs a full one.
         unrelated = _first_row(connection.execute("""select 1 from library.local_relation_dirty_albums
-            where library_id=%s and not (album_id=any(%s::bigint[]))
-              and not (album_id=0 and first_change_xid is not distinct from pg_current_xact_id()) limit 1""", (library_id, sorted(ids))))
+            where library_id=%s and album_id<=0
+              and not (album_id=0 and first_change_xid is not distinct from pg_current_xact_id()) limit 1""", (library_id,)))
         if unrelated is not None:
             pending = connection.execute("""select album_id,first_inventory_revision,
                 first_gallery_generation,first_change_xid::text,
                 pg_current_xact_id()::text as publication_xid
-                from library.local_relation_dirty_albums where library_id=%s
-                  and not (album_id=any(%s::bigint[]))
+                from library.local_relation_dirty_albums where library_id=%s and album_id<=0
                   and not (album_id=0 and first_change_xid is not distinct from pg_current_xact_id())
-                order by album_id limit 5""", (library_id, sorted(ids))).fetchall()
+                order by album_id limit 5""", (library_id,)).fetchall()
             logging.getLogger(__name__).warning(
                 'Scoped publication deferred: reason=%s library=%s expected_generation=%s affected_count=%s affected_sample=%s pending=%s',
                 reason, library_id, expected_gallery_generation, len(ids), sorted(ids)[:5], pending)

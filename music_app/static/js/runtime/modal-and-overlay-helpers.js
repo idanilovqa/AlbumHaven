@@ -555,6 +555,8 @@ function syncLibraryNavigationMode(mode) {
   });
   const heading = document.getElementById('navigation-tree-heading');
   if (heading) heading.textContent = collections ? 'Custom Collections' : 'Artists';
+  // The rail carries the mode, so the CSS shows exactly one tree whatever re-renders a tree's own attributes.
+  document.getElementById('shell-navigation-rail')?.setAttribute('data-library-navigation-mode', mode);
   const collectionsTree = document.getElementById('sidebar-collections');
   const artistsTree = document.getElementById('sidebar-list');
   if (collectionsTree) collectionsTree.hidden = !collections;

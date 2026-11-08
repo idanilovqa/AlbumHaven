@@ -341,3 +341,7 @@
 :root .settings-host .settings-nav :is(.settings-nav-item, .settings-nav-item span, .settings-nav-heading) {
   color: var(--appearance-panel-ink, var(--app-ink));
 }
+/* One tree per side-panel mode: Loose Tracks never shows inside the artist tree, and Custom Collections
+   never shows artists (owner, 11-08). */
+#shell-navigation-rail[data-library-navigation-mode="collections"] #sidebar-list,
+#shell-navigation-rail:not([data-library-navigation-mode="collections"]) #sidebar-collections { display: none !important; }

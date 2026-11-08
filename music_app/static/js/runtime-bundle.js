@@ -12790,6 +12790,8 @@ function syncLibraryNavigationMode(mode) {
   });
   const heading = document.getElementById('navigation-tree-heading');
   if (heading) heading.textContent = collections ? 'Custom Collections' : 'Artists';
+  // The rail carries the mode, so the CSS shows exactly one tree whatever re-renders a tree's own attributes.
+  document.getElementById('shell-navigation-rail')?.setAttribute('data-library-navigation-mode', mode);
   const collectionsTree = document.getElementById('sidebar-collections');
   const artistsTree = document.getElementById('sidebar-list');
   if (collectionsTree) collectionsTree.hidden = !collections;
@@ -47895,6 +47897,12 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     abandonScanPageForNavigation({ clearSelection: true });
   }
   const normalizedQuery = String(nextQuery || '');
+  // Owner (11-08): a new search never sits on Loose Tracks showing the previous search's matches. It returns to
+  // the artist tree so the gallery opens the best matching artist; a Loose Tracks match shows as the dot on the
+  // Loose Tracks side-bar button.
+  if (normalizedQuery.trim() && normalizedQuery.trim() !== String(state.view.query || '').trim()
+      && document.getElementById('non-album-modal')?.hidden === false
+      && typeof closeNonAlbumModal === 'function') closeNonAlbumModal();
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
   state.ui.failedGallerySearch = null;

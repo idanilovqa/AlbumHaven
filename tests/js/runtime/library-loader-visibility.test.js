@@ -966,7 +966,12 @@ for (const query of ['', 'Scan Artist 00']) {
 }
 
 test('searching loader hides previous gallery until the search settles', () => {
-  const { context, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const { context, elements, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const railAttributes = new Map();
+  elements['shell-navigation-rail'] = {
+    toggleAttribute(name, enabled) { if (enabled) railAttributes.set(name, ''); else railAttributes.delete(name); },
+    setAttribute(name, value) { railAttributes.set(name, value); },
+  };
   vm.runInContext(`
     state.ui.pendingViewTransition = true;
     state.ui.pendingGallerySearch = true;
@@ -977,6 +982,9 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(title.textContent, 'Searching');
   assert.equal(scroll.hidden, true, 'previous results must not remain visible during submitted search');
   assert.equal(loader.classList.contains('is-searching'), true);
+  // NEW-005 (owner): the side panel's previous tree is hidden while the search runs.
+  assert.equal(railAttributes.has('data-search-pending'), true);
+  assert.equal(railAttributes.get('aria-busy'), 'true');
   vm.runInContext(`
     state.ui.pendingViewTransition = false;
     state.ui.pendingGallerySearch = false;
@@ -985,4 +993,6 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(loader.hidden, true);
   assert.equal(scroll.hidden, false);
   assert.equal(loader.classList.contains('is-searching'), false);
+  assert.equal(railAttributes.has('data-search-pending'), false, 'the new tree shows with the results');
+  assert.equal(railAttributes.get('aria-busy'), 'false');
 });

@@ -6427,6 +6427,11 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // NEW-005 (owner): while a search runs, the side panel never shows the previous search's tree (leaving Loose
+  // Tracks briefly showed the old selected artist); it shows again with the new results.
+  const rail = document.getElementById('shell-navigation-rail');
+  rail?.toggleAttribute?.('data-search-pending', searching);
+  rail?.setAttribute?.('aria-busy', String(searching));
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;

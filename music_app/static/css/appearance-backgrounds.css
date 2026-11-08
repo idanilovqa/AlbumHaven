@@ -414,7 +414,7 @@ html .cover-lookup-drawer {
 }
 :root[data-appearance-palette] :is(.utility-modal-header, .track-modal-header, .utility-tabs, .utility-tab) { background: var(--appearance-panel-background); border-color: var(--appearance-line); }
 :root[data-appearance-palette] :is(.utility-list-item-meta, .utility-list-item-issues, .utility-rule-description, .utility-section-subtitle) { color: var(--appearance-muted); }
-:root[data-appearance-palette] :is(.cover, .cover-placeholder, .track-modal-cover-shell .cover-placeholder, .utility-detail-cover, .utility-detail-cover-placeholder, .version-picker-option-cover, .version-picker-option-cover-placeholder) {
+:root[data-appearance-palette] :is(.cover, .cover-placeholder, .track-modal-cover-shell .cover-placeholder, .utility-detail-cover, .utility-detail-cover-placeholder) {
   color: var(--appearance-muted);
   border-color: var(--appearance-line);
   background: linear-gradient(145deg, color-mix(in srgb, var(--appearance-card) 82%, var(--appearance-main-surface)), var(--appearance-control));

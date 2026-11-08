@@ -2211,6 +2211,7 @@ test('Mark As A Version offers only same-name albums sharing half their tracks, 
     markAlbumVersion: async (child, parent) => { calls.push(['mark', child, parent]); },
     showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
   });
+  useNavigationTree(context);
   vm.runInContext(source, context);
   const helloween = { key: 'a', name: 'Helloween', album_artist: 'Helloween' };
   assert.deepEqual(Array.from(context.getVersionPickerCandidates(helloween), (item) => item.key), ['b', 'c'], 'only albums of the same name');
@@ -2222,7 +2223,7 @@ test('Mark As A Version offers only same-name albums sharing half their tracks, 
   assert.equal(options.submitEnabled, false);
   let enabled = false;
   const listeners = {};
-  const option = { getAttribute: () => 'b', classList: { toggle() {} }, setAttribute() {} };
+  const option = { getAttribute: () => 'b', classList: { toggle() {}, contains: () => false }, setAttribute() {}, removeAttribute() {} };
   const list = { innerHTML: '', removeAttribute() {} };
   const content = {
     addEventListener: (name, handler) => { listeners[name] = handler; },
@@ -2273,8 +2274,24 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
 
+// Mark As A Version renders the real NavigationTree wide item from its template.
+function useNavigationTree(context) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..', '..', '..');
+  const template = fs.readFileSync(path.join(root, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
+  const treeContext = { document: { getElementById: (id) => (id === 'navigation-tree-item-template' ? { textContent: template } : null) } };
+  treeContext.window = treeContext;
+  vm.createContext(treeContext);
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/navigation-tree.js'), 'utf8'), treeContext);
+  context.window = { ...(context.window || {}), NavigationTree: treeContext.NavigationTree };
+  context.buildUtilityAlbumArtbox = () => '<span class="utility-detail-cover"></span>';
+  return context;
+}
+
 test('INT-007: an album already marked as a version is selected in Mark As A Version', () => {
   const { context } = loadHelper();
+  useNavigationTree(context);
   context.state.view.manual_version_links = { 'helloween::remaster': 'helloween::original', 'other::x': 'other::y' };
   assert.deepEqual([...context.getLinkedVersionKeys('helloween::original')], ['helloween::remaster']);
   assert.deepEqual([...context.getLinkedVersionKeys('helloween::remaster')], ['helloween::original']);
@@ -2282,8 +2299,13 @@ test('INT-007: an album already marked as a version is selected in Mark As A Ver
     [{ key: 'helloween::remaster', name: 'Helloween' }, { key: 'helloween::live', name: 'Helloween' }],
     context.getLinkedVersionKeys('helloween::original'),
   );
-  assert.match(html, /version-picker-option is-active" type="button" data-version-picker-target="helloween::remaster" aria-pressed="true"/);
-  assert.match(html, /version-picker-option" type="button" data-version-picker-target="helloween::live" aria-pressed="false"/);
+  // The owner asked for the split-release choice's element: the wide navigation-tree item.
+  const items = html.split('</button>').filter((part) => part.includes('data-version-picker-target'));
+  assert.equal(items.length, 2);
+  assert.match(items[0], /navigation-tree-item--wide[^"]*is-selected is-active"[^>]*data-navigation-tree-item="wide"[^>]*data-version-picker-target="helloween::remaster"/);
+  assert.match(items[0], /aria-current="true"/);
+  assert.doesNotMatch(items[1], /is-selected|aria-current/);
+  assert.match(items[1], /data-version-picker-target="helloween::live"/);
   const template = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../music_app/templates/partials/app-form-modal.html'), 'utf8');
   assert.match(template, /action_button\('Close', class_name='app-form-close', id='app-form-close'/);
 });

@@ -164,20 +164,24 @@ function getLinkedVersionKeys(albumKey) {
 
 function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
   if (!candidates.length) return '<div class="version-picker-empty">No other album of this name shares at least half of its tracks.</div>';
-  // INT-007 (owner): an album already marked as a version shows as selected.
-  return candidates.map((item) => `
-    <button class="version-picker-option${linkedKeys.has(String(item.key || '')) ? ' is-active' : ''}" type="button" data-version-picker-target="${escapeHtml(String(item.key || ''))}" aria-pressed="${linkedKeys.has(String(item.key || '')) ? 'true' : 'false'}">
-      <span class="version-picker-option-cover">
-        ${item.cover_path
-          ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
-          : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
-      </span>
-      <span class="version-picker-option-meta">
-        <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
-        <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
-      </span>
-    </button>
-  `).join('');
+  // INT-007 (owner): an album already marked as a version shows as selected. Each album is the shared wide
+  // navigation-tree item, the same element the split-release choice uses.
+  return candidates.map((item) => {
+    const label = String(item.name || 'Album');
+    const trackCount = Number(item.track_count || (Array.isArray(item.tracks) ? item.tracks.length : 0));
+    return window.NavigationTree.renderItem({
+      variant: 'wide',
+      action: true,
+      key: String(item.key || ''),
+      label,
+      selected: linkedKeys.has(String(item.key || '')),
+      subtitle: [item.album_artist, item.edition].filter(Boolean).join(' · '),
+      year: String(item.year || ''),
+      artworkHtml: buildUtilityAlbumArtbox(item, { label: `Artwork for ${label}` }),
+      count: trackCount ? `${trackCount} ${trackCount === 1 ? 'track' : 'tracks'}` : null,
+      attributes: { 'data-version-picker-target': String(item.key || '') },
+    });
+  }).join('');
 }
 
 // Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
@@ -191,7 +195,7 @@ function openVersionPickerModal(album) {
     description: `Select another album that is a version of ${String(album.name || 'this album')}.`,
     submitLabel: 'Save',
     submitEnabled: false,
-    contentHtml: '<div class="version-picker-list" data-version-picker-list aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></div>',
+    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></nav>',
     onMount(content, controls) {
       // Only same-name albums that share at least half of their tracks are offered.
       void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((candidates) => {
@@ -208,10 +212,8 @@ function openVersionPickerModal(album) {
         const option = event.target.closest?.('[data-version-picker-target]');
         if (!option) return;
         selectedKey = option.getAttribute('data-version-picker-target') || '';
-        content.querySelectorAll('[data-version-picker-target]').forEach((node) => {
-          node.classList.toggle('is-active', node === option);
-          node.setAttribute('aria-pressed', node === option ? 'true' : 'false');
-        });
+        content.querySelectorAll('[data-version-picker-target]')
+          .forEach((node) => window.NavigationTree.setItemSelected(node, node === option));
         controls.setSubmitEnabled(Boolean(selectedKey) && selectedKey !== savedKey);
       };
       content.addEventListener('click', onPick);

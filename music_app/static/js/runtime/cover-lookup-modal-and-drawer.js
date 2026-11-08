@@ -3462,7 +3462,7 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
   let chosenId = '';
   const chosen = await showAppFormDialog({
     title: 'Choose the current release',
-    contentHtml: `<p class="confirm-modal-text">This album was split. Choose the release this notification belongs to.</p><nav class="navigation-tree cover-lookup-split-choice" aria-label="Split releases">${buildCoverLookupSplitReleaseItemsHtml(releases)}</nav>`,
+    contentHtml: `<p class="confirm-modal-text">This album was split. Choose the release this notification belongs to.</p><nav class="navigation-tree navigation-tree--choice" aria-label="Split releases">${buildCoverLookupSplitReleaseItemsHtml(releases)}</nav>`,
     submitLabel: 'Open Cover Look Up',
     submitEnabled: false,
     onMount: (content, dialog) => {

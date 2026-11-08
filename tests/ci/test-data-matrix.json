@@ -6613,6 +6613,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/versionPickerTreeItem.spec.js",
+    "case": "Mark As A Version selects an album with the same wide navigation-tree item as the split-release choice",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Mark As A Version selects an album with the same wide navigation-tree item as the split-release choice"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
     "case": "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable",
     "profile": null,

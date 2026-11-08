@@ -73,20 +73,34 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
 
     from music_app.services import library_browse_postgres as browse
 
+    import psycopg
+
     database_url = _seed_problematic_albums(8)
     writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
-    complete = writer.build_problematic_files_payload()
-    writer._store_problematic_files_snapshot(json.dumps(
-        {key: value for key, value in complete.items() if key != "projection_cache_status"}, default=str))
+    complete = writer._build_problematic_files_payload_uncached()
+    fingerprint = complete.pop(browse._SNAPSHOT_FINGERPRINT_KEY)
+    writer._store_problematic_files_snapshot(json.dumps({**complete, browse._SNAPSHOT_FINGERPRINT_KEY: fingerprint}, default=str))
     cache_key = (database_url, "problematic-files")
-    # A "restart": nothing in memory for this database.
-    for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
-        registry.pop(cache_key, None)
-    browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
 
-    page = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url}) \
-        .build_problematic_files_page(limit=5)
+    def restart_and_open_first_page():
+        # A "restart": nothing in memory for this database.
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
+            registry.pop(cache_key, None)
+        browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
+        return browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url}) \
+            .build_problematic_files_page(limit=5)
 
+    page = restart_and_open_first_page()
     assert page["projection_cache_status"] == "stale"
     assert [item["key"] for item in page["items"]] == [item["key"] for item in complete["items"][:5]]
+    assert browse._SNAPSHOT_FINGERPRINT_KEY not in page
+
+    # Any later library change (a tag edit bumps the inventory revision) makes
+    # the stored list unusable: it may list merged or removed albums.
+    with psycopg.connect(database_url) as connection:
+        connection.execute("""update library.libraries set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb),
+            '{inventory_mutation_revision}', to_jsonb(coalesce((metadata ->> 'inventory_mutation_revision')::bigint, 0) + 1))
+            where library_kind = 'local' and name = 'Local Library'""")
+        connection.commit()
+    assert restart_and_open_first_page()["projection_cache_status"] == "bounded"
     browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)

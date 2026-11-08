@@ -1077,6 +1077,30 @@ test('Album Details highlights matching track credits without highlighting unrel
     [true, false, true]);
 });
 
+test('Album Details highlights every track on a disc whose CD name matches the search', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'v-rox festival' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  context.buildTrackListHtml([
+    { path: 'cd1-1.mp3', title: 'Opener', disc_number: 1, total_discs: 2, disc_subtitle: 'Moscow 2014', track_number: 1 },
+    { path: 'cd2-1.mp3', title: 'Encore', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 1 },
+    { path: 'cd2-2.mp3', title: 'Finale', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 2 },
+  ], { album_artist: 'Owner' });
+
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, group => [group.discLabel, Array.from(group.tracks, track => track.isSearchMatch)]),
+    [['CD 1 • Moscow 2014', [false]], ['CD 2 • V-ROX Festival 2015', [true, true]]],
+  );
+});
+
 test('Album Details passes main and bonus group semantics into AlbumTrackTable', () => {
   let renderedConfig = null;
   const context = loadHelper([], {

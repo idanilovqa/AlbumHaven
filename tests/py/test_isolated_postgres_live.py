@@ -6218,6 +6218,87 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_search_finds_an_album_by_its_disc_subtitle(monkeypatch, tmp_path):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    music_dir = (tmp_path / "Music").resolve()
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(music_dir),
+        "APP_NAME": "Album Haven",
+    }
+
+    def file_entry(path: Path, *, title: str, disc_number: int, disc_subtitle: str | None) -> dict[str, object]:
+        return {
+            "path": str(path),
+            "mtime": 1.0,
+            "size": 100,
+            "album": "Live Bootlegs",
+            "album_artist": "Disc Subtitle Owner",
+            "artist": "Disc Subtitle Owner",
+            "title": title,
+            "track_number": 1,
+            "disc_number": disc_number,
+            "total_discs": 2,
+            "disc_subtitle": disc_subtitle,
+            "duration_seconds": 60,
+            "year": 2015,
+            "edition": "",
+            "album_rating": 0,
+            "library_root_id": "disc-subtitle-root",
+            "library_root_category": "main_library",
+            "exception_type": None,
+        }
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+        from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+        from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {"id": "disc-subtitle-root", "path": str(music_dir), "layout_mode": "artist"}
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        album_dir = music_dir / "Disc Subtitle Owner" / "Live Bootlegs"
+        first_disc = album_dir / "CD1" / "01 - Opening.flac"
+        second_disc = album_dir / "CD2" / "01 - Encore.flac"
+        PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
+            Path("unused-disc-subtitle.json"),
+            {
+                str(first_disc): file_entry(first_disc, title="Opening", disc_number=1, disc_subtitle="Moscow 2014"),
+                str(second_disc): file_entry(
+                    second_disc, title="Encore", disc_number=2, disc_subtitle="V-ROX Festival 2015"
+                ),
+            },
+            "disc-subtitle-root-identity",
+            1.0,
+            observed_library_root_ids={"disc-subtitle-root"},
+        )
+        browse_repository = PostgresLibraryBrowseRepository(config, connect=isolatedPostgres._connect)
+
+        def album_names(query: str) -> list[str]:
+            payload = browse_repository.build_search_payload(query_params={"q": query, "surface": "albums"})
+            return [item["name"] for group in payload["artist_groups"] for item in group["albums"]]
+
+        assert album_names("V-ROX Festival 2015") == ["Live Bootlegs"]
+        assert album_names("v-rox festival") == ["Live Bootlegs"]
+        assert album_names("Tallinn 2016") == []
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships(
     monkeypatch,
     tmp_path,

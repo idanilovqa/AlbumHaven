@@ -9905,7 +9905,7 @@ def _search_preview_sql(
               library.local_track_files.track_id,
               library.local_track_files.scan_cache_stale
             from library.local_track_files
-            where {file_path_prefilter_sql}(
+            where ({file_path_prefilter_sql}(
                 lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
                   escape ''
                 or lower(btrim(
@@ -9915,7 +9915,11 @@ def _search_preview_sql(
                     ''
                   )
                 )) like lower(%(query_like)s) escape ''
-              )
+              ))
+              or lower(btrim(coalesce(
+                library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}',
+                ''
+              ))) like lower(%(query_like)s) escape ''
         ),
         matched_track_album_ids as materialized (
           select

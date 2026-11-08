@@ -5713,6 +5713,26 @@ def test_search_preview_sql_scopes_missing_candidates_to_bootstrap_library():
     )
 
 
+def test_search_preview_sql_matches_disc_subtitles_outside_the_file_path_prefilter():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    for use_utf8_prefilter in (False, True):
+        sql = " ".join(_search_preview_sql(use_utf8_prefilter=use_utf8_prefilter).split()).lower()
+        file_matches = sql.split("file_name_matches as materialized (", 1)[1].split(
+            "matched_track_album_ids as materialized (", 1
+        )[0]
+        # A disc subtitle (CD name) finds every track on that disc, even when
+        # the UTF-8 prefilter narrows the file-path predicates.
+        path_clause, subtitle_clause = file_matches.split(
+            ")) or lower(btrim(coalesce( library.local_track_files.metadata #>> '{scan_cache,file_entry,disc_subtitle}'",
+            1,
+        )
+
+        assert path_clause.startswith(" select library.local_track_files.track_id")
+        assert "like lower(%(query_like)s)" in subtitle_clause
+        assert "search_utf8_hex" not in subtitle_clause
+
+
 def test_search_preview_sql_separates_active_and_stale_filename_matches():
     from music_app.services.library_browse_postgres import _search_preview_sql
 
@@ -10646,7 +10666,8 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
 
     sql = " ".join(_search_preview_sql().split())
 
-    assert sql.count("like lower(%(query_like)s)") == 4
+    # Album title, track title, file basename, file stem, disc subtitle.
+    assert sql.count("like lower(%(query_like)s)") == 5
     assert sql.count("like library.fold_search_accents(%(query_like)s)") == 4
     assert "album_title_matches as materialized (" in sql
     assert "display_artist_matches as materialized (" in sql

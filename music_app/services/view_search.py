@@ -634,6 +634,7 @@ def _get_album_track_search_fields(album) -> tuple[list[str], str]:
             getattr(track, "title", "") or "",
             track_path_name,
             track_path_stem,
+            getattr(track, "disc_subtitle", "") or "",
             source=track,
         ):
             if not normalized or normalized in seen:

@@ -74,6 +74,33 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that disc",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-disc-subtitle-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-disc-subtitle-search"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "disc-subtitle-search-match",
+      "album-details-disc-subtitle-highlight"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-disc-subtitle-search",
+      "filesystemCopy": "media/cases/watcher-disc-subtitle-search"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
     "profile": "functional-core",
     "setupScope": "isolated",

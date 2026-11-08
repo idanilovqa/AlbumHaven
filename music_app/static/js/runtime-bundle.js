@@ -36441,6 +36441,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     } else if (group.isBonus) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
+    // Search also matches CD names, so every track on a matching disc is a search match.
+    const discMatchesSearch = matchesAlbumTrackSearch(query, group.discSubtitle, '');
     const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;
       const duration = formatTrackDuration(track.duration_seconds);
@@ -36471,7 +36473,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
+        isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
       };
     });
     return {

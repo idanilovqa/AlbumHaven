@@ -25,14 +25,14 @@ function resolveWatcherFixtureMediaRoot(environment = process.env) {
 const RETAG_SCRIPT = `
 import sys
 from pathlib import Path
-from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TCMP, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
+from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TCMP, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TSST
 
 track = Path(sys.argv[1])
 try:
     tags = ID3(track)
 except ID3NoHeaderError:
     tags = ID3()
-for frame in ("TALB", "TCMP", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
+for frame in ("TALB", "TCMP", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK", "TSST"):
     tags.delall(frame)
 if sys.argv[8] == "1":
     tags.delall("APIC")
@@ -45,6 +45,8 @@ tags.add(TRCK(encoding=3, text=[sys.argv[7]]))
 tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
 if sys.argv[10] == "1":
     tags.add(TCMP(encoding=3, text=["1"]))
+if sys.argv[11]:
+    tags.add(TSST(encoding=3, text=[sys.argv[11]]))
 tags.save(track)
 if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
@@ -158,7 +160,7 @@ export async function cleanupWatchedAlbumFixture({
 
 async function retag(trackPath, {
   trackArtist, albumArtist, album, year, title, trackNumber,
-  discTag = '1/1', removeEmbeddedArtwork = false, isCompilation = false,
+  discTag = '1/1', removeEmbeddedArtwork = false, isCompilation = false, discSubtitle = '',
 }) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
     '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
@@ -166,6 +168,7 @@ async function retag(trackPath, {
     removeEmbeddedArtwork ? '1' : '0',
     discTag,
     isCompilation ? '1' : '0',
+    discSubtitle,
   ], { encoding: 'utf8', windowsHide: true });
 }
 
@@ -245,6 +248,7 @@ async function buildWatchedAlbumFixture({
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
   discNumbers = null,
+  discSubtitles = null,
   isCompilation = false,
   removeEmbeddedArtwork = false,
   createLocalArt = false,
@@ -267,6 +271,7 @@ async function buildWatchedAlbumFixture({
     trackArtists: albumTrackArtists = null,
     albumArtist: albumOwner = albumArtist,
     discNumbers: albumDiscNumbers = discNumbers,
+    discSubtitles: albumDiscSubtitles = discSubtitles,
     isCompilation: albumCompilation = false,
   }) => {
     const directory = assertOwnedPath(
@@ -314,11 +319,15 @@ async function buildWatchedAlbumFixture({
                 title,
                 trackNumber: index + 1,
                 discTag: `${discNumber}/${discTotal}`,
+                discSubtitle: albumDiscSubtitles?.[index] || '',
                 removeEmbeddedArtwork,
                 isCompilation: albumCompilation,
               },
             });
-            createdTracks.push({ filename, title, path: destination, discNumber, discTotal });
+            createdTracks.push({
+              filename, title, path: destination, discNumber, discTotal,
+              discSubtitle: albumDiscSubtitles?.[index] || '',
+            });
           }
         },
       });
@@ -334,6 +343,7 @@ async function buildWatchedAlbumFixture({
     trackTitles,
     trackArtists,
     discNumbers,
+    discSubtitles,
     isCompilation,
   });
   const albumDirectory = target.albumDirectory;
@@ -350,6 +360,7 @@ async function buildWatchedAlbumFixture({
       await retag(track.path, {
         trackArtist, albumArtist, album, year, title, trackNumber: index + 1,
         discTag: `${track.discNumber}/${track.discTotal}`,
+        discSubtitle: track.discSubtitle,
         removeEmbeddedArtwork,
         isCompilation,
       });

@@ -93,6 +93,14 @@ const PUNCTUATION_BAND_TARGET = Object.freeze({
   album: 'Watcher Punctuation Identity',
   year: 2007,
 });
+const DISC_SUBTITLE_TARGET = Object.freeze({
+  artist: 'Watcher Disc Name Artist',
+  album: 'Watcher Pirate Copies',
+  year: 2016,
+  trackTitles: ['Moscow Opener', 'Moscow Closer', 'Festival Opener', 'Festival Closer'],
+  discNumbers: [1, 1, 2, 2],
+  discSubtitles: ['Moscow Club 2014', 'Moscow Club 2014', 'V-ROX Festival 2015', 'V-ROX Festival 2015'],
+});
 const POSSESSIVE_PROJECT_TARGET = Object.freeze({
   artist: "Luca Turilli's Rhapsody",
   baseArtist: 'Rhapsody',
@@ -525,6 +533,74 @@ test('FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity', {
         { timeout: 60000, intervals: [250, 500, 1000] },
       ).toBe(1);
       expect(await navigationPanelActions.readSidebarArtistLabelCount('Ash')).toBe(0);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+test('FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that disc', {
+  tag: '@area:gallery-search',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const { artist, album, year, trackTitles, discNumbers, discSubtitles } = DISC_SUBTITLE_TARGET;
+  const [firstDiscName, secondDiscName] = [discSubtitles[0], discSubtitles.at(-1)];
+  const rows = trackModalActions.trackModal.albumTrackTable.rows;
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add a two-CD album whose second CD has its own name', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+      fixture = await createWatchedAlbumFixture({
+        artist, album, year, trackTitles, discNumbers, discSubtitles,
+        ownedDirectoryName: 'watcher-disc-subtitle-search',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+    });
+
+    await stepLogger.step('An unrelated CD name does not find the album', async () => {
+      await searchToolbarActions.search('Tallinn Festival 2016', { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('Tallinn Festival 2016');
+      await galleryActions.expectAlbumAbsentFromSettledGallery({ artist, album, query: 'Tallinn Festival 2016' });
+    });
+
+    await stepLogger.step('Search the second CD name and open the album it finds', async () => {
+      await searchToolbarActions.search(secondDiscName, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(secondDiscName);
+      await galleryActions.waitForAlbumVisible(album, 60000);
+      await galleryActions.clickAlbumDetailsByAlbumName(album);
+      await trackModalActions.waitForReady();
+    });
+
+    await stepLogger.step('Album Details names both CDs and highlights only the second CD tracks', async () => {
+      await expect(trackModalActions.trackModal.albumTrackTable.discHeadings).toHaveText([
+        `CD 1 • ${firstDiscName}`,
+        `CD 2 • ${secondDiscName}`,
+      ]);
+      await expect(rows).toHaveCount(trackTitles.length);
+      for (const [index, title] of trackTitles.entries()) {
+        await expect(trackModalActions.trackModal.trackTitleAt(index)).toContainText(title);
+        const row = expect(rows.nth(index));
+        await (discNumbers[index] === 2 ? row : row.not).toHaveAttribute('data-track-search-match', 'true');
+      }
     });
   } catch (error) {
     originalFailure = error;

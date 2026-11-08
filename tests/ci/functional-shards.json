@@ -356,6 +356,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that disc",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
               "area": "gallery-search"
             },

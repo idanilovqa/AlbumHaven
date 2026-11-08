@@ -6553,6 +6553,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupFrames.spec.js",
+    "case": "a selected suggested cover keeps the green suggestion ring around the blue selection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected suggested cover keeps the green suggestion ring around the blue selection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

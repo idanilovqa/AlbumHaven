@@ -533,8 +533,22 @@
   mask-composite: exclude;
   animation: cover-lookup-suggest-travel 3.2s linear infinite;
 }
+/* INT-028 (owner): a suggested cover the user selects keeps both frames: the blue selection inside, the
+   breathing green suggestion ring outside it. */
+@keyframes cover-lookup-suggest-breathe-ring {
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent), 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
+}
+.cover-lookup-art-card.is-suggested.is-active {
+  border-color: #60a5fa;
+  outline: 3px solid #60a5fa;
+  outline-offset: -2px;
+  box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa));
+  overflow: visible;
+  animation: cover-lookup-suggest-breathe-ring 2.8s ease-in-out infinite;
+}
+.cover-lookup-art-card.is-suggested.is-active::after { inset: -4px; border-radius: 17px; }
 @media (prefers-reduced-motion: reduce) {
-  .cover-lookup-art-card.is-suggested { animation: none; }
+  .cover-lookup-art-card.is-suggested, .cover-lookup-art-card.is-suggested.is-active { animation: none; }
   .cover-lookup-art-card.is-suggested::after { display: none; }
 }
 .cover-lookup-art-preview {

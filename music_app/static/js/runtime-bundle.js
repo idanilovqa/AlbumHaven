@@ -33029,6 +33029,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && !String(state.coverLookup.modal.pendingLocalPath || '')
         && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
+        // UI-3 (owner): the selection never moves on its own. An album whose cover is a local file shows that
+        // file as selected once LOCAL lists it; its linked remote cover never reads "Selected" meanwhile.
+        && !String(state.coverLookup.modal.album?.cover_path || '').trim()
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || '')));

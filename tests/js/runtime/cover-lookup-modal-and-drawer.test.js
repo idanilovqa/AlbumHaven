@@ -8016,3 +8016,15 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
   assert.match(html, /<div class="cover-lookup-section-heading"> <h4 class="cover-lookup-section-title">LOCAL[^<]*<\/h4> <span class="small-alert small-alert--warning cover-lookup-local-alert"[^>]*tabindex="0">.*?Local artwork storage is unavailable/, 'a compact, expandable alert right after the heading');
   assert.match(html, /<\/div> <div class="cover-lookup-gallery">/, 'the LOCAL gallery keeps its place under the heading');
 });
+
+require('node:test')('UI-3: a linked remote cover reads Selected only when the album has no local cover file', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  Object.assign(context.state.coverLookup.modal, {
+    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '', activeLocalSelectionPath: '',
+    album: { key: 'a', cover_path: 'C:/Music/A/cover.jpg' },
+  });
+  const card = () => context.buildCoverLookupCard({ id: 'r', source: 'apple', album: 'A' }, 'saved-remote');
+  assert.doesNotMatch(card(), /\bis-active\b/, 'before LOCAL lists the album cover, nothing is selected');
+  context.state.coverLookup.modal.album = { key: 'a', cover_path: '' };
+  assert.match(card(), /\bis-active\b/, 'a remote-only album shows its linked remote cover as selected');
+});

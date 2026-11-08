@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "album-haven-android-shell"
 include(":app")
+include(":playback-engine")

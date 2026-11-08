@@ -6508,6 +6508,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (artists)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (artists)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (collections)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (collections)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

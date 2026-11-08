@@ -463,6 +463,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .shell-navigation-rail .sidebar-top .mobile-bar-action svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .mobile-artists-mode-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; }
   .mobile-artists-mode-button span { font-size: 14px; font-weight: 600; }
+  /* Owner (11-08): only the selected mode is expanded with its label; the others are 40px icon buttons. */
+  .shell-navigation-rail .mobile-artists-mode-button:not([aria-pressed="true"]) { width: 40px; padding: 0; justify-content: center; }
+  .mobile-artists-mode-button:not([aria-pressed="true"]) span { display: none; }
  #mobile-library-button[data-search-results='true'] { animation: mobile-artists-search-pulse 2.4s ease-in-out infinite; border-color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
  @keyframes mobile-artists-search-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 22%, transparent); } }
  @media (prefers-reduced-motion: reduce) { #mobile-library-button[data-search-results='true'] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 18%, transparent); } }

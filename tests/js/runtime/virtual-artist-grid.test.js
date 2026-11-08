@@ -5935,6 +5935,7 @@ test('Separate Split Albums gives each release type its own split section before
     const section = { group: { albums: [compilationSplit, owned, studioSplit, guest] } };
     context.state.gallery.mainState = { ...context.state.gallery.mainState, splitAlbums: 'separate' };
     assert.deepEqual(JSON.parse(JSON.stringify(virtualGrid.getBlocksForSection(section))), [
+        { kind: 'subheading', title: 'Studio Albums', count: 1 },
         { kind: 'row', albums: [owned] },
         { kind: 'subheading', title: 'Studio Split', count: 1 },
         { kind: 'row', albums: [studioSplit] },

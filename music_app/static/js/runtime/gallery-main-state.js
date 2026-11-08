@@ -1,5 +1,7 @@
 const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
 const GALLERY_RELEASE_TYPE_LABELS = Object.freeze({ studio: 'Studio', ep: 'EP', live: 'Live', demo: 'Demo', compilation: 'Compilation', single: 'Single' });
+// Section titles for an artist's own releases when split albums are shown separately.
+const GALLERY_RELEASE_TYPE_SECTION_TITLES = Object.freeze({ studio: 'Studio Albums', ep: 'EPs', live: 'Live Albums', demo: 'Demos', compilation: 'Compilations', single: 'Singles' });
 // Split Albums switch positions, left to right.
 const GALLERY_SPLIT_ALBUM_MODES = ['hide', 'separate', 'show'];
 const GALLERY_SPLIT_ALBUM_LABELS = Object.freeze({ hide: 'Hide Split Albums', separate: 'Separate Split Albums', show: 'Show Split Albums' });

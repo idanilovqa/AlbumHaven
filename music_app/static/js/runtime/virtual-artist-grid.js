@@ -1270,7 +1270,17 @@ class VirtualArtistGrid {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(artistAlbums);
+        // With split sections present, the artist's own releases are labelled by type too ("Studio Albums").
+        if (splitAlbums.length) {
+            GALLERY_RELEASE_TYPES.forEach((type) => {
+                const typedAlbums = artistAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+                if (!typedAlbums.length) return;
+                blocks.push({ kind: 'subheading', title: GALLERY_RELEASE_TYPE_SECTION_TITLES[type], count: typedAlbums.length });
+                appendRows(typedAlbums);
+            });
+        } else {
+            appendRows(artistAlbums);
+        }
         GALLERY_RELEASE_TYPES.forEach((type) => {
             const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
             if (!typedSplits.length) return;

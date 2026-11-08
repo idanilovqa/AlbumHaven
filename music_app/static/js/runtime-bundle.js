@@ -4880,6 +4880,8 @@ function buildGalleryCardInfoHtml(config = {}) {
 
 const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
 const GALLERY_RELEASE_TYPE_LABELS = Object.freeze({ studio: 'Studio', ep: 'EP', live: 'Live', demo: 'Demo', compilation: 'Compilation', single: 'Single' });
+// Section titles for an artist's own releases when split albums are shown separately.
+const GALLERY_RELEASE_TYPE_SECTION_TITLES = Object.freeze({ studio: 'Studio Albums', ep: 'EPs', live: 'Live Albums', demo: 'Demos', compilation: 'Compilations', single: 'Singles' });
 // Split Albums switch positions, left to right.
 const GALLERY_SPLIT_ALBUM_MODES = ['hide', 'separate', 'show'];
 const GALLERY_SPLIT_ALBUM_LABELS = Object.freeze({ hide: 'Hide Split Albums', separate: 'Separate Split Albums', show: 'Show Split Albums' });
@@ -40658,7 +40660,17 @@ class VirtualArtistGrid {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(artistAlbums);
+        // With split sections present, the artist's own releases are labelled by type too ("Studio Albums").
+        if (splitAlbums.length) {
+            GALLERY_RELEASE_TYPES.forEach((type) => {
+                const typedAlbums = artistAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+                if (!typedAlbums.length) return;
+                blocks.push({ kind: 'subheading', title: GALLERY_RELEASE_TYPE_SECTION_TITLES[type], count: typedAlbums.length });
+                appendRows(typedAlbums);
+            });
+        } else {
+            appendRows(artistAlbums);
+        }
         GALLERY_RELEASE_TYPES.forEach((type) => {
             const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
             if (!typedSplits.length) return;

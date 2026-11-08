@@ -91,6 +91,42 @@ class PlaybackClaimOwnerTest {
     }
 
     @Test
+    fun aRenewalTheServerAnswersAfterTheLeaseKeepsTheClaim() {
+        owner.acquire(track) {}
+        drain()
+        now = PlaybackClaimOwner.HEARTBEAT_MS
+        owner.tick()
+        // The server stalls past the lease; the renewal in flight decides, not the clock.
+        now = PlaybackClaimOwner.LEASE_MS + 5_000
+        owner.tick()
+        assertTrue(owner.owned)
+        assertNull(owner.nextDeadlineMs())
+
+        drain()
+        assertTrue(owner.owned)
+        assertEquals(listOf<ClaimEvent>(ClaimEvent.Owned), events)
+        assertEquals(listOf("acquire:null", "acquire:token-1"), api.calls)
+    }
+
+    @Test
+    fun pastTheLeaseOneMoreRenewalIsAskedAndOnlyItsRefusalOrSilenceLosesTheClaim() {
+        owner.acquire(track) {}
+        drain()
+        now = PlaybackClaimOwner.LEASE_MS
+        owner.tick()
+        drain()
+        assertTrue(owner.owned)
+        assertEquals(listOf("acquire:null", "acquire:token-1"), api.calls)
+
+        api.renewResponse = { ClaimResponse.Unreachable }
+        now = 2 * PlaybackClaimOwner.LEASE_MS
+        owner.tick()
+        drain()
+        assertFalse(owner.owned)
+        assertEquals(listOf(ClaimEvent.Owned, ClaimEvent.Lost), events)
+    }
+
+    @Test
     fun everyAcquireAndHeartbeatAnswerSaysAfreshWhetherListensReachLastfm() {
         assertNull(owner.scrobblingAvailable)
         api.acquireResponse = { ClaimResponse.Granted("token-1", scrobblingAvailable = false) }

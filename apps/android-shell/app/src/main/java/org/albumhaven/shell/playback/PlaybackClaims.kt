@@ -119,16 +119,15 @@ class PlaybackClaimOwner(
         track = claimTrack
     }
 
-    /** Heartbeats a held claim and gives it up locally once its lease can no longer be valid. */
+    /**
+     * Heartbeats a held claim. Past its lease the server decides, as the web's expiry does: a
+     * renewal in flight answers for it, otherwise one more is sent, and only a refusal, or no
+     * answer to a renewal past the lease, gives the claim up. A server that answers late keeps it.
+     */
     fun tick() {
         val held = token ?: return
         val now = clock()
-        if (now >= leaseEndsMs) {
-            drop()
-            events(ClaimEvent.Lost)
-            return
-        }
-        if (renewing || now - lastRenewSentMs < HEARTBEAT_MS) return
+        if (renewing || (now < leaseEndsMs && now - lastRenewSentMs < HEARTBEAT_MS)) return
         val claimTrack = track ?: return
         renewing = true
         lastRenewSentMs = now
@@ -142,7 +141,8 @@ class PlaybackClaimOwner(
     /** When [tick] next has work for a held claim: its next heartbeat, or the end of its lease. */
     fun nextDeadlineMs(): Long? = when {
         token == null -> null
-        renewing -> leaseEndsMs
+        // Past the lease only the renewal's answer, which wakes the playback thread, decides.
+        renewing -> leaseEndsMs.takeIf { clock() < it }
         else -> minOf(leaseEndsMs, lastRenewSentMs + HEARTBEAT_MS)
     }
 
@@ -229,8 +229,13 @@ class PlaybackClaimOwner(
                 drop()
                 events(ClaimEvent.Lost)
             }
-            // Retried on the next tick until the lease can no longer be valid.
-            ClaimResponse.Unreachable -> lastRenewSentMs = sentMs - HEARTBEAT_MS + RETRY_MS
+            // Retried on the next tick; past the lease, an unanswered renewal ends the claim.
+            ClaimResponse.Unreachable -> if (clock() >= leaseEndsMs) {
+                drop()
+                events(ClaimEvent.Lost)
+            } else {
+                lastRenewSentMs = sentMs - HEARTBEAT_MS + RETRY_MS
+            }
         }
     }
 

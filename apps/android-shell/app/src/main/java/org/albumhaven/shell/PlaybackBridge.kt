@@ -117,8 +117,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
             null
         }
         val year = if ("year" in fields) text(item.opt("year"))?.takeIf { it.length <= MAX_YEAR_CHARS } ?: return null else ""
-        val rating = if ("rating" in fields) (item.opt("rating") as? Int)?.takeIf { it in 1..MAX_RATING } ?: return null else null
-        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken, year, rating)
+        return QueueItem(ref, title, artist, album, artwork, duration, trackNumber, listenKey, queueGroup, resumeToken, year)
     }
 
     private fun loopRange(json: JSONObject): LoopRange? {
@@ -157,7 +156,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
          */
         const val RESUMPTION_CAPABILITY = "playback.resumption.v1"
 
-        /** Queue items may carry the album's `year` and `rating` (1-10), which the media card shows after the album. */
+        /** Queue items may carry the album's `year`, which the media card shows after the album. */
         const val ALBUM_DETAILS_CAPABILITY = "playback.album_details.v1"
         val CAPABILITIES = listOf(
             NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY, RESUMPTION_CAPABILITY,
@@ -188,8 +187,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private val ITEM_KEYS = setOf(
             "playbackRef", "listenKey", "title", "artist", "album", "artworkUrl", "durationMs", "trackNumber", "queueGroup",
         )
-        private val OPTIONAL_ITEM_KEYS = setOf("resumeToken", "year", "rating")
-        private const val MAX_RATING = 10
+        private val OPTIONAL_ITEM_KEYS = setOf("resumeToken", "year")
         private const val MAX_YEAR_CHARS = 32
 
         fun snapshotJson(snapshot: NativePlaybackSnapshot): JSONObject = JSONObject()

@@ -4232,7 +4232,6 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       coverPath: '',
       durationSeconds: 0,
       year: '2002',
-      albumRating: null,
     },
   );
   assert.equal(context.state.player.playbackQueue.currentIndex, 0);

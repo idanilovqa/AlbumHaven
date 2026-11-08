@@ -60,8 +60,6 @@ class SessionMappingTest {
         assertEquals("Album", mediaCardArtistLine("", "Album"))
         assertEquals("Artist · Album · 1999", mediaCardArtistLine("Artist", "Album", "1999"))
         assertEquals("Same · 1999", mediaCardArtistLine("Same", "same", "1999"))
-        assertEquals("Artist · Album · 1999 · ★ 8/10", mediaCardArtistLine("Artist", "Album", "1999", 8))
-        assertEquals("Artist · Album", mediaCardArtistLine("Artist", "Album", "", null))
     }
 
     @Test

@@ -572,10 +572,25 @@ function applyCoverLookupCandidateSource(candidateSource) {
   // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
   // so the card shown in Notifications is always identifiable in the gallery.
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
-  const isSelectableSuggestion = (matches, candidateId) => Boolean(candidateId) && matches.some((candidate) => (
+  // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
+  // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
+  // the same or a lower resolution).
+  const suggestionTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modal.taskId || ''));
+  const activeLocalCover = (modal.localCovers || []).find((cover) => cover?.is_active);
+  const hasCurrentCover = Boolean(activeLocalCover || String(modal.album?.cover_path || '').trim()
+    || String(modal.album?.remote_cover_url || '').trim());
+  const searchAwaitsDecision = !hasCurrentCover
+    || (Boolean(suggestionTask) && !isActionedCoverLookupNotification(suggestionTask));
+  const shortEdge = (width, height) => Math.min(Number(width) || 0, Number(height) || 0);
+  const currentCoverEdge = shortEdge(
+    activeLocalCover?.width ?? modal.album?.local_cover_width,
+    activeLocalCover?.height ?? modal.album?.local_cover_height,
+  );
+  const isSelectableSuggestion = (matches, candidateId) => searchAwaitsDecision && Boolean(candidateId) && matches.some((candidate) => (
     String(candidate?.id || '') === candidateId
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
+    && (!currentCoverEdge || shortEdge(candidate?.width, candidate?.height) > currentCoverEdge)
   ));
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
@@ -2641,6 +2656,8 @@ function renderCoverLookupModal() {
   const galleryErrorMarkup = modalState.galleryError
     ? buildSmallAlertHtml({ severity: 'warning', message: modalState.galleryError, focusable: true, className: 'cover-lookup-local-alert' }) : '';
   const localInventoryUnknown = Boolean((modalState.galleryError || modalState.localInventoryPending) && !modalState.localInventoryLoaded);
+  // The album's own selected local cover is known before the listing arrives.
+  const expectedLocalCount = String(modalState.album?.cover_path || '').trim() && !remoteCover ? 1 : 0;
   const galleryLoadingMarkup = modalState.loading ? buildCoverLookupGalleryLoadingMarkup(modalState) : '';
   replaceCoverLookupModalMarkup(els.body, `
     ${galleryLoadingMarkup || `
@@ -2649,7 +2666,7 @@ function renderCoverLookupModal() {
         <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
         ${galleryErrorMarkup}
       </div>
-      <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
+      <div class="cover-lookup-gallery${!localCovers.length && localInventoryUnknown && expectedLocalCount ? ' cover-lookup-gallery-loading' : ''}">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown && expectedLocalCount ? buildCoverLookupGalleryLoadingCards('local', expectedLocalCount) : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>

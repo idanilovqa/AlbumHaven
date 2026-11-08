@@ -349,17 +349,38 @@ require('node:test')('Neural Code keeps its automatic local cover selected while
   task.notification_action_taken = true;
   context.applyCoverLookupCandidateSource(source);
 
-  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, remote.id);
+  // INT-028 (owner): once the search has been acted on, nothing is suggested any more.
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
-  assert.match(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b/);
-  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-active\b|cover-lookup-art-check/);
+  assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b|\bis-active\b|cover-lookup-art-check/);
   assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
   context.syncCoverLookupSelectionUi();
-  assert.equal(classes.has('is-suggested'), true);
+  assert.equal(classes.has('is-suggested'), false);
   assert.equal(classes.has('is-active'), false);
 });
 
-require('node:test')('a user-owned local cover keeps its selection while the remote suggestion stays framed', () => {
+require('node:test')('INT-028: a suggestion must be sharper than the current cover', () => {
+  const { context } = createDrawerHarness();
+  const task = { id: 'sharp-task', status: 'completed', notification_action_taken: false };
+  context.state.coverLookup.tasks = [task];
+  const local = { path: 'C:/Fixture/cover.jpg', is_active: true, width: 1000, height: 1000 };
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: task.id, album: { key: 'a', cover_path: local.path }, localCovers: [local],
+    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '',
+  });
+  const apply = (width) => context.applyCoverLookupCandidateSource({
+    generation: `g-${width}`, status: 'completed', bestCandidateId: 'remote',
+    candidates: [{ id: 'remote', art_kind: 'cover', url: 'https://images.example/r.jpg', width, height: width }],
+  });
+  apply(1000);
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '', 'the same resolution is never suggested');
+  apply(600);
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '', 'a lower resolution is never suggested');
+  apply(1400);
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'remote');
+});
+
+require('node:test')('a user-owned local cover keeps its selection, and without a pending search nothing is suggested', () => {
   const { context } = createDrawerHarness();
   Object.assign(context.state.coverLookup.modal, {
     album: { cover_selection_origin: 'user' },
@@ -370,7 +391,8 @@ require('node:test')('a user-owned local cover keeps its selection while the rem
     generation: 'later-search', status: 'completed', bestCandidateId: 'remote',
     candidates: [{ id: 'remote', url: 'https://images.example/remote.jpg' }],
   });
-  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'remote');
+  // INT-028 (owner): opened from Album Details with no unactioned search, no cover is suggested.
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
 });
 

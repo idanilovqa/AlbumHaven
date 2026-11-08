@@ -516,11 +516,40 @@
   outline-offset: -2px;
   box-shadow: none;
 }
-/* The lookup's suggested cover keeps a steady green frame, independent of the current selection. */
+/* INT-028: the suggested cover's green frame glows: a light travels around its edge and the frame slowly
+   breathes. Reduced motion keeps the steady frame. */
+@property --cover-lookup-suggest-angle { syntax: '<angle>'; inherits: false; initial-value: 0turn; }
+@keyframes cover-lookup-suggest-travel { to { --cover-lookup-suggest-angle: 1turn; } }
+@keyframes cover-lookup-suggest-breathe {
+  50% { outline-color: color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
+}
 .cover-lookup-art-card.is-suggested {
+  position: relative;
   border-color: var(--appearance-success, var(--success, #52d7aa));
   outline: 3px solid var(--appearance-success, var(--success, #52d7aa));
   outline-offset: -2px;
+  animation: cover-lookup-suggest-breathe 2.8s ease-in-out infinite;
+}
+.cover-lookup-art-card.is-suggested::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  padding: 3px;
+  border-radius: inherit;
+  background: conic-gradient(from var(--cover-lookup-suggest-angle), transparent 0turn 0.72turn,
+    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.86turn, #fff 0.9turn,
+    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.94turn, transparent 1turn);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: cover-lookup-suggest-travel 3.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cover-lookup-art-card.is-suggested { animation: none; }
+  .cover-lookup-art-card.is-suggested::after { display: none; }
 }
 .cover-lookup-art-preview {
   position: relative;

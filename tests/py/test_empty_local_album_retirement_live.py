@@ -172,6 +172,47 @@ def test_live_move_carries_rating_to_successor_before_retiring(watcher_repair_in
     assert _ratings(fixture) == [(_successor_key(fixture, source), 8, provenance)]
 
 
+def _rate_disc(fixture, album_key, disc_key, rating):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""
+            insert into app.album_disc_ratings (account_id, library_id, album_key, disc_key, rating, provenance)
+            select owner.account_id, album.library_id, album.album_key, %s, %s, 'file_tag_scan'
+            from app.bootstrap_owners as owner, library.local_albums as album
+            where album.album_key = %s
+        """, (disc_key, rating, album_key))
+
+
+def _disc_ratings(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return sorted(
+            (row["album_key"], row["disc_key"], row["rating"])
+            for row in connection.execute("select album_key, disc_key, rating from app.album_disc_ratings").fetchall()
+        )
+
+
+def test_live_move_carries_disc_ratings_to_successor_before_retiring(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    _rate_disc(fixture, source["album_key"], "2", 9)
+
+    fixture.seed(*_edition_entries(fixture, ""))
+
+    _assert_moved_to_new_row(fixture, source, source_kept=False)
+    assert _disc_ratings(fixture) == [(_successor_key(fixture, source), "2", 9)]
+
+
+def test_live_split_move_keeps_disc_rated_emptied_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    _rate_disc(fixture, source["album_key"], "bonus disc", 6)
+    first, second = _edition_entries(fixture, "")
+
+    fixture.seed(first, {**second, "edition": "Live"})
+
+    assert source["id"] in {album["id"] for album in _albums(fixture)}
+    assert _disc_ratings(fixture) == [(source["album_key"], "bonus disc", 6)]
+
+
 def test_live_conflicting_successor_rating_keeps_emptied_album(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     source = _seed_edition_album(fixture)

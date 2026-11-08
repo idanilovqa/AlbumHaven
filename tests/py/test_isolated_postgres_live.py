@@ -5973,3 +5973,123 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
             assert claimed is None
     finally:
         lease.release()
+
+
+def _seed_disc_rating_albums(fixture, albums=None):
+    # One snapshot holds every album: each seed replaces the whole library.
+    albums = albums or {"All the Wars": (8, 8)}
+    entries = [
+        entry
+        for album, disc_two_ratings in albums.items()
+        for entry in [
+            {**fixture.entry(f"Owner/{album}/CD1/0{index}.flac", album=album),
+             "track_number": index, "disc_number": 1, "disc_number_raw": "1/2", "album_rating": 5}
+            for index in (1, 2)
+        ] + [
+            {**fixture.entry(f"Owner/{album}/CD2/0{index}.flac", album=album),
+             "track_number": index, "disc_number": 2, "disc_number_raw": "2/2", "album_rating": rating}
+            for index, rating in enumerate(disc_two_ratings, start=1)
+        ]
+    ]
+    fixture.seed(*entries)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return connection.execute(
+            "select library_id, album_key, metadata -> 'tag_album_rating' as tag_rating"
+            " from library.local_albums where title = %(title)s",
+            {"title": next(iter(albums))},
+        ).fetchone()
+
+
+def _disc_rating_rows(setup_url):
+    with isolatedPostgres._connect(setup_url) as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                """
+                select app.album_disc_ratings.album_key, app.album_disc_ratings.disc_key,
+                       app.album_disc_ratings.rating, app.album_disc_ratings.provenance,
+                       app.album_disc_ratings.account_id = app.bootstrap_owners.account_id as is_owner
+                from app.album_disc_ratings
+                cross join app.bootstrap_owners
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                order by album_key, disc_key
+                """
+            ).fetchall()
+        ]
+
+
+def test_live_explicit_import_seeds_only_the_owners_differing_consistent_disc_rating(
+    watcher_repair_inventory,
+):
+    from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    album = _seed_disc_rating_albums(fixture, {"All the Wars": (8, 8), "Mixed Bonus": (8, 9)})
+    assert album["tag_rating"] == 5
+    service = PostgresAlbumRatingsService(fixture.config)
+
+    first = service.import_missing_tag_ratings()
+    second = service.import_missing_tag_ratings()
+
+    assert first["disc_ratings"] == {"created": 1, "authority_skipped": 0}
+    assert second["disc_ratings"] == {"created": 0, "authority_skipped": 1}
+    assert _disc_rating_rows(fixture.setup_url) == [
+        {"album_key": album["album_key"], "disc_key": "2", "rating": 8,
+         "provenance": "explicit_import", "is_owner": True},
+    ]
+    detail = PostgresLibraryBrowseRepository(fixture.config).build_album_detail_payload(
+        album["album_key"]
+    )
+    assert detail["album_preference"]["rating"] == 5
+    assert detail["album_preference"]["disc_ratings"] == [{"disc_key": "2", "rating": 8}]
+
+
+def test_live_import_never_overwrites_an_existing_disc_rating_row(watcher_repair_inventory):
+    from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+
+    fixture = watcher_repair_inventory
+    album = _seed_disc_rating_albums(fixture)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """
+            insert into app.album_disc_ratings (account_id, library_id, album_key, disc_key, rating, provenance)
+            select account_id, %(library_id)s, %(album_key)s, '2', null, 'explicit_clear'
+            from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'
+            """,
+            {"library_id": album["library_id"], "album_key": album["album_key"]},
+        )
+
+    result = PostgresAlbumRatingsService(fixture.config).import_missing_tag_ratings()
+
+    assert result["disc_ratings"] == {"created": 0, "authority_skipped": 1}
+    [row] = _disc_rating_rows(fixture.setup_url)
+    assert row["rating"] is None
+    assert row["provenance"] == "explicit_clear"
+
+
+def test_live_disc_rating_follows_an_album_key_rename(watcher_repair_inventory):
+    from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+
+    fixture = watcher_repair_inventory
+    album = _seed_disc_rating_albums(fixture)
+    PostgresAlbumRatingsService(fixture.config).import_missing_tag_ratings()
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # Production key adoption moves the album rating in the same statement.
+        connection.execute(
+            """
+            with moved_album_rating as (
+              update app.album_ratings set album_key = %(new_key)s
+              where library_id = %(library_id)s and album_key = %(album_key)s
+              returning 1
+            )
+            update library.local_albums set album_key = %(new_key)s
+            where library_id = %(library_id)s and album_key = %(album_key)s
+            """,
+            {"new_key": "owner::renamed", "library_id": album["library_id"], "album_key": album["album_key"]},
+        )
+
+    assert [(row["album_key"], row["rating"]) for row in _disc_rating_rows(fixture.setup_url)] == [
+        ("owner::renamed", 8),
+    ]

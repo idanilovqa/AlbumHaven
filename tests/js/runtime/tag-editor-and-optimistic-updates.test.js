@@ -4674,3 +4674,65 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
 });
+
+test('Album Details hands each disc its private disc rating and the album rating to the track table', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+
+  context.buildTrackListHtml([
+    { path: 'main.flac', title: 'Main', disc_number: 1, disc_number_raw: '1', track_number: 1 },
+    { path: 'bonus.flac', title: 'Bonus', disc_number: null, disc_number_raw: '  Bonus   Disc/2', track_number: 1 },
+  ], {
+    album_preference: { rating: 5, disc_ratings: [{ disc_key: 'bonus disc', rating: 8 }] },
+  });
+
+  assert.equal(renderedConfig.albumRating, 5);
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, (group) => [group.isBonus, group.discRating]),
+    [[false, null], [true, 8]],
+  );
+
+  context.buildTrackListHtml([
+    { path: 'bonus.flac', title: 'Bonus', disc_number: 2, disc_number_raw: 'Bonus Disc', track_number: 1 },
+  ], { album_preference: { rating: null } });
+  assert.equal(renderedConfig.albumRating, null);
+  assert.deepEqual(Array.from(renderedConfig.groups, (group) => group.discRating), [null]);
+});
+
+test('disc rating keys normalize the disc tag the way the server stores them', () => {
+  const { getTrackDiscRatingKey } = loadHelper([]);
+  assert.equal(getTrackDiscRatingKey({ disc_number_raw: '02/03', disc_number: 2 }), '2');
+  assert.equal(getTrackDiscRatingKey({ disc_number_raw: '  Bonus   DISC ' }), 'bonus disc');
+  assert.equal(getTrackDiscRatingKey({ disc_number: 3 }), '3');
+  assert.equal(getTrackDiscRatingKey({}), '');
+});
+
+test('Album Details matches a numbered second disc rating by its disc tag (All the Wars)', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+
+  context.buildTrackListHtml([
+    { path: 'wars-1.mp3', title: 'All the Wars', disc_number: 1, disc_number_raw: '1/2', track_number: 1 },
+    { path: 'wars-2.mp3', title: 'Light Up Your Eyes', disc_number: 2, disc_number_raw: '2/2', track_number: 9 },
+  ], { album_preference: { rating: 5, disc_ratings: [{ disc_key: '2', rating: 8 }] } });
+
+  assert.equal(renderedConfig.albumRating, 5);
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, (group) => [group.discLabel, group.discRating]),
+    [['CD 1', null], ['CD 2', 8]],
+  );
+});

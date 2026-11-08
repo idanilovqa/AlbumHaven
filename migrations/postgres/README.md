@@ -309,6 +309,14 @@ as its own album), each with the MusicBrainz release group, release, disc and
 agreeing signals. Existing rows stay null until their re-check. Adding a nullable
 column does not rewrite the table. Rollback drops the column.
 
+Migration `0176_create_album_disc_ratings.sql` adds the app-owned per-account
+`app.album_disc_ratings` table: one rating per disc of a local album, read from
+the disc's own file tags and shown on a later disc's heading only when it differs
+from the album's. Its number follows 0175 because sandbox ledgers already record a
+different `0099`. Rows follow album re-keys by cascade; when a scan empties an
+album row, its disc ratings are carried to the successor row like album ratings,
+or the row is kept. Rollback drops the table; album ratings are unaffected.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

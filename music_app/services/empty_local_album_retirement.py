@@ -8,10 +8,11 @@ same transaction as the move.
 
 A row is retired only when nothing on it records a user decision. Rows that
 carry one are kept, so no manual choice is lost or reassigned by inference.
-Ratings are never dropped: when every moved track went to one successor row,
-each account's rating is carried there with its provenance unless that account
-already rated the successor, and the row is retired only when the successor
-holds an equal rating for every account. Otherwise the row is kept.
+Ratings, album and disc alike, are never dropped: when every moved track went
+to one successor row, each account's rating is carried there with its
+provenance unless that account already rated the successor (or that disc of
+it), and the row is retired only when the successor holds an equal rating for
+every one. Otherwise the row is kept.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
 GUARDED_ALBUM_CHILD_TABLES = frozenset(
     {
         "app.album_ratings",
+        "app.album_disc_ratings",
         "library.local_mbid_assertions",
     }
 )
@@ -59,6 +61,10 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from app.album_ratings as rating
       where rating.library_id = album.library_id
         and rating.album_key = album.album_key)"""),
+    ("disc_rating", """not exists (
+      select 1 from app.album_disc_ratings as rating
+      where rating.library_id = album.library_id
+        and rating.album_key = album.album_key)"""),
     ("version_decision", """not exists (
       select 1 from library.manual_versions as version
       where version.library_id = album.library_id
@@ -82,10 +88,12 @@ RETIRABLE_EMPTY_ALBUM_PREDICATE_SQL = "\n      and ".join(
 )
 
 
+# Each rating guard's table and the columns, beside the album, that identify one rating.
+_RATING_TABLES = {"rating": ("app.album_ratings", ()), "disc_rating": ("app.album_disc_ratings", ("disc_key",))}
 _UNRATED_GUARDS_SQL = "\n      and ".join(
-    f"({clause})" for name, clause in RETIREMENT_GUARDS if name != "rating"
+    f"({clause})" for name, clause in RETIREMENT_GUARDS if name not in _RATING_TABLES
 )
-# Vacated rows (alias `album`) that pass every guard but the rating one,
+# Vacated rows (alias `album`) that pass every guard but the rating ones,
 # with their single successor row (alias `successor`), when there is one.
 _VACATED_ALBUMS_SQL = f"""
     from unnest(%(album_ids)s::bigint[], %(successor_ids)s::bigint[])
@@ -119,42 +127,50 @@ def retire_vacated_local_albums(
             for targets in (successors[album_id] for album_id in album_ids)
         ],
     }
-    connection.execute(
-        f"""
-        insert into app.album_ratings (
-          account_id, library_id, album_key, rating, provenance,
-          created_at, updated_at, metadata
+    uncarried = []
+    for table, keys in _RATING_TABLES.values():
+        columns = "".join(f"{key}, " for key in keys)
+        source_columns = "".join(f"rating.{key}, " for key in keys)
+        conflict_columns = "".join(f", {key}" for key in keys)
+        same_keys = "".join(f"and carried.{key} = rating.{key} " for key in keys)
+        connection.execute(
+            f"""
+            insert into {table} (
+              account_id, library_id, album_key, {columns}rating, provenance,
+              created_at, updated_at, metadata
+            )
+            select rating.account_id, rating.library_id, vacated.successor_key,
+                   {source_columns}rating.rating, rating.provenance,
+                   rating.created_at, rating.updated_at, rating.metadata
+            from (select album.library_id, album.album_key,
+                         successor.album_key as successor_key
+                  {_VACATED_ALBUMS_SQL}) as vacated
+            join {table} as rating
+              on rating.library_id = vacated.library_id
+             and rating.album_key = vacated.album_key
+            where vacated.successor_key is not null
+            on conflict (account_id, library_id, album_key{conflict_columns}) do nothing
+            """,
+            parameters,
         )
-        select rating.account_id, rating.library_id, vacated.successor_key,
-               rating.rating, rating.provenance,
-               rating.created_at, rating.updated_at, rating.metadata
-        from (select album.library_id, album.album_key,
-                     successor.album_key as successor_key
-              {_VACATED_ALBUMS_SQL}) as vacated
-        join app.album_ratings as rating
-          on rating.library_id = vacated.library_id
-         and rating.album_key = vacated.album_key
-        where vacated.successor_key is not null
-        on conflict (account_id, library_id, album_key) do nothing
-        """,
-        parameters,
-    )
+        # Retired only when the successor holds an equal rating for every one.
+        uncarried.append(f"""not exists (
+            select 1 from {table} as rating
+            where rating.library_id = retired.library_id
+              and rating.album_key = retired.album_key
+              and not exists (
+                select 1 from {table} as carried
+                where carried.account_id = rating.account_id
+                  and carried.library_id = rating.library_id
+                  and carried.album_key = vacated.successor_key
+                  {same_keys}and carried.rating is not distinct from rating.rating))""")
     connection.execute(
         f"""
         delete from library.local_albums as retired
         using (select album.id, successor.album_key as successor_key
                {_VACATED_ALBUMS_SQL}) as vacated
         where retired.id = vacated.id
-          and not exists (
-            select 1 from app.album_ratings as rating
-            where rating.library_id = retired.library_id
-              and rating.album_key = retired.album_key
-              and not exists (
-                select 1 from app.album_ratings as carried
-                where carried.account_id = rating.account_id
-                  and carried.library_id = rating.library_id
-                  and carried.album_key = vacated.successor_key
-                  and carried.rating is not distinct from rating.rating))
+          and {' and '.join(uncarried)}
         """,
         parameters,
     )

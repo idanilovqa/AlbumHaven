@@ -10,7 +10,10 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
-from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.album_ratings_postgres import (
+    PostgresAlbumRatingsService,
+    tag_disc_rating_candidates,
+)
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
@@ -1870,11 +1873,15 @@ class PostgresScanCacheAdapter:
                         "Scan rating seeding requires a current-generation guard."
                     )
                 def seed_and_commit_publication() -> None:
-                    PostgresAlbumRatingsService(
-                        self._config
-                    ).seed_missing_album_ratings_in_transaction(
+                    ratings_service = PostgresAlbumRatingsService(self._config)
+                    ratings_service.seed_missing_album_ratings_in_transaction(
                         connection,
                         _tag_album_rating_candidates(albums),
+                        source="file_tag_scan",
+                    )
+                    ratings_service.seed_missing_album_disc_ratings_in_transaction(
+                        connection,
+                        tag_disc_rating_candidates(albums),
                         source="file_tag_scan",
                     )
                     if before_commit is not None:
@@ -3732,6 +3739,48 @@ def _reconcile_semantic_local_albums_sql(
               semantic_album_candidates.library_id
           and app.album_ratings.album_key =
               semantic_album_candidates.redundant_album_key;
+
+        insert into app.album_disc_ratings (
+          account_id,
+          library_id,
+          album_key,
+          disc_key,
+          rating,
+          provenance,
+          created_at,
+          updated_at,
+          metadata
+        )
+        select distinct on (
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key
+        )
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key,
+          app.album_disc_ratings.rating,
+          app.album_disc_ratings.provenance,
+          app.album_disc_ratings.created_at,
+          app.album_disc_ratings.updated_at,
+          app.album_disc_ratings.metadata
+        from semantic_album_candidates
+        join app.album_disc_ratings
+          on app.album_disc_ratings.library_id =
+             semantic_album_candidates.library_id
+         and app.album_disc_ratings.album_key =
+             semantic_album_candidates.redundant_album_key
+        order by
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key,
+          (app.album_disc_ratings.rating is not null) desc,
+          app.album_disc_ratings.updated_at desc,
+          semantic_album_candidates.redundant_album_id
+        on conflict (account_id, library_id, album_key, disc_key) do nothing;
 
         insert into library.local_album_featured_artists (
           library_id,

@@ -257,7 +257,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const className = ['rating-row', config.className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(className)}" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {

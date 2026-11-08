@@ -98,8 +98,9 @@ def test_delivery_1_migration_is_next_and_lexically_ordered():
     names = sorted(path.name for path in MIGRATIONS_ROOT.glob("*.sql") if path.is_file())
 
     assert MIGRATION_NAME in names
-    assert names[-5:] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME, RECHECK_MIGRATION_NAME, MATCHER_VERSION_MIGRATION_NAME,
-                          ALBUM_EVIDENCE_MIGRATION_NAME]
+    start = names.index(MIGRATION_NAME)
+    assert names[start:start + 5] == [MIGRATION_NAME, DISCOGS_MIGRATION_NAME, RECHECK_MIGRATION_NAME,
+                                      MATCHER_VERSION_MIGRATION_NAME, ALBUM_EVIDENCE_MIGRATION_NAME]
     # 0112 is the ported Problematic Files path projection, also a reserved number.
     assert names[names.index(MIGRATION_NAME) - 1].startswith("0112_")
 

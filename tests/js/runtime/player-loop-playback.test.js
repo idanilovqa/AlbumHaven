@@ -811,7 +811,8 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   finishEffects();
   await pause;
   assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
-  assert.deepEqual(starts, pendingStage === 'claim' ? [] : [newTrack.path]);
+  // The stream starts while the claim is asked for (instant start); the later Pause still wins.
+  assert.deepEqual(starts, [newTrack.path]);
   assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
   assert.equal(context.state.player.current.path, oldTrack.path);
   assert.equal(ownership.activeClaim, null);
@@ -1120,24 +1121,43 @@ test('BFCache resume uses consumed ownership once and opens one listen at the sa
   assert.equal(listenStarts.length, 1);
 });
 
-test('playTrackFromPayload awaits server ownership before opening audible streaming', async () => {
+test('playTrackFromPayload starts streaming while server ownership is asked for', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });
   const streamingStarts = [];
+  let pauses = 0;
   const { context } = loadHelper({
     canStartPlaybackInThisTab: () => claim,
     startStreamingTrack: async (track) => { streamingStarts.push(track); },
+    pauseStreamingPlayback: () => { pauses += 1; },
   });
 
   const pendingStart = context.playTrackFromPayload({
     path: 'C:/Music/awaited.flac', src: '/track?path=awaited.flac', title: 'Awaited',
   }, { autoplay: true });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(streamingStarts, [], 'audio cannot open while claim acquisition is pending');
+  assert.equal(streamingStarts.length, 1, 'the stream opens without waiting for the claim (instant start)');
 
   resolveClaim(true);
   assert.equal(await pendingStart, true);
   assert.equal(streamingStarts.length, 1);
+  assert.equal(pauses, 0);
+});
+
+test('a refused claim pauses the instantly started track', async () => {
+  const streamingStarts = [];
+  let pauses = 0;
+  const { context } = loadHelper({
+    canStartPlaybackInThisTab: async () => false,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+    pauseStreamingPlayback: () => { pauses += 1; },
+  });
+
+  assert.equal(await context.playTrackFromPayload({
+    path: 'C:/Music/refused.flac', src: '/track?path=refused.flac', title: 'Refused',
+  }, { autoplay: true }), false);
+  assert.equal(streamingStarts.length, 1);
+  assert.equal(pauses, 1);
 });
 
 test('different-track selection cancels optional waveform work before awaiting ownership', async () => {
@@ -1163,17 +1183,17 @@ test('different-track selection cancels optional waveform work before awaiting o
     cancelStreamingWaveformGeneration: (generation) => events.push(`cancel:${generation}`),
     canStartPlaybackInThisTab: () => { events.push('claim'); return claim; },
     startStreamingTrack: async () => { events.push('stream'); },
+    pauseStreamingPlayback: () => { events.push('pause'); },
   });
 
   const pendingStart = context.playTrackFromPayload({
     path: 'C:/Music/next.flac', src: '/track?path=next.flac', title: 'Next',
   });
 
-  assert.deepEqual(events, ['cancel:7', 'claim']);
+  assert.deepEqual(events.slice(0, 2), ['cancel:7', 'claim']);
   resolveClaim(false);
   assert.equal(await pendingStart, false);
-  assert.deepEqual(events, ['cancel:7', 'claim']);
-  assert.strictEqual(context.state.player.current, current);
+  assert.deepEqual(events, ['cancel:7', 'claim', 'stream', 'pause']);
 });
 
 test('same-track and malformed selections do not cancel current waveform work', async () => {
@@ -1206,7 +1226,7 @@ test('same-track and malformed selections do not cancel current waveform work', 
   assert.deepEqual(starts, [current]);
 });
 
-test('resume awaits server ownership and never treats its Promise as authorization', async () => {
+test('resume sounds at once while server ownership is asked for, and resumes only once', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });
   let resumeCalls = 0;
@@ -1220,11 +1240,28 @@ test('resume awaits server ownership and never treats its Promise as authorizati
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(resumeCalls, 0, 'a pending Promise is not a successful claim');
+  assert.equal(resumeCalls, 1, 'instant resume: the paused stream sounds while the claim is pending');
 
   resolveClaim(true);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(resumeCalls, 1);
+});
+
+test('a refused claim pauses an instant resume again', async () => {
+  let resumeCalls = 0;
+  let pauses = 0;
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: async () => false,
+    resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
+    pauseStreamingPlayback: () => { pauses += 1; },
+  });
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([resumeCalls, pauses], [1, 1]);
 });
 
 test('pause waits for authorized listen effects before releasing ownership', async () => {
@@ -1986,7 +2023,7 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(audio.currentTime, 12);
 }
 
-test('server ownership denial keeps the play control silent and reports the block', async () => {
+test('server ownership denial pauses the instant resume and reports the block', async () => {
   const calls = {
     showToast: [],
     updatePlayerUi: 0,
@@ -2018,7 +2055,10 @@ test('server ownership denial keeps the play control silent and reports the bloc
   playButton.dispatch('click');
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(audio.playCalls, 0);
+  // Instant resume sounded while the claim was asked for; the refusal paused it again.
+  assert.equal(audio.playCalls, 1);
+  assert.equal(audio.pauseCalls, 1);
+  assert.equal(audio.paused, true);
   assert.deepEqual(calls.showToast, [['Playback is active in another tab.', 'error', 2800]]);
   assert.equal(calls.updatePlayerUi, 0);
 });

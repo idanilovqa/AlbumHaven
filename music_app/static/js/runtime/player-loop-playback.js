@@ -346,11 +346,12 @@ async function playTrackFromPayload(track, options = {}) {
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  if (shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function') {
-    // A settled answer must not yield, or rapid queue steps would skip their starts.
-    const canStart = canStartPlaybackInThisTab(track);
-    if (canStart !== true && !await canStart) return false;
-  }
+  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
+  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
+    ? canStartPlaybackInThisTab(track)
+    : true;
+  if (pendingClaim === false) return false;
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
@@ -386,6 +387,14 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  if (pendingClaim !== true && !await pendingClaim) {
+    if (selectionToken === playerTrackSelectionToken) {
+      pauseStreamingPlayback();
+      updatePlayerUi();
+    }
+    return false;
+  }
+  if (selectionToken !== playerTrackSelectionToken) return false;
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -899,9 +908,18 @@ function togglePlayerPlayback(options = {}) {
     const selectionToken = ++playerTrackSelectionToken;
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
-      if (typeof canStartPlaybackInThisTab === 'function' && !await canStartPlaybackInThisTab(track)) return false;
+      const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
+      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
+      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+        ? resumeStreamingPlayback()
+        : null;
+      if (claim !== true && !await claim) {
+        if (early && selectionToken === playerTrackSelectionToken) pauseStreamingPlayback();
+        return false;
+      }
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
+      if (early) return early;
       if (playback.mode === 'stopped') {
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),

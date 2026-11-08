@@ -12,14 +12,16 @@
 /* Settings headers stay pinned like the Gallery header while their outlet scrolls. */
 .settings-host .page-gallery-bar { position: sticky; top: 0; z-index: 4; background: var(--appearance-main-surface, var(--app-surface)); }
 @media (min-width: 901px) { .page-gallery-bar__back--narrow-only { display: none; } }
-/* Align desktop page actions with the title; factual subtitles have their own row. */
+/* Desktop page headers match the Gallery header: the subtitle sits directly under the title (same 2px gap);
+   Back and the actions span both text rows and center on them, so they never stretch the title row. */
 @media (min-width: 901px) {
-  .page-gallery-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 0; }
+  .page-gallery-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; align-content: center; row-gap: 0; }
   .page-gallery-bar > .gallery-bar__context { display: contents; }
-  .page-gallery-bar__back { grid-column: 1; grid-row: 1; display: inline-grid; place-items: center; }
-  .page-gallery-bar .gallery-bar__title { grid-column: 2; grid-row: 1; }
-  .page-gallery-bar .gallery-bar__summary { grid-column: 2; grid-row: 2; }
-  .page-gallery-bar > .gallery-bar__actions { grid-column: 3; grid-row: 1; }
+  .page-gallery-bar__back { grid-column: 1; grid-row: 1 / span 2; align-self: center; display: inline-grid; place-items: center; }
+  .page-gallery-bar .gallery-bar__title { grid-column: 2; grid-row: 1; align-self: end; }
+  .page-gallery-bar .gallery-bar__summary { grid-column: 2; grid-row: 2; align-self: start; }
+  .page-gallery-bar > .gallery-bar__actions { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+  .page-gallery-bar:not(:has(.gallery-bar__summary)) .gallery-bar__title { grid-row: 1 / span 2; align-self: center; }
 }
 .mobile-page-header { flex-shrink: 0; }
 /* Retained pages still need an exit when the window grows beyond phone width. */

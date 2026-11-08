@@ -30,7 +30,7 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
 test('shared page headers keep Back before the title on desktop', () => {
   assert.match(
     mobileLayoutCss,
-    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
+    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1 \/ span 2;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
   );
 });
 

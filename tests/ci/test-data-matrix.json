@@ -6433,6 +6433,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

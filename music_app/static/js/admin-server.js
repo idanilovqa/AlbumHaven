@@ -56,6 +56,7 @@
     }).then(Boolean));
     const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
     const canBrowse = Boolean(browse?.hasAttribute?.('data-path-input-browsable'));
+    const setButtonDisabled = (button, disabled) => window.ButtonComponent.setDisabled(button, disabled);
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
@@ -71,9 +72,10 @@
       const special = selectedMode() === 'custom';
       const path = pathInput.value.trim();
       pathInput.disabled = !special || locked;
-      if (browse) browse.disabled = !special || locked || !canBrowse;
+      // The buttons render disabled with aria-disabled; the shared Button keeps both in step (UI-7).
+      if (browse) setButtonDisabled(browse, !special || locked || !canBrowse);
       const changed = selectedMode() !== savedMode() || (special && path !== savedPath());
-      save.disabled = locked || !changed || (special && !path);
+      setButtonDisabled(save, locked || !changed || (special && !path));
     };
     const syncPathControl = () => {
       // Owner (11-09, UI-8): the proposed folder is the field's value, ready to save or edit.
@@ -168,7 +170,7 @@
       if (save.disabled) return;
       const mode = selectedMode();
       if (!(await confirmChange('Move generated album previews to the selected location? Covers stay available while the move runs.'))) return;
-      save.disabled = true;
+      setButtonDisabled(save, true);
       try {
         const next = await mutate('/admin/server/preview-storage', {
           mode,
@@ -199,7 +201,7 @@
       }
     });
 
-    save.disabled = true;
+    setButtonDisabled(save, true);
     void load();
     return () => {
       disposed = true;

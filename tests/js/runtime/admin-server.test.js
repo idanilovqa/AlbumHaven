@@ -62,7 +62,7 @@ function runtime(initial = {}) {
       addEventListener() {},
       querySelector: selector => selector === '[data-admin-server]' ? form : null,
     },
-    window: { confirm: () => { throw new Error('the browser confirm() is never used'); } },
+    window: { confirm: () => { throw new Error('the browser confirm() is never used'); }, ButtonComponent: require('../../../music_app/static/js/button-component.js') },
     showAppFormDialog: async (options) => { dialogs.push(options); return options.onSubmit(); },
     setTimeout(callback, delay) { polls.push({ callback, delay }); return polls.length; },
     clearTimeout() {},
@@ -136,6 +136,9 @@ test('mode choice controls the server-path field and save payload', async () => 
   // Owner (11-09, UI-8): the proposed folder is the field's value, so Save is ready at once.
   assert.equal(ui.pathInput.value, 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews');
   assert.equal(ui.save.disabled, false);
+  // UI-7: the browse button rendered with aria-disabled="true" is enabled for real, not only its property.
+  assert.equal(ui.browse.disabled, false);
+  assert.equal(ui.browse['aria-disabled'], 'false');
 
   ui.custom.checked = false;
   ui.albumFolders.checked = true;

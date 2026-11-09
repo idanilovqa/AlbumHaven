@@ -625,7 +625,9 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
-    summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
+    summary.textContent = context.artistCount == null || context.albumCount == null
+      ? ''
+      : `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
     name.textContent = context.artist;

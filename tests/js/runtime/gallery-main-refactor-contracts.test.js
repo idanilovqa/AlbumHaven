@@ -1580,6 +1580,16 @@ test('full root gallery summary preserves client-filtered and query totals', () 
     { ...view, query: 'Artist' }, filtered, context.createGalleryMainState(),
   ), filtered);
 });
+test('a source switch over a partial gallery shows no count until the real totals arrive', () => {
+  const context = loadRuntime();
+  const partial = { initial_view_partial: true, artist_count: 120, album_count: 900, loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'] };
+  const mounted = { artistCount: 80, albumCount: 200 };
+  const hoardOnly = context.createGalleryMainState({ sources: { main_library: false, new_arrivals: false, hoard: true } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly))), { artistCount: null, albumCount: null });
+  const complete = { ...partial, initial_view_partial: false };
+  assert.equal(context.resolveGallerySummaryTotals(complete, mounted, hoardOnly), mounted);
+});
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };
   const summary = { textContent: '' };

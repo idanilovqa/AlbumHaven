@@ -232,6 +232,14 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
   }
   if (view.query) return rootTotals;
+  // Counting mounted albums is exact only for a complete view that holds every chosen
+  // source; otherwise the true totals arrive with the source request.
+  const loadedSources = view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'];
+  const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
+  if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
+    && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
+    return { artistCount: null, albumCount: null };
+  }
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 3

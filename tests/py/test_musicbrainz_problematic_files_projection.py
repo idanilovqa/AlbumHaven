@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_artist_items,
     project_artist_problems_into_problematic_files,
 )
 
@@ -68,10 +69,23 @@ def test_non_owners_and_failures_leave_the_existing_payload_unchanged():
         assert payload == {"items": ALBUMS, "count": 2}
 
 
-def test_bounded_first_page_stays_compact_without_artist_rows():
+def test_bounded_first_page_carries_artist_rows_so_every_filter_is_ready_at_once():
     payload = {"items": [dict(item) for item in ALBUMS], "count": 2, "complete": False}
 
     project_artist_problems_into_problematic_files(_request(ROWS), payload)
 
-    assert [item["key"] for item in payload["items"]] == ["album-b", "album-k"]
-    assert payload["count"] == 2
+    assert [item["key"] for item in payload["items"]] == [
+        "musicbrainz-artist:7", "album-b", "album-k",
+    ]
+    assert payload["count"] == 3
+
+
+def test_preloaded_artist_rows_are_merged_without_another_query():
+    payload = {"items": [dict(item) for item in ALBUMS], "count": 2}
+    items = load_problematic_artist_items(_request(ROWS))
+
+    project_artist_problems_into_problematic_files(_request(ROWS, fail=True), payload, artist_items=items)
+
+    assert [item["key"] for item in payload["items"]] == [
+        "musicbrainz-artist:7", "album-b", "album-k",
+    ]

@@ -6,6 +6,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping
 
 from fastapi import APIRouter, Query, Request
@@ -46,7 +47,10 @@ from music_app.services.library_browse_postgres import (
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
-from music_app.routes.musicbrainz_enrichment_asgi import project_artist_problems_into_problematic_files
+from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_artist_items,
+    project_artist_problems_into_problematic_files,
+)
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -1134,13 +1138,16 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        payload = (
-            repository.build_problematic_files_page(limit=limit)
-            if limit is not None
-            else repository.build_problematic_files_payload()
-        )
-        _project_missing_album_actions_for_request(request, payload)
-        project_artist_problems_into_problematic_files(request, payload)
+        # The owner's Artist rows load beside the page, adding no readiness time.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            artist_items = pool.submit(load_problematic_artist_items, request)
+            payload = (
+                repository.build_problematic_files_page(limit=limit)
+                if limit is not None
+                else repository.build_problematic_files_payload()
+            )
+            _project_missing_album_actions_for_request(request, payload)
+            project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_albums_payload(

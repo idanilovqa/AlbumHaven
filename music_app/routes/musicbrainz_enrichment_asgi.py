@@ -202,36 +202,42 @@ async def _require_current_library_owner(request: Request):
     return actor
 
 
-def project_artist_problems_into_problematic_files(request: Request, payload: object) -> object:
-    """Add the primary owner's unresolved artist identities as ``Artist`` rows.
+def load_problematic_artist_items(request: Request) -> list[dict[str, object]]:
+    """The primary owner's unresolved artist identities as Problematic Files ``Artist`` rows.
 
-    Runs per request after the shared Problematic Files projection, so the
-    cached library-wide payload never carries owner-only repair details. A
-    failure leaves the existing Album and Folder rows untouched.
+    Owner-only, so they are added per request and never cached with the
+    library-wide projection. A failure yields no rows.
     """
-    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-        return payload
-    if payload.get("complete") is False:
-        # The bounded first page stays compact; Artist rows arrive with the
-        # complete summary the client always loads next.
-        return payload
     if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
-        return payload
+        return []
     service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
     list_attention = getattr(service, "list_artist_attention", None)
     if not callable(list_attention):
-        return payload
+        return []
     try:
         rows = list_attention(include_gallery_artist=False)
     except Exception:
         logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
         logger.warning("MusicBrainz artist problems were unavailable for Problematic Files.")
-        return payload
-    artist_items = [
+        return []
+    return [
         _problematic_artist_item(row)
         for row in rows if isinstance(row, Mapping)
         and row.get("unresolved_reason") and row.get("problem_occurrence_id") is not None
     ]
+
+
+def project_artist_problems_into_problematic_files(
+    request: Request,
+    payload: object,
+    artist_items: list[dict[str, object]] | None = None,
+) -> object:
+    """Merge the owner's ``Artist`` rows into every page, the bounded first one
+    included, so their filters are ready with the album filters."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    if artist_items is None:
+        artist_items = load_problematic_artist_items(request)
     if artist_items:
         # Stable sort by name keeps the existing Album/Folder order intact.
         payload["items"] = sorted(

@@ -991,6 +991,47 @@ def test_targeted_album_rows_collapse_unseparated_automatic_year_members_to_comp
     assert {row["album_key"] for row in track_rows} == {keys[0]}
 
 
+def test_targeted_album_rows_keep_editions_in_separate_folders_as_separate_releases():
+    """SMALL-11: Dragonland's 2002 «Holy War» and a 2014 reissue in a download folder
+    were collapsed into the 2002 album, so Album Details showed CD 1 plus an unnumbered
+    disc instead of two versions."""
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["dragonland::holy war::year::2002", "dragonland::holy war::year::2014"]
+    folders = ["N:/Music/Dragonland/2002 - Holy War", "C:/Downloads/Dragonland - Holy War (2014)"]
+    album_rows = [
+        {"artist_key": "dragonland", "album_key": key, "title": "Holy War", "release_year": year}
+        for key, year in zip(keys, (2002, 2014), strict=True)
+    ]
+    featured_rows = [{"album_key": key, "artist_key": "dragonland", "featured_kind": "owner"} for key in keys]
+    track_rows = [
+        {"album_key": key, "track_key": f"{folder}/{number:02d}.flac"}
+        for key, folder, count in zip(keys, folders, (13, 12), strict=True)
+        for number in range(1, count + 1)
+    ]
+    # The bad collapse already put every file under the 2002 album.
+    existing = [
+        {"private_path": row["track_key"], "album_key": keys[0], "album_title": "Holy War",
+         "artist_key": "dragonland", "release_year": 2002}
+        for row in track_rows
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=existing,
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == set(keys)
+    assert {row["album_key"]: row["release_year"] for row in album_rows} == {keys[0]: 2002, keys[1]: 2014}
+    assert sum(row["album_key"] == keys[1] for row in track_rows) == 12
+    assert sum(row["album_key"] == keys[0] for row in track_rows) == 13
+
+
 def test_targeted_album_rows_keep_intentional_year_retag_as_a_split():
     from music_app.services.scan_cache_persistence import (
         _remap_targeted_album_identity_rows,

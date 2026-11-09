@@ -777,6 +777,38 @@ def test_live_watcher_follows_the_year_split_key_a_full_scan_created(watcher_rep
     assert albums["owner::demo album"]["release_year"] == 2020, "the other year's album is not rewritten"
 
 
+def test_live_watcher_keeps_two_editions_in_separate_folders_as_two_albums(watcher_repair_inventory):
+    # SMALL-11: Dragonland «Holy War», 2002 (13 tracks, no disc tag) in the library and a
+    # 2014 reissue (12 tracks tagged disc 1) in a download folder. A watcher batch that
+    # saw both folders collapsed the 2014 files into the 2002 album.
+    fixture = watcher_repair_inventory
+    first = [
+        {**fixture.entry(f"Owner/2002 - Holy War/{number:02d}.flac", album="Holy War"),
+         "year": 2002, "track_number": number, "disc_number": None}
+        for number in range(1, 14)
+    ]
+    reissue = [
+        {**fixture.entry(f"Downloads/Owner - Holy War (2014)/{number:02d}.flac", album="Holy War"),
+         "year": 2014, "track_number": number, "disc_number": 1}
+        for number in range(1, 13)
+    ]
+    fixture.seed(*first, *reissue)
+    entries = {entry["path"]: entry for entry in (*first, *reissue)}
+
+    result = _live_reconcile(
+        fixture, entries, Path(first[0]["path"]).parent, Path(reissue[0]["path"]).parent,
+    )
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    first_keys = {members[entry["path"]] for entry in first}
+    reissue_keys = {members[entry["path"]] for entry in reissue}
+    assert len(first_keys) == 1 and len(reissue_keys) == 1
+    assert first_keys != reissue_keys, "the two editions stay two albums"
+    assert albums[first_keys.pop()]["release_year"] == 2002
+    assert albums[reissue_keys.pop()]["release_year"] == 2014
+
+
 def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_albums(watcher_repair_inventory):
     # Owner 2026-11-04: absent artist/album tags never make "Unknown Artist" or
     # "Unknown Album"; those files are loose tracks flagged in Problematic Files.

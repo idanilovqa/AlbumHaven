@@ -27,6 +27,7 @@ from music_app.services.cache import (
 )
 from music_app.services.library import (
     _is_various_artist,
+    _track_album_container,
     album_separate_release_key,
     build_albums_from_file_cache,
     safe_int,
@@ -3868,6 +3869,20 @@ def _remap_targeted_album_identity_rows(
             if str(track_row.get("album_key") or "").strip() in grouped_keys
         }
         if not grouped_track_paths or not grouped_track_paths.issubset(existing_paths):
+            automatic_year_split_keys.update(grouped_keys)
+            continue
+        # Each year in its own folder is a separate edition (a 2002 release and a 2014
+        # reissue downloaded elsewhere), not one album whose files disagree on the year.
+        folders_by_key: dict[str, set[str]] = {}
+        for track_row in track_rows:
+            key = str(track_row.get("album_key") or "").strip()
+            if key in grouped_keys:
+                folders_by_key.setdefault(key, set()).add(
+                    _track_album_container(track_row.get("track_key")).casefold()
+                )
+        if len(folders_by_key) > 1 and sum(map(len, folders_by_key.values())) == len(
+            set().union(*folders_by_key.values())
+        ):
             automatic_year_split_keys.update(grouped_keys)
             continue
         deliberately_changed_paths = {

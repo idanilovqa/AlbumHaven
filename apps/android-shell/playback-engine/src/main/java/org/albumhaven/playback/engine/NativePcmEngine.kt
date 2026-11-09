@@ -359,6 +359,18 @@ class NativePcmEngine(
     private var expectContinuity = false
     private var failed = false
 
+    /**
+     * The socket was lost while the current stream played: it plays on from its received bytes up to
+     * this frame, where a stream opened on the next socket takes over (see [detach]).
+     */
+    private var resumeFrame: Long? = null
+
+    /** A seek asked for while the socket was lost; it runs once the resumed stream is promoted. */
+    private var resumeSeekFrame: Long? = null
+
+    /** Whether the playing stream lost its socket and waits for [resume] on the next one. */
+    val awaitingResume: Boolean get() = resumeFrame != null && continuity == null
+
     /** Track frame of the next sample written to the sink. */
     var timelineFrame = 0L
         private set
@@ -494,6 +506,10 @@ class NativePcmEngine(
         require(frame >= 0) { "seek frame must be nonnegative" }
         val stream = current ?: return
         if (failed) return
+        if (resumeFrame != null) {
+            resumeSeekFrame = frame
+            return
+        }
         pendingPromotion?.let { promotion ->
             if (promotion.streamId == stream.streamId) promotion.requestedSeekFrame = frame
             return
@@ -816,6 +832,48 @@ class NativePcmEngine(
     }
 
     /**
+     * The socket is gone, as when the phone moves from Wi-Fi to mobile data. A playing encoded
+     * stream keeps playing the bytes it already received, cut at a frame they decode whole, instead
+     * of stopping; [resume] on the next socket opens the rest from that frame and it takes over there
+     * with no gap, as a queued successor does. Returns that frame, or null when nothing can play on,
+     * in which case the caller stops as [onTransportClosed] does.
+     */
+    fun detach(): Long? {
+        if (failed || !playing || loop != null || pendingSeek != null || resumeFrame != null) return null
+        val stream = current ?: return null
+        val encoded = stream.encoded ?: return null
+        if (stream.local || stream.eosReceived || encoded.closed || encoded.serverEos != null || encoded.localSeek != null) return null
+        val table = encoded.table ?: return null
+        val end = stream.startFrame + encoded.initialTotalFrames
+        val produced = end - encoded.remainingFrames
+        val splice = table.wholeThrough(encoded.initialSkipFrames, encoded.initialTotalFrames, stream.startFrame, encoded.receivedBytes)
+            ?.takeIf { it > produced } ?: return null
+        // Nothing reaches the old socket's streams any more, and no control may name them on the next.
+        continuity?.local = true
+        closeContinuity("socket-lost")
+        pendingPromotion = null
+        unconfirmedCloses.clear()
+        stream.local = true
+        encoded.remainingFrames = splice - produced
+        encoded.serverEos = PcmServerEvent.Eos(
+            stream.generation, stream.streamId, stream.role.wire, null,
+            encoded.deliveredFrames + encoded.decodedFrames + encoded.remainingFrames,
+        )
+        expectContinuity = true
+        resumeFrame = splice
+        pumpEncoded(stream)
+        return splice
+    }
+
+    /** On the next socket, opens the detached track from its splice frame; false when none waits. */
+    fun resume(): Boolean {
+        if (failed || !awaitingResume) return false
+        val stream = current ?: return false
+        open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, checkNotNull(resumeFrame))
+        return true
+    }
+
+    /**
      * Writes at most [maxFrames] frames the sink can take now, crossing prepared
      * boundaries inside one call. Returns the frames written.
      */
@@ -900,7 +958,12 @@ class NativePcmEngine(
             return false
         }
         if (next != null && continuityRing.bufferedFrames > 0) {
-            val kind = if (next.kind == StreamKind.LOOP) PcmBoundaryKind.LOOP else PcmBoundaryKind.QUEUED_NEXT
+            val kind = when (next.kind) {
+                StreamKind.LOOP -> PcmBoundaryKind.LOOP
+                // Only a resumed stream waits on the continuity role as a seek with none pending.
+                StreamKind.SEEK -> PcmBoundaryKind.SEEK
+                else -> PcmBoundaryKind.QUEUED_NEXT
+            }
             promote(kind, next.startFrame)
             return true
         }
@@ -952,7 +1015,9 @@ class NativePcmEngine(
         current = incoming
         continuity = null
         timelineFrame = incomingTimelineFrame
-        pendingPromotion = PendingPromotion(incoming.streamId)
+        pendingPromotion = PendingPromotion(incoming.streamId).apply { requestedSeekFrame = resumeSeekFrame }
+        resumeFrame = null
+        resumeSeekFrame = null
         when (kind) {
             PcmBoundaryKind.QUEUED_NEXT -> {
                 // A successor deferred behind the promoted one is prepared once the server confirms.
@@ -1065,7 +1130,7 @@ class NativePcmEngine(
 
     /** Opens, replaces or closes the continuity role so it matches the loop or queued successor. */
     private fun reconcileContinuity() {
-        if (failed) return
+        if (failed || resumeFrame != null) return
         val head = current ?: return
         val desiredKind = when {
             loop != null -> StreamKind.LOOP
@@ -1308,5 +1373,7 @@ class NativePcmEngine(
         expectContinuity = false
         pausing = false
         sounded = false
+        resumeFrame = null
+        resumeSeekFrame = null
     }
 }

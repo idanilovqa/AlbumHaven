@@ -1113,6 +1113,30 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aNetworkChangeMidTrackPlaysOnWithoutAGap() {
+        val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+        val harness = ControllerHarness(long, realTime = true, encoded = true)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
+        val sink = harness.sinks.last()
+
+        val operations = sink.operations.size
+        // Wi-Fi to mobile data: the socket drops with what was in flight, and the next one connects.
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        harness.server.reconnect()
+        harness.runUntil { sink.writtenFrames >= 20 * RATE || harness.events.any { it is NativePlaybackEvent.Error } }
+        // The output never stopped across the switch: nothing was paused or flushed.
+        assertFalse(sink.operations.drop(operations).any { it == "pause" || it == "flush" })
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED || harness.events.any { it is NativePlaybackEvent.Error } }
+
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertEquals(2, harness.connects)
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
+    }
+
+    @Test
     fun aNewDocumentReattachesToTheRunningQueueWithItsClaimAndRevision() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
         val harness = ControllerHarness(long, realTime = true)

@@ -205,6 +205,44 @@ class EncodedPcmEngineTest {
     }
 
     @Test
+    fun aLostSocketPlaysOnFromTheReceivedAudioAndTheNextSocketTakesOverWithoutAGap() {
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 60)
+        val harness = PcmHarness(long, second, encoded = true)
+        harness.engine.start(long.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 48_000 }
+
+        harness.server.disconnect()
+        val splice = checkNotNull(harness.engine.detach())
+        // Offline, the received audio keeps playing up to the splice frame and no control is sent.
+        val controls = harness.server.controls.size
+        repeat(40) { harness.step() }
+        assertEquals(null, harness.failure())
+        assertEquals(controls, harness.server.controls.size)
+        assertTrue("it played on while offline", harness.sink.writtenFrames > 48_000 + 30_000)
+
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+
+        assertEquals(null, harness.failure())
+        assertEquals(listOf(Run(3, 0, long.frames), Run(2, 0, second.frames)), harness.sink.runs())
+        assertEquals(splice, harness.sent<PcmClientControl.Open>().single { it.track == long.pcm && it.startFrame > 0 }.startFrame)
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aSocketLostBeforeAnyWholeSeekPointStopsAsBefore() {
+        val harness = PcmHarness(first, encoded = true)
+        harness.server.decoding = false
+        harness.engine.start(first.pcm)
+        harness.deliver()
+        harness.server.disconnect()
+
+        assertEquals(null, harness.engine.detach())
+    }
+
+    @Test
     fun aSeekPastTheReceivedAudioAsksTheServer() {
         val long = SyntheticTrack(tag = 3, frames = 48_000L * 300)
         val harness = PcmHarness(long, encoded = true)

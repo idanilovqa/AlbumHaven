@@ -1099,6 +1099,8 @@ class NativePlaybackController(
     private fun transportOpened() {
         transportOpen = true
         timing.socketOpen(clock(), reused = false)
+        // A stream that played on through the lost socket hands over to one opened here.
+        if (loaded && engine?.resume() == true) return
         if (!wantPlay) return
         if (loaded) startWhenReady() else startEngineAt(index, heldPositionMs)
     }
@@ -1108,6 +1110,11 @@ class NativePlaybackController(
         transportOpen = false
         lastCloseCode = code
         if (loaded) {
+            // A network change ends the socket mid-track: the received audio plays on while it reconnects.
+            if (wantPlay && code !in REFUSED_CLOSE_CODES && engine?.detach() != null) {
+                ensureTransport()
+                return
+            }
             engine?.onTransportClosed(code)
         } else if (wantPlay && state != NativePlaybackState.PLAYING) {
             wantPlay = false

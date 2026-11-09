@@ -59,6 +59,21 @@ fun SeekTable.lookup(
     return LocalSeekWindow(prefixBytes, offsets[entry], kept - samples[entry], initialTotal - offsetInStream)
 }
 
+/**
+ * The track frame up to which [receivedBytes] decode whole, a full seek stride short of the last
+ * received seek point so the decoder's output surely passes it; null when no such frame lies inside
+ * the stream. A stream that lost its server plays on to here and a new stream takes over at it.
+ */
+fun SeekTable.wholeThrough(initialSkip: Long, initialTotal: Long, streamStart: Long, receivedBytes: Long): Long? {
+    var last = -1
+    for (index in offsets.indices) if (offsets[index] <= receivedBytes) last = index else break
+    val spare = last - 1
+    if (spare < 0) return null
+    val kept = samples[spare] - initialSkip
+    if (kept <= 0) return null
+    return streamStart + minOf(kept, initialTotal)
+}
+
 /** The index of the first sample above [value], as Python's `bisect_right`. */
 private fun SeekTable.upperBound(value: Long): Int {
     var low = 0

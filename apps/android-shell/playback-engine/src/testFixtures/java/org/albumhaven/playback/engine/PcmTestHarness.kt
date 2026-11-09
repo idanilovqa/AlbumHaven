@@ -205,6 +205,18 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
 
     fun decodeAll() = streams.values.toList().forEach(::drain)
 
+    /** The socket drops: what was in flight is lost and a new socket starts with no streams. */
+    fun disconnect() {
+        outbox.clear()
+        streams.clear()
+        completed.clear()
+        accepting = false
+    }
+
+    fun reconnect() {
+        accepting = true
+    }
+
     fun streamPosition(id: Long): Long? = streams[id]?.position
 
     private fun open(json: JSONObject, generation: Long, id: Long) {

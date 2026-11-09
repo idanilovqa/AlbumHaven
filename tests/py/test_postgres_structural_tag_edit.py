@@ -3544,7 +3544,7 @@ def test_selected_postgres_year_compensation_restores_exact_release_date(monkeyp
     monkeypatch.setattr(
         routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
     )
     monkeypatch.setattr(
         routes,
@@ -3585,7 +3585,7 @@ def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
     monkeypatch.setattr(
         routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
     )
     monkeypatch.setattr(
         routes,

@@ -4734,7 +4734,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
     monkeypatch.setattr(
         asgi_routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
     )
     monkeypatch.setattr(
         asgi_routes,

@@ -40,12 +40,15 @@ def restore_media_tag_values(
 ) -> None:
     """Write previous tag values back; the writer reads them back and raises on a mismatch.
 
-    A file that a watcher or player holds for a moment fails with an OS error,
-    so that restore is retried before it counts as failed.
+    A restore that reports no change, or not every field, is not a rollback. A file
+    that a watcher or player holds for a moment fails with an OS error, so that
+    restore is retried before it counts as failed.
     """
     for attempt in range(_RESTORE_ATTEMPTS):
         try:
-            apply_repairs_worker(path, previous_values)
+            _path, changed, changed_fields = apply_repairs_worker(path, previous_values)
+            if not changed or set(changed_fields) != set(previous_values):
+                raise RuntimeError(f"{path}: compensation did not verify every requested field")
             return
         except Exception as exc:
             transient = isinstance(exc, OSError) or isinstance(exc.__cause__, OSError)

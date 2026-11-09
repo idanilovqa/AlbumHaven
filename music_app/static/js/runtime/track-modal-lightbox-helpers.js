@@ -560,6 +560,12 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
 }
 
 function cancelTrackModalAlbumDetailsPrewarms() {
+  // Unregister aborted loads now: their rejection can settle a task later, and an
+  // open in between must start its own request instead of joining a doomed one.
+  trackModalAlbumDetailsLoads.forEach((load, alias) => {
+    if (trackModalSpeculativeAlbumDetailsLoadControllers.has(load)) trackModalAlbumDetailsLoads.delete(alias);
+  });
+  trackModalSpeculativeAlbumDetailsLoadControllers.clear();
   trackModalSpeculativePrewarmControllers.forEach((controller) => controller.abort());
   trackModalSpeculativePrewarmControllers.clear();
 }

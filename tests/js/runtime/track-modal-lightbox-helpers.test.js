@@ -879,6 +879,24 @@ test('revision reload preserves a speculative detail request promoted to foregro
   assert.equal(await foreground, album);
 });
 
+test('an open right after prewarms are cancelled never joins the aborted request', async () => {
+  const preview = { key: 'late-abort-album', name: 'Late Abort Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const { context } = loadHelper({ initialAlbums: [preview],
+    // An abort that lands while the body is read rejects in a later task, not at once.
+    onFetchAlbumDetails: ({ requestOptions }) => (requestOptions.signal
+      ? new Promise((_resolve, reject) => requestOptions.signal.addEventListener('abort', () => {
+        setTimeout(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), 0);
+      }, { once: true }))
+      : Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  assert.equal(await foreground, album);
+  assert.equal(context.fetchCalls.length, 2, 'the open starts its own request');
+});
+
 test('opening a preview album renders all known edition tabs before details resolve', () => {
   const album = { key: 'alpha', name: 'Album', preview_only: true, tracks: [] };
   const { context } = loadHelper({ onFetchAlbumDetails: () => new Promise(() => {}) });

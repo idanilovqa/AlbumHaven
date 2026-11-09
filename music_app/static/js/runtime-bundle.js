@@ -39544,7 +39544,7 @@ const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
 // Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
-// SHA-256 of the cover file a URL names), and the exact URL a blob came from is kept as its SHA-256.
+// SHA-256 of the cover URL without its version), and the exact URL is kept as its SHA-256.
 const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
 const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
 
@@ -39716,11 +39716,11 @@ class GalleryCoverPreviewCache {
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   }
 
-  // The same key as app-copy-worker.js coverKey: one per cover file, whatever size or version.
+  // The same key as app-copy-worker.js coverKey: one per cover and size, whatever version.
   async storedCoverKey(productionUrl) {
     const url = new URL(productionUrl);
     url.searchParams.delete('v');
-    const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
+    const source = `${url.pathname}${url.search}`;
     return `${url.origin}${GALLERY_COVER_KEY_PREFIX}${await this.sha256Hex(source)}`;
   }
 

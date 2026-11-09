@@ -12,7 +12,7 @@ const versionTag = productionUrl => sha256Hex(productionUrl);
 function storeKey(productionUrl) {
   const url = new URL(productionUrl);
   url.searchParams.delete('v');
-  const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
+  const source = `${url.pathname}${url.search}`;
   return `${url.origin}/__album-haven-cover/${sha256Hex(source)}`;
 }
 

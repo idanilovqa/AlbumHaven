@@ -267,7 +267,8 @@ const COVER_URL = `/cover?path=${encodeURIComponent(COVER_PATH)}&size=480&v=proc
 const OTHER_COVER_URL = `/cover?path=${encodeURIComponent('/srv/music/Mono/cover.png')}&size=480&v=process-abc`;
 const coverKey = async (url) => {
   const parsed = new URL(url, ORIGIN);
-  const source = parsed.searchParams.get('path') ?? `${parsed.pathname}${parsed.search}`;
+  parsed.searchParams.delete('v');
+  const source = `${parsed.pathname}${parsed.search}`;
   return `/__album-haven-cover/${Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))).toString('hex')}`;
 };
 
@@ -379,15 +380,22 @@ test('a cover never seen has no bytes under its key; the page shows its placehol
   assert.equal(calls.length, 1);
 });
 
-test('covers still load from the server online, as today, and any size of a cover fills its key', async () => {
-  const { calls, handle } = setup({ respond: libraryServer({ coverBytes: 9 }) });
+test('covers still load from the server online, as today, and each size keeps its own key', async () => {
+  const { calls, handle } = setup({
+    respond: request => (new URL(request.url).pathname === '/'
+      ? libraryPage()
+      : coverResponse(new URL(request.url).searchParams.get('size') === '960' ? 12 : 9)),
+  });
   await handle(navigation('/'));
   await handle(resource(COVER_URL.replace('size=480', 'size=960')));
   await handle(resource(COVER_URL));
+  await handle(resource(COVER_URL));
 
-  assert.equal(calls.filter(request => request.url.includes('/cover?')).length, 2);
-  const kept = await handle(resource(await coverKey(COVER_URL)));
-  assert.equal((await kept.arrayBuffer()).byteLength, 9);
+  assert.equal(calls.filter(request => request.url.includes('/cover?')).length, 3);
+  assert.equal((await (await handle(resource(await coverKey(COVER_URL)))).arrayBuffer()).byteLength, 9);
+  assert.equal((await (await handle(resource(await coverKey(COVER_URL.replace('size=480', 'size=960'))))).arrayBuffer()).byteLength, 12);
+  // A new version of the same cover replaces its bytes under the same key.
+  assert.equal(await coverKey(COVER_URL), await coverKey(COVER_URL.replace('v=process-abc', 'v=process-new')));
 });
 
 test('the cover cache holds at most its byte budget, least recently seen first out', async () => {

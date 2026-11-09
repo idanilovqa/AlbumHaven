@@ -10,7 +10,7 @@
 //
 // No file path is stored on the device. The server addresses local covers by path
 // (`/cover?path=…`), so a kept page has every `cover_path` and `music_dir` emptied and every cover
-// URL replaced by an opaque key, the SHA-256 of the cover file it names; cover bytes seen online
+// URL replaced by an opaque key, the SHA-256 of that URL without its version; cover bytes seen online
 // are kept under the same key, least recently seen out first past 200 MB.
 (function appCopyWorker(root) {
   'use strict';
@@ -58,12 +58,12 @@
       await Promise.all(names.map(name => caches.delete(name)));
     }
 
-    // One key per cover file, whatever size or version a page asks for; the gallery's own cover
-    // cache (runtime/gallery-cover-preview-cache.js storedCoverKey) uses the same key.
+    // One key per cover and size, whatever version a page asks for; the gallery's own cover cache
+    // (runtime/gallery-cover-preview-cache.js storedCoverKey) uses the same key.
     async function coverKey(requested) {
       const url = new URL(requested);
       url.searchParams.delete('v');
-      const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
+      const source = `${url.pathname}${url.search}`;
       const digest = await subtle.digest('SHA-256', new TextEncoder().encode(source));
       const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
       return new URL(`${COVER_KEY_PREFIX}${hex}`, origin).href;

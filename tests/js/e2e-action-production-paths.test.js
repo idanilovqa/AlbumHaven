@@ -116,7 +116,7 @@ test('cover cache diagnostics inspect the opaque production key and exact stored
 
   const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
 
-  const opaqueKey = require('node:crypto').createHash('sha256').update('album-cover').digest('hex');
+  const opaqueKey = require('node:crypto').createHash('sha256').update('/cover?path=album-cover&size=480').digest('hex');
   assert.deepEqual(matchedKeys, [`http://127.0.0.1:4173/__album-haven-cover/${opaqueKey}`]);
   assert.equal(state.cached, true);
   assert.equal(state.cachedStatus, 200);

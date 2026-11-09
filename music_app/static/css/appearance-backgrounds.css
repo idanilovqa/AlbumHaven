@@ -332,7 +332,8 @@ html .cover-lookup-drawer {
   --appearance-control-selected: color-mix(in srgb, var(--appearance-ink, var(--text, #eeeeee)) 45%, var(--appearance-control, var(--panel, #171717)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-control-selected); }
-:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-control-selected); outline-offset: 1px; }
+/* Radios take no hover outline; their option label shows the hand cursor (.ui-radio-option). */
+:root input[type='checkbox']:not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-control-selected); outline-offset: 1px; }
 :root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
 :root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.ui-input-action *):not(.gallery-info-button):focus-visible {
   outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent))));

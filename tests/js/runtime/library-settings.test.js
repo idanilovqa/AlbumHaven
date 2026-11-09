@@ -783,6 +783,8 @@ test('Library Data Corrections sits above Album ratings, defaults to Display onl
   assert.match(markup, /<p>Corrects text metadata across your whole library\.<\/p>/);
   assert.match(markup, /value="display_only" data-library-metadata-corrections="display_only"\s+checked[^>]*><span>Display only<\/span>/);
   assert.match(markup, /value="write_tags" data-library-metadata-corrections="write_tags"\s+ ><span>Write in tags<\/span>/);
+  // The shared radio component owns the hand cursor; radios themselves show no hover outline.
+  assert.equal((markup.match(/<label class="appearance-option ui-radio-option">/g) || []).length, 2);
   const radio = { disabled: false, getAttribute: () => 'write_tags', closest: selector => (selector.includes('data-library-metadata-corrections') ? radio : null) };
   assert.equal(context.handleLibrarySettingsClick({ target: radio, preventDefault() {} }), true);
   assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).metadata_corrections, 'write_tags');

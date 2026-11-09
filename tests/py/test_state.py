@@ -5679,3 +5679,37 @@ def test_scan_leaves_a_root_unobserved_when_its_walk_finds_far_fewer_files(monke
     assert set(publication_state.get("scan_incomplete_root_ids", set())) == withdrawn
     assert [fields["root_id"] for _action, fields in events] == sorted(withdrawn)
     assert all("path" not in fields for _action, fields in events)
+
+
+@pytest.mark.parametrize(
+    ("root_exists", "missed_file_exists", "withdrawn"),
+    [
+        pytest.param(True, False, False, id="files-really-removed"),
+        pytest.param(True, True, True, id="walk-missed-existing-files"),
+        pytest.param(False, False, True, id="root-unreachable"),
+    ],
+)
+def test_a_sharp_drop_publishes_only_when_the_missed_files_are_really_gone(
+    monkeypatch, tmp_path, root_exists, missed_file_exists, withdrawn,
+):
+    root = tmp_path / "library"
+    if root_exists:
+        root.mkdir()
+    published_paths = [str(root / f"{index:03}.flac") for index in range(100)]
+    if missed_file_exists:
+        (root / "030.flac").write_bytes(b"")
+    monkeypatch.setattr(
+        state_module, "select_scan_cache_adapter",
+        lambda _cfg: SimpleNamespace(
+            count_published_files_by_root=lambda: {"n-root": 100},
+            sample_published_files=lambda root_id, limit: (str(root), published_paths[-limit:]),
+        ),
+    )
+    monkeypatch.setattr(state_module, "log_app_event", lambda *_args, **_fields: None)
+    publication_state = {"observed_library_root_ids": {"n-root"}}
+    # The walk reports the first 30 files; the other 70 are missing from it.
+    file_cache = {path: {"library_root_id": "n-root"} for path in published_paths[:30]}
+
+    state_module._withdraw_shrunken_roots({}, None, publication_state, file_cache)
+
+    assert ("n-root" not in publication_state["observed_library_root_ids"]) is withdrawn

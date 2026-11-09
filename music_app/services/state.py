@@ -1208,6 +1208,26 @@ def _shrunken_root_ids(published: dict[str, int], discovered: dict[str, int]) ->
     }
 
 
+_SHRUNKEN_ROOT_SAMPLE_SIZE = 200
+_SHRUNKEN_ROOT_PROBE_LIMIT = 20
+
+
+def _walk_missed_existing_files(adapter, root_id: str, file_cache) -> bool:
+    """Whether a partial walk is proven incomplete rather than a real removal.
+
+    True when the root folder cannot be reached, when a sampled published file the walk
+    did not report still exists, or when the sample holds no unreported file to check.
+    """
+    sample = getattr(adapter, "sample_published_files", None)
+    if sample is None:
+        return True
+    root_path, paths = sample(root_id, _SHRUNKEN_ROOT_SAMPLE_SIZE)
+    if not root_path or not os.path.isdir(root_path):
+        return True
+    unreported = [path for path in paths if path and path not in file_cache][:_SHRUNKEN_ROOT_PROBE_LIMIT]
+    return not unreported or any(os.path.exists(path) for path in unreported)
+
+
 def _withdraw_shrunken_roots(cfg, logger, publication_state, file_cache) -> None:
     observed_root_ids = publication_state.get("observed_library_root_ids")
     if not isinstance(observed_root_ids, set) or not observed_root_ids:
@@ -1224,7 +1244,10 @@ def _withdraw_shrunken_roots(cfg, logger, publication_state, file_cache) -> None
     for entry in file_cache.values():
         root_id = str(entry.get("library_root_id") or "")
         discovered[root_id] = discovered.get(root_id, 0) + 1
-    shrunken = _shrunken_root_ids(published, discovered)
+    shrunken = {
+        root_id for root_id in _shrunken_root_ids(published, discovered)
+        if not discovered.get(root_id) or _walk_missed_existing_files(adapter, root_id, file_cache)
+    }
     if not shrunken:
         return
     observed_root_ids.difference_update(shrunken)

@@ -332,6 +332,26 @@ class PostgresScanCacheAdapter:
             if payload.get("root_id")
         }
 
+    def sample_published_files(self, root_id: str, limit: int) -> tuple[str, list[str]]:
+        """The root's folder and a random sample of its active published track files."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                """
+                select roots.root_path, files.private_path
+                from library.local_track_files files
+                join library.library_roots roots on roots.id = files.library_root_id
+                where files.scan_cache_stale is false
+                  and coalesce(nullif(roots.metadata ->> 'root_id', ''),
+                               files.metadata ->> 'library_root_id') = %(root_id)s
+                order by random()
+                limit %(limit)s
+                """,
+                {"root_id": root_id, "limit": limit},
+            ).fetchall()
+        payloads = [_row_mapping(row) for row in rows]
+        root_path = str(payloads[0].get("root_path") or "") if payloads else ""
+        return root_path, [str(payload.get("private_path") or "") for payload in payloads]
+
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         try:
             return self.load_snapshot_strict(cache_path, root_identity)

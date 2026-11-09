@@ -183,6 +183,9 @@ class Updater(
     private var committed = false
     private var cancelInstallTimeout: (() -> Unit)? = null
 
+    /** Set by a download the user asked to install: the verified update installs with no second press. */
+    private var installWhenReady: ((done: () -> Unit) -> Unit)? = null
+
     var state: UpdateState = restore()
         private set(value) {
             if (value !is UpdateState.Installing) clearInstallTimeout()
@@ -257,8 +260,11 @@ class Updater(
         }
     }
 
-    /** Starts the explicit download of an available update, or retries a failed one. */
-    fun download(): Boolean {
+    /**
+     * Starts the explicit download of an available update, or retries a failed one. With [thenInstall]
+     * the verified update goes straight on to [install] with it, so one press updates the app.
+     */
+    fun download(thenInstall: ((done: () -> Unit) -> Unit)? = null): Boolean {
         val manifest = when (val current = state) {
             is UpdateState.Available -> current.manifest
             is UpdateState.Failed -> current.manifest ?: return false
@@ -266,6 +272,7 @@ class Updater(
         }
         ports.discardFiles()
         store.stagedManifest = null
+        installWhenReady = thenInstall
         state = UpdateState.Downloading(manifest, 0)
         ports.download(
             manifest,
@@ -301,6 +308,10 @@ class Updater(
             }
             store.stagedManifest = manifest.raw
             state = UpdateState.Ready(manifest)
+            installWhenReady?.let { prepare ->
+                installWhenReady = null
+                install(prepare)
+            }
         }
     }
 
@@ -438,6 +449,7 @@ class Updater(
 
     /** [reason] is a [Rejection] or [AccessFailure] wire name. */
     private fun fail(error: UpdateError, reason: String?, manifest: UpdateManifest) {
+        installWhenReady = null
         ports.cancelDownload()
         ports.discardFiles()
         store.stagedManifest = null

@@ -171,7 +171,15 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             if (!recovery.choosingSandbox && webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
         }
         if (origin != null) siteOrigin = origin
-        val startUrl = origin?.let { page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), it) }
+        // A saved page wins; after an in-app update, the page Update was pressed on.
+        val updatePage = preferences.takeUpdatePage()
+        val startUrl = origin?.let {
+            if (savedInstanceState != null || updatePage == null) {
+                page.restore(savedInstanceState?.getString(STATE_ORIGIN), savedInstanceState?.getString(STATE_URL), it)
+            } else {
+                page.restore(it, updatePage, it)
+            }
+        }
         Log.i(TAG, "create saved_state=${savedInstanceState != null} saved_page=${page.url != null} has_origin=${origin != null}")
         logProcessExitReasons()
         // The page loads while the playback service binds; the bridge answers it once bound.
@@ -309,13 +317,15 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private inner class ShellUpdatePort(private val updater: Updater) : UpdatePort {
         override val state get() = updater.state
         override fun check(webProtocols: IntRange) = updater.check(webProtocols)
-        override fun download() = updater.download()
+        override fun download() = updater.download(thenInstall = ::prepareForPackageReplacement)
         override fun install() = updater.install(::prepareForPackageReplacement)
     }
 
     /** Sessions are flushed and playback is stopped, checkpointed and released before the package is replaced. */
     private fun prepareForPackageReplacement(done: () -> Unit) {
         CookieManager.getInstance().flush()
+        // The updated app opens on this page.
+        page.url?.let(preferences::keepUpdatePage)
         playback?.prepareForPackageReplacement(done) ?: done()
     }
 

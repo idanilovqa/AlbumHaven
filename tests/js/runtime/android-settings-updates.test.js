@@ -127,10 +127,10 @@ const STATES = [
   [update({ checkedAt: 1_800_000_000_000 }), 'Check for update', null, 'check'],
   [update({ state: 'checking' }), 'Checking…', null, null],
   [update({ state: 'upToDate', checkedAt: 1_800_000_000_000 }), 'No updates available', null, 'check'],
-  [update({ state: 'available', ...ready }), 'Update available', 'Download update', 'download'],
+  [update({ state: 'available', ...ready }), 'Update available', 'Download and install', 'download'],
   [update({ state: 'downloading', progress: 42, ...ready }), 'Downloading 42%', null, null],
   [update({ state: 'verifying', ...ready }), 'Verifying update…', null, null],
-  [update({ state: 'ready', ...ready }), 'Update', null, 'install'],
+  [update({ state: 'ready', ...ready }), 'Install update', null, 'install'],
   [update({ state: 'installing', ...ready }), 'Installing…', null, 'install'],
   [update({ state: 'authorization', ...ready }), 'Open install settings', null, 'install'],
   // Every failed check, download or install reads the same, whatever the shell's error and reason.
@@ -291,7 +291,7 @@ test('a refused command keeps the current state for the next event', async () =>
   press(api, row);
   await new Promise(setImmediate);
   assert.equal(api.androidSettings.update.state, 'available');
-  assert.deepEqual(shown(row), { hidden: false, label: 'Update available', detail: 'Download update', busy: false, action: 'download' });
+  assert.deepEqual(shown(row), { hidden: false, label: 'Update available', detail: 'Download and install', busy: false, action: 'download' });
 });
 
 test('a busy row ignores a press', async () => {
@@ -311,7 +311,7 @@ test('updates.state events change the same row in place, through download and ve
   bridge.event('updates.state', { ...downloading(100), state: 'verifying' });
   assert.equal(shown(row).label, 'Verifying update…');
   bridge.event('updates.state', { ...downloading(100), state: 'ready' });
-  assert.deepEqual(shown(row), { hidden: false, label: 'Update', detail: null, busy: false, action: 'install' });
+  assert.deepEqual(shown(row), { hidden: false, label: 'Install update', detail: null, busy: false, action: 'install' });
   bridge.event('updates.state', { nonsense: true });
   assert.equal(api.androidSettings.update.state, 'ready');
 });

@@ -25,7 +25,20 @@ class ShellPreferences(context: Context) : SandboxSlots {
         return slot
     }
 
+    /** The page Update was pressed on, kept across the package replacement. */
+    fun keepUpdatePage(url: String) = preferences.edit(commit = true) { putString(KEY_UPDATE_PAGE, url) }
+
+    val hasUpdatePage: Boolean get() = preferences.contains(KEY_UPDATE_PAGE)
+
+    /** One-shot: the updated app's first launch opens it. */
+    fun takeUpdatePage(): String? {
+        val url = preferences.getString(KEY_UPDATE_PAGE, null) ?: return null
+        preferences.edit { remove(KEY_UPDATE_PAGE) }
+        return url
+    }
+
     private companion object {
+        const val KEY_UPDATE_PAGE = "update_page"
         const val KEY_SLOT = "selected_sandbox_slot"
         const val KEY_CONNECTED = "connected_sandbox_slot"
     }

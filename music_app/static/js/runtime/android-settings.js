@@ -22,10 +22,11 @@ function androidUpdateMenuView() {
   switch (update.state) {
     case 'checking': return ['Checking…', null];
     case 'upToDate': return ['No updates available', 'check'];
-    case 'available': return ['Update available', 'download', 'Download update'];
+    // One press downloads, verifies and installs it.
+    case 'available': return ['Update available', 'download', 'Download and install'];
     case 'downloading': return [`Downloading ${update.progress}%`, null];
     case 'verifying': return ['Verifying update…', null];
-    case 'ready': return ['Update', 'install'];
+    case 'ready': return ['Install update', 'install'];
     // Pressing it again shows a confirmation left unanswered; an approved install keeps installing.
     case 'installing': return ['Installing…', 'install'];
     case 'authorization': return ['Open install settings', 'install'];
@@ -192,8 +193,8 @@ async function selectAndroidSandbox(slot) {
 }
 
 function handleAndroidSettingsClick(event) {
-  // The menu closes on a press (account-menu.js) and rejects a busy row; the row stays busy until
-  // the shell answers, so reopening the menu cannot send the command twice.
+  // The menu stays open on this row (account-menu.js) and rejects it while busy; the row stays busy
+  // until the shell answers, so the command cannot be sent twice.
   const updateAction = event.target.closest?.('[data-android-update-action]');
   if (updateAction) {
     event.preventDefault();

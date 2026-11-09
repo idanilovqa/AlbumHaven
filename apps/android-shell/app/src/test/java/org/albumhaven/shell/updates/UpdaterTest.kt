@@ -316,6 +316,34 @@ class UpdaterTest {
     }
 
     @Test
+    fun `one press downloads, verifies and installs the update`() {
+        val updater = available()
+        var prepared: (() -> Unit)? = null
+        assertTrue(updater.download { done -> prepared = done })
+        ports.downloadDone!!(DownloadResult.Completed)
+        ports.verifiedApk = true
+        ports.inspectDone!!(inspection())
+        assertEquals(UpdateState.Installing(manifest()), updater.state)
+        ports.stageDone!!(StageResult.Staged(9))
+        prepared!!()
+        assertEquals(listOf(9), ports.committed)
+    }
+
+    @Test
+    fun `a failed one-press update does not install the next download by itself`() {
+        val updater = available()
+        var prepares = 0
+        updater.download { prepares++ }
+        ports.downloadDone!!(DownloadResult.Failed)
+        assertTrue(updater.download())
+        ports.downloadDone!!(DownloadResult.Completed)
+        ports.verifiedApk = true
+        ports.inspectDone!!(inspection())
+        assertEquals(UpdateState.Ready(manifest()), updater.state)
+        assertEquals(0, prepares)
+    }
+
+    @Test
     fun `playback is shut down before the session is committed`() {
         val updater = ready()
         val order = mutableListOf<String>()

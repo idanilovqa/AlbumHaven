@@ -34,6 +34,7 @@ interface BridgeHost {
 interface UpdatePort {
     val state: UpdateState
     fun check(webProtocols: IntRange): Boolean
+    /** Downloads the available update and, once it is verified, installs it. */
     fun download(): Boolean
     fun install(): Boolean
 }

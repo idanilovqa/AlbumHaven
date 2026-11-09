@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="recovery_logo_description">Album Haven</string>
+    <string name="update_channel_name">App updates</string>
+    <string name="update_done_title">Album Haven updated</string>
+    <string name="update_done_message">Tap to open the new version.</string>
     <string name="recovery_loading_title">Loading Album Haven…</string>
     <string name="recovery_loading_detail">Connecting to %1$s</string>
     <string name="recovery_loading_progress">Connecting to Album Haven</string>

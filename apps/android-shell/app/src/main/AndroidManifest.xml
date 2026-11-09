@@ -62,5 +62,14 @@
         <receiver
             android:name=".updates.UpdateInstallReceiver"
             android:exported="false" />
+
+        <!-- After an in-app update, offers to open the new version on the page Update was pressed on. -->
+        <receiver
+            android:name=".updates.UpdatedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

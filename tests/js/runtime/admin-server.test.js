@@ -133,9 +133,9 @@ test('mode choice controls the server-path field and save payload', async () => 
   ui.custom.checked = true;
   await ui.custom.listeners.get('change')();
   assert.equal(ui.pathInput.disabled, false);
-  assert.equal(ui.pathInput.value, '');
-  assert.equal(ui.pathInput.placeholder, 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews');
-  assert.equal(ui.save.disabled, true);
+  // Owner (11-09, UI-8): the proposed folder is the field's value, so Save is ready at once.
+  assert.equal(ui.pathInput.value, 'C:\\Users\\Owner\\Documents\\Album Haven\\Generated Previews');
+  assert.equal(ui.save.disabled, false);
 
   ui.custom.checked = false;
   ui.albumFolders.checked = true;

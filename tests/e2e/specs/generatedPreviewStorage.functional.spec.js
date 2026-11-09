@@ -112,6 +112,19 @@ async function selectStorage(page, { mode, root = '' }) {
   await adminServer.mode(mode).check({ timeout: 10_000 });
   if (mode === 'custom') {
     await expect(adminServer.path).toBeEnabled({ timeout: 10_000 });
+    if (current.mode !== 'custom') {
+      // Owner (11-09, UI-8): the proposed folder is the field's value, not a hint.
+      await expect(adminServer.path).toHaveValue(current.suggested_path);
+      await expect(adminServer.save).toBeEnabled();
+    }
+    // Owner (11-09, UI-7): the folder icon opens the server's own folders.
+    await expect(adminServer.browse).toBeEnabled();
+    await adminServer.browse.click({ timeout: 10_000 });
+    const chooser = page.getByRole('dialog', { name: 'Choose server folder' });
+    await expect(chooser).toBeVisible();
+    await expect(chooser.locator('[data-folder-path]').first()).toBeVisible();
+    await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(chooser).toBeHidden();
     await adminServer.path.fill(root, { timeout: 10_000 });
   }
   // Owner (11-09): the move is confirmed in the app's own dialog; a browser confirm() fails the test.

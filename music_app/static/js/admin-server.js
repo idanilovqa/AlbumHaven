@@ -76,8 +76,9 @@
       save.disabled = locked || !changed || (special && !path);
     };
     const syncPathControl = () => {
+      // Owner (11-09, UI-8): the proposed folder is the field's value, ready to save or edit.
       if (selectedMode() === 'album_folders') pathInput.value = '';
-      pathInput.placeholder = String(state?.suggested_path || '');
+      else if (!pathInput.value.trim()) pathInput.value = String(state?.suggested_path || '');
       syncControls();
     };
 

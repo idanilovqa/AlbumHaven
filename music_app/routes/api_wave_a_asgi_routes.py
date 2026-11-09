@@ -565,11 +565,10 @@ async def library_settings_read(request: Request) -> JSONResponse:
 
 @router.get("/library-settings/browse")
 async def library_settings_browse(request: Request, path: str = "") -> JSONResponse:
-    from music_app.services.policy_asgi import allowed_actions_for_request
+    from music_app.services.policy_asgi import can_browse_server_folders
     await root_request_scope(request)
     config = _app_config(request)
-    actions = allowed_actions_for_request(request, ("library.filesystem.browse", "library.paths.read")).as_payload()
-    if config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted" or not all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read")):
+    if not can_browse_server_folders(request):
         from fastapi import HTTPException
         raise HTTPException(403, "Directory browsing is unavailable")
     return JSONResponse({"ok": True, **await run_in_threadpool(bounded_directories, config, path)})

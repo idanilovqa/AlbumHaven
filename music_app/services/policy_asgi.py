@@ -158,6 +158,20 @@ def _deployment_mode(request: Request) -> str:
     return str(config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") or "self_hosted")
 
 
+def can_browse_server_folders(request: Request) -> bool:
+    """Folder browsing discloses server paths, so only a deployment configured literally as self-hosted allows it."""
+    config = getattr(request.app.state, "config", {})
+    if not isinstance(config, Mapping) or config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted":
+        return False
+    # Without configured browse bases there is nothing the picker may show (UI-7).
+    if not config.get("ALBUM_HAVEN_LIBRARY_BROWSE_BASES"):
+        return False
+    actions = allowed_actions_for_request(
+        request, ("library.filesystem.browse", "library.paths.read"),
+    ).as_payload()
+    return all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read"))
+
+
 def _request_origin(request: Request) -> RequestOrigin:
     peer = request.client.host if request.client else "unknown"
     config = getattr(request.app.state, "auth_policy_config", {})

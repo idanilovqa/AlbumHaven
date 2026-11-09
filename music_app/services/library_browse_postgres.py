@@ -8130,7 +8130,7 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     """The MusicBrainz artist the album certainly belongs to, for album details."""
     if not album_id:
         return None
-    row = _row_mapping(connection.execute(
+    rows = connection.execute(
         """
         select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
                identity.tag_differs
@@ -8141,7 +8141,8 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
         where album.id = %(album_id)s
         """,
         {"album_id": album_id},
-    ).fetchone())
+    ).fetchall()
+    row = _row_mapping(rows[0]) if rows else {}
     if not row.get("mbid"):
         return None
     return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",

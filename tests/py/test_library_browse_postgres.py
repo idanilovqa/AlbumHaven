@@ -241,6 +241,7 @@ class _EmptyMissingAlbumConnection:
             "transaction_timestamp() as observed_at", "select distinct albums.id as album_id",
             "requested_identities as materialized",
             "candidate_containers as materialized",
+            "library.local_album_artist_identities",
         )):
             return _InventoryCursor()
         assert _is_missing_album_query(sql)

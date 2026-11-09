@@ -606,11 +606,11 @@
 "title": "Unknown Album",
 "tracks": [
 {
-"duration_seconds": 149.0,
+"duration_seconds": 132.0,
 "title": "In The Sky"
 },
 {
-"duration_seconds": 132.0,
+"duration_seconds": 149.0,
 "title": "In The Sky"
 }
 ],
@@ -3098,9 +3098,9 @@
 },
 "owner_mbid": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
 "recorded": {
-"classification": "found",
+"classification": "per_album",
 "credit_name": null,
-"mbid": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae"
+"mbid": null
 }
 },
 {
@@ -3728,6 +3728,275 @@
 "relations": [],
 "sort-name": "YARuGA",
 "tags": [],
+"type": "Group"
+},
+"/artist/4d7928cd-7ed2-4282-8c29-c0c9f966f1bd?fmt=json&inc=aliases%2Bgenres%2Btags%2Burl-rels": {
+"aliases": [
+{
+"locale": null,
+"name": "Alic Cooper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alica Cooper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alice Cooper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alice Cooper Band",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alice Cooper Group",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alice Coper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alice Copper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Alis Cooper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Cooper",
+"primary": null
+},
+{
+"locale": null,
+"name": "Earwigs",
+"primary": null
+},
+{
+"locale": null,
+"name": "Nazz",
+"primary": null
+},
+{
+"locale": null,
+"name": "Spiders",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Earwig",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Earwigs",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Naz",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Nazz",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Spider",
+"primary": null
+},
+{
+"locale": null,
+"name": "The Spiders",
+"primary": null
+},
+{
+"locale": null,
+"name": "アリス・クーパー",
+"primary": null
+}
+],
+"country": "US",
+"disambiguation": "the band, active 1964–1974/5",
+"genres": [
+{
+"count": 1,
+"disambiguation": "",
+"id": "93244085-20e5-4f16-9067-1d19143b3810",
+"name": "classic rock"
+},
+{
+"count": 5,
+"disambiguation": "",
+"id": "b7bb11c3-bb83-4047-af65-1e8aba89039f",
+"name": "garage rock"
+},
+{
+"count": 1,
+"disambiguation": "",
+"id": "818134e3-9392-4624-a13c-c4b19c54bccd",
+"name": "glam metal"
+},
+{
+"count": 9,
+"disambiguation": "",
+"id": "54d89e62-5bfb-42bc-a321-9230e6fdcd75",
+"name": "glam rock"
+},
+{
+"count": 15,
+"disambiguation": "",
+"id": "51cb9f91-e6a2-41bf-891f-e78e3f1e52ab",
+"name": "hard rock"
+},
+{
+"count": 2,
+"disambiguation": "",
+"id": "a6719055-99c4-47eb-beaa-71081f2376f9",
+"name": "heavy metal"
+},
+{
+"count": 1,
+"disambiguation": "",
+"id": "56407f9d-3398-4bf3-bbbd-ea372fa5adeb",
+"name": "new wave"
+},
+{
+"count": 1,
+"disambiguation": "",
+"id": "797e2e85-5ffd-495c-a757-8b4079052f0e",
+"name": "pop rock"
+},
+{
+"count": 4,
+"disambiguation": "",
+"id": "146ef761-5ad9-48b4-b0b3-483104f7da48",
+"name": "psychedelic rock"
+},
+{
+"count": 6,
+"disambiguation": "",
+"id": "0e3fc579-2d24-4f20-9dae-736e1ec78798",
+"name": "rock"
+}
+],
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd",
+"name": "Alice Cooper",
+"relations": [
+{
+"attribute-ids": {},
+"attribute-values": {},
+"attributes": [],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"source-credit": "The Spiders",
+"target-credit": "",
+"target-type": "url",
+"type": "discogs",
+"type-id": "04a5b104-a4c2-4bac-99a1-7b837c37d9e4",
+"url": {
+"id": "9292e899-3547-4cfb-a1a4-f180e02b8f82",
+"resource": "https://www.discogs.com/artist/278563"
+}
+},
+{
+"attribute-ids": {},
+"attribute-values": {},
+"attributes": [],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"source-credit": "The Nazz",
+"target-credit": "",
+"target-type": "url",
+"type": "discogs",
+"type-id": "04a5b104-a4c2-4bac-99a1-7b837c37d9e4",
+"url": {
+"id": "0ee972cc-2ea1-4647-ab09-2f46ed53677d",
+"resource": "https://www.discogs.com/artist/463651"
+}
+},
+{
+"attribute-ids": {},
+"attribute-values": {},
+"attributes": [],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"source-credit": "Alice Cooper",
+"target-credit": "",
+"target-type": "url",
+"type": "discogs",
+"type-id": "04a5b104-a4c2-4bac-99a1-7b837c37d9e4",
+"url": {
+"id": "56a113b4-b885-447a-93ee-8a0a116d659b",
+"resource": "https://www.discogs.com/artist/48433"
+}
+}
+],
+"sort-name": "Alice Cooper",
+"tags": [
+{
+"count": 1,
+"name": "classic rock"
+},
+{
+"count": 5,
+"name": "garage rock"
+},
+{
+"count": 1,
+"name": "glam metal"
+},
+{
+"count": 9,
+"name": "glam rock"
+},
+{
+"count": 15,
+"name": "hard rock"
+},
+{
+"count": 2,
+"name": "heavy metal"
+},
+{
+"count": 1,
+"name": "new wave"
+},
+{
+"count": 1,
+"name": "pop rock"
+},
+{
+"count": 4,
+"name": "psychedelic rock"
+},
+{
+"count": 6,
+"name": "rock"
+},
+{
+"count": 1,
+"name": "shock rock"
+}
+],
 "type": "Group"
 },
 "/artist/5f0ac37c-0c9a-4354-a721-4d7616390b4e?fmt=json&inc=aliases%2Bgenres%2Btags%2Burl-rels": {
@@ -18572,6 +18841,705 @@
 "count": 0,
 "releases": []
 },
+"/release/?query=release%3A%22Along+Came+A+Spider%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 12,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008-07-29",
+"id": "0da0c201-6011-4bfe-aaa8-fa75782d59a7",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008-07-25",
+"id": "6d453015-c1f3-30df-864b-ed7416ba2d29",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012-12-04",
+"id": "874bf930-29ec-4825-8327-cb1b3713f6f9",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2020-01-31",
+"id": "8d097259-a127-4196-a2a3-5f764d802229",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008",
+"id": "15beac79-1944-4f0e-8a32-b9f22862674e",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "226a509d-a1e7-473d-8a98-0fce907307eb",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-02-01",
+"id": "0b68a5f2-53b6-437f-a6fe-19fc069cb6f8",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008",
+"id": "9f825ab9-047d-4525-9a21-876793bafdfc",
+"release-group": {
+"id": "78c87424-9d7e-40a5-8b33-f521fbd256fb",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 4
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008-07-29",
+"id": "c8a0601b-cf77-45a6-bdf0-ee8f03582654",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008",
+"id": "7487299b-e611-4123-bc20-509464ae041d",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012",
+"id": "4f07e899-1514-499b-99a8-16a9b9e8b5d2",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2010",
+"id": "fcd94556-967d-45c6-b8c4-5107f8d1c26a",
+"release-group": {
+"id": "57a01829-f966-37e0-876a-422191e461f1",
+"title": "Along Came a Spider"
+},
+"title": "Along Came a Spider",
+"track-count": 14
+}
+]
+},
+"/release/?query=release%3A%22Brutal+Planet%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 13,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000-06-06",
+"id": "a2178988-0fdc-4fc2-b650-57b7bd4f277c",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000",
+"id": "22fefb51-7f03-360a-9027-bc6cadf1c7d2",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "",
+"id": "dc5338f9-e600-4191-8c26-86e145e304ee",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2007-09-25",
+"id": "838bd75e-ce62-4d23-acc7-e1d51e4abfa3",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2022-01-26",
+"id": "bf16a064-6a71-458f-9142-82f62346a23d",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2018-07-06",
+"id": "7e8bf1ca-35b0-487c-8ebd-33e47d05f7ca",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 22
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2001",
+"id": "24b84b68-dc6f-4aa8-9a0d-0f4e0e466b35",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 17
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000-06-06",
+"id": "f65493d5-60c2-4667-b5fa-63b59ec76874",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2010",
+"id": "a759d238-005b-4549-89c4-944b683f1401",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000",
+"id": "574bf8f5-cc0f-4b8c-bde2-7fcac789bdb4",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000",
+"id": "7451fc56-f5f2-446e-9b99-e6a5e9599461",
+"release-group": {
+"id": "9b7864a1-ab68-4b12-b7a2-14a43e14ecb8",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2000-06-28",
+"id": "39d2707b-4e38-42a8-aa23-f3d0a8cc0519",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "cb93e128-7465-4bec-9f57-26d17f34a1e4",
+"release-group": {
+"id": "c280ab3d-96e0-30fc-a5ce-47c96e4fee98",
+"title": "Brutal Planet"
+},
+"title": "Brutal Planet",
+"track-count": 11
+}
+]
+},
+"/release/?query=release%3A%22Dirty+Diamonds%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 11,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2005-07-04",
+"id": "a86adbde-1216-4c94-81e8-8fb45cfad0bd",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2019-11-08",
+"id": "64ff831a-ce6a-4927-926c-29701062ab80",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2020-09-18",
+"id": "590a2a76-1d34-4f95-b476-db07b99b7567",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2005-08-02",
+"id": "f41a610f-89ac-4694-a77f-2c586a275a78",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2010",
+"id": "7298c4ff-047a-4471-8890-a9eee873e169",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2005",
+"id": "21b6a8e5-1a79-4a21-8244-5a6fab3dc774",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2019-04-13",
+"id": "d4aeae11-e278-4c8a-a45b-f716d9b659c5",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2005-08-02",
+"id": "6eb585f4-b80c-452a-9bc5-149ad3b90e78",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2005-07-04",
+"id": "28940f0e-9d71-4ac3-8ae7-3b6048abdffb",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2013",
+"id": "e17ff4cb-4b75-44f0-a65c-04bffa5218e8",
+"release-group": {
+"id": "500870c0-f0e7-3c13-9882-2ff51684e0c6",
+"title": "Dirty Diamonds"
+},
+"title": "Dirty Diamonds",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008",
+"id": "8f5e9dc8-ab93-40df-b01f-589c9b298b5d",
+"release-group": {
+"id": "888a0abf-6e91-414e-bb0d-1b9b8d8d5295",
+"title": "Dirty Diamonds / The Eyes of Alice Cooper"
+},
+"title": "Dirty Diamonds / The Eyes of Alice Cooper",
+"track-count": 26
+}
+]
+},
 "/release/?query=release%3A%22Edge+Of+Night%22+AND+artistname%3A%22Shadowland%22&fmt=json&limit=25": {
 "count": 1,
 "releases": [
@@ -18645,6 +19613,429 @@
 },
 "title": "Genesis",
 "track-count": 13
+}
+]
+},
+"/release/?query=release%3A%22Hey+Stoopid%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 22,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "442ccafc-aad9-4bb1-bf59-87f8f6ea1614",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991-06-27",
+"id": "d9780511-e2c0-4c2e-a6d9-337b241cd586",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 13
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "1943d5f7-f7ec-46a5-b5bc-a947895eb857",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 2
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "53cd99c8-b92c-4723-a153-57753628050c",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 2
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2013-09-23",
+"id": "ebc3fde9-d08d-458e-b9b3-9f94da82a977",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 15
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "",
+"id": "f55dfcf8-ab42-48f7-aef7-a76a298fe537",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 2
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "3f5de166-4199-4582-b7a4-4695a9d289ea",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "5f6424ec-c0dd-430e-97f8-3d3b24d00420",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 2
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991-07-02",
+"id": "521aafcc-1f8a-46ce-8ad3-cb80ac73e25f",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "30143e13-452e-371f-9598-80995fc4e647",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "4542aff8-632f-4d74-8988-0f9bb3dbf907",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "7e53a654-a062-3417-812f-5b60149761c6",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "9b8bc812-e172-47ba-b574-e51f8cfe2567",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2008-03-01",
+"id": "8805a69f-a260-4fc0-a9bc-54446cac59b2",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991-07-01",
+"id": "433acf16-152e-406e-9a8d-7c9e76a6b64d",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2014-09-03",
+"id": "58fcb58d-ea47-4e25-b396-7a6c9ee65560",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 15
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "cb0626b1-ed01-4e19-8a67-02659bfb8b85",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": null,
+"id": "22692a87-ad63-494b-ac5f-11af7ff75213",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1991",
+"id": "f7c5d074-d0cf-4118-9aa0-6ec0d3ebda0f",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": null,
+"id": "ab46337a-691d-4fbe-a634-8f2a481cc12c",
+"release-group": {
+"id": "9ea0e0fa-564b-37da-bed2-bec1a8572f57",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 3
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2025-05-02",
+"id": "693fa396-36a7-49e9-8b6b-1c4f4d8b0366",
+"release-group": {
+"id": "b9543c2d-2482-3f09-b552-18728b124eb3",
+"title": "Hey Stoopid"
+},
+"title": "Hey Stoopid",
+"track-count": 12
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2001",
+"id": "b63dfe40-8704-4685-8719-bead6b4add48",
+"release-group": {
+"id": "d8a5ef58-bba3-4376-9f9f-76c6b498f9f0",
+"title": "Hey Stoopid / The Last Temptation"
+},
+"title": "Hey Stoopid / The Last Temptation",
+"track-count": 22
 }
 ]
 },
@@ -19067,6 +20458,776 @@
 },
 "title": "The Singing Walrus Song Collection #1",
 "track-count": 30
+}
+]
+},
+"/release/?query=release%3A%22Welcome+2+My+Nightmare%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 15,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-09-16",
+"id": "8e7f2f12-aea5-4241-a704-1a77d67689f2",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 15
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-09-12",
+"id": "54406087-b52f-47bb-a704-fce6ed130816",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 15
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "25f77963-fc62-4783-b22b-149ecc190ab9",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 17
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2020-03-11",
+"id": "eb627ef4-d675-4559-aa62-12aba22809dc",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 15
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "2608ba97-3a0d-4a16-bd97-6db2f553fb0a",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 16
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012-02-21",
+"id": "f4faab19-ca33-452f-9422-d4639c4fa124",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-09-13",
+"id": "116f03a1-25a1-4e15-a910-4138f653a657",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "fafb66a8-4abd-4fab-a2b4-5184ce3f9aba",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 18
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": null,
+"id": "a1e64c43-249c-405d-b64c-9ba40b2bbff7",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 18
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012-01-18",
+"id": "806b1e6b-5a30-4e0f-8ad2-812da8bbe976",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 18
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "cc16c882-47a5-4c08-8a9f-7cbbb2b5e505",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 18
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-09-13",
+"id": "be530bfe-0e2b-4124-9a3c-88344500474c",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 18
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": null,
+"id": "720bc454-4573-43c9-a723-287f2e6f869e",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 21
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2026-05-08",
+"id": "9f241ec4-d3a5-4d41-a188-eb5af4ac5d7f",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Welcome 2 My Nightmare",
+"track-count": 21
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011",
+"id": "e8d5362b-a39f-4223-aa89-dd34cce99b0e",
+"release-group": {
+"id": "37839a36-66b9-4a6d-908c-ff7ca0a0c9bd",
+"title": "Welcome 2 My Nightmare"
+},
+"title": "Classic Rock Presents Welcome 2 My Nightmare",
+"track-count": 16
+}
+]
+},
+"/release/?query=release%3A%22Welcome+To+My+Nightmare%22+AND+artistname%3A%22Alice+Cooper%22&fmt=json&limit=25": {
+"count": 32,
+"releases": [
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1990-10-25",
+"id": "287a0f2c-53da-4fac-b254-f004e350fe82",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1975-03-11",
+"id": "81686d96-d0f6-33b4-b0a7-f9ae2ffb65f1",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2001",
+"id": "65e263b5-b9fc-418c-9d0a-f48e2d2b77a4",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 22
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012-01-18",
+"id": "f03fb12d-d8a5-4538-8d11-5339220e7d8c",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2002",
+"id": "85d0f13a-cef6-4ee0-9863-60bf82347562",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2024-04-19",
+"id": "2c210c82-7d1a-4168-a2cb-9fffb8489284",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 22
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1994",
+"id": "dc94a2b2-8a70-4e68-8e1c-de76ce7d8aa2",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2011-10-01",
+"id": "b48ee1d9-3efe-479d-98d4-0892a3ab5fb4",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1975",
+"id": "c737d8d3-d0b0-4db2-b414-3b91130de9af",
+"release-group": {
+"id": "b2e5f1d1-7bb7-4505-86e2-b2befdc33eda",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 2
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1993",
+"id": "44be5016-0e7d-436c-985d-668aebea0b4a",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1975-03",
+"id": "8a1484ce-ea12-4842-b733-1d91f40922ff",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1987",
+"id": "d9cb356f-ad8b-3384-bd4f-dcdcb8323b7c",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "",
+"id": "1cf90aaa-2e50-4a0c-bc69-0c16b7b01c02",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2024-01-05",
+"id": "75c3ed16-6d38-4fc9-bd6b-e6c6347c7a0c",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1982",
+"id": "c2d20cff-badd-4f15-bb73-74855b41f95e",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2021-05-24",
+"id": "68334117-a31a-4b85-b3b6-700552cdb7d0",
+"release-group": {
+"id": "a83d98a6-0422-4145-a77c-1d3cbe3ace5a",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 1
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1975-08-01",
+"id": "5809f272-da60-4ff2-befc-11ae00238152",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1987-12-04",
+"id": "7dd37506-7115-44fb-82c6-461817844aa4",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1988",
+"id": "c3bd0f57-17eb-460b-8b6e-9b4f69acdae9",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2001-06-26",
+"id": "9512dbdd-2ac9-4031-8136-f7426d597a35",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 22
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2012-07-10",
+"id": "e81db23d-5f6c-47ad-9a37-cccf6003c47b",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2002-03-19",
+"id": "6e24448d-df7d-4d75-be9e-b1721c3209ea",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 14
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "1990-05-25",
+"id": "b342837f-f20e-42a1-9a33-80ea98f81fcb",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "2013-12-03",
+"id": "ce18af71-6b24-45dd-9fe5-3730535c84fc",
+"release-group": {
+"id": "65b17904-31c4-303e-a6a2-7c2e750945c7",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare",
+"track-count": 11
+},
+{
+"artist-credit": [
+{
+"artist": {
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper"
+},
+"name": "Alice Cooper"
+}
+],
+"date": "",
+"id": "f996298e-9b2e-4fb3-a88a-03b6fafa2d07",
+"release-group": {
+"id": "b2e5f1d1-7bb7-4505-86e2-b2befdc33eda",
+"title": "Welcome to My Nightmare"
+},
+"title": "Welcome to My Nightmare / Only Women",
+"track-count": 2
 }
 ]
 },

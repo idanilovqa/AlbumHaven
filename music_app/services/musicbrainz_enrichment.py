@@ -441,7 +441,7 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             _settle_shared_albums(scored, albums, mirror)
             decision = decide(scored, local_name)
         if decision["classification"] in {"ambiguous", "per_album"} and _compare_capped_albums(
-                decision["candidates"][:2], albums, mirror, keep=max(1, reserve)):
+                decision["candidates"][:2], albums, mirror, keep=max(len(decision["candidates"]) + 1, reserve)):
             # Tracklists were capped: albums compared on the year alone may still be
             # certain, for a split artist's identities as for the margin.
             decision = decide(scored, local_name)
@@ -550,10 +550,9 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         artists = []
         for owner in decision["candidates"]:
             lookup = mirror.call("lookup_artist", owner["mbid"], accept=("matched",))
-            if lookup is None:
-                return {"classification": "provider_unavailable",
-                        "safe_error": "The MusicBrainz request budget ran out before the albums' artists were confirmed."}
-            artists.append(dict(lookup["artist"]))
+            # With the budget spent, the name the albums' credits gave is enough to list it.
+            artists.append(dict(lookup["artist"]) if lookup else {
+                key: owner.get(key) for key in ("mbid", "canonical_name", "disambiguation", "artist_type")})
         return {"classification": "per_album", "artists": artists, "confidence": 1,
                 "album_identities": _album_identities(decision["certain"], albums),
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}

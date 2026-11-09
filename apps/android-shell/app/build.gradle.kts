@@ -109,8 +109,12 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.okhttp.mockwebserver)
 
+    // The fake streaming server and the synthetic signal the owner-reported device cases play.
+    androidTestImplementation(testFixtures(project(":playback-engine")))
+    androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.androidx.test.rules)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }

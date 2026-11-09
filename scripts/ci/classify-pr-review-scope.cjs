@@ -52,14 +52,17 @@ function isDocumentationPath(filePath) {
   return lower.startsWith('docs/') || (!normalized.includes('/') && lower.endsWith('.md'));
 }
 
-// The Android shell, its future native modules, and the contract fixtures its Kotlin tests share
-// with the browser. Markdown there is documentation and never needs a Gradle or emulator run.
+// The Android shell, its future native modules, the contract fixtures its Kotlin tests share
+// with the browser, and the tests only the Android jobs run. Markdown there is documentation and
+// never needs a Gradle or emulator run.
 const ANDROID_PATH_PATTERNS = Object.freeze([
   'apps/android-shell/**',
   'packages/native/**',
   'tests/fixtures/android-bridge/**',
   'tests/fixtures/listen-sessions-v1.json',
   'tests/fixtures/playback-protocol-v1.json',
+  'scripts/ci/android-update-e2e.py',
+  'tests/py/test_playback_decoder_conformance.py',
 ]);
 // A release bump (scripts/prepare_release.py always writes version.py) names the version stable
 // promotion builds and the changelog it requires; promotion accepts only a head whose own run

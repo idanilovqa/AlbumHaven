@@ -72,6 +72,23 @@ jobs:
         working-directory: apps/android-shell
         run: ./gradlew --no-daemon --console=plain testStableDebugUnitTest testSandboxDebugUnitTest :playback-engine:testDebugUnitTest
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # The app's MP3 and FLAC decoders, built for this Linux host from the APK's C sources, against
+      # the server's reference decode. It needs make, a C compiler, ffmpeg and node; Windows skips it.
+      - name: Android decoder conformance gate
+        env:
+          CI: "1"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pytest tests/py/test_playback_decoder_conformance.py -q
+
       # The browser side of the shared contract fixtures runs in test_js (npm run test:js:all).
       # The repository is public, so APKs are never uploaded (owner decision,
       # November 4, 2026); only their checksums are kept as build evidence.
@@ -96,6 +113,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Named for its first emulator: android-promote and its tests look the job up by this name.
   test_android_instrumentation:
     name: Android Instrumentation (API 29)
     needs:
@@ -105,7 +123,7 @@ jobs:
       - codex_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.run_android == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -151,12 +169,47 @@ jobs:
           working-directory: apps/android-shell
           script: ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
 
+      # The next emulator's run replaces these.
+      - name: Keep the API 29 reports
+        if: ${{ always() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/reports/api-29"
+          cp -r apps/android-shell/app/build/reports/androidTests apps/android-shell/app/build/outputs/androidTest-results "$RUNNER_TEMP/reports/api-29/" 2>/dev/null || true
+
+      # The in-app update replaces this debug build with the same build at a higher version code.
+      - name: Build the in-app update's installed and offered APKs
+        working-directory: apps/android-shell
+        run: |
+          mkdir -p "$RUNNER_TEMP/update-e2e"
+          ./gradlew --no-daemon --console=plain assembleStableDebug -PalbumHavenDevOrigin=http://127.0.0.1:18765
+          cp app/build/outputs/apk/stable/debug/app-stable-debug.apk "$RUNNER_TEMP/update-e2e/installed.apk"
+          ./gradlew --no-daemon --console=plain assembleStableDebug -PalbumHavenDevOrigin=http://127.0.0.1:18765 -PalbumHavenVersionCode=2 -PalbumHavenVersionName=0.10.1
+          cp app/build/outputs/apk/stable/debug/app-stable-debug.apk "$RUNNER_TEMP/update-e2e/offered.apk"
+
+      # The API 29 image's WebView predates the bridge, so the cases that need the page run here:
+      # leaving for system Settings, and the in-app update with Android's real package replacement.
+      - name: WebView and in-app update cases on an API 36 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: apps/android-shell
+          # A slow software-rendered System UI must not cover the app with "isn't responding".
+          script: |
+            adb shell settings put global hide_error_dialogs 1
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.LeaveForSettingsTest
+            python3 ../../scripts/ci/android-update-e2e.py --serial emulator-5554 --old "$RUNNER_TEMP/update-e2e/installed.apk" --new "$RUNNER_TEMP/update-e2e/offered.apk"
+
       - name: Upload instrumentation reports
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: android-instrumentation-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/reports/api-29/
             apps/android-shell/app/build/reports/androidTests/
             apps/android-shell/app/build/outputs/androidTest-results/
           if-no-files-found: ignore

@@ -393,12 +393,13 @@ for (const forceFull of [false, true]) {
   });
 }
 
-test('Android paths cover the shell, native modules, shared contract fixtures and release bumps only', () => {
+test('Android paths cover the shell, native modules, shared contract fixtures, Android-only tests and release bumps only', () => {
   for (const filePath of [
     'version.py', 'apps/android-shell/app/build.gradle.kts', 'apps/android-shell/gradle/libs.versions.toml',
     'apps\\android-shell\\app\\src\\main\\java\\Shell.kt', 'packages/native/native-media/android/Engine.kt',
     'tests/fixtures/android-bridge/v1.json', 'tests/fixtures/android-bridge/stable-shells.json',
     'tests/fixtures/listen-sessions-v1.json', 'tests/fixtures/playback-protocol-v1.json',
+    'scripts/ci/android-update-e2e.py', 'tests/py/test_playback_decoder_conformance.py',
   ]) assert.equal(isAndroidPath(filePath), true, filePath);
   for (const filePath of [
     'apps/android-shell/README.md', 'docs/android-update-artifacts.md', 'music_app/static/js/runtime/android-bridge-client.js',

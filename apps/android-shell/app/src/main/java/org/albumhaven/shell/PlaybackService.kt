@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.session.CacheBitmapLoader
@@ -144,9 +145,6 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        // A paused player keeps the service in the foreground, so Android never freezes the process
-        // while System UI shows its card; it ended a frozen one at the card's next query.
-        setForegroundServiceTimeoutMs(PAUSED_FOREGROUND_MS)
         verifyDecoders()
         origin = host.initialOrigin()
         val preferences = getSharedPreferences(RESTORE_PREFERENCES, MODE_PRIVATE)
@@ -183,6 +181,19 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
+
+    /**
+     * Media3 leaves the foreground at most ten minutes after a pause; Android then froze the process
+     * while System UI showed its card, and ended it at the card's next query. A paused, loaded queue
+     * counts as engaged, so Media3 keeps the service in the foreground with its own media
+     * notification for as long as the card stands; a stop, an end, an error or a cleared queue
+     * leaves it as before. Media3 acts on the flag this method passes on, not on the one
+     * `onUpdateNotification` receives.
+     */
+    override fun onUpdateNotificationAsync(session: MediaSession, startInForegroundRequired: Boolean): ListenableFuture<Void> =
+        super.onUpdateNotificationAsync(session, startInForegroundRequired || keepsPausedCard(session.player))
+
+    private fun keepsPausedCard(player: Player) = player.playbackState == Player.STATE_READY && !player.playWhenReady
 
     /**
      * Android starts the service for a media key or Bluetooth play with `startForegroundService`.
@@ -580,8 +591,6 @@ class PlaybackService : MediaLibraryService() {
         /** Well inside Android's ten-second start deadline, and after Media3 has handled the key. */
         private const val FOREGROUND_START_CHECK_MS = 3_000L
 
-        /** The owner keeps a paused card for a quick resume; a day stands in for always (Media3 schedules the end). */
-        private const val PAUSED_FOREGROUND_MS = 24L * 60 * 60 * 1000
         private const val UNSERVED_START_NOTIFICATION_ID = 1002
 
         /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */

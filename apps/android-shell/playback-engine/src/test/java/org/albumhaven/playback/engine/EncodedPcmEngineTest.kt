@@ -232,6 +232,94 @@ class EncodedPcmEngineTest {
     }
 
     @Test
+    fun aLostSocketAfterTheWholeSongArrivedPlaysItToTheEndAndTheNextSocketPreparesWhatFollows() {
+        // Two seconds of the fake codec is far less than the minutes the engine keeps ahead.
+        val whole = SyntheticTrack(tag = 4, frames = 96_000)
+        val harness = PcmHarness(whole, second, encoded = true)
+        harness.engine.start(whole.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 24_000 }
+
+        harness.server.disconnect()
+        assertEquals(whole.frames, harness.engine.detach())
+        playsOnAloneToItsEnd(harness, whole)
+
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+
+        assertEquals(null, harness.failure())
+        assertEquals(listOf(Run(4, 0, whole.frames), Run(2, 0, second.frames)), harness.sink.runs())
+        // A successor prepared on the lost socket is prepared again on the next; the song itself is not.
+        assertEquals("ref-4", opened(harness).single { it != "ref-2" })
+        assertEquals("ref-2", opened(harness).last())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aLostSocketWhileACachedSongPlaysPlaysItToTheEndAndTheNextSocketPreparesWhatFollows() {
+        val whole = SyntheticTrack(tag = 4, frames = 96_000)
+        val cache = MemoryTrackCache()
+        PcmHarness(whole, encoded = true, cache = cache).apply {
+            engine.start(whole.pcm)
+            playToEnd()
+        }
+        val harness = PcmHarness(whole, second, encoded = true, cache = cache)
+        harness.engine.start(whole.pcm)
+        harness.engine.setQueuedNext(second.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 24_000 }
+
+        harness.server.disconnect()
+        assertEquals(whole.frames, harness.engine.detach())
+        playsOnAloneToItsEnd(harness, whole)
+
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+
+        assertEquals(null, harness.failure())
+        assertEquals(listOf(Run(4, 0, whole.frames), Run(2, 0, second.frames)), harness.sink.runs())
+        assertEquals("only the successor came from the server", listOf("ref-2"), opened(harness))
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
+    fun aSeekPastWhatIsOnTheDeviceWhileOfflineRunsOnTheNextSocket() {
+        val whole = SyntheticTrack(tag = 4, frames = 96_000)
+        val harness = PcmHarness(whole, encoded = true)
+        harness.engine.start(whole.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 24_000 }
+        harness.server.disconnect()
+        assertEquals(whole.frames, harness.engine.detach())
+
+        val controls = harness.server.controls.size
+        harness.engine.seek(70_000)
+        repeat(5) { harness.step() }
+        assertEquals("nothing was sent on the lost socket", controls, harness.server.controls.size)
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+
+        assertEquals(null, harness.failure())
+        assertEquals(70_000L, harness.sent<PcmClientControl.Open>().last().startFrame)
+        assertEquals(Run(4, 70_000, whole.frames - 70_000), harness.sink.runs().last())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    /** With no socket, [track] plays to its last frame and then waits for its successor; no control is sent. */
+    private fun playsOnAloneToItsEnd(harness: PcmHarness, track: SyntheticTrack) {
+        val controls = harness.server.controls.size
+        val underruns = harness.emitted<PcmEngineEvent.Underrun>().size
+        harness.playUntil { harness.emitted<PcmEngineEvent.Underrun>().size > underruns }
+        assertEquals(null, harness.failure())
+        assertEquals(controls, harness.server.controls.size)
+        assertEquals(listOf(Run(track.tag, 0, track.frames)), harness.sink.runs())
+        assertEquals(emptyList<PcmEngineEvent.Ended>(), harness.emitted<PcmEngineEvent.Ended>())
+    }
+
+    private fun opened(harness: PcmHarness) = harness.sent<PcmClientControl.Open>().map { it.track.playbackRef }
+
+    @Test
     fun aSocketLostBeforeAnyWholeSeekPointStopsAsBefore() {
         val harness = PcmHarness(first, encoded = true)
         harness.server.decoding = false

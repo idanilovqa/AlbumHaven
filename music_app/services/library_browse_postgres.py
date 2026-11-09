@@ -122,7 +122,7 @@ _UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
 # serves both the bounded first page and searches before the list completes.
 _PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
 _PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
-# Migration 0118's stored last complete list: read once per process when no
+# Migration 0117's stored last complete list: read once per process when no
 # list is in memory; databases without the table skip it.
 _PROBLEMATIC_SNAPSHOT_CHECKED: set[tuple[str, str]] = set()
 _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES: set[str] = set()

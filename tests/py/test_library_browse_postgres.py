@@ -15182,7 +15182,7 @@ def test_problematic_files_invalidation_drops_the_last_list_and_rewarms(monkeypa
 
 def test_problematic_files_cold_first_page_answers_from_the_stored_last_list(monkeypatch):
     """A restarted server has no list in memory; the cold candidate pass took
-    ~5 s on the owner's library. Migration 0118's snapshot answers at once."""
+    ~5 s on the owner's library. Migration 0117's snapshot answers at once."""
     from music_app.services import library_browse_postgres as browse
 
     database_url = "postgresql://album_haven_app@localhost/cold-snapshot"

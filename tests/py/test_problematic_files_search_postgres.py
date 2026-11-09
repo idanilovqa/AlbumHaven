@@ -67,7 +67,7 @@ def test_search_finds_a_problematic_album_beyond_the_first_page():
 
 
 def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
-    """Migration 0118 keeps the last complete list; a cold process reads it
+    """Migration 0117 keeps the last complete list; a cold process reads it
     instead of the ~5 s whole-library candidate pass."""
     import json
 

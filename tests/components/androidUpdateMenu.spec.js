@@ -8,7 +8,8 @@ const { renderActionButton } = require('../../music_app/static/js/button-compone
 const root = path.resolve(__dirname, '../..');
 const template = fs.readFileSync(path.join(root, 'music_app/templates/partials/account-menu.html'), 'utf8');
 const settingsItem = template.match(/<button class="account-menu-item"[^>]*data-account-menu-settings[\s\S]*?<\/button>/)[0];
-const updateItem = template.match(/<button class="account-menu-item"[^>]*data-android-update-menu-item[\s\S]*?<\/button>/)[0];
+// The Update row with the separator lines around it.
+const updateItem = template.match(/<div class="account-menu-separator"[\s\S]*?data-android-update-menu-item[\s\S]*?<div class="account-menu-separator"[^>]*><\/div>/)[0];
 const handshake = JSON.parse(fs.readFileSync(path.join(root, 'tests/fixtures/android-bridge/v1.json'), 'utf8'))
   .handshakeResponse.payload;
 const ready = { versionName: '0.10.0-sandbox.763af93', versionCode: 2 };
@@ -69,9 +70,22 @@ test('the Update row shows only inside the Android app', async ({ page }) => {
   await expect(menu.getByRole('menuitem')).toHaveCount(1);
   await expect(menu.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
   await expect(row).toBeHidden();
+  await expect(menu.locator('.account-menu-separator:visible')).toHaveCount(0);
 });
 
-test('Check for update runs from the menu, which closes and shows the new state when it reopens', async ({ page }) => {
+test('separator lines set the Update row apart inside the app', async ({ page }) => {
+  const { trigger, menu, row } = await mountMenu(page);
+  await trigger.click();
+  await expect(row).toBeVisible();
+  const lines = menu.locator('.account-menu-separator');
+  await expect(lines).toHaveCount(2);
+  const [above, below, item] = [await lines.nth(0).boundingBox(), await lines.nth(1).boundingBox(), await row.boundingBox()];
+  expect(above.height).toBe(1);
+  expect(above.y + above.height).toBeLessThanOrEqual(item.y);
+  expect(below.y).toBeGreaterThanOrEqual(item.y + item.height);
+});
+
+test('Check for update runs from the menu, which stays open to show the result', async ({ page }) => {
   const { trigger, menu } = await mountMenu(page);
   await trigger.focus();
   await page.keyboard.press('ArrowDown');
@@ -81,11 +95,9 @@ test('Check for update runs from the menu, which closes and shows the new state 
   await expect(check).toBeFocused();
   await page.evaluate((updates) => { window.answer = { ok: true, updates }; }, { ...handshake.updates, state: 'checking' });
   await page.keyboard.press('Enter');
-  await expect(menu).toBeHidden();
-  await expect(trigger).toBeFocused();
+  await expect(menu).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.sent)).toEqual(['bridge.handshake', 'updates.check']);
 
-  await trigger.click();
   const checking = menu.getByRole('menuitem', { name: 'Checking…' });
   await expect(checking).toHaveAttribute('aria-disabled', 'true');
   await expect(checking).toHaveCSS('cursor', 'not-allowed');
@@ -94,14 +106,16 @@ test('Check for update runs from the menu, which closes and shows the new state 
   await checking.click({ force: true });
   await expect(menu).toBeVisible();
   expect(await page.evaluate(() => window.sent)).toEqual(['bridge.handshake', 'updates.check']);
+  await page.evaluate((payload) => window.shellEvent('updates.state', payload), { ...handshake.updates, state: 'upToDate' });
+  await expect(menu.getByRole('menuitem', { name: 'No updates available' })).toBeVisible();
 });
 
-test('an open menu follows the download in place, then offers Update', async ({ page }) => {
+test('an open menu follows the download in place, then offers Install update', async ({ page }) => {
   const { trigger, menu, row } = await mountMenu(page, { updates: { ...handshake.updates, state: 'available', ...ready } });
   await trigger.click();
-  const available = menu.getByRole('menuitem', { name: 'Update available Download update' });
+  const available = menu.getByRole('menuitem', { name: 'Update available Download and install' });
   await expect(available).toBeVisible();
-  await expect(available.locator('[data-android-update-detail]')).toHaveText('Download update');
+  await expect(available.locator('[data-android-update-detail]')).toHaveText('Download and install');
   const box = await available.boundingBox();
   const menuBox = await menu.boundingBox();
   expect(box.x + box.width).toBeLessThanOrEqual(menuBox.x + menuBox.width);
@@ -119,10 +133,10 @@ test('an open menu follows the download in place, then offers Update', async ({ 
   await event({ state: 'verifying', progress: 100 });
   await expect(row).toHaveAccessibleName('Verifying update…');
   await event({ state: 'ready' });
-  const install = menu.getByRole('menuitem', { name: 'Update', exact: true });
+  const install = menu.getByRole('menuitem', { name: 'Install update', exact: true });
   await expect(install).not.toHaveAttribute('aria-disabled', /.*/);
   await install.click();
-  await expect(menu).toBeHidden();
+  await expect(menu).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.sent.at(-1))).toBe('updates.install');
 });
 
@@ -135,7 +149,7 @@ for (const [state, name, command] of [
     const { trigger, menu } = await mountMenu(page, { updates: { ...handshake.updates, ...state } });
     await trigger.click();
     await menu.getByRole('menuitem', { name, exact: true }).click();
-    await expect(menu).toBeHidden();
+    await expect(menu).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.sent.at(-1))).toBe(command);
   });
 }

@@ -9849,14 +9849,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/androidUpdateMenu.spec.js",
-    "case": "Check for update runs from the menu, which closes and shows the new state when it reopens",
+    "case": "separator lines set the Update row apart inside the app",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "Check for update runs from the menu, which closes and shows the new state when it reopens"
+      "separator lines set the Update row apart inside the app"
     ],
     "ownerApproval": "approved"
   },
@@ -9864,14 +9864,29 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/androidUpdateMenu.spec.js",
-    "case": "an open menu follows the download in place, then offers Update",
+    "case": "Check for update runs from the menu, which stays open to show the result",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "an open menu follows the download in place, then offers Update"
+      "Check for update runs from the menu, which stays open to show the result"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "an open menu follows the download in place, then offers Install update",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an open menu follows the download in place, then offers Install update"
     ],
     "ownerApproval": "approved"
   },

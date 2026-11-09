@@ -33,6 +33,10 @@
   cursor: pointer;
 }
 .account-menu-item[hidden] { display: none; }
+/* Lines that set the Android Update row apart; hidden with it outside the app. */
+.account-menu-separator { height: 1px; margin: 4px 12px; background: #2a3e54; }
+.account-menu-separator:has(+ [data-android-update-menu-item][hidden]),
+[data-android-update-menu-item][hidden] + .account-menu-separator { display: none; }
 /* A row that names its action below its label. */
 .account-menu-item__text { display: grid; gap: 2px; padding-block: 6px; }
 .account-menu-item__detail { font-size: 12px; opacity: .8; }

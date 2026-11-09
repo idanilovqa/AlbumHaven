@@ -5,10 +5,6 @@
     <button class="account-menu-item" type="button" role="menuitem" tabindex="-1" data-account-menu-settings data-open-utilities="1">
       <span class="account-menu-icon" aria-hidden="true">&#9881;</span><span>Settings</span>
     </button>
-    {# The Android app's update action; android-settings.js shows it once the app reports its update state. #}
-    <button class="account-menu-item" type="button" role="menuitem" tabindex="-1" data-android-update-menu-item data-account-menu-keep-open hidden>
-      <span class="account-menu-icon" aria-hidden="true">&#8635;</span><span class="account-menu-item__text"><span data-android-update-label></span><span class="account-menu-item__detail" data-android-update-detail hidden></span></span>
-    </button>
     {% if account_menu_allowed_actions.allows('accounts.read') %}
     <a class="account-menu-item" href="/admin/members" role="menuitem" tabindex="-1" data-account-menu-admin>
       <span class="account-menu-icon" aria-hidden="true">&#9817;</span><span>Admin Panel</span>
@@ -18,6 +14,13 @@
       <span class="account-menu-icon" aria-hidden="true">◇</span><span>My Account</span>
     </a>
     {% endif %}
+    <div class="account-menu-separator" role="separator"></div>
+    {# The Android app's update action; android-settings.js shows it once the app reports its update state.
+       Separator lines set it apart, just above Sign Out; they show only with it. #}
+    <button class="account-menu-item" type="button" role="menuitem" tabindex="-1" data-android-update-menu-item data-account-menu-keep-open hidden>
+      <span class="account-menu-icon" aria-hidden="true">&#8635;</span><span class="account-menu-item__text"><span data-android-update-label></span><span class="account-menu-item__detail" data-android-update-detail hidden></span></span>
+    </button>
+    <div class="account-menu-separator" role="separator"></div>
     <form class="account-menu-form" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ account_menu_csrf_token }}">
       <button class="account-menu-item" type="submit" role="menuitem" tabindex="-1" data-account-menu-sign-out>

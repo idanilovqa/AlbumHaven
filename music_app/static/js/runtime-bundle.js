@@ -4901,6 +4901,14 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
   }
   if (view.query) return rootTotals;
+  // Counting mounted albums is exact only for a complete view that holds every chosen
+  // source; otherwise the true totals arrive with the source request.
+  const loadedSources = view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'];
+  const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
+  if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
+    && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
+    return { artistCount: null, albumCount: null };
+  }
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 3
@@ -7145,7 +7153,9 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
-    summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
+    summary.textContent = context.artistCount == null || context.albumCount == null
+      ? ''
+      : `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
     name.textContent = context.artist;
@@ -24460,7 +24470,7 @@ function buildLibraryDataCorrectionsSection(draft) {
   const disabled = librarySettingsReadOnlyClient() || actions['library.settings.manage'] !== true;
   // The app then edits tags for the user, so choosing it needs that permission.
   const writeDisabled = disabled || (actions['library.files.edit_tags'] !== true && draft.metadata_corrections !== 'write_tags');
-  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option">
+  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option ui-radio-option">
       <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
         ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${(mode.value === 'write_tags' ? writeDisabled : disabled) ? 'disabled' : ''}><span>${mode.label}</span>
     </label>`).join('');
@@ -34173,6 +34183,16 @@ function getAlbumTrackDisplayNumber(track, index) {
   return index + 1;
 }
 
+// A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".
+const ALBUM_TRACK_DISC_FOLDER_PATTERN = /(?:^|[^a-z])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?!\d)/i;
+
+// The album folder a track lives in; a "CD 2" style subfolder belongs to its parent.
+function getAlbumTrackPhysicalFolder(track) {
+  const parts = String(track?.path || '').split(/[\\/]/).slice(0, -1);
+  if (parts.length && ALBUM_TRACK_DISC_FOLDER_PATTERN.test(parts[parts.length - 1])) parts.pop();
+  return parts.join('/').toLocaleLowerCase();
+}
+
 function compareAlbumTracks(left, right) {
   const discCompare = compareAlbumTrackSortNumbers(
     getPositiveAlbumTrackSortNumber(left?.disc_number),
@@ -36399,10 +36419,12 @@ function groupAlbumTracks(tracks) {
   const hasExplicitCd1 = explicitDiscs.includes(1);
   const hasLaterExplicitDiscs = explicitDiscs.some((disc) => disc > 1);
   const inferredCd1FromMissingTags = hasLaterExplicitDiscs && !hasExplicitCd1;
-  // One CD with some tracks missing the disc tag is still one CD.
+  // One CD in one folder, some tracks missing the disc tag, is still one CD. Copies in
+  // other folders (a duplicate or another edition) are never pooled into it.
   const soleDisc = explicitDiscs.length === 1
     && explicitLabels.length === 1
     && explicitLabels[0] === `CD${explicitDiscs[0]}`
+    && new Set(safeTracks.map(getAlbumTrackPhysicalFolder)).size === 1
     ? explicitDiscs[0]
     : null;
 

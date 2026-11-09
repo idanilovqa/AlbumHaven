@@ -933,6 +933,22 @@ test('one CD with some tracks missing the disc tag shows as one track list in tr
   assert.doesNotMatch(html, /CD ?1/);
 });
 
+test('copies of an album in two folders are never pooled into one CD', () => {
+  const context = loadHelper([]);
+  const copy = (folder, disc) => [1, 2].map((number) => ({
+    path: `${folder}\\${number}.flac`, disc_number: disc, disc_number_raw: disc ? String(disc) : '', track_number: number,
+  }));
+  const tracks = [
+    ...copy('N:\\Music\\Dragonland\\2002 - Holy War', 1),
+    ...copy('C:\\Downloads\\Dragonland - Holy War (Deluxe Edition) (2014)', null),
+  ];
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 2);
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.tracks.length), [2, 2]);
+});
+
 test('Album Details ignores bonus-like album and path words when the raw disc label is ordinary', () => {
   const context = loadHelper([]);
   const grouped = context.groupAlbumTracks([

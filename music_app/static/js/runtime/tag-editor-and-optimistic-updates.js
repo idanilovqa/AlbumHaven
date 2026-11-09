@@ -39,6 +39,16 @@ function getAlbumTrackDisplayNumber(track, index) {
   return index + 1;
 }
 
+// A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".
+const ALBUM_TRACK_DISC_FOLDER_PATTERN = /(?:^|[^a-z])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?!\d)/i;
+
+// The album folder a track lives in; a "CD 2" style subfolder belongs to its parent.
+function getAlbumTrackPhysicalFolder(track) {
+  const parts = String(track?.path || '').split(/[\\/]/).slice(0, -1);
+  if (parts.length && ALBUM_TRACK_DISC_FOLDER_PATTERN.test(parts[parts.length - 1])) parts.pop();
+  return parts.join('/').toLocaleLowerCase();
+}
+
 function compareAlbumTracks(left, right) {
   const discCompare = compareAlbumTrackSortNumbers(
     getPositiveAlbumTrackSortNumber(left?.disc_number),
@@ -2265,10 +2275,12 @@ function groupAlbumTracks(tracks) {
   const hasExplicitCd1 = explicitDiscs.includes(1);
   const hasLaterExplicitDiscs = explicitDiscs.some((disc) => disc > 1);
   const inferredCd1FromMissingTags = hasLaterExplicitDiscs && !hasExplicitCd1;
-  // One CD with some tracks missing the disc tag is still one CD.
+  // One CD in one folder, some tracks missing the disc tag, is still one CD. Copies in
+  // other folders (a duplicate or another edition) are never pooled into it.
   const soleDisc = explicitDiscs.length === 1
     && explicitLabels.length === 1
     && explicitLabels[0] === `CD${explicitDiscs[0]}`
+    && new Set(safeTracks.map(getAlbumTrackPhysicalFolder)).size === 1
     ? explicitDiscs[0]
     : null;
 

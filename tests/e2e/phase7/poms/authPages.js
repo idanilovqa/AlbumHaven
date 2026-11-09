@@ -17,7 +17,13 @@ export class LoginPage {
   async signIn(username, password) {
     await this.username.fill(username);
     await this.password.fill(password);
-    await this.submit.click();
+    // The sign-in script posts in the background; its answer carries the session cookie (or the
+    // rejection), so a caller's next request never races it.
+    await Promise.all([
+      this.page.waitForResponse((response) => new URL(response.url()).pathname === '/login'
+        && response.request().method() === 'POST'),
+      this.submit.click(),
+    ]);
   }
 }
 

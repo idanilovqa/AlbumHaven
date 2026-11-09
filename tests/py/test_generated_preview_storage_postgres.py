@@ -93,6 +93,9 @@ def test_load_returns_the_singleton_storage_state():
     assert "inventory_count" in connection.calls[0][0]
     assert "inventory_bytes" in connection.calls[0][0]
     assert connection.calls[0][0].count("from app.generated_preview_inventory") == 1
+    # UI-8: the summary separates re-checked previews and previews left to be regenerated.
+    assert "as rechecked_count" in connection.calls[0][0]
+    assert "item.status = 'skipped' and item.actual_sha256 is not null" in connection.calls[0][0]
 
 
 def test_request_location_is_revision_guarded_and_records_requested_target():
@@ -305,6 +308,9 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     assert "finished_at = now()" in sql
     assert "set current_path = finished.target_path" in sql
     assert "and %(status)s <> 'failed'" in sql
+    # UI-8: a preview re-checked during the move records the checksum it moved with, and the planned bytes follow.
+    assert "sha256 = case when %(status)s = 'completed' then finished.actual_sha256" in sql
+    assert "total_bytes = total_bytes + case when %(status)s <> 'failed' then %(byte_count)s - finished.expected_bytes" in sql
     assert params["status"] == status
 
 

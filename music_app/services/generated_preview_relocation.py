@@ -11,6 +11,8 @@ import threading
 from typing import Mapping
 from uuid import uuid4
 
+from PIL import Image, UnidentifiedImageError
+
 from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
 
 
@@ -167,10 +169,11 @@ class GeneratedPreviewRelocationWorker:
                 for item in items:
                     result = _relocate_item(item, operation_id=operation_id)
                     source_to_delete = result.pop("source_to_delete", None)
+                    # The source is deleted only while it still holds exactly the bytes that were published.
                     if source_to_delete is not None and _matches(
                         source_to_delete,
-                        int(item["expected_bytes"]),
-                        str(item["expected_sha256"]),
+                        int(result["byte_count"]),
+                        str(result["sha256"]),
                     ):
                         try:
                             source_to_delete.unlink()
@@ -238,8 +241,25 @@ def _relocate_item(item: Mapping[str, object], *, operation_id: str) -> dict[str
             result["status"] = "completed"
             result["source_to_delete"] = source if source != target else None
             return result
-        if not _matches(source, expected_bytes, expected_sha256):
-            raise ValueError("Source preview is missing or does not match its inventory checksum.")
+        # Owner (11-09, UI-8): previews are regenerable, so an inventory checksum that went stale (the preview was
+        # regenerated after it was recorded) must not fail the owner's move. A valid preview moves with its current
+        # checksum, which the move records; a missing or unreadable one is left to be regenerated.
+        if _matches(source, expected_bytes, expected_sha256):
+            current = (expected_bytes, expected_sha256)
+        else:
+            current = _fingerprint(source) if _is_valid_image(source) else None
+        published = _fingerprint(target)
+        if published is not None and published != current:
+            # A copy this move published before a restart (its source already gone) is accepted as is.
+            if current is None and _is_valid_image(target):
+                result.update(status="completed", byte_count=published[0], sha256=published[1])
+                return result
+            raise ValueError("A different file already exists at the preview destination.")
+        if current is None:
+            result.update(status="skipped", byte_count=0)
+            return result
+        expected_bytes, expected_sha256 = current
+        result.update(byte_count=expected_bytes, sha256=expected_sha256)
         target.parent.mkdir(parents=True, exist_ok=True)
         if _same_volume(source, target):
             try:
@@ -288,12 +308,33 @@ def _matches(path: Path, expected_bytes: int, expected_sha256: str) -> bool:
     try:
         if not path.is_file() or path.stat().st_size != expected_bytes:
             return False
+    except OSError:
+        return False
+    return _fingerprint(path) == (expected_bytes, expected_sha256)
+
+
+def _fingerprint(path: Path) -> tuple[int, str] | None:
+    """The file's size and SHA-256, or None when it is missing or unreadable."""
+    try:
+        if not path.is_file():
+            return None
         digest = hashlib.sha256()
+        size = 0
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-        return digest.hexdigest() == expected_sha256
+                size += len(chunk)
+        return size, digest.hexdigest()
     except OSError:
+        return None
+
+
+def _is_valid_image(path: Path) -> bool:
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        return True
+    except (OSError, UnidentifiedImageError, ValueError, SyntaxError):
         return False
 
 

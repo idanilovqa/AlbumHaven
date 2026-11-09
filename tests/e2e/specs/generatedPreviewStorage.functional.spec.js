@@ -231,6 +231,25 @@ test(
         if (fs.existsSync(customRoot)) fs.rmSync(customRoot, { recursive: true });
         const started = await selectStorage(page, { mode: 'custom', root: customRoot });
         expect(['queued', 'running']).toContain(started.operation_state);
+        // Owner (11-09, UI-8): once the move has recorded its list, a preview that changes on disk (regenerated
+        // with the inventory recorder off, as on sandbox3) has a stale checksum, and one may disappear. The stale
+        // one still moves and is re-checked; the missing one is left to be regenerated. Neither fails the move.
+        await waitForStorageState(
+          page,
+          (state) => state.operation_state === 'running' && Number(state.completed_count) > 0,
+          'the preview move should be under way',
+        );
+        const notYetMoved = Object.keys(hashTree(albumCacheRoot))
+          .filter((relative) => relative.startsWith('cover_variants/') && !relative.includes('f'.repeat(40)))
+          .sort();
+        expect(notYetMoved.length).toBeGreaterThanOrEqual(3);
+        const [regeneratedRelative, staleRelative, missingRelative] = notYetMoved.slice(-3);
+        // A real preview of another size stands in for the regenerated one: a valid image with a new checksum.
+        const regenerated = fs.readFileSync(path.join(albumCacheRoot, regeneratedRelative));
+        fs.writeFileSync(path.join(albumCacheRoot, staleRelative), regenerated);
+        fs.rmSync(path.join(albumCacheRoot, missingRelative));
+        initialHashes[staleRelative] = createHash('sha256').update(regenerated).digest('hex');
+        delete initialHashes[missingRelative];
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
@@ -280,7 +299,13 @@ test(
           'custom preview relocation should complete',
         );
         expect(completed.failed_count).toBe(0);
+        expect({ rechecked: completed.rechecked_count, regenerateLater: completed.regenerate_later_count })
+          .toEqual({ rechecked: 1, regenerateLater: 1 });
         expect(hashTree(path.join(customRoot, 'v1'))).toMatchObject(initialHashes);
+        const adminServer = new AdminServerPage(page);
+        await page.goto('/admin/server');
+        await expect(adminServer.counts).toContainText(/ moved · 1 re-checked · 1 to be regenerated · 0 failed$/);
+        await expect(page.locator('[data-preview-failure]')).toBeHidden();
         expect(hashTree(albumCacheRoot)).toEqual({});
         testArtifacts.queueJsonAttachment('generated-preview-storage-relocation-performance.json', {
           galleryReady,

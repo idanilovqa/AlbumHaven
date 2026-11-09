@@ -108,8 +108,15 @@
       const inventoryCount = Number(next.inventory_count ?? next.total_count ?? 0);
       const inventoryBytes = Number(next.inventory_bytes ?? next.total_bytes ?? 0);
       const totalCount = Number(next.total_count || 0);
-      const movement = totalCount > 0 && (active || canceled || Number(next.failed_count || 0) > 0)
-        ? ` · ${Number(next.completed_count || 0)} of ${totalCount} moved · ${Number(next.failed_count || 0)} failed`
+      // UI-8 (owner, 11-09): the summary separates previews moved with a fresh checksum and previews left to be
+      // regenerated from real failures; it stays after the move finishes.
+      const regenerateLater = Number(next.regenerate_later_count || 0);
+      const rechecked = Number(next.rechecked_count || 0);
+      const movement = totalCount > 0 && String(next.operation_state || 'idle') !== 'idle'
+        ? [` · ${Number(next.completed_count || 0) - regenerateLater} of ${totalCount} moved`,
+          rechecked ? ` · ${rechecked} re-checked` : '',
+          regenerateLater ? ` · ${regenerateLater} to be regenerated` : '',
+          ` · ${Number(next.failed_count || 0)} failed`].join('')
         : '';
       counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}`;
       counts.hidden = false;

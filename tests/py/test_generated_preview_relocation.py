@@ -273,17 +273,72 @@ def test_cross_volume_copy_deletes_source_before_terminal_checkpoint(tmp_path, m
     assert repository.completed[0]["status"] == "completed"
 
 
-def test_hash_mismatch_fails_without_deleting_source_or_publishing_target(tmp_path):
-    source = tmp_path / "source.webp"
-    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
-    source.write_bytes(b"unexpected")
-    repository = FakeRepository([item(source, target, b"expected")])
+def _png(color) -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# Owner (11-09, UI-8): previews are regenerable, so a stale inventory checksum never fails the owner's move.
+def test_stale_checksum_preview_moves_with_its_current_checksum(tmp_path):
+    recorded, regenerated = _png("red"), _png("blue")
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(regenerated)
+    repository = FakeRepository([item(source, target, recorded)])
 
     run_worker(repository)
 
-    assert source.read_bytes() == b"unexpected"
+    assert target.read_bytes() == regenerated
+    assert not source.exists()
+    result = repository.completed[0]
+    assert result["status"] == "completed" and result["error"] is None
+    assert (result["byte_count"], result["sha256"]) == (len(regenerated), hashlib.sha256(regenerated).hexdigest())
+
+
+def test_missing_source_preview_is_left_to_be_regenerated(tmp_path):
+    source = tmp_path / "missing.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    repository = FakeRepository([item(source, target, _png("red"))])
+
+    run_worker(repository)
+
     assert not target.exists()
+    assert repository.completed[0]["status"] == "skipped"
+    assert repository.completed[0]["byte_count"] == 0
+    assert repository.completed[0]["error"] is None
+
+
+def test_corrupt_source_preview_is_left_to_be_regenerated_without_publishing_it(tmp_path):
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(b"not an image")
+    repository = FakeRepository([item(source, target, _png("red"))])
+
+    run_worker(repository)
+
+    assert source.read_bytes() == b"not an image"
+    assert not target.exists()
+    assert repository.completed[0]["status"] == "skipped"
+
+
+def test_a_different_file_at_the_destination_is_refused(tmp_path):
+    recorded, regenerated, other = _png("red"), _png("blue"), _png("green")
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(regenerated)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(other)
+    repository = FakeRepository([item(source, target, recorded)])
+
+    run_worker(repository)
+
+    assert source.read_bytes() == regenerated
+    assert target.read_bytes() == other
     assert repository.completed[0]["status"] == "failed"
+    assert "different file already exists" in repository.completed[0]["error"]
 
 
 def test_restart_accepts_verified_target_when_source_already_disappeared(tmp_path):

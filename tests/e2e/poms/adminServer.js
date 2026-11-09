@@ -4,6 +4,7 @@ export class AdminServerPage {
     this.heading = page.getByRole('heading', { name: 'Album previews' });
     this.form = page.getByRole('form', { name: 'Album previews' });
     this.path = page.locator('[data-preview-path]');
+    this.counts = page.locator('[data-preview-counts]');
     this.browse = page.getByRole('button', { name: 'Choose server folder', exact: true });
     this.save = page.getByRole('button', { name: 'Save', exact: true });
   }

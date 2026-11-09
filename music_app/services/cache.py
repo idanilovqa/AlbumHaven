@@ -313,6 +313,7 @@ def save_cache_to_disk_for_config(
     expected_inventory_mutation_revision: int | None = None,
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
+    unreachable_scope: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -346,6 +347,8 @@ def save_cache_to_disk_for_config(
             for root_id in observed_library_root_ids
             if str(root_id).strip()
         }
+    if unreachable_scope is not None:
+        snapshot_options["unreachable_scope"] = unreachable_scope
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,

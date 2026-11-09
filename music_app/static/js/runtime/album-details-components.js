@@ -109,19 +109,28 @@ function buildLooseTracksHeaderActionsHtml() {
   ].join('');
 }
 
+const MISSING_ALBUM_REASON_TEXT = {
+  deleted: 'The files of this album were deleted from disk.',
+  unreachable: 'The drive or network share holding this album cannot be reached. It returns on its own once the drive is reachable again.',
+};
+
 function buildMissingAlbumDetailsHtml(config = {}) {
+  const rescanButton = config.canRemove
+    ? ButtonComponent.renderButton({ label: 'Re-scan', size: 'small', attributes: { 'data-rescan-missing-album': '1', 'data-album-key': config.albumKey || '' } })
+    : '';
   const removeButton = config.canRemove
     ? ButtonComponent.renderButton({ label: 'Remove from library', variant: 'primary', size: 'small', className: 'on-page-alert__remove', attributes: { 'data-remove-missing-album': '1', 'data-album-key': config.albumKey || '' } })
     : '';
   const keepButton = ButtonComponent.renderButton({ label: 'Keep as missing', size: 'small', attributes: { 'data-close-track-modal': '1' } });
+  const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
   const message = config.canRemove
-    ? 'This album cannot be found under the current libraries. Its library entry is still saved.'
-    : 'This album cannot be found under the current libraries. Ask an owner or administrator to remove it.';
+    ? `${reason} Its library entry is still saved.`
+    : `${reason} Ask an owner or administrator to remove it.`;
   return buildOnPageAlertHtml({
     severity: 'error',
     title: 'Album details unavailable',
     message,
-    actionsHtml: `${removeButton}${keepButton}`,
+    actionsHtml: `${rescanButton}${removeButton}${keepButton}`,
   });
 }
 

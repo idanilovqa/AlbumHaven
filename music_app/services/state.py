@@ -946,6 +946,10 @@ def refresh_relation_views_for_state(
             for root_id in observed_library_root_ids
             if str(root_id).strip()
         }
+        snapshot_options["unreachable_scope"] = {
+            "root_ids": sorted(str(value) for value in target_state.get("unreachable_library_root_ids") or ()),
+            "paths": sorted(str(value) for value in target_state.get("unreachable_library_paths") or ()),
+        }
     if postgres_relation_projection:
         snapshot_options["rebuild_relation_projection"] = True
     else:
@@ -1132,8 +1136,16 @@ def scan_music_incremental(
         and normcase(str(Path(str(root.get("path") or "")).resolve(strict=False)))
         in available_paths
     }
+    unreachable_paths: set[str] = set()
+    traversal_failed_root_ids: set[str] = set()
     if publication_state is not None:
         publication_state["observed_library_root_ids"] = set(observed_roots)
+        # A configured root that cannot be reached keeps its albums, marked missing as unreachable.
+        publication_state["unreachable_library_root_ids"] = {
+            str(root.get("id") or "").strip() for root in root_definitions
+            if str(root.get("id") or "").strip() and str(root.get("id") or "").strip() not in observed_roots
+        }
+        publication_state["unreachable_library_paths"] = unreachable_paths
     counter_state = library_state.get("_file_error_history_counts")
     if not isinstance(counter_state, dict):
         counter_state = {}
@@ -1144,26 +1156,21 @@ def scan_music_incremental(
         scan_generation=int(expected_scan_generation or 0),
         counter_state=counter_state,
      history_scope=history_scope)
-    traversal_failed_root_ids: set[str] = set()
-
     def record_file_error(action: str, **fields: object) -> None:
         if action in {
             "Library directory read failed",
             "Library directory entry inspection failed",
             "Library candidate file stat failed",
         }:
-            failed_path = Path(str(fields.get("path") or "")).resolve(strict=False)
-            for root_id, root_path in observed_roots.items():
-                try:
-                    failed_path.relative_to(root_path)
-                except ValueError:
-                    continue
-                traversal_failed_root_ids.add(root_id)
-                if publication_state is not None:
-                    observed_root_ids = publication_state.get("observed_library_root_ids")
-                    if isinstance(observed_root_ids, set):
-                        observed_root_ids.discard(root_id)
-                break
+            # Files under a folder the walk could not read are unreachable, not deleted.
+            failed_path = str(fields.get("path") or "").strip()
+            if failed_path:
+                unreachable_paths.add(failed_path)
+                resolved = Path(failed_path).resolve(strict=False)
+                for root_id, root_path in observed_roots.items():
+                    if resolved == root_path or root_path in resolved.parents:
+                        traversal_failed_root_ids.add(root_id)
+                        break
         base_record_file_error(action, **fields)
 
     result = scan_library_file_cache(
@@ -1179,85 +1186,40 @@ def scan_music_incremental(
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
     )
-    if publication_state is not None and traversal_failed_root_ids:
-        observed_root_ids = publication_state.get("observed_library_root_ids")
-        if isinstance(observed_root_ids, set):
-            observed_root_ids.difference_update(traversal_failed_root_ids)
     if publication_state is not None:
-        _withdraw_shrunken_roots(cfg, logger, publication_state, result[0])
+        _mark_empty_walk_roots_unreachable(cfg, logger, publication_state, result[0], traversal_failed_root_ids)
     return result
 
 
-_SHRUNKEN_ROOT_MIN_PUBLISHED_FILES = 100
+def _mark_empty_walk_roots_unreachable(cfg, logger, publication_state, file_cache, traversal_failed_root_ids=()) -> None:
+    """A root that lists empty while it still has published files is treated as unreachable.
 
-
-def _shrunken_root_ids(published: dict[str, int], discovered: dict[str, int]) -> set[str]:
-    """Roots whose walk found none, or under half, of the files they have published.
-
-    A sleeping or flaky drive can enumerate empty without raising; treating that
-    walk as complete would mark the whole root stale (sandbox2 N:, 2026-11-05).
-    The half rule applies only to large roots so a small root's real cleanup
-    still publishes; watcher deletions publish either way.
+    A sleeping or flaky drive can enumerate empty without raising (sandbox2 N:, 2026-11-05).
+    Its albums are still marked missing, as unreachable, and return when the drive answers.
+    Roots the walk could not fully read stay pending for the next startup repair.
     """
-    return {
-        root_id for root_id, count in published.items()
-        if count > 0 and (
-            discovered.get(root_id, 0) == 0
-            or (count >= _SHRUNKEN_ROOT_MIN_PUBLISHED_FILES and discovered.get(root_id, 0) * 2 < count)
-        )
-    }
-
-
-_SHRUNKEN_ROOT_SAMPLE_SIZE = 200
-_SHRUNKEN_ROOT_PROBE_LIMIT = 20
-
-
-def _walk_missed_existing_files(adapter, root_id: str, file_cache) -> bool:
-    """Whether a partial walk is proven incomplete rather than a real removal.
-
-    True when the root folder cannot be reached, when a sampled published file the walk
-    did not report still exists, or when the sample holds no unreported file to check.
-    """
-    sample = getattr(adapter, "sample_published_files", None)
-    if sample is None:
-        return True
-    root_path, paths = sample(root_id, _SHRUNKEN_ROOT_SAMPLE_SIZE)
-    if not root_path or not os.path.isdir(root_path):
-        return True
-    unreported = [path for path in paths if path and path not in file_cache][:_SHRUNKEN_ROOT_PROBE_LIMIT]
-    return not unreported or any(os.path.exists(path) for path in unreported)
-
-
-def _withdraw_shrunken_roots(cfg, logger, publication_state, file_cache) -> None:
     observed_root_ids = publication_state.get("observed_library_root_ids")
-    if not isinstance(observed_root_ids, set) or not observed_root_ids:
+    unreachable_root_ids = publication_state.get("unreachable_library_root_ids")
+    if not isinstance(observed_root_ids, set) or not isinstance(unreachable_root_ids, set):
         return
     try:
         adapter = select_scan_cache_adapter(cfg)
     except ValueError:
-        return  # no persisted inventory to compare against
+        adapter = None  # no persisted inventory to compare against
     count_published = getattr(adapter, "count_published_files_by_root", None)
-    if count_published is None:
-        return
-    published = {root_id: count for root_id, count in count_published().items() if root_id in observed_root_ids}
-    discovered: dict[str, int] = {}
-    for entry in file_cache.values():
-        root_id = str(entry.get("library_root_id") or "")
-        discovered[root_id] = discovered.get(root_id, 0) + 1
-    shrunken = {
-        root_id for root_id in _shrunken_root_ids(published, discovered)
-        if not discovered.get(root_id) or _walk_missed_existing_files(adapter, root_id, file_cache)
-    }
-    if not shrunken:
-        return
-    observed_root_ids.difference_update(shrunken)
-    publication_state["scan_incomplete_root_ids"] = shrunken
-    for root_id in sorted(shrunken):
-        log_app_event(
-            cfg, logger, "Library root walk found far fewer files than published; root left unchanged",
-            level="warning", root_id=root_id,
-            discovered_file_count=discovered.get(root_id, 0), published_file_count=published[root_id],
-        )
+    if count_published is not None and observed_root_ids:
+        discovered = {str(entry.get("library_root_id") or "") for entry in file_cache.values()}
+        for root_id, count in count_published().items():
+            if root_id in observed_root_ids and count > 0 and root_id not in discovered:
+                observed_root_ids.discard(root_id)
+                unreachable_root_ids.add(root_id)
+                log_app_event(
+                    cfg, logger, "Library root listed no files; its albums are marked unreachable",
+                    level="warning", root_id=root_id, published_file_count=count,
+                )
+    incomplete = set(unreachable_root_ids) | set(traversal_failed_root_ids)
+    if incomplete:
+        publication_state["scan_incomplete_root_ids"] = incomplete
 
 
 def refresh_cover_artwork_for_track_paths_for_state(

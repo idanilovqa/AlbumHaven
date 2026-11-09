@@ -1005,9 +1005,6 @@ def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watch
             (main_b["path"],),
         )
     assert fixture.adapter.count_published_files_by_root() == {"repair-main": 1, "repair-hoard": 1}
-    root_path, sample = fixture.adapter.sample_published_files("repair-main", 10)
-    assert root_path == fixture.roots[0]["path"]
-    assert sample == [main_a["path"]]
 
 
 def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):

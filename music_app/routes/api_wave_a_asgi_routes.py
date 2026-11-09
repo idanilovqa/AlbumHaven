@@ -54,8 +54,10 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
+from music_app.services.missing_album_rescan import MissingAlbumRescan
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
+    get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
 )
@@ -187,6 +189,30 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
         )
 
     await run_in_threadpool(update_runtime_after_removal)
+    return JSONResponse({"ok": True, **result})
+
+
+@router.post("/api/library/albums/{album_key:path}/rescan")
+async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse:
+    """Restore a missing album found where it was or where it moved, or say why it is still missing."""
+    await require_action("library.inventory.manage")(request)
+    normalized_key = str(album_key or "").strip()
+    reconcile = getattr(request.app.state, "reconcile_library_paths", None)
+    if not normalized_key:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    if not callable(reconcile):
+        return JSONResponse(
+            {"ok": False, "error": "Library watching is not running.", "code": "rescan_unavailable"},
+            status_code=503,
+        )
+    config = _app_config(request)
+    try:
+        result = await run_in_threadpool(
+            MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan,
+            normalized_key,
+        )
+    except MissingAlbumNotFound:
+        return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2

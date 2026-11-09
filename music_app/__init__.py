@@ -461,6 +461,7 @@ def create_asgi_app():
         WatchdogLibraryEventSource,
     )
     from music_app.services.library_roots import get_library_roots
+    from music_app.services.library_reachability import folder_is_readable
     from music_app.services.library_event_coordinator import (
         CoordinatorProblem,
         LibraryEventCoordinator,
@@ -744,6 +745,10 @@ def create_asgi_app():
                     persist_library_watch_problem(
                         CoordinatorProblem("stable_write_unavailable", root_id)
                     )
+            return result
+
+        # Album Details "Re-scan" publishes through the watcher's own reconciliation.
+        _app.state.reconcile_library_paths = reconcile_targeted_request
 
         def submit_targeted_reconciliation(request) -> None:
             targeted_executor.submit(request)
@@ -793,7 +798,14 @@ def create_asgi_app():
                         f"Library watcher catch-up root is no longer configured: {root_id}"
                     )
                 root_path = Path(str(root.get("path") or ""))
-                if not root_path.is_dir():
+                if not folder_is_readable(root_path):
+                    # Its albums stay in the library, marked missing as unreachable (the root cannot
+                    # be read), until a catch-up after it returns restores them.
+                    targeted_reconciler.reconcile(
+                        TargetedReconciliationRequest(root_id=root_id, deleted_subtrees=frozenset({root_path})),
+                        root_healthy=True,
+                        publication_guard=None,
+                    )
                     raise LibraryRootUnavailableError(root_id)
                 while True:
                     result = targeted_reconciler.reconcile(

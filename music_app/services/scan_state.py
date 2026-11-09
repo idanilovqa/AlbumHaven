@@ -635,6 +635,11 @@ def refresh_library_state(
                 observed_root_ids = publication_state.get(
                     "observed_library_root_ids"
                 )
+                if isinstance(observed_root_ids, set):
+                    # A root the walk could not fully read is not proven healthy.
+                    observed_root_ids = observed_root_ids - set(
+                        publication_state.get("scan_incomplete_root_ids") or ()
+                    )
                 try:
                     recover_library_watch_health(
                         scan_mode=(

@@ -139,8 +139,20 @@ test('missing Album Details uses OnPageAlert and renders no track table', () => 
   assert.match(html, /Album details unavailable/);
   assert.match(html, /Remove from library/);
   assert.match(html, /Keep as missing/);
+  assert.match(html, /data-rescan-missing-album="1"[^>]*>[\s\S]*?Re-scan/);
   assert.doesNotMatch(html, /small-alert/);
   assert.doesNotMatch(html, /album-track-table/);
+});
+
+test('missing Album Details states why the album is missing', () => {
+  const context = loadComponents();
+  const deleted = context.buildMissingAlbumDetailsHtml({ canRemove: true, albumKey: 'a', reason: 'deleted' });
+  const unreachable = context.buildMissingAlbumDetailsHtml({ canRemove: true, albumKey: 'a', reason: 'unreachable' });
+  const viewer = context.buildMissingAlbumDetailsHtml({ canRemove: false, albumKey: 'a', reason: 'unreachable' });
+  assert.match(deleted, /The files of this album were deleted from disk\. Its library entry is still saved\./);
+  assert.match(unreachable, /drive or network share holding this album cannot be reached/);
+  assert.doesNotMatch(viewer, /Re-scan|Remove from library/);
+  assert.match(viewer, /Ask an owner or administrator to remove it\./);
 });
 
 test('Album Details delegates action geometry to ActionButton and aligns stacked actions to line one', () => {

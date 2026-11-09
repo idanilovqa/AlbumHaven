@@ -5711,6 +5711,7 @@ def _missing_album_projection_payloads(
                 "cover_path": None,
                 "inventory_status": "missing",
                 "missing_since": stale_timestamps[0] if stale_timestamps else None,
+                "missing_reason": _album_missing_reason(album_rows),
                 "track_count_preview": 0,
                 "total_duration_seconds": 0,
                 "tracks": [],
@@ -5719,6 +5720,15 @@ def _missing_album_projection_payloads(
             }
         )
     return missing_albums
+
+
+def _album_missing_reason(album_rows: list[Mapping[str, object]]) -> str | None:
+    """"unreachable" when any file's drive or share was unreachable, "deleted" when every file
+    was deleted, otherwise unknown (files marked missing before reasons were recorded)."""
+    reasons = {str(row.get("file_missing_reason") or "") for row in album_rows}
+    if "unreachable" in reasons:
+        return "unreachable"
+    return "deleted" if reasons == {"deleted"} else None
 
 
 def _missing_album_detail_payload(album: Mapping[str, object]) -> dict[str, object]:
@@ -6843,6 +6853,7 @@ def _problematic_album_summary_payload(
     if album.get("inventory_status") == "missing":
         payload["inventory_status"] = "missing"
         payload["missing_since"] = album.get("missing_since")
+        payload["missing_reason"] = album.get("missing_reason")
         payload["track_paths"] = []
         payload["tracks"] = []
     return {
@@ -6933,6 +6944,7 @@ def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, 
     if album.get("inventory_status") == "missing":
         detail["inventory_status"] = "missing"
         detail["missing_since"] = album.get("missing_since")
+        detail["missing_reason"] = album.get("missing_reason")
         detail["tracks"] = []
         detail["problematic_track_paths"] = []
     return detail
@@ -11217,6 +11229,8 @@ def _missing_albums_sql(
           library.local_track_files.scan_cache_stale as file_scan_cache_stale,
           library.local_track_files.metadata #>> '{scan_cache,stale_marked_at}'
             as file_stale_marked_at,
+          library.local_track_files.metadata #>> '{scan_cache,missing_reason}'
+            as file_missing_reason,
           library.local_track_files.library_root_id as file_library_root_id,
           library.library_roots.root_kind as file_library_root_category
         from missing_albums

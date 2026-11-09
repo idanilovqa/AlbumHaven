@@ -5651,65 +5651,35 @@ def test_user_requested_scan_retries_cover_searches_once(config):
 
 
 @pytest.mark.parametrize(
-    ("discovered_n", "withdrawn"),
+    ("discovered_n", "unreachable"),
     [
-        pytest.param(0, {"n-root"}, id="empty-walk"),
-        pytest.param(30, {"n-root"}, id="sharp-drop"),
-        pytest.param(90, set(), id="ordinary-deletions"),
+        pytest.param(0, {"n-root"}, id="empty-walk-is-unreachable"),
+        pytest.param(30, set(), id="sharp-drop-publishes-deletions"),
     ],
 )
-def test_scan_leaves_a_root_unobserved_when_its_walk_finds_far_fewer_files(monkeypatch, discovered_n, withdrawn):
+def test_a_root_that_lists_no_files_is_marked_unreachable_and_any_drop_publishes(monkeypatch, discovered_n, unreachable):
+    # Owner 2026-11-08: no "under half" guard; missing albums are marked, never removed,
+    # and a root that answers with nothing is treated as unreachable rather than deleted.
     events = []
     monkeypatch.setattr(
         state_module, "select_scan_cache_adapter",
-        lambda _cfg: SimpleNamespace(count_published_files_by_root=lambda: {"n-root": 100, "d-root": 2, "small-root": 3}),
+        lambda _cfg: SimpleNamespace(count_published_files_by_root=lambda: {"n-root": 100, "d-root": 2}),
     )
     monkeypatch.setattr(
         state_module, "log_app_event",
         lambda _cfg, _logger, action, **fields: events.append((action, fields)),
     )
-    publication_state = {"observed_library_root_ids": {"n-root", "d-root", "small-root"}}
+    publication_state = {
+        "observed_library_root_ids": {"n-root", "d-root"},
+        "unreachable_library_root_ids": {"gone-root"},
+    }
     file_cache = {f"n{index}": {"library_root_id": "n-root"} for index in range(discovered_n)}
-    file_cache.update({"d0": {"library_root_id": "d-root"}, "d1": {"library_root_id": "d-root"}, "s0": {"library_root_id": "small-root"}})
+    file_cache.update({"d0": {"library_root_id": "d-root"}})
 
-    state_module._withdraw_shrunken_roots({}, None, publication_state, file_cache)
+    state_module._mark_empty_walk_roots_unreachable({}, None, publication_state, file_cache, {"d-root"})
 
-    # small-root lost 2 of 3 files: below the size floor, a real cleanup still publishes.
-    assert publication_state["observed_library_root_ids"] == {"n-root", "d-root", "small-root"} - withdrawn
-    assert set(publication_state.get("scan_incomplete_root_ids", set())) == withdrawn
-    assert [fields["root_id"] for _action, fields in events] == sorted(withdrawn)
-    assert all("path" not in fields for _action, fields in events)
-
-
-@pytest.mark.parametrize(
-    ("root_exists", "missed_file_exists", "withdrawn"),
-    [
-        pytest.param(True, False, False, id="files-really-removed"),
-        pytest.param(True, True, True, id="walk-missed-existing-files"),
-        pytest.param(False, False, True, id="root-unreachable"),
-    ],
-)
-def test_a_sharp_drop_publishes_only_when_the_missed_files_are_really_gone(
-    monkeypatch, tmp_path, root_exists, missed_file_exists, withdrawn,
-):
-    root = tmp_path / "library"
-    if root_exists:
-        root.mkdir()
-    published_paths = [str(root / f"{index:03}.flac") for index in range(100)]
-    if missed_file_exists:
-        (root / "030.flac").write_bytes(b"")
-    monkeypatch.setattr(
-        state_module, "select_scan_cache_adapter",
-        lambda _cfg: SimpleNamespace(
-            count_published_files_by_root=lambda: {"n-root": 100},
-            sample_published_files=lambda root_id, limit: (str(root), published_paths[-limit:]),
-        ),
-    )
-    monkeypatch.setattr(state_module, "log_app_event", lambda *_args, **_fields: None)
-    publication_state = {"observed_library_root_ids": {"n-root"}}
-    # The walk reports the first 30 files; the other 70 are missing from it.
-    file_cache = {path: {"library_root_id": "n-root"} for path in published_paths[:30]}
-
-    state_module._withdraw_shrunken_roots({}, None, publication_state, file_cache)
-
-    assert ("n-root" not in publication_state["observed_library_root_ids"]) is withdrawn
+    assert publication_state["observed_library_root_ids"] == {"n-root", "d-root"} - unreachable
+    assert publication_state["unreachable_library_root_ids"] == {"gone-root"} | unreachable
+    # Unreachable roots and roots with an unreadable folder stay pending for the next repair.
+    assert publication_state["scan_incomplete_root_ids"] == {"gone-root", "d-root"} | unreachable
+    assert [fields["root_id"] for _action, fields in events] == sorted(unreachable)

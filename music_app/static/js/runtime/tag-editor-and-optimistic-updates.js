@@ -1859,6 +1859,93 @@ if (typeof applyMissingAlbumRemovalToView !== 'function') {
   var applyMissingAlbumRemovalToView = applyMissingAlbumRemovalToViewDefault;
 }
 
+function getPendingMissingAlbumRefreshRequest() {
+  return state.ui?.pendingViewRequest || (
+    state.busy && state.ui?.activeViewRequestUrl
+      ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+      : null
+  );
+}
+
+// Re-render the gallery and, if its Album Details is still open, the album itself.
+async function refreshMissingAlbumView(album, albumKey, pendingRefreshRequest) {
+  if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
+    const refreshOptions = typeof album?.constructor === 'function'
+      ? new album.constructor()
+      : {};
+    refreshOptions.preserveScroll = true;
+    if (pendingRefreshRequest) {
+      Object.assign(refreshOptions, pendingRefreshRequest.options, {
+        preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
+        interruptCurrent: true,
+        restartIfSameUrl: true,
+      });
+      if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+    }
+    await fetchAndRender(
+      pendingRefreshRequest?.url || buildUrl(state.view),
+      Boolean(pendingRefreshRequest?.push),
+      refreshOptions,
+    );
+  }
+  if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+  const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+  const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+  if (modal?.overlay && !modal.overlay.hidden
+    && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+    invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+    const loadToken = invalidatePendingTrackModalLoad();
+    const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+    if (refreshedAlbum && !modal.overlay.hidden
+      && loadToken === state.ui.pendingTrackModalLoadToken
+      && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+      openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+    }
+  }
+}
+
+const MISSING_ALBUM_RESCAN_MESSAGES = {
+  restored: ['Album found and restored.', 'success'],
+  moved: ['Album found in its new folder and restored.', 'success'],
+  deleted: ['Still missing: its files were deleted from disk.', 'info'],
+  unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
+};
+
+async function rescanMissingAlbum(album, button) {
+  if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
+  const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  try {
+    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/rescan`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = {};
+    }
+    if (!response.ok) throw new Error(payload.error || 'Unable to re-scan this album.');
+    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
+    const [message, tone] = MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+      || ['Still missing.', 'info'];
+    if (typeof showToast === 'function') showToast(message, tone, 3600);
+    return payload.status !== 'missing';
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);
+    return false;
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
+}
+
 async function confirmMissingAlbumRemoval(album, options = {}) {
   if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
   if (!canConfirmMissingAlbumRemoval(album)) {
@@ -1881,45 +1968,9 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     } catch (_error) {
       payload = {};
     }
-    const pendingRefreshRequest = state.ui?.pendingViewRequest || (
-      state.busy && state.ui?.activeViewRequestUrl
-        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
-        : null
-    );
+    const pendingRefreshRequest = getPendingMissingAlbumRefreshRequest();
     if (response.status === 409) {
-      if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
-        const refreshOptions = typeof album?.constructor === 'function'
-          ? new album.constructor()
-          : {};
-        refreshOptions.preserveScroll = true;
-        if (pendingRefreshRequest) {
-          Object.assign(refreshOptions, pendingRefreshRequest.options, {
-            preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
-            interruptCurrent: true,
-            restartIfSameUrl: true,
-          });
-          if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
-        }
-        await fetchAndRender(
-          pendingRefreshRequest?.url || buildUrl(state.view),
-          Boolean(pendingRefreshRequest?.push),
-          refreshOptions,
-        );
-      }
-      if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
-      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
-      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
-      if (modal?.overlay && !modal.overlay.hidden
-        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
-        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
-        const loadToken = invalidatePendingTrackModalLoad();
-        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
-        if (refreshedAlbum && !modal.overlay.hidden
-          && loadToken === state.ui.pendingTrackModalLoadToken
-          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
-          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
-        }
-      }
+      await refreshMissingAlbumView(album, albumKey, pendingRefreshRequest);
       const conflictMessage = String(
         payload.error || payload.detail || 'Album Haven found this album again.'
       ).trim() || 'Album Haven found this album again.';
@@ -2040,6 +2091,7 @@ function renderTrackModalRelease(album) {
       ? buildMissingAlbumDetailsHtml({
         canRemove: canConfirmMissingAlbumRemoval(album),
         albumKey,
+        reason: album.missing_reason,
       })
       : '';
   }

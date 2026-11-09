@@ -837,11 +837,13 @@ def test_scan_observed_roots_preserve_filesystem_case_identity(monkeypatch, case
     "Library directory entry inspection failed",
     "Library candidate file stat failed",
 ])
-def test_scan_does_not_publish_missing_inventory_for_root_with_traversal_error(
+def test_scan_marks_files_under_an_unreadable_folder_unreachable_not_deleted(
     monkeypatch,
     tmp_path: Path,
     failure_action,
 ):
+    # Owner 2026-11-08: a read error no longer withholds the whole root; files under the
+    # folder the walk could not read are marked missing as unreachable, the rest publish.
     from music_app.services import state
 
     readable = tmp_path / "readable"
@@ -864,7 +866,6 @@ def test_scan_does_not_publish_missing_inventory_for_root_with_traversal_error(
             path=unreadable / "restricted-child",
             error=PermissionError("access denied"),
         )
-        assert publication_state["observed_library_root_ids"] == {"readable-root"}
         return {}, 42.0
 
     monkeypatch.setattr(state, "scan_library_file_cache", fake_scan)
@@ -880,7 +881,9 @@ def test_scan_does_not_publish_missing_inventory_for_root_with_traversal_error(
         publication_state=publication_state,
     )
 
-    assert publication_state["observed_library_root_ids"] == {"readable-root"}
+    assert publication_state["observed_library_root_ids"] == {"readable-root", "unreadable-root"}
+    assert publication_state["unreachable_library_paths"] == {str(unreadable / "restricted-child")}
+    assert publication_state["scan_incomplete_root_ids"] == {"unreadable-root"}
 
 
 def test_stale_publication_is_limited_to_observed_roots_and_preserves_first_timestamp():
@@ -900,13 +903,12 @@ def test_stale_publication_does_not_reference_update_target_from_join_on_clause(
 
     sql = " ".join(scan_cache_persistence._mark_stale_track_files_sql().casefold().split())
 
-    update_clause = sql.split("update library.local_track_files", 1)[1]
+    # Roots are joined while choosing candidates; the update itself joins only that result.
+    candidates, update_clause = sql.split("update library.local_track_files", 1)
     from_clause, where_clause = update_clause.split(" where ", 1)
-    assert "library.local_track_files.library_root_id" not in from_clause
-    assert (
-        "library.library_roots.id = library.local_track_files.library_root_id"
-        in where_clause
-    )
+    assert from_clause.strip().endswith("from candidates")
+    assert "library.local_track_files.id = candidates.id" in where_clause
+    assert "on library.library_roots.id = library.local_track_files.library_root_id" in candidates
 
 
 def test_active_track_file_upsert_clears_prior_stale_timestamp():

@@ -14,6 +14,7 @@ from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.library_reachability import library_root_missing_reason
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
@@ -134,6 +135,7 @@ class ScanCacheAdapter(Protocol):
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
         ...
@@ -331,26 +333,6 @@ class PostgresScanCacheAdapter:
             for payload in map(_row_mapping, rows)
             if payload.get("root_id")
         }
-
-    def sample_published_files(self, root_id: str, limit: int) -> tuple[str, list[str]]:
-        """The root's folder and a random sample of its active published track files."""
-        with self._connect_to_database() as connection:
-            rows = connection.execute(
-                """
-                select roots.root_path, files.private_path
-                from library.local_track_files files
-                join library.library_roots roots on roots.id = files.library_root_id
-                where files.scan_cache_stale is false
-                  and coalesce(nullif(roots.metadata ->> 'root_id', ''),
-                               files.metadata ->> 'library_root_id') = %(root_id)s
-                order by random()
-                limit %(limit)s
-                """,
-                {"root_id": root_id, "limit": limit},
-            ).fetchall()
-        payloads = [_row_mapping(row) for row in rows]
-        root_path = str(payloads[0].get("root_path") or "") if payloads else ""
-        return root_path, [str(payload.get("private_path") or "") for payload in payloads]
 
     def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         try:
@@ -718,6 +700,9 @@ class PostgresScanCacheAdapter:
                     _mark_targeted_track_files_stale_sql(),
                     {
                         "root_id": stale_root_id,
+                        "missing_reason": library_root_missing_reason(_row_mapping(
+                            _first_row(connection.execute(_library_root_path_sql(), {"root_id": stale_root_id}))
+                        ).get("root_path")),
                         "deleted_paths": paths,
                         "deleted_subtrees": subtrees,
                         "active_paths": sorted(
@@ -2163,6 +2148,7 @@ class PostgresScanCacheAdapter:
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
         observed_library_root_ids: set[str] | None = None,
+        unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
     ) -> dict[str, object] | None:
         """Publish the snapshot; with publish_paths, only the albums those files belong to.
@@ -2351,6 +2337,8 @@ class PostgresScanCacheAdapter:
                         "current_path_count": len(current_private_paths),
                         "source": _SOURCE,
                         "observed_root_ids": sorted(observed_library_root_ids or set()),
+                        "unreachable_root_ids": list((unreachable_scope or {}).get("root_ids") or []),
+                        "unreachable_paths": list((unreachable_scope or {}).get("paths") or []),
                         "stale_metadata": _jsonb(
                             {
                                 "scan_cache": {
@@ -7932,8 +7920,20 @@ def _upsert_local_track_file_sql() -> str:
     """
 
 
+def _library_root_path_sql() -> str:
+    return """
+        select library.library_roots.root_path
+        from library.library_roots
+        where library.library_roots.metadata ->> 'root_id' = %(root_id)s
+        order by library.library_roots.is_active desc
+        limit 1
+    """
+
+
 def _mark_stale_track_files_sql() -> str:
     return """
+        -- A published file the walk did not report is missing: "unreachable" when its root or a
+        -- folder above it could not be read, otherwise "deleted". Rows are never removed here.
         -- stale_marked_at is written only on the first active-to-stale transition.
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7944,6 +7944,47 @@ def _mark_stale_track_files_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ),
+        candidates as (
+          select library.local_track_files.id,
+            case
+              when coalesce(
+                nullif(library.library_roots.metadata ->> 'root_id', ''),
+                library.local_track_files.metadata ->> 'library_root_id'
+              ) = any(%(unreachable_root_ids)s::text[])
+                or exists (
+                  select 1 from unnest(%(unreachable_paths)s::text[]) as failed(path)
+                  where lower(replace(library.local_track_files.private_path, E'\\\\', '/'))
+                        = lower(rtrim(replace(failed.path, E'\\\\', '/'), '/'))
+                     or starts_with(
+                          lower(replace(library.local_track_files.private_path, E'\\\\', '/')),
+                          lower(rtrim(replace(failed.path, E'\\\\', '/'), '/')) || '/')
+                )
+              then 'unreachable' else 'deleted'
+            end as missing_reason
+          from library.local_track_files
+          join library.local_tracks on library.local_tracks.id = library.local_track_files.track_id
+          join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id
+          join library.library_roots
+            on library.library_roots.id = library.local_track_files.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id
+          where coalesce(
+              nullif(btrim(library.local_track_files.metadata #>> '{scan_cache,source}'), ''),
+              %(source)s
+            ) = %(source)s
+            and coalesce(
+              nullif(library.library_roots.metadata ->> 'root_id', ''),
+              library.local_track_files.metadata ->> 'library_root_id'
+            ) = any(%(observed_root_ids)s::text[] || %(unreachable_root_ids)s::text[])
+            -- A hashed anti-join: comparing each file against the whole path array
+            -- was quadratic for a full library.
+            and (
+              %(current_path_count)s = 0
+              or not exists (
+                select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
+                where current_file.private_path = library.local_track_files.private_path
+              )
+            )
         )
         update library.local_track_files
            set metadata = jsonb_set(
@@ -7957,34 +7998,21 @@ def _mark_stale_track_files_sql() -> str:
                      library.local_track_files.metadata
                        #>> '{scan_cache,stale_marked_at}',
                      now()::text
-                   )
+                   ),
+                   'missing_reason', candidates.missing_reason,
+                   'missing_checked_at', now()::text
                  ),
                  true
                ),
-               last_seen_at = now()
-        from library.local_tracks
-        join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id
-        join library.library_roots
-          on library.library_roots.library_id = bootstrap_context.library_id
-        where library.local_track_files.track_id = library.local_tracks.id
-          and library.library_roots.id = library.local_track_files.library_root_id
-          and coalesce(
-            nullif(btrim(library.local_track_files.metadata #>> '{scan_cache,source}'), ''),
-            %(source)s
-          ) = %(source)s
-          and library.local_track_files.scan_cache_stale is false
-          and coalesce(
-            nullif(library.library_roots.metadata ->> 'root_id', ''),
-            library.local_track_files.metadata ->> 'library_root_id'
-          ) = any(%(observed_root_ids)s::text[])
-          -- A hashed anti-join: comparing each file against the whole path array
-          -- was quadratic for a full library.
+               last_seen_at = case when library.local_track_files.scan_cache_stale
+                 then library.local_track_files.last_seen_at else now() end
+        from candidates
+        where library.local_track_files.id = candidates.id
+          -- An already-missing file is rewritten only when its reason changed.
           and (
-            %(current_path_count)s = 0
-            or not exists (
-              select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
-              where current_file.private_path = library.local_track_files.private_path
-            )
+            library.local_track_files.scan_cache_stale is false
+            or library.local_track_files.metadata #>> '{scan_cache,missing_reason}'
+               is distinct from candidates.missing_reason
           );
     """
 
@@ -8093,7 +8121,9 @@ def _mark_targeted_track_files_stale_sql() -> str:
                        library.local_track_files.metadata
                          #>> '{scan_cache,stale_marked_at}',
                        now()::text
-                     )
+                     ),
+                     'missing_reason', %(missing_reason)s::text,
+                     'missing_checked_at', now()::text
                    ),
                    true
                  ),

@@ -47,7 +47,13 @@
     const browse = form.querySelector('[data-path-input-browse]');
     const failure = form.querySelector('[data-preview-failure]');
     const request = options.request || fetch;
-    const confirmChange = options.confirm || window.confirm.bind(window);
+    // Owner (11-09): the move is confirmed in the app's own dialog, never the browser's confirm().
+    const confirmChange = options.confirm || (message => showAppFormDialog({
+      title: 'Move album previews',
+      description: message,
+      submitLabel: 'Move previews',
+      onSubmit: () => true,
+    }).then(Boolean));
     const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
     const canBrowse = Boolean(browse?.hasAttribute?.('data-path-input-browsable'));
     const schedule = options.setTimeout || setTimeout;
@@ -160,7 +166,7 @@
       event.preventDefault();
       if (save.disabled) return;
       const mode = selectedMode();
-      if (!confirmChange('Move generated album previews to the selected location? Covers remain available while the move runs.')) return;
+      if (!(await confirmChange('Move generated album previews to the selected location? Covers stay available while the move runs.'))) return;
       save.disabled = true;
       try {
         const next = await mutate('/admin/server/preview-storage', {

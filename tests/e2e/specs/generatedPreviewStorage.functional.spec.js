@@ -114,14 +114,22 @@ async function selectStorage(page, { mode, root = '' }) {
     await expect(adminServer.path).toBeEnabled({ timeout: 10_000 });
     await adminServer.path.fill(root, { timeout: 10_000 });
   }
-  page.once('dialog', (dialog) => dialog.accept());
+  // Owner (11-09): the move is confirmed in the app's own dialog; a browser confirm() fails the test.
+  const browserDialog = (dialog) => { throw new Error(`Unexpected browser dialog: ${dialog.message()}`); };
+  page.on('dialog', browserDialog);
+  await adminServer.save.click({ timeout: 10_000 });
+  const confirm = page.getByRole('dialog', { name: 'Move album previews' });
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toContainText('Covers stay available while the move runs.');
   const [response] = await Promise.all([
     page.waitForResponse((candidate) => (
       candidate.request().method() === 'PUT'
       && new URL(candidate.url()).pathname === '/admin/server/preview-storage'
     ), { timeout: 10_000 }),
-    adminServer.save.click({ timeout: 10_000 }),
+    confirm.getByRole('button', { name: 'Move previews', exact: true }).click({ timeout: 10_000 }),
   ]);
+  page.off('dialog', browserDialog);
+  await expect(confirm).toBeHidden();
   expect(response.status()).toBe(202);
   return response.json();
 }

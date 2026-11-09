@@ -53,6 +53,7 @@ function runtime(initial = {}) {
   form.querySelectorAll = selector => selector === '[data-preview-mode]' ? [albumFolders, custom] : [];
   const fetches = [];
   const polls = [];
+  const dialogs = [];
   const responses = [initial];
   const context = vm.createContext({
     console,
@@ -61,7 +62,8 @@ function runtime(initial = {}) {
       addEventListener() {},
       querySelector: selector => selector === '[data-admin-server]' ? form : null,
     },
-    window: { confirm: () => true },
+    window: { confirm: () => { throw new Error('the browser confirm() is never used'); } },
+    showAppFormDialog: async (options) => { dialogs.push(options); return options.onSubmit(); },
     setTimeout(callback, delay) { polls.push({ callback, delay }); return polls.length; },
     clearTimeout() {},
     fetch: async (url, options = {}) => {
@@ -71,7 +73,7 @@ function runtime(initial = {}) {
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
-  return { context, form, albumFolders, custom, pathInput, save, cancel, retry, status, error, browse, fetches, polls };
+  return { context, form, albumFolders, custom, pathInput, save, cancel, retry, status, error, browse, fetches, polls, dialogs };
 }
 
 const settleController = () => new Promise(resolve => setImmediate(resolve));
@@ -153,6 +155,15 @@ test('mode choice controls the server-path field and save payload', async () => 
   assert.deepEqual(JSON.parse(request.options.body), {
     mode: 'custom', path: 'D:\\Album previews', expected_revision: 4, confirmed: true,
   });
+  // Owner (11-09): the app's own dialog asks, never the browser's confirm(); Cancel moves nothing.
+  assert.equal(ui.dialogs.length, 1);
+  assert.equal(ui.dialogs[0].title, 'Move album previews');
+  assert.equal(ui.dialogs[0].submitLabel, 'Move previews');
+  const sent = ui.fetches.length;
+  ui.save.disabled = false;
+  ui.context.showAppFormDialog = async () => null;
+  await ui.form.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(ui.fetches.length, sent, 'cancelled: no request');
 });
 
 test('active relocation polls a bounded status request and exposes cancel', async () => {

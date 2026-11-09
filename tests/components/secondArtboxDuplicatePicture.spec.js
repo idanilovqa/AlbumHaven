@@ -28,4 +28,18 @@ test('the second artbox lookup dims a picture that matches the album cover and k
   await page.waitForTimeout(200);
   await expect(page.locator('#other')).not.toHaveClass(/is-disabled/);
   await expect(page.locator('#other')).toHaveAttribute('data-select-remote-cover', 'other');
+
+  // A flat red picture is not the flat navy cover: both have the same brightness gradients (an all-zero dHash),
+  // so the average color decides. FTC-COVERS-045 found front-scan.jpg wrongly blocked this way.
+  await page.evaluate(() => {
+    const flat = (color) => { const c = document.createElement('canvas'); c.width = c.height = 120; const ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 120, 120); return c.toDataURL('image/png'); };
+    const navy = flat('#000080');
+    window.buildAlbumDisplayCoverUrl = () => navy;
+    const card = (id, src) => `<div class="cover-lookup-art-card" id="${id}" role="button" tabindex="0" data-select-remote-cover="${id}"><span class="cover-lookup-art-preview"><img src="${src}" alt=""></span><span class="cover-lookup-art-action-label">Select</span></div>`;
+    document.getElementById('body').innerHTML = card('flat-same', flat('#000080')) + card('flat-other', flat('#ff0000'));
+    markSecondArtboxDuplicatePictures(document.getElementById('body'));
+  });
+  await expect(page.locator('#flat-same')).toHaveClass(/is-disabled/);
+  await page.waitForTimeout(200);
+  await expect(page.locator('#flat-other')).not.toHaveClass(/is-disabled/);
 });

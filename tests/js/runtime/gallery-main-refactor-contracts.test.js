@@ -524,6 +524,27 @@ test('the phone Loose Tracks tab shows the search dot like the desktop button', 
   assert.equal(tab.dataset.searchMatch, 'false');
 });
 
+test('a search with an artist selected loads that artist\'s loose tracks only once its menu is open', () => {
+  const requested = [];
+  const menu = { hidden: true };
+  const context = loadRuntime({
+    state: { view: { query: 'Release', selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => (id === 'gallery-album-types-menu' ? menu : null),
+    },
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options.libraryWide); return new Promise(() => {}); },
+  });
+  const hydrate = requireContract(context, 'hydrateDeferredNonAlbumTracksForAlbumTypes');
+  hydrate();
+  assert.deepEqual(requested, [true], 'a closed menu keeps the search to its library-wide probe');
+  menu.hidden = false;
+  hydrate();
+  assert.deepEqual(requested, [true, true, false], 'the open menu also resolves the artist\'s own button');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,

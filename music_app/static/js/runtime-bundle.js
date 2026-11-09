@@ -7042,9 +7042,16 @@ function updateGalleryMainControls() {
 function hydrateDeferredNonAlbumTracksForAlbumTypes() {
   const searching = Boolean(String(state.view?.query || '').trim());
   if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
-  void hydrateDeferredNonAlbumTracks({ libraryWide: searching || !String(state.view.selected_artist || '').trim() }).catch(error => {
-    console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-  });
+  const artistSelected = Boolean(String(state.view.selected_artist || '').trim());
+  const warn = error => console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  void hydrateDeferredNonAlbumTracks({ libraryWide: searching || !artistSelected }).catch(warn);
+  // A search probes library-wide loose tracks for its match indicator; the open menu's artist
+  // button still needs that artist's own loose tracks to know whether it has any.
+  const menuOpen = galleryMainSurfaceController?.current?.()?.key === 'album-types'
+    || document.getElementById?.('gallery-album-types-menu')?.hidden === false;
+  if (searching && artistSelected && menuOpen && state.view.non_album_tracks_deferred) {
+    void hydrateDeferredNonAlbumTracks({ libraryWide: false }).catch(warn);
+  }
 }
 
 function buildGalleryFamilyPanelBody() {

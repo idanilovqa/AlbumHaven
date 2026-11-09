@@ -3362,32 +3362,53 @@ def persist_ddt_studio_records_album_year_contract(
         ) from exc
 
     with psycopg.connect(setup_database_url) as connection:
-        result = connection.execute(
+        # Publication seeds the album's tag rating, which has no ON UPDATE CASCADE:
+        # the rating moves to the new key in the same statement as the album.
+        renamed = connection.execute(
             """
-            update library.local_albums
-            set
-              album_key = lower(%s::text) || '::' || lower(%s::text),
-              release_year = %s,
-              metadata = jsonb_set(
-                library.local_albums.metadata,
-                '{release_date}',
-                to_jsonb(%s::text),
-                true
+            with album as (
+              select library_id, album_key from library.local_albums where title = %(title)s
+            ), ratings as (
+              delete from app.album_ratings
+              using album
+              where app.album_ratings.library_id = album.library_id
+                and app.album_ratings.album_key = album.album_key
+              returning app.album_ratings.*
+            ), renamed as (
+              update library.local_albums
+              set
+                album_key = lower(%(artist)s::text) || '::' || lower(%(title)s::text),
+                release_year = %(year)s,
+                metadata = jsonb_set(
+                  library.local_albums.metadata,
+                  '{release_date}',
+                  to_jsonb(%(release_date)s::text),
+                  true
+                )
+              where library.local_albums.title = %(title)s
+              returning library_id, album_key
+            ), moved as (
+              insert into app.album_ratings (
+                account_id, library_id, album_key, rating, provenance, created_at, updated_at, metadata
               )
-            where library.local_albums.title = %s;
+              select ratings.account_id, renamed.library_id, renamed.album_key, ratings.rating,
+                     ratings.provenance, ratings.created_at, ratings.updated_at, ratings.metadata
+              from ratings cross join renamed
+              returning 1
+            )
+            select (select count(*) from renamed) as renamed, (select count(*) from moved) as moved;
             """,
-            (
-                DDT_STUDIO_RECORDS_PERSISTED_ALBUM_ARTIST,
-                DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
-                DDT_STUDIO_RECORDS_FIXTURE_YEAR,
-                f"{DDT_STUDIO_RECORDS_FIXTURE_YEAR}-01-01",
-                DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
-            ),
-        )
-        if result.rowcount != 1:
+            {
+                "artist": DDT_STUDIO_RECORDS_PERSISTED_ALBUM_ARTIST,
+                "title": DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
+                "year": DDT_STUDIO_RECORDS_FIXTURE_YEAR,
+                "release_date": f"{DDT_STUDIO_RECORDS_FIXTURE_YEAR}-01-01",
+            },
+        ).fetchone()[0]
+        if renamed != 1:
             raise RuntimeError(
                 "The DDT Studio Records fixture must update exactly one persisted "
-                f"album year, updated {result.rowcount}."
+                f"album year, updated {renamed}."
             )
 
 

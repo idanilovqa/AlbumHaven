@@ -1,4 +1,4 @@
-{% from "partials/button.html" import action_button %}
+{% from "partials/button.html" import action_button, ui_button %}
 {% macro gallery_bar(title, summary='', class_name='', back_href='', back_label='Back', instance='', mobile_layout='', settings_navigation=false, settings_parent=false, gallery_context=false, aria_label='', hidden=false, element_id='', tabindex='', mobile_page=false, desktop_back=true) -%}
 <header{% if element_id %} id="{{ element_id }}"{% endif %} class="gallery-bar{% if class_name %} {{ class_name }}{% endif %}" data-gallery-bar{% if instance %} data-gallery-bar-instance="{{ instance }}"{% endif %}{% if mobile_layout %} data-gallery-bar-layout="{{ mobile_layout }}"{% endif %}{% if tabindex %} tabindex="{{ tabindex }}"{% endif %}{% if aria_label %} aria-label="{{ aria_label }}"{% endif %}{% if hidden %} hidden{% endif %}>
   {% if mobile_page %}
@@ -7,7 +7,8 @@
   <img class="mobile-page-cover" id="mobile-page-cover" alt="" hidden>
   <div class="gallery-bar__context"><h1 class="gallery-bar__title" id="mobile-page-title">{{ title }}</h1><p class="gallery-bar__summary" id="mobile-page-summary">{{ summary }}</p></div>
   <div class="gallery-bar__actions" id="mobile-settings-actions" hidden>
-    <button class="button mobile-settings-section-button" id="mobile-settings-section-button" type="button" data-mobile-settings-subsections aria-controls="mobile-settings-subsection-menu" aria-expanded="false"><span data-mobile-subsection-label></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    {# Owner (11-09): the section picker is the shared Button that opens the shared anchored menu, like Settings' other dropdowns. #}
+    {{ ui_button('Sections', class_name='mobile-settings-section-button', attributes={'id': 'mobile-settings-section-button', 'data-mobile-settings-subsections': true, 'aria-haspopup': 'menu', 'aria-controls': 'mobile-settings-subsection-menu', 'aria-expanded': 'false'}) }}
   </div>
   {% else %}
   {% if back_href %}

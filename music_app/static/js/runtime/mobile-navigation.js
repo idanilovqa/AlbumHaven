@@ -832,7 +832,7 @@ function syncMobileUtilityNavigation() {
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
   trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
-  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
+  trigger.querySelector('.ui-button__content').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');

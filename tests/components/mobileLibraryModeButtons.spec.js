@@ -23,11 +23,14 @@ for (const selected of ['artists', 'collections']) {
     const buttons = await page.locator('[data-navigation-mode]').evaluateAll((nodes) => nodes.map((node) => ({
       mode: node.dataset.navigationMode, width: node.getBoundingClientRect().width,
       labelShown: getComputedStyle(node.querySelector('span > span')).display !== 'none',
+      iconShown: node.querySelector('svg').checkVisibility() && node.querySelector('svg').getBoundingClientRect().width >= 18,
       name: node.getAttribute('aria-label'),
     })));
     for (const button of buttons) {
       const isSelected = button.mode === selected;
       expect(button.labelShown, button.mode).toBe(isSelected);
+      // Owner (11-09): the unselected Loose Tracks button showed no icon at all.
+      expect(button.iconShown, button.mode).toBe(true);
       if (isSelected) expect(button.width).toBeGreaterThan(60);
       else expect(Math.round(button.width)).toBe(40);
       expect(button.name).toBeTruthy();

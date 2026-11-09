@@ -126,9 +126,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-settings-drawer.gallery-anchored-menu { position: fixed; left: 0 !important; right: auto !important; width: max-content; min-width: min(190px, 75vw); max-width: min(320px, 75vw) !important; bottom: var(--player-height); max-height: none; border-radius: 0 14px 14px 0; padding: 0 10px 14px; overflow-y: auto; }
   .mobile-drawer-heading { display: flex; align-items: center; gap: 8px; padding: 16px 4px; }
   .mobile-drawer-heading h2 { margin: 0; font-size: 18px; }
-  .mobile-settings-section-button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; max-width: 160px; padding: 6px 8px; }
-  .mobile-settings-section-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-settings-section-button svg { width: 16px; flex: 0 0 16px; }
+  .mobile-settings-section-button { max-width: 160px; }
+  .mobile-settings-section-button .ui-button__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Rows are a responsive GalleryCard variant, not a second artwork component. */
   .album-card[data-gallery-display="list"] { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; min-height: 88px; border-radius: 14px; overflow: hidden; border-left: 3px solid var(--appearance-selected-accent, #34ca78); cursor: pointer; }
   .album-card[data-gallery-display="list"] > .cover { width: 72px; height: 72px; aspect-ratio: 1; margin: 8px; border-radius: 9px; }
@@ -223,8 +222,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .player-preview-dock { position: sticky; top: 0; z-index: 2; background: var(--appearance-main-surface, var(--bg)); padding: 8px 0 12px; }
   .appearance-device-controls { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
   .appearance-device-controls > * { min-width: 0; box-sizing: border-box; }
-  .appearance-device-selector, .appearance-device-mode { display: flex; flex-wrap: wrap; gap: 10px 6px; }
-  .appearance-device-controls button { min-height: 40px; padding: 6px 10px; font-size: 13px; }
+  .appearance-device-mode { display: flex; flex-wrap: wrap; gap: 10px 6px; }
+  .appearance-device-mode button { min-height: 40px; padding: 6px 10px; font-size: 13px; }
   .appearance-device-controls .appearance-device-help { margin: 0; font-size: 12px; line-height: 1.45; }
   .appearance-device-mode[hidden] { display: none; }
   /* Candidate body scrolls; footer stays in normal flex layout above the player. */
@@ -472,7 +471,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-artists-mode-button span { font-size: 14px; font-weight: 600; }
   /* Owner (11-08): only the selected mode is expanded with its label; the others are 40px icon buttons. */
   .shell-navigation-rail .mobile-artists-mode-button:not([aria-pressed="true"]) { width: 40px; padding: 0; justify-content: center; }
-  .mobile-artists-mode-button:not([aria-pressed="true"]) span { display: none; }
+  .mobile-artists-mode-button:not([aria-pressed="true"]) .action-button__content > span { display: none; }
  #mobile-library-button[data-search-results='true'] { animation: mobile-artists-search-pulse 2.4s ease-in-out infinite; border-color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
  @keyframes mobile-artists-search-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 22%, transparent); } }
  @media (prefers-reduced-motion: reduce) { #mobile-library-button[data-search-results='true'] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 18%, transparent); } }
@@ -657,13 +656,15 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   /* Owner (11-08): the Gallery's buttons share the name row when the whole name fits (syncGalleryBarNameFit);
      a longer name is printed in full on its own row and the buttons stay under it. */
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
-  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) > .gallery-bar__actions { grid-row: 1; margin-top: -8px; }
+  /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the
+     title as closely as on web. */
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) > .gallery-bar__actions { grid-row: 1; margin-block: -8px; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
   /* UI-9 (owner): page headers match the Gallery header exactly: same title row, buttons on it, subtitle under
      it. Page titles are short; one that does not fit wraps inside its own column. */
   .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] { grid-template-rows: minmax(32px, auto) auto; }
   .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-column: 2; }
-  .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions { grid-row: 1; margin-top: -8px; }
+  .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions { grid-row: 1; margin-block: -8px; }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;
     color: inherit;
@@ -805,6 +806,15 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]):not([data-album-identity-in-body="true"]) { align-items: center; }
   #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]):not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover, .mobile-bar-action) { align-self: center; }
   #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]) .gallery-bar__summary { margin: 2px 0 0; }
+  /* Owner (11-09): every Settings page header lines up with the Gallery header: Back where the Gallery's hamburger
+     is, then the hamburger, then the title on the Gallery title's line and size; the section picker is centred on
+     the Gallery buttons' line. */
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header { align-items: flex-start; gap: 6px; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header > :is(.mobile-bar-action, .gallery-bar__actions) {
+    align-self: flex-start; display: flex; align-items: center; justify-content: center; height: 40px; margin-top: -8px;
+  }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header > .gallery-bar__context { align-self: flex-start; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header #mobile-page-title { min-height: 0; line-height: 24px; }
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] :is(.gallery-bar__title, .gallery-bar__summary) {
     display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }

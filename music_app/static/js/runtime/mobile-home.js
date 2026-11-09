@@ -48,6 +48,8 @@ function syncMobileHome() {
       const summary = bar.querySelector('[data-gallery-context-summary]');
       if (name) name.textContent = host.dataset.accountName || 'My music';
       if (summary) summary.textContent = '';
+      // Owner (11-09): Home names the account, not an artist, so the previous artist's "i" never stays beside it.
+      bar.querySelector('[data-artist-info-trigger]')?.remove();
     }
   }
   if (!show) showMobileGalleryPinchHint();

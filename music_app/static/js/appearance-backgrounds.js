@@ -1214,11 +1214,14 @@
         if (mode && !mode.disabled) controller.setDeviceSectionMode(mode.getAttribute('data-appearance-device-mode'));
       });
       return state => {
-        const busy = state.loading || state.saving || state.loadFailed;
+        // Owner (11-09, UI-MOBILE-SETTINGS): the first load only confirms the values the page bootstrapped with,
+        // so the editor ignores input while it runs instead of dimming every control and flashing the page.
+        editor.inert = Boolean(state.loading);
+        const busy = state.saving || state.loadFailed;
         controls.querySelectorAll('[data-appearance-device]').forEach(button => {
           const profile = button.getAttribute('data-appearance-device');
+          // Owner (11-09, UI-MOBILE-SETTINGS): a phone shows the same device selector, with only Mobile unlocked.
           button.disabled = profile === 'tv' || busy || (isPhoneEditor() && profile !== 'mobile');
-          button.hidden = isPhoneEditor() && profile !== 'mobile';
           button.setAttribute('aria-disabled', String(button.disabled));
           button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
         });
@@ -1250,7 +1253,7 @@
       let drawnPalette;
       const sync = state => {
         if (mounted !== editor) return;
-        const disabled = state.loading || state.saving || state.loadFailed, preference = state.draft, effective = state.effective;
+        const disabled = state.saving || state.loadFailed, preference = state.draft, effective = state.effective;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
         syncDeviceProfile(state);
@@ -1318,7 +1321,7 @@
       };
     const sync = state => {
       if (mounted !== editor) return;
-        const disabled = state.loading || state.saving || state.loadFailed;
+        const disabled = state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
         syncDeviceProfile(state);
@@ -1363,7 +1366,7 @@
       });
     const sync = state => {
       if (mounted !== editor) return;
-        const disabled = state.loading || state.saving || state.loadFailed;
+        const disabled = state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
         syncDeviceProfile(state);
@@ -1424,7 +1427,7 @@
       find('.background-status').hidden = true;
     const sync = state => {
       if (mounted !== editor) return;
-        const disabled = state.loading || state.saving || state.loadFailed;
+        const disabled = state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
         syncDeviceProfile(state);
@@ -1506,7 +1509,7 @@
           if (restoreModeFocus) mounted.querySelector(`[data-appearance-seekbar-mode="${state.seekbarMode}"]`)?.focus();
           return;
         }
-        const disabled = state.loading || state.saving || state.loadFailed, custom = Boolean(state.draft.player_style_override || state.draft.player_override);
+        const disabled = state.saving || state.loadFailed, custom = Boolean(state.draft.player_style_override || state.draft.player_override);
         editor.querySelectorAll('[data-appearance-seekbar-mode]').forEach(radio => { radio.checked = radio.value === state.seekbarMode; });
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });

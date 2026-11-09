@@ -52,7 +52,7 @@ function startServer() {
     }
     if (url.pathname === '/login') {
       response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-      response.end('<!doctype html><title>Sign in</title><form aria-label="Album Haven sign in"></form>');
+      response.end('<!doctype html><title>Sign in</title><form aria-label="Album Haven sign in"><label>Username <input></label></form>');
       return;
     }
     response.writeHead(404);
@@ -85,7 +85,10 @@ async function copyCount(page) {
 test.describe('app copy service worker', () => {
   let server;
   test.beforeEach(async () => { server = await startServer(); });
-  test.afterEach(async () => { await new Promise(resolve => server.http.close(resolve)); });
+  test.afterEach(async () => {
+    server.http.closeAllConnections();
+    await new Promise(resolve => server.http.close(resolve));
+  });
 
   test('IAR-001: once kept, a start shows the copy at once without asking the server for the page', async ({ page }) => {
     await page.goto(`${server.origin}/`);

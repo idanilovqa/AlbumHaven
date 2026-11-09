@@ -304,9 +304,19 @@ test('saving the view keeps the current page and reports whether a fresh copy ex
   assert.deepEqual(await worker.message({ type: 'status' }), { stored: false });
   assert.deepEqual(await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` }), { stored: true });
   await handle(navigation('/?artist=Broadcast'));
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.deepEqual(await worker.message({ type: 'forget' }), { stored: false });
   assert.deepEqual(await worker.message({ type: 'status' }), { stored: false });
+});
+
+test('saving another page also keeps Home, which a full restart opens', async () => {
+  const { calls, worker, handle } = setup();
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Mono` });
+  await handle(navigation('/'));
+
+  assert.deepEqual(calls.map(request => new URL(request.url).search), ['?artist=Broadcast', '', '?artist=Mono']);
 });
 
 test('saving ignores pages other than the app page and other origins', async () => {

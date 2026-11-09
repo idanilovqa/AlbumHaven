@@ -205,6 +205,11 @@
         if (url.origin === origin && isAppPage(url)) {
           try {
             await fetchPage(url);
+            // A full restart opens Home, so the shell's "a copy exists" must cover it too.
+            const target = await accountCache();
+            if (target && pageKey(url) !== '/' && !isFresh((await readMeta(target.cache)).pages['/'])) {
+              await fetchPage(new URL('/', origin));
+            }
           } catch (_error) {
             // Offline: the copy kept before stays as it is.
           }

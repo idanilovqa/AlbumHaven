@@ -6984,3 +6984,28 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
             assert claimed is None
     finally:
         lease.release()
+
+
+def test_live_duplicate_identity_folds_latin_accents_like_python(monkeypatch):
+    from music_app.services.library import _duplicate_album_identity_values
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    pairs = [
+        ("Non Al Denaro Non all'amore Nè Al Cielo", "Non al denaro non all'amore né al cielo", True),
+        ("Fabrizio  De André", "fabrizio de andre", True),
+        ("Ёлка", "Елка", False),
+    ]
+    with isolatedPostgres._connect(runtime_url) as connection:
+        for left, right, same in pairs:
+            row = connection.execute(
+                "select library.duplicate_identity_text(%s) as left_identity, library.duplicate_identity_text(%s) as right_identity",
+                (left, right),
+            ).fetchone()
+            assert (row["left_identity"] == row["right_identity"]) is same
+            assert row["left_identity"] == _duplicate_album_identity_values("Artist", left, 2000)[1]
+        valid = connection.execute(
+            "select indisvalid from pg_index where indexrelid = 'library.local_track_files_active_duplicate_identity_idx'::regclass"
+        ).fetchone()
+        assert valid["indisvalid"] is True

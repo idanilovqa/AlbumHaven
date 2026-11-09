@@ -1364,12 +1364,11 @@ def _duplicate_album_identity_values(
     album: object,
     year: object,
 ) -> tuple[str, str, int] | None:
-    artist = " ".join(
-        unicodedata.normalize("NFC", str(album_artist or "")).casefold().split()
-    )
-    title = " ".join(
-        unicodedata.normalize("NFC", str(album or "")).casefold().split()
-    )
+    from music_app.services.view_search import fold_search_accents
+
+    # Matches library.duplicate_identity_text: case and Latin accents fold.
+    artist = " ".join(fold_search_accents(unicodedata.normalize("NFC", str(album_artist or ""))).split())
+    title = " ".join(fold_search_accents(unicodedata.normalize("NFC", str(album or ""))).split())
     normalized_year = safe_int(year)
     if (
         not artist

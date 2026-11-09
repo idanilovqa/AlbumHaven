@@ -11977,8 +11977,22 @@ def test_duplicate_identity_values_match_postgres_slash_year_normalization():
 
     assert _duplicate_album_identity_values("Straße", "Café", "2001/2002") == (
         "strasse",
-        "café",
+        "cafe",
         2001,
+    )
+
+
+def test_duplicate_identity_ignores_case_and_latin_accents_but_not_cyrillic_letters():
+    from music_app.services.library import _duplicate_album_identity_values
+
+    assert _duplicate_album_identity_values(
+        "Fabrizio De André", "Non Al Denaro Non all'amore Nè Al Cielo", 1971,
+    ) == _duplicate_album_identity_values(
+        "Fabrizio De André", "Non al denaro non all'amore né al cielo", "1971",
+    )
+    # Cyrillic letters are not accent variants: Ё and Е stay distinct.
+    assert _duplicate_album_identity_values("Ария", "Ёлка", 1987) != _duplicate_album_identity_values(
+        "Ария", "Елка", 1987,
     )
 
 
@@ -12002,7 +12016,7 @@ def test_duplicate_compact_candidate_index_does_not_construct_track_models(monke
             "album": "Café",
             "year": "2001",
         }
-    ]) == [(1, "one", ("strasse", "café", 2001))]
+    ]) == [(1, "one", ("strasse", "cafe", 2001))]
 
 
 def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_validation():

@@ -39,17 +39,20 @@ import java.util.concurrent.TimeUnit
 class PlaybackNotificationTest {
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
     private val track = SyntheticTrack(tag = 5, frames = 120L * RATE)
-    private val origin = DeviceOrigin(FakeAhpcServer(listOf(track))).start(DeviceOrigin.DEV_PORT)
+    private val short = SyntheticTrack(tag = 6, frames = 3L * RATE)
+    private val origin = DeviceOrigin(FakeAhpcServer(listOf(track, short))).start(DeviceOrigin.DEV_PORT)
     private var connection: ServiceConnection? = null
     private lateinit var handle: PlaybackServiceHandle
-    private val item = QueueItem(
-        playbackRef = track.pcm.playbackRef,
-        title = "Signal 5",
+    private val item = item(track)
+
+    private fun item(of: SyntheticTrack) = QueueItem(
+        playbackRef = of.pcm.playbackRef,
+        title = "Signal ${of.tag}",
         artist = "Device Artist",
         album = "Device Album",
         artworkUrl = null,
-        durationMs = track.frames * 1000 / RATE,
-        listenKey = "lk-5",
+        durationMs = of.frames * 1000 / RATE,
+        listenKey = "lk-${of.tag}",
         year = "1999",
     )
 
@@ -97,12 +100,35 @@ class PlaybackNotificationTest {
         assertEquals(NativePlaybackState.PAUSED, handle.port.snapshot.state)
         val card = mediaNotification()!!
         assertEquals("Signal 5", card.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
-        // Media3 would leave the foreground ten minutes after the pause by default; the app keeps it a day.
-        val timeoutMs = pausedForegroundTimeoutMs()
-        assertTrue("paused foreground timeout $timeoutMs ms", timeoutMs >= TimeUnit.HOURS.toMillis(24))
     }
 
-    private fun play() {
+    /** Media3 leaves the foreground at most ten minutes after a pause; here its timeout is two seconds. */
+    @Test
+    fun thePausedCardOutlastsMedia3sForegroundTimeoutAndAStopStillLeavesTheForeground() {
+        play()
+        onMain { playbackServiceInstance().setForegroundServiceTimeoutMs(SHORT_TIMEOUT_MS) }
+        onMain { handle.port.pause() }
+        waitUntil("paused") { handle.port.snapshot.state == NativePlaybackState.PAUSED }
+
+        val pausedAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() - pausedAt < SHORT_TIMEOUT_MS * 5) {
+            assertTrue("the paused card is gone", mediaNotification() != null)
+            assertEquals("the service left the foreground", true, playbackService()?.foreground)
+            Thread.sleep(500)
+        }
+        onMain { handle.port.stop() }
+        waitUntil("the stopped service out of the foreground") { playbackService()?.foreground != true }
+    }
+
+    @Test
+    fun anEndedQueueLeavesTheForeground() {
+        play(item(short))
+        onMain { playbackServiceInstance().setForegroundServiceTimeoutMs(SHORT_TIMEOUT_MS) }
+        waitUntil("the queue ended") { handle.port.snapshot.state == NativePlaybackState.ENDED }
+        waitUntil("the ended service out of the foreground") { playbackService()?.foreground != true }
+    }
+
+    private fun play(queued: QueueItem = item) {
         val bound = CountDownLatch(1)
         val serviceConnection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -115,7 +141,7 @@ class PlaybackNotificationTest {
         assertTrue(context.bindService(PlaybackService.shellBindIntent(context), serviceConnection, Context.BIND_AUTO_CREATE))
         connection = serviceConnection
         assertTrue(bound.await(10, TimeUnit.SECONDS))
-        onMain { handle.port.loadQueue(QueueLoad(1, listOf(item), 0, 0, null, autoplay = true)) }
+        onMain { handle.port.loadQueue(QueueLoad(1, listOf(queued), 0, 0, null, autoplay = true)) }
         waitUntil("playing") { handle.port.snapshot.state == NativePlaybackState.PLAYING }
         waitUntil("the media notification") { mediaNotification() != null && playbackService()?.foreground == true }
     }
@@ -135,24 +161,10 @@ class PlaybackNotificationTest {
         context.getSystemService(ActivityManager::class.java).getRunningServices(Int.MAX_VALUE)
             .firstOrNull { it.service.className == PlaybackService::class.java.name && it.service.packageName == context.packageName }
 
-    /**
-     * How long Media3 keeps the paused service in the foreground: its notification manager's
-     * user-engaged timeout, which `setForegroundServiceTimeoutMs` sets. Read through reflection,
-     * as Media3 exposes no getter; it supports the visible check above, which cannot wait a day.
-     */
-    private fun pausedForegroundTimeoutMs(): Long {
-        val owner = handle.javaClass.declaredFields.first { it.type == PlaybackService::class.java }.apply { isAccessible = true }
-        val service = owner.get(handle) as PlaybackService
-        var type: Class<*>? = PlaybackService::class.java
-        while (type != null) {
-            val field = type.declaredFields.firstOrNull { it.type.simpleName == "MediaNotificationManager" }
-            if (field != null) {
-                val manager = field.apply { isAccessible = true }.get(service)!!
-                return manager.javaClass.getDeclaredField("userEngagedTimeoutMs").apply { isAccessible = true }.getLong(manager)
-            }
-            type = type.superclass
-        }
-        error("Media3 has no notification manager field")
+    /** The service this test bound, to shorten Media3's timeout through its public setter. */
+    private fun playbackServiceInstance(): PlaybackService {
+        val owner = handle.javaClass.declaredFields.first { it.type == PlaybackService::class.java }
+        return owner.apply { isAccessible = true }.get(handle) as PlaybackService
     }
 
     private fun onMain(block: () -> Unit) = InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
@@ -160,5 +172,6 @@ class PlaybackNotificationTest {
     private companion object {
         /** Longer than the "about a minute" after which the owner's paused card disappeared. */
         const val PAUSED_WATCH_MS = 75_000L
+        const val SHORT_TIMEOUT_MS = 2_000L
     }
 }

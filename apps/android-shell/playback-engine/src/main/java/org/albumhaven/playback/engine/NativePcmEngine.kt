@@ -365,8 +365,14 @@ class NativePcmEngine(
      */
     private var resumeFrame: Long? = null
 
-    /** A seek asked for while the socket was lost; it runs once the resumed stream is promoted. */
+    /** A seek asked for while the socket was lost; it runs once the resumed stream is promoted, or on [resume]. */
     private var resumeSeekFrame: Long? = null
+
+    /**
+     * The socket was lost while the current stream needed nothing more from the server: it plays on
+     * alone, and [resume] prepares what follows it on the next socket (see [detach]).
+     */
+    private var playingOffline = false
 
     /** Whether the playing stream lost its socket and waits for [resume] on the next one. */
     val awaitingResume: Boolean get() = resumeFrame != null && continuity == null
@@ -514,8 +520,15 @@ class NativePcmEngine(
             if (promotion.streamId == stream.streamId) promotion.requestedSeekFrame = frame
             return
         }
+        // The newest seek wins over one waiting for the next socket.
+        resumeSeekFrame = null
         if (seekWithinBuffer(stream, frame)) return
         if (seekWithinKeptBytes(stream, frame)) return
+        // Offline, only audio already on the device can be sought; the rest waits for the next socket.
+        if (playingOffline) {
+            resumeSeekFrame = frame
+            return
+        }
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
         pendingSeek = PendingSeek(target.streamId, frame)
@@ -832,15 +845,22 @@ class NativePcmEngine(
     }
 
     /**
-     * The socket is gone, as when the phone moves from Wi-Fi to mobile data. A playing encoded
-     * stream keeps playing the bytes it already received, cut at a frame they decode whole, instead
-     * of stopping; [resume] on the next socket opens the rest from that frame and it takes over there
-     * with no gap, as a queued successor does. Returns that frame, or null when nothing can play on,
-     * in which case the caller stops as [onTransportClosed] does.
+     * The socket is gone, as when the phone moves from Wi-Fi to mobile data. A playing stream the
+     * server has nothing more to send for (all of it received, or played from the device's cache)
+     * plays on to its end, and [resume] on the next socket prepares what follows it. A playing
+     * encoded stream still arriving keeps playing the bytes it already received, cut at a frame they
+     * decode whole, instead of stopping; [resume] opens the rest from that frame and it takes over
+     * there with no gap, as a queued successor does. Returns the frame the stream plays on to, or
+     * null when nothing can play on, in which case the caller stops as [onTransportClosed] does.
      */
     fun detach(): Long? {
-        if (failed || !playing || loop != null || pendingSeek != null || resumeFrame != null) return null
+        if (failed || !playing || pendingSeek != null || resumeFrame != null || playingOffline) return null
         val stream = current ?: return null
+        receivedEnd(stream)?.let { end ->
+            playOffline(stream)
+            return end
+        }
+        if (loop != null) return null
         val encoded = stream.encoded ?: return null
         if (stream.local || stream.eosReceived || encoded.closed || encoded.serverEos != null || encoded.localSeek != null) return null
         val table = encoded.table ?: return null
@@ -865,9 +885,46 @@ class NativePcmEngine(
         return splice
     }
 
-    /** On the next socket, opens the detached track from its splice frame; false when none waits. */
+    /** The frame [stream]'s audio ends at when all of it is already on the device; else null. */
+    private fun receivedEnd(stream: Stream): Long? {
+        val encoded = stream.encoded
+        return when {
+            encoded != null -> (stream.startFrame + encoded.initialTotalFrames).takeIf { stream.local || encoded.serverEos != null }
+            else -> (stream.startFrame + stream.receivedFrames).takeIf { stream.eosReceived }
+        }
+    }
+
+    /** Lets [stream] play on with no socket: no control may name the old socket's streams on the next one. */
+    private fun playOffline(stream: Stream) {
+        continuity?.takeUnless { it.local }?.let { prepared ->
+            prepared.local = true
+            closeContinuity("socket-lost")
+        }
+        pendingPromotion = null
+        unconfirmedCloses.clear()
+        stream.local = true
+        // Its end waits for the successor the next socket prepares, rather than ending the queue.
+        expectContinuity = queuedNext != null
+        playingOffline = true
+    }
+
+    /**
+     * On the next socket: a stream that played on alone gets its successor or loop prepared, and a
+     * seek asked for meanwhile runs; a detached track opens from its splice frame. False when
+     * nothing waits.
+     */
     fun resume(): Boolean {
-        if (failed || !awaitingResume) return false
+        if (failed) return false
+        if (playingOffline) {
+            playingOffline = false
+            reconcileContinuity()
+            resumeSeekFrame?.let { frame ->
+                resumeSeekFrame = null
+                seek(frame)
+            }
+            return true
+        }
+        if (!awaitingResume) return false
         val stream = current ?: return false
         open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, checkNotNull(resumeFrame))
         return true
@@ -1130,7 +1187,7 @@ class NativePcmEngine(
 
     /** Opens, replaces or closes the continuity role so it matches the loop or queued successor. */
     private fun reconcileContinuity() {
-        if (failed || resumeFrame != null) return
+        if (failed || resumeFrame != null || playingOffline) return
         val head = current ?: return
         val desiredKind = when {
             loop != null -> StreamKind.LOOP
@@ -1375,5 +1432,6 @@ class NativePcmEngine(
         sounded = false
         resumeFrame = null
         resumeSeekFrame = null
+        playingOffline = false
     }
 }

@@ -1137,6 +1137,32 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aNetworkChangeOnceTheWholeSongArrivedPlaysOnWithoutAGap() {
+        // Two seconds of the fake codec all arrive at once, as a song's last minutes do.
+        val whole = SyntheticTrack(tag = 4, frames = 2L * RATE)
+        val harness = ControllerHarness(whole, second, realTime = true, encoded = true)
+        harness.load(1, whole, second)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= RATE / 2 }
+        val sink = harness.sinks.last()
+
+        val operations = sink.operations.size
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        harness.server.reconnect()
+        val successorStarted = whole.frames + RATE / 2
+        harness.runUntil { sink.writtenFrames >= successorStarted || harness.events.any { it is NativePlaybackEvent.Error } }
+        // The output never stopped across the switch or into the successor.
+        assertFalse(sink.operations.drop(operations).any { it == "pause" || it == "flush" })
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED || harness.events.any { it is NativePlaybackEvent.Error } }
+
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertEquals(2, harness.connects)
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(Run(4, 0, whole.frames), Run(2, 0, second.frames)), sink.runs())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    @Test
     fun aNewDocumentReattachesToTheRunningQueueWithItsClaimAndRevision() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
         val harness = ControllerHarness(long, realTime = true)

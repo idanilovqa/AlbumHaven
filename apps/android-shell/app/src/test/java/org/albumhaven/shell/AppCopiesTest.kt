@@ -53,7 +53,8 @@ class AppCopiesTest {
     @Test
     fun iar006SigningOutDropsTheCopy() {
         copies.reported(SITE, stored = true)
-        copies.signedOut(SITE)
+        // The sign-in page's start (ShellActivity), as the page deleted the copy on leaving.
+        copies.reported(SITE, stored = false)
         assertFalse(copies.exists(SITE))
     }
 

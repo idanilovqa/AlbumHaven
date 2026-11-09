@@ -598,7 +598,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // The sign-in page means signed out: the page's copy went as it left (app-copy-worker.js).
-            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) copies.signedOut(siteOrigin)
+            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) copies.reported(siteOrigin, stored = false)
             // The same origin's next document re-attaches to the running queue from its handshake.
             documentGone()
             incompatibleWeb = false

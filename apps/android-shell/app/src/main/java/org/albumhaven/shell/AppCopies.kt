@@ -33,9 +33,6 @@ internal class AppCopies(private val store: AppCopyStore, private val now: () ->
         }
     }
 
-    /** Signing in again starts without the copy, which the page deleted as it left. */
-    fun signedOut(origin: String) = reported(origin, stored = false)
-
     /** Leaving [origin] for another sandbox: its copy goes, at once if its page answers. */
     fun leaving(origin: String) {
         store.dropCopy(origin)

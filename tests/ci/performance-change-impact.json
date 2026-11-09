@@ -64,6 +64,7 @@
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
     "music_app/services/cover_provider_outcomes_postgres.py",
+    "music_app/services/album_ratings_postgres.py",
     "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
   ],
   "rules": [
@@ -207,7 +208,8 @@
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
         "music_app/services/album_local_membership.py",
-        "music_app/services/cover_provider_outcomes_postgres.py"
+        "music_app/services/cover_provider_outcomes_postgres.py",
+        "music_app/services/album_ratings_postgres.py"
       ],
       "targets": [
         "utility-problematic-files",

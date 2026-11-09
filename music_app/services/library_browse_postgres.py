@@ -23,7 +23,7 @@ from music_app.routes.api_rules_helpers import (
     text_problem_reason,
     year_problem_reason,
 )
-from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService, valid_tag_rating_sql
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -5127,6 +5127,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "is_compilation": bool(metadata.get("is_compilation")),
                 "cover_path": row_payload.get("album_cover_path"),
                 "spotify_cover_quota_exceeded": bool(row_payload.get("spotify_cover_quota_exceeded")),
+                "file_rating_mismatch": bool(row_payload.get("file_rating_mismatch")),
                 "cover_revision": metadata.get("cover_revision"),
                 "cover_selection_origin": (
                     str(metadata.get("cover_selection_origin") or "").strip().casefold()
@@ -5576,6 +5577,7 @@ _PROBLEM_REASON_IDENTITY_CODES = {
     "Album name mismatch": "album-name-mismatch",
     "Album artist mismatch": "album-artist-mismatch",
     "Year mismatch": "year-mismatch",
+    "File rating mismatch": "file-rating-mismatch",
     "Inconsistent year": "inconsistent-year",
     "Undecoded characters": "undecoded-characters",
     "Encoding problem": "encoding-problem",
@@ -5680,6 +5682,8 @@ def _problematic_album_reasons(album: Mapping[str, object]) -> list[str]:
 
     if album.get("spotify_cover_quota_exceeded"):
         add("Spotify cover search quota exceeded")
+    if album.get("file_rating_mismatch"):
+        add("File rating mismatch")
 
     if not album.get("cover_path"):
         add("Missing cover art")
@@ -5782,6 +5786,8 @@ def _problematic_album_scope_reasons(album: Mapping[str, object]) -> list[str]:
 
     if album.get("spotify_cover_quota_exceeded"):
         add("Spotify cover search quota exceeded")
+    if album.get("file_rating_mismatch"):
+        add("File rating mismatch")
 
     if not album.get("cover_path"):
         add("Missing cover art")
@@ -11145,7 +11151,7 @@ def _problematic_files_sql(
     duplicate_sources_only: bool = False,
     path_columns: bool = False,
 ) -> str:
-    spotify_quota_cte = "" if duplicate_sources_only else """
+    album_flag_ctes = "" if duplicate_sources_only else f"""
         spotify_quota_albums as materialized (
           select tasks.task_key
           from ops.cover_lookup_tasks tasks
@@ -11154,6 +11160,21 @@ def _problematic_files_sql(
             and tasks.metadata ->> 'provider' = 'search_spotify'
             and tasks.metadata ->> 'category' = 'rate_limit_quota'
             and tasks.status = 'failed'
+        ),
+        file_rating_mismatch_albums as materialized (
+          -- The library owner's app rating is authoritative; a differing file
+          -- tag is reported for the user to resolve, never applied.
+          select library.local_albums.id as album_id
+          from app.album_ratings
+          join bootstrap_context on bootstrap_context.library_id = app.album_ratings.library_id
+          join library.libraries
+            on library.libraries.id = app.album_ratings.library_id
+           and library.libraries.owner_account_id = app.album_ratings.account_id
+          join library.local_albums
+            on library.local_albums.library_id = app.album_ratings.library_id
+           and library.local_albums.album_key = app.album_ratings.album_key
+          where {valid_tag_rating_sql("library.local_albums.metadata -> 'tag_album_rating'")}
+            <> app.album_ratings.rating
         ),
     """
 
@@ -11605,6 +11626,8 @@ def _problematic_files_sql(
           union
           select duplicate_album_ids.album_id from duplicate_album_ids
           union
+          select file_rating_mismatch_albums.album_id from file_rating_mismatch_albums
+          union
           select active_track_order_rollup.album_id
           from active_track_order_rollup
           where active_track_order_rollup.incomplete_track_order is true
@@ -11638,7 +11661,7 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
-            {spotify_quota_cte}
+            {album_flag_ctes}
             {physical_file_ctes}
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
@@ -11659,7 +11682,7 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
-            {spotify_quota_cte}
+            {album_flag_ctes}
             {physical_file_ctes}
             {candidate_ctes_sql}
             select library.local_albums.id as album_id
@@ -12008,6 +12031,7 @@ def _problematic_files_sql(
     )
     diagnostic_result_projection = "" if duplicate_sources_only else f"""
           , (selected_albums.id::text || ':search_spotify') in (select task_key from spotify_quota_albums) as spotify_cover_quota_exceeded
+          , selected_albums.id in (select album_id from file_rating_mismatch_albums) as file_rating_mismatch
           , coalesce(ignored_repair_rollup.ignored_repair_keys, array[]::text[]) as ignored_repair_keys,
           coalesce(separate_release_rollup.separate_release_keys, array[]::text[]) as separate_release_keys,
           {duplicate_candidate_projection} as duplicate_candidate,
@@ -12046,7 +12070,7 @@ def _problematic_files_sql(
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        {spotify_quota_cte}
+        {album_flag_ctes}
         {physical_file_ctes if inventory_physical_context else ''}
         {candidate_ctes}
         {initial_selection_name} as (

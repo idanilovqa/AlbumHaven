@@ -340,7 +340,7 @@ def _load_album_disc_ratings_sql() -> str:
     )
 
 
-def _valid_tag_rating_sql(value: str) -> str:
+def valid_tag_rating_sql(value: str) -> str:
     return f"""
         case
           when jsonb_typeof({value}) = 'number'
@@ -352,8 +352,8 @@ def _valid_tag_rating_sql(value: str) -> str:
 
 
 def _import_missing_tag_disc_ratings_sql() -> str:
-    album_rating = _valid_tag_rating_sql("library.local_albums.metadata -> 'tag_album_rating'")
-    track_rating = _valid_tag_rating_sql(
+    album_rating = valid_tag_rating_sql("library.local_albums.metadata -> 'tag_album_rating'")
+    track_rating = valid_tag_rating_sql(
         "library.local_track_files.metadata #> '{scan_cache,file_entry,album_rating}'"
     )
     return (

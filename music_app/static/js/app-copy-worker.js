@@ -7,6 +7,11 @@
 // date. Only responses the server marked as copies for an account are kept, never anything
 // no-store. Signing in or out deletes every copy, as does a page for another account.
 // The copy is only for showing: every write goes to the server.
+//
+// No file path is stored on the device. The server addresses local covers by path
+// (`/cover?path=…`), so a kept page has every `cover_path` and `music_dir` emptied and every cover
+// URL replaced by an opaque key, the SHA-256 of the cover file it names; cover bytes seen online
+// are kept under the same key, least recently seen out first past 200 MB.
 (function appCopyWorker(root) {
   'use strict';
 
@@ -16,20 +21,30 @@
   const META_PATH = '/__app-copy__/meta';
   const MAX_COPY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const MAX_PAGES = 4;
-  const MAX_COVERS = 400;
-  const MIN_COVER_MAX_AGE_S = 24 * 60 * 60;
+  const MAX_COVER_BYTES = 200 * 1024 * 1024;
+  const COVER_KEY_PREFIX = '/__album-haven-cover/';
+  const MAX_COVER_FILLS = 120;
+  // A cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`); paths are percent-encoded.
+  const COVER_URL = /\/cover\?path=[^"'\s<>]*/g;
+  const PATH_FIELDS = /("(?:cover_path|music_dir)":\s*)"(?:[^"\\]|\\.)*"/g;
+  const PATH_ATTRIBUTES = /(data-cover-path=)"[^"]*"/g;
   const NETWORK_MARKER = '<meta name="album-haven-app-copy" content="network"';
   const COPY_MARKER = '<meta name="album-haven-app-copy" content="cache"';
   const SIGN_IN_PAGES = /^\/(?:login|accept-invitation|password-reset|password-recovery)(?:\/|$)/;
   const SIGN_IN_POSTS = new Set(['/login', '/logout']);
 
   const noStore = response => /(?:^|,)\s*no-store\b/i.test(response.headers.get('Cache-Control') || '');
-  const maxAge = response => Number((response.headers.get('Cache-Control') || '').match(/max-age=(\d+)/i)?.[1] || 0);
   const isAppPage = url => url.pathname === '/';
   const pageKey = url => `${url.pathname}${url.search}`;
 
-  function createAppCopyWorker({ caches, fetch, origin, now = Date.now, maxCovers = MAX_COVERS }) {
+  function createAppCopyWorker({
+    caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, subtle = root.crypto.subtle,
+  }) {
     const metaUrl = new URL(META_PATH, origin).href;
+    // Kept covers by URL in least-recently-seen order, with their sizes; read from the cache once.
+    let coverIndex = null;
+    // Covers named by kept pages, by opaque key, to fetch once while online. Held in memory only.
+    const unseenCovers = new Map();
 
     async function accountCache() {
       const name = (await caches.keys()).find(key => key.startsWith(CACHE_PREFIX));
@@ -37,8 +52,32 @@
     }
 
     async function forget() {
+      coverIndex = null;
+      unseenCovers.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(CACHE_PREFIX));
       await Promise.all(names.map(name => caches.delete(name)));
+    }
+
+    // One key per cover file, whatever size or version a page asks for.
+    async function coverKey(url) {
+      const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
+      const digest = await subtle.digest('SHA-256', new TextEncoder().encode(source));
+      const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      return new URL(`${COVER_KEY_PREFIX}${hex}`, origin).href;
+    }
+
+    async function withoutPaths(html) {
+      const keys = new Map();
+      for (const [raw] of html.matchAll(COVER_URL)) {
+        if (keys.has(raw)) continue;
+        const url = new URL(raw.replaceAll('\\u0026', '&').replaceAll('&amp;', '&'), origin);
+        const key = await coverKey(url);
+        keys.set(raw, new URL(key).pathname);
+        unseenCovers.set(key, url.href);
+      }
+      return html.replace(COVER_URL, raw => keys.get(raw))
+        .replace(PATH_FIELDS, '$1""')
+        .replace(PATH_ATTRIBUTES, '$1""');
     }
 
     async function readMeta(cache) {
@@ -79,7 +118,7 @@
         target = null;
       }
       const cache = target ? target.cache : await caches.open(CACHE_PREFIX + account);
-      const html = (await response.text()).replace(NETWORK_MARKER, COPY_MARKER);
+      const html = await withoutPaths((await response.text()).replace(NETWORK_MARKER, COPY_MARKER));
       const key = pageKey(url);
       await cache.put(new URL(key, origin).href, new Response(html, {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -159,25 +198,91 @@
       }
     }
 
+    // Each cover is stored as `<key>?bytes=<size>`, so the sizes come from the key names alone.
+    async function readCoverIndex(cache) {
+      if (!coverIndex) {
+        const index = new Map();
+        for (const request of await cache.keys()) {
+          const url = new URL(request.url);
+          if (!url.pathname.startsWith(COVER_KEY_PREFIX)) continue;
+          index.set(`${url.origin}${url.pathname}`, Number(url.searchParams.get('bytes') || 0));
+        }
+        coverIndex = index;
+      }
+      return coverIndex;
+    }
+
+    // The cover under [key], now the most recently seen (in memory; a restart keeps the stored
+    // order); null when none is kept.
+    async function seenCover(cache, key) {
+      const kept = await cache.match(key, { ignoreSearch: true });
+      if (kept && coverIndex?.has(key)) {
+        const bytes = coverIndex.get(key);
+        coverIndex.delete(key);
+        coverIndex.set(key, bytes);
+      }
+      return kept || null;
+    }
+
+    async function keepCover(cache, key, response) {
+      const body = await response.arrayBuffer();
+      const index = await readCoverIndex(cache);
+      if (index.get(key) !== body.byteLength) {
+        await cache.delete(key, { ignoreSearch: true });
+        await cache.put(`${key}?bytes=${body.byteLength}`, new Response(body, {
+          headers: { 'Content-Type': response.headers.get('Content-Type') || 'application/octet-stream' },
+        }));
+      }
+      index.delete(key);
+      index.set(key, body.byteLength);
+      let total = Array.from(index.values()).reduce((sum, bytes) => sum + bytes, 0);
+      for (const [evicted, bytes] of index) {
+        if (total <= maxCoverBytes) break;
+        index.delete(evicted);
+        total -= bytes;
+        await cache.delete(evicted, { ignoreSearch: true });
+      }
+    }
+
+    // A cover from the server, as today, kept under its opaque key; offline, the one kept there.
     async function cover(request) {
       const target = await accountCache();
       if (!target) return fetch(request);
-      const kept = await target.cache.match(request);
-      if (kept) {
-        // Moved to the end, so the least recently seen cover goes first.
-        await target.cache.delete(request);
-        await target.cache.put(request, kept.clone());
-        return kept;
+      const key = await coverKey(new URL(request.url));
+      let response;
+      try {
+        response = await fetch(request);
+      } catch (error) {
+        const kept = await seenCover(target.cache, key);
+        if (kept) return kept;
+        throw error;
       }
-      const response = await fetch(request);
-      if (response.status === 200 && !noStore(response) && maxAge(response) >= MIN_COVER_MAX_AGE_S) {
-        await target.cache.put(request, response.clone());
-        const covers = (await target.cache.keys()).filter(key => new URL(key.url).pathname === '/cover');
-        for (const evicted of covers.slice(0, Math.max(0, covers.length - maxCovers))) {
-          await target.cache.delete(evicted);
-        }
+      if (response.status === 200 && !noStore(response)) {
+        await keepCover(target.cache, key, response.clone());
       }
       return response;
+    }
+
+    // The kept pages' covers not yet kept, fetched once while online, top of the page first.
+    async function fillCovers() {
+      const target = await accountCache();
+      if (!target) return;
+      const index = await readCoverIndex(target.cache);
+      for (const [key, url] of Array.from(unseenCovers).slice(0, MAX_COVER_FILLS)) {
+        unseenCovers.delete(key);
+        if (index.has(key)) continue;
+        const response = await fetch(new Request(url, { credentials: 'same-origin' }));
+        if (response.status === 200 && !noStore(response)) {
+          await keepCover(target.cache, key, response);
+        }
+      }
+    }
+
+    // A kept page's cover: its bytes when seen before, else nothing and the page shows a placeholder.
+    async function keptCover(request) {
+      const target = await accountCache();
+      const kept = target ? await seenCover(target.cache, request.url) : null;
+      return kept || new Response(null, { status: 404 });
     }
 
     // Which handler answers [request]; null leaves it to the network untouched.
@@ -191,10 +296,13 @@
         return SIGN_IN_PAGES.test(url.pathname) ? 'forget' : null;
       }
       if (url.pathname.startsWith('/static/')) return url.searchParams.has('v') ? 'versioned-asset' : 'asset';
+      if (url.pathname.startsWith(COVER_KEY_PREFIX)) return 'kept-cover';
       return url.pathname === '/cover' ? 'cover' : null;
     }
 
-    const handlers = { page: navigate, 'versioned-asset': versionedAsset, asset, cover, forget };
+    const handlers = {
+      page: navigate, 'versioned-asset': versionedAsset, asset, cover, 'kept-cover': keptCover, forget,
+    };
     const handle = (name, request) => handlers[name](request);
 
     // The page asks to keep its current view, to forget every copy, or whether a copy exists.
@@ -210,6 +318,7 @@
             if (target && pageKey(url) !== '/' && !isFresh((await readMeta(target.cache)).pages['/'])) {
               await fetchPage(new URL('/', origin));
             }
+            await fillCovers();
           } catch (_error) {
             // Offline: the copy kept before stays as it is.
           }

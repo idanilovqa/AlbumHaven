@@ -8,7 +8,6 @@ other response, and the same page fetched normally, keeps its no-store contract.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -71,9 +70,8 @@ def test_app_page_fetched_as_a_copy_is_marked_for_its_account_only(asgi_app):
     assert headers["x-album-haven-app-copy"] == decode_json(account_body)["account"]
     assert f'<meta name="album-haven-app-copy" content="network" data-account="{headers["x-album-haven-app-copy"]}">'.encode() in body
     assert headers["x-album-haven-asset-version"] == asgi_app.state.runtime_asset_version
-    # The copy is the page as rendered, minus the server's library path.
-    assert _bootstrap(body)["initial_view"]["music_dir"] == ""
-    assert str(Path(asgi_app.state.config["MUSIC_DIR"])).encode("utf-8") not in body
+    # The page is rendered as for any request; the worker removes file paths before storing it.
+    assert _bootstrap(body)["initial_view"]["music_dir"] == str(asgi_app.state.config["MUSIC_DIR"])
 
 
 def test_copy_account_key_is_opaque_and_stable(asgi_app):

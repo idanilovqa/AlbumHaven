@@ -51,12 +51,7 @@ from music_app.services.playlist_read_seams import build_view_surface_payload, r
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
-from music_app.services.app_copy import (
-    app_copy_account,
-    app_copy_requested,
-    mark_app_copy,
-    without_library_path,
-)
+from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -1065,8 +1060,6 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
     copy_account = app_copy_account(request.state.current_actor) if app_copy_requested(request) else ""
-    if copy_account:
-        bootstrap_payload = without_library_path(bootstrap_payload)
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)

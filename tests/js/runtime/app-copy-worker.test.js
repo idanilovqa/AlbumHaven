@@ -19,13 +19,25 @@ function fakeCaches() {
       const entries = new Map();
       stores.set(name, {
         entries,
-        async match(request) { return entries.get(keyOf(request))?.clone(); },
+        async match(request, options = {}) {
+          const key = keyOf(request);
+          if (!options.ignoreSearch) return entries.get(key)?.clone();
+          const base = key.split('?')[0];
+          for (const [url, response] of entries) if (url.split('?')[0] === base) return response.clone();
+          return undefined;
+        },
         async put(request, response) {
           const key = keyOf(request);
           entries.delete(key);
           entries.set(key, response);
         },
-        async delete(request) { return entries.delete(keyOf(request)); },
+        async delete(request, options = {}) {
+          const key = keyOf(request);
+          if (!options.ignoreSearch) return entries.delete(key);
+          const matches = [...entries.keys()].filter(url => url.split('?')[0] === key.split('?')[0]);
+          matches.forEach(url => entries.delete(url));
+          return matches.length > 0;
+        },
         async keys() { return [...entries.keys()].map(url => new Request(url)); },
       });
     }
@@ -46,7 +58,7 @@ function page(account, { version = 'v1', body = 'Library', cacheControl = 'priva
   );
 }
 
-function setup({ respond = () => page('acct-a'), maxCovers } = {}) {
+function setup({ respond = () => page('acct-a'), maxCoverBytes } = {}) {
   const caches = fakeCaches();
   const calls = [];
   let clock = 1_000_000;
@@ -56,7 +68,7 @@ function setup({ respond = () => page('acct-a'), maxCovers } = {}) {
     if (response instanceof Error) throw response;
     return response;
   };
-  const worker = createAppCopyWorker({ caches, fetch, origin: ORIGIN, now: () => clock, maxCovers });
+  const worker = createAppCopyWorker({ caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes });
   const handle = async (request) => {
     const route = worker.route(request);
     return route ? worker.handle(route, request) : null;
@@ -249,36 +261,183 @@ test('IAR-004: a new version is kept for the next start while the running versio
   assert.ok(cache.entries.has(`${ORIGIN}/static/app.js?v=v2`));
 });
 
-test('cover thumbnails already seen are kept up to a bound, least recently used first out', async () => {
-  const { caches, calls, handle } = setup({
-    maxCovers: 2,
-    respond: request => (new URL(request.url).pathname === '/'
-      ? page('acct-a')
-      : new Response(request.url, { headers: { 'Cache-Control': 'public, max-age=31536000' } })),
-  });
-  await handle(navigation('/'));
-  await handle(resource('/cover?path=a&v=1'));
-  await handle(resource('/cover?path=b&v=1'));
-  await handle(resource('/cover?path=a&v=1'));
-  await handle(resource('/cover?path=c&v=1'));
+// The server addresses local covers by their file path. Rendered as an attribute and as tojson.
+const COVER_PATH = String.raw`C:\Music\Broadcast\Tender Buttons\cover.jpg`;
+const COVER_URL = `/cover?path=${encodeURIComponent(COVER_PATH)}&size=480&v=process-abc`;
+const OTHER_COVER_URL = `/cover?path=${encodeURIComponent('/srv/music/Mono/cover.png')}&size=480&v=process-abc`;
+const coverKey = async (url) => {
+  const parsed = new URL(url, ORIGIN);
+  const source = parsed.searchParams.get('path') ?? `${parsed.pathname}${parsed.search}`;
+  return `/__album-haven-cover/${Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))).toString('hex')}`;
+};
 
-  const covers = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()].filter(url => url.includes('/cover'));
-  assert.deepEqual(covers, [`${ORIGIN}/cover?path=a&v=1`, `${ORIGIN}/cover?path=c&v=1`]);
-  assert.equal(calls.filter(request => request.url.includes('path=a')).length, 1);
+function libraryPage(account = 'acct-a') {
+  const attribute = COVER_URL.replaceAll('&', '&amp;');
+  const json = JSON.stringify({
+    initial_view: {
+      music_dir: String.raw`C:\Music`,
+      artist_groups: [{ albums: [
+        { key: 'a', cover_path: COVER_PATH, cover_preview_url: COVER_URL },
+        { key: 'b', cover_path: '/srv/music/Mono/cover.png', cover_preview_url: OTHER_COVER_URL },
+        { key: 'c', cover_path: null, remote_cover_url: 'https://covers.example/c.jpg' },
+      ] }],
+    },
+  }).replaceAll('&', '\\u0026');
+  return new Response(
+    `<!doctype html><html><head><meta name="album-haven-app-copy" content="network" data-account="${account}"></head><body>`
+    + `<img src="${attribute}" data-cover-path="${COVER_PATH}" data-remote-cover-url="">`
+    + `<script>window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = ${json};</script></body></html>`,
+    { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-cache', [COPY_HEADER]: account, [VERSION_HEADER]: 'v1' } },
+  );
+}
+
+const coverResponse = (bytes = 10, cacheControl = 'public, max-age=31536000') => new Response(new Uint8Array(bytes), {
+  headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': cacheControl },
 });
 
-test('short-lived covers are not kept', async () => {
-  const { caches, handle } = setup({
-    respond: request => (new URL(request.url).pathname === '/'
-      ? page('acct-a')
-      : new Response('img', { headers: { 'Cache-Control': 'public, max-age=300' } })),
-  });
+function libraryServer({ coverBytes = 10, coverCacheControl } = {}) {
+  return request => (new URL(request.url).pathname === '/' ? libraryPage() : coverResponse(coverBytes, coverCacheControl));
+}
+
+// Every stored URL and text body: no drive letter, UNC or POSIX library path, cover path URL or music_dir value.
+async function storedPathLeaks(caches) {
+  const leaks = [];
+  for (const name of await caches.keys()) {
+    const cache = await caches.open(name);
+    for (const request of await cache.keys()) {
+      const response = await cache.match(request);
+      const type = response.headers.get('Content-Type') || '';
+      const texts = [decodeURIComponent(request.url), ...(type.startsWith('image/') ? [] : [await response.text()])];
+      for (const text of texts) {
+        for (const pattern of [/(?<![A-Za-z])[A-Za-z]:[\\/]/,/\\\\[^\\"]+\\/, /\/srv\/music/, /\/cover\?path=/, /"music_dir":\s*"[^"]/, /data-cover-path="[^"]/, /"cover_path":\s*"[^"]/]) {
+          if (pattern.test(text)) leaks.push(`${request.url}: ${pattern}`);
+        }
+      }
+    }
+  }
+  return leaks;
+}
+
+test('the path scanner catches every stored form of a library path', async () => {
+  for (const leak of [COVER_PATH, String.raw`\\nas\music\cover.jpg`, '/srv/music/x', COVER_URL, '"music_dir":"x"', 'data-cover-path="x"', '"cover_path": "x"']) {
+    const caches = fakeCaches();
+    await (await caches.open('probe')).put(`${ORIGIN}/probe`, new Response(`<p>${leak}</p>`, { headers: { 'Content-Type': 'text/html' } }));
+    assert.equal((await storedPathLeaks(caches)).length > 0, true, leak);
+  }
+});
+
+test('IAR-009: no file path is stored anywhere: covers get opaque on-device keys', async () => {
+  const { caches, handle } = setup({ respond: libraryServer() });
+  await handle(navigation('/'));
+  await handle(resource(COVER_URL));
+
+  assert.deepEqual(await storedPathLeaks(caches), []);
+  const kept = await (await handle(navigation('/'))).text();
+  assert.ok(kept.includes(`src="${await coverKey(COVER_URL)}"`), kept);
+  assert.ok(kept.includes(`"cover_preview_url":"${await coverKey(OTHER_COVER_URL)}"`), kept);
+  assert.ok(kept.includes('"cover_path":""') && kept.includes('data-cover-path=""') && kept.includes('"music_dir":""'));
+  assert.ok(kept.includes('https://covers.example/c.jpg'));
+});
+
+test('a cover seen online shows from its opaque key in the copy, offline too', async () => {
+  let online = true;
+  const server = libraryServer({ coverBytes: 7 });
+  const { handle } = setup({ respond: request => (online ? server(request) : new TypeError('Failed to fetch')) });
+  await handle(navigation('/'));
+  await handle(resource(COVER_URL));
+  online = false;
+
+  const kept = await handle(resource(await coverKey(COVER_URL)));
+
+  assert.equal(kept.status, 200);
+  assert.equal((await kept.arrayBuffer()).byteLength, 7);
+});
+
+test('saving the view fetches the covers of the kept page once, so they show offline', async () => {
+  let online = true;
+  const server = libraryServer({ coverBytes: 5 });
+  const { caches, calls, handle, worker } = setup({ respond: request => (online ? server(request) : new TypeError('Failed to fetch')) });
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  online = false;
+
+  assert.equal(calls.filter(request => request.url.includes('/cover?')).length, 2);
+  for (const url of [COVER_URL, OTHER_COVER_URL]) {
+    assert.equal((await handle(resource(await coverKey(url)))).status, 200);
+  }
+  assert.deepEqual(await storedPathLeaks(caches), []);
+});
+
+test('a cover never seen has no bytes under its key; the page shows its placeholder', async () => {
+  const { calls, handle } = setup({ respond: libraryServer() });
   await handle(navigation('/'));
 
-  await handle(resource('/cover?path=a'));
+  const missing = await handle(resource(await coverKey(OTHER_COVER_URL)));
+
+  assert.equal(missing.status, 404);
+  assert.equal(calls.length, 1);
+});
+
+test('covers still load from the server online, as today, and any size of a cover fills its key', async () => {
+  const { calls, handle } = setup({ respond: libraryServer({ coverBytes: 9 }) });
+  await handle(navigation('/'));
+  await handle(resource(COVER_URL.replace('size=480', 'size=960')));
+  await handle(resource(COVER_URL));
+
+  assert.equal(calls.filter(request => request.url.includes('/cover?')).length, 2);
+  const kept = await handle(resource(await coverKey(COVER_URL)));
+  assert.equal((await kept.arrayBuffer()).byteLength, 9);
+});
+
+test('the cover cache holds at most its byte budget, least recently seen first out', async () => {
+  const { caches, handle } = setup({ maxCoverBytes: 25, respond: libraryServer({ coverBytes: 10 }) });
+  await handle(navigation('/'));
+  const urls = ['a', 'b', 'c'].map(name => `/cover?path=${name}&size=480&v=1`);
+  await handle(resource(urls[0]));
+  await handle(resource(urls[1]));
+  await handle(resource(urls[0]));
+  await handle(resource(urls[2]));
+
+  const keys = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()].filter(url => url.includes('/__album-haven-cover/')).map(url => url.split('?')[0]);
+  assert.deepEqual(keys, [`${ORIGIN}${await coverKey(urls[0])}`, `${ORIGIN}${await coverKey(urls[2])}`]);
+});
+
+test('a restarted worker reads cover sizes from the stored keys and keeps to the budget', async () => {
+  const caches = fakeCaches();
+  const fetch = async request => libraryServer({ coverBytes: 10 })(request);
+  const urls = ['a', 'b', 'c'].map(name => `/cover?path=${name}&size=480&v=1`);
+  const first = createAppCopyWorker({ caches, fetch, origin: ORIGIN, maxCoverBytes: 25 });
+  await first.handle('page', navigation('/'));
+  await first.handle('cover', resource(urls[0]));
+  await first.handle('cover', resource(urls[1]));
+
+  const restarted = createAppCopyWorker({ caches, fetch, origin: ORIGIN, maxCoverBytes: 25 });
+  await restarted.handle('cover', resource(urls[2]));
+
+  const keys = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()]
+    .filter(url => url.includes('/__album-haven-cover/')).map(url => url.split('?')[0]);
+  assert.deepEqual(keys, [`${ORIGIN}${await coverKey(urls[1])}`, `${ORIGIN}${await coverKey(urls[2])}`]);
+});
+
+test('covers the server marks no-store are not kept', async () => {
+  const { caches, handle } = setup({ respond: libraryServer({ coverCacheControl: 'no-store, max-age=0' }) });
+  await handle(navigation('/'));
+
+  await handle(resource(COVER_URL));
 
   const urls = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()];
-  assert.ok(!urls.some(url => url.includes('/cover')));
+  assert.ok(!urls.some(url => url.includes('cover')));
+});
+
+test('IAR-006: covers go with the copy on sign-out', async () => {
+  const { caches, handle, worker } = setup({ respond: libraryServer() });
+  await handle(navigation('/'));
+  await handle(resource(COVER_URL));
+
+  await worker.handle('forget', resource('/logout', 'POST'));
+
+  assert.deepEqual(await caches.keys(), []);
 });
 
 test('IAR-005: offline, unversioned assets come from the last copy seen', async () => {

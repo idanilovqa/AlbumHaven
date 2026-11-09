@@ -4795,7 +4795,10 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
 // or size. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
 // well under a millisecond) and compared with the album cover's; a near-identical picture is dimmed and
 // cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
+// The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
+// alike; their average colors must also be close for the pictures to count as the same.
 const ARTBOX_DUPLICATE_MAX_DISTANCE = 6;
+const ARTBOX_DUPLICATE_MAX_COLOR_DELTA = 24;
 const artboxPictureHashes = new Map();
 
 function computeImageDHash(image) {
@@ -4810,13 +4813,23 @@ function computeImageDHash(image) {
   const grey = (x, y) => { const i = (y * 9 + x) * 4; return pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114; };
   let bits = '';
   for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) bits += grey(x, y) > grey(x + 1, y) ? '1' : '0';
-  return bits;
+  const mean = [0, 1, 2].map((channel) => {
+    let total = 0;
+    for (let index = channel; index < pixels.length; index += 4) total += pixels[index];
+    return total / (pixels.length / 4);
+  });
+  return { bits, mean };
 }
 
 function dHashDistance(left, right) {
   let distance = 0;
   for (let index = 0; index < 64; index += 1) if (left[index] !== right[index]) distance += 1;
   return distance;
+}
+
+function isSameArtboxPicture(left, right) {
+  return dHashDistance(left.bits, right.bits) <= ARTBOX_DUPLICATE_MAX_DISTANCE
+    && left.mean.every((value, channel) => Math.abs(value - right.mean[channel]) <= ARTBOX_DUPLICATE_MAX_COLOR_DELTA);
 }
 
 function hashArtboxPicture(url) {
@@ -4852,7 +4865,7 @@ function markSecondArtboxDuplicatePictures(body) {
     if (!coverHash) return;
     body.querySelectorAll('.cover-lookup-art-card:not(.is-disabled) .cover-lookup-art-preview img').forEach((image) => {
       void hashLoadedPreview(image).then((hash) => {
-        if (!hash || dHashDistance(hash, coverHash) > ARTBOX_DUPLICATE_MAX_DISTANCE) return;
+        if (!hash || !isSameArtboxPicture(hash, coverHash)) return;
         const card = image.closest('.cover-lookup-art-card');
         if (!card || !card.isConnected || card.classList.contains('is-active')) return;
         card.classList.add('is-disabled');
@@ -30981,8 +30994,7 @@ function renderTagEditor(options = {}) {
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
       // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
-      // REC-005 (owner): the disc comes from the disc folder's name; the disc tag only when the folder has none.
-      const discNumber = showFolderNames ? (getAlbumTrackDiscNumber({ path }) || getAlbumTrackDiscNumber(track)) : null;
+      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
       const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">

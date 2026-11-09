@@ -42,9 +42,17 @@ test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { t
     await tagEditorActions.expectFolderFullyLoaded();
     const paths = await tagEditorActions.readTrackPaths();
     expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
-    expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
-    // REC-005 (owner): each file is marked with its disc as "CD N", taken from the disc folder name.
-    await expect(tagEditorActions.tagEditor.trackList.locator('.tag-editor-track-folder', { hasText: 'CD 2' }).first()).toBeVisible();
+    const secondDiscPath = paths.find((path) => /[\\/]Disc 2[\\/]/u.test(path));
+    expect(secondDiscPath).toBeTruthy();
+    // REC-005 (owner, 11-08): each row prints the disc number from its tags. This fixture tags both disc folders
+    // as disc 1, so the Disc 2 file is proven by its own row, and every row reads "CD 1".
+    const secondDiscRow = tagEditorActions.tagEditor.trackList.locator(`[data-tag-editor-track="${secondDiscPath.replace(/["\\]/gu, '\\$&')}"]`);
+    await secondDiscRow.scrollIntoViewIfNeeded();
+    await expect(secondDiscRow).toBeVisible();
+    await expect(secondDiscRow.locator('.tag-editor-track-folder')).toHaveText('CD 1');
+    const labels = await tagEditorActions.tagEditor.trackList.locator('.tag-editor-track-folder').allTextContents();
+    expect(labels).toHaveLength(paths.length);
+    expect([...new Set(labels.map((label) => label.trim()))]).toEqual(['CD 1']);
   });
 });
 

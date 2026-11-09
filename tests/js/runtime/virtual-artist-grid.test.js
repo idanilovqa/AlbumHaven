@@ -4016,7 +4016,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   const cardsMarkup = containerEl.innerHTML;
   const cardsRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'cards' });
   assert.match(cardsMarkup, /data-gallery-display="cards"/);
-  assert.match(cardsMarkup, /class="album-subtitle"><span data-gallery-metadata-text>Broadcast · 2005<\/span><\/div>/);
+  assert.match(cardsMarkup, /class="album-subtitle gallery-card__metadata"><span class="gallery-card__artist"><span data-gallery-metadata-text>Broadcast<\/span><\/span><span class="gallery-card__year">· 2005<\/span><\/div>/);
   assert.doesNotMatch(cardsMarkup, /class="album-year"/);
 
   context.state.gallery.mainState = context.reduceGalleryMainState(
@@ -5865,6 +5865,29 @@ test('artist blocks place owned albums before a counted Featured On subsection',
     ]);
 });
 
+test('selected Hans Zimmer keeps joint owners and one chronological Featured On section', () => {
+  const { context } = createRuntimeContext();
+  const preferencePath = path.join(path.dirname(helperPath), 'gallery-display-preference-helpers.js');
+  vm.runInContext(fs.readFileSync(preferencePath, 'utf8'), context, { filename: preferencePath });
+  context.state.view.selected_artist = 'Hans Zimmer';
+  context.state.gallery.combineSimilarArtistsByArtist = {};
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.columns = 2;
+  const score = { key: 'score', name: 'Spirit', year: 2002, album_artist: 'Hans Zimmer', artist_relationship: 'owned' };
+  const joint = { key: 'joint', name: 'Spirit', year: 2002, album_artist: 'Bryan Adams / Hans Zimmer', artist_relationship: 'owned' };
+  const earlier = { key: 'guest-1989', name: 'Rain Man', year: 1989, album_artist: 'Various Artists', artist_relationship: 'featured' };
+  const later = { key: 'guest-2020', name: 'Later soundtrack', year: 2020, album_artist: 'Composer A & Composer B', artist_relationship: 'featured' };
+  const groups = context.buildDisplayGroups([{ artist: 'Hans Zimmer', albums: [score, later, joint, earlier] }]);
+  assert.deepEqual(Array.from(groups, group => group.artist), ['Hans Zimmer']);
+  const blocks = groups.flatMap(group => virtualGrid.getBlocksForSection({ group }));
+  assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+    { kind: 'row', albums: [score, joint] },
+    { kind: 'subheading', title: 'Featured On', count: 2 },
+    { kind: 'row', albums: [earlier, later] },
+  ]);
+  assert.equal(joint.album_artist, 'Bryan Adams / Hans Zimmer');
+});
+
 test('artist blocks render a Featured On subsection for a featured-only artist', () => {
     const { context } = createRuntimeContext();
     const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -5920,17 +5943,19 @@ test('Featured On subheading renders singular and plural album counts', () => {
     assert.match(html, /artist-subsection-label/);
     assert.match(
       html,
-      new RegExp(`Featured On[\\s\\S]*gallery-divider__line[\\s\\S]*artist-subsection-separator[^>]*>•[\\s\\S]*${label}`),
+      new RegExp(`Featured On[\\s\\S]*gallery-divider__line[\\s\\S]*artist-subsection-count[^>]*>${label}`),
     );
+    assert.doesNotMatch(html, /artist-subsection-separator|>•</);
   }
   const subsectionRule = galleryCssSource.match(/\.artist-subsection-label\s*\{([^}]*)\}/)?.[1] || '';
   assert.match(subsectionRule, /display\s*:\s*grid/);
   assert.match(
     subsectionRule,
-    /grid-template-columns\s*:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content\s+max-content/,
+    /grid-template-columns\s*:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content\s*;/,
   );
   assert.match(subsectionRule, /margin\s*:\s*2px\s+0\s+-2px\s+28px/);
   assert.match(subsectionRule, /font-size\s*:\s*0\.68rem/);
+  assert.doesNotMatch(galleryCssSource, /\.artist-subsection-separator\s*\{/);
 });
 
 for (const rowGap of [14, 23]) {

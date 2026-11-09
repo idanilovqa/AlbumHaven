@@ -30,7 +30,9 @@ for folder, edition, discs in [("Real Album", "", [1, 2]), ("Complete copy", "",
             records.append((f"{folder}/CD{disc}/{number}.mp3", "Real Album", f"Disc {disc} Song {number}", disc, number, edition))
 records += [("Random songs/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),
             ("Random songs/unrelated.mp3", "Unrelated Album", "Unrelated song", 1, 8, ""),
-            ("Orphan/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, "")]
+            ("Orphan/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),
+            ("Wallet Box/CD01/01.mp3", "Wallet Album One", "Wallet Song One", 1, 1, ""),
+            ("Wallet Box/CD02/01.mp3", "Wallet Album Two", "Wallet Song Two", 1, 1, "")]
 for relative, album, title, disc, number, edition in records:
     destination = owner / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +51,11 @@ for folder, size, color in [("Real Album",1600,"red"),("Complete copy",1600,"red
     Image.new("RGB",(size,size),color).save(owner/folder/"cover.png")
 for folder in ["Real Album", "Complete copy"]:
     Image.new("RGB",(1600,1600),"green").save(owner/folder/"manual-choice.png")
+Image.new("RGB",(1200,1200),"orange").save(owner/"Wallet Box"/"CD01"/"front.png")
+Image.new("RGB",(1200,1200),"blue").save(owner/"Wallet Box"/"CD02"/"front.png")
 print(json.dumps({"owner": str(owner), "primaryCover": str(owner/"Real Album"/"cover.png"),
+                  "walletOneCover": str(owner/"Wallet Box"/"CD01"/"front.png"),
+                  "walletTwoCover": str(owner/"Wallet Box"/"CD02"/"front.png"),
                   "excludedPaths": [str(owner/r[0]) for r in records if r[0].startswith(("Random songs/","Orphan/"))]}))
 `;
 
@@ -103,7 +109,12 @@ from psycopg.types.json import Jsonb
 owner = Path(sys.argv[1]).resolve(strict=True)
 if not owner.name.startswith("E2E Album Source Ownership "):
     raise RuntimeError("Legacy cover setup requires test-owned media")
-wrong = owner / ("Real Album" if sys.argv[2] == "stage-in-folder" else "Random songs") / "cover.png"
+wrong = owner / ("Real Album" if sys.argv[2] in {"stage-in-folder", "stage-in-folder-automatic"} else "Random songs") / "cover.png"
+if sys.argv[2] == "stage-in-folder-automatic":
+    from PIL import Image
+    with Image.open(wrong) as image:
+        resized = image.resize((640, 640))
+    resized.save(wrong)
 revision = hashlib.sha256(wrong.read_bytes()).hexdigest()
 prefix = str(owner / "Real Album") + os.sep
 with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as connection:
@@ -116,12 +127,12 @@ with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as c
     if len(albums) != 1:
         raise RuntimeError("Expected one uniquely owned fixture album")
     album_id = albums[0][0]
-    if sys.argv[2] in {"stage", "stage-in-folder"}:
+    if sys.argv[2] in {"stage", "stage-in-folder", "stage-in-folder-automatic"}:
         from PIL import Image
         with Image.open(wrong) as image:
             width, height = image.size
         metadata = {"cover_path": str(wrong), "cover_revision": revision,
-                    "cover_selection_origin": "user", "local_cover_width": width,
+                "cover_selection_origin": "automatic" if sys.argv[2] == "stage-in-folder-automatic" else "user", "local_cover_width": width,
                     "local_cover_height": height}
         connection.execute("""
             update library.local_albums set cover_path = %s,
@@ -162,4 +173,5 @@ async function legacyCoverState(fixture, operation) {
 // Call staging only while the managed production application is stopped.
 export const stageOwnedLegacyCoverContamination = fixture => legacyCoverState(fixture, 'stage');
 export const stageOwnedLegacyInFolderCover = fixture => legacyCoverState(fixture, 'stage-in-folder');
+export const stageOwnedAutomaticInFolderCover = fixture => legacyCoverState(fixture, 'stage-in-folder-automatic');
 export const readOwnedLegacyCoverState = fixture => legacyCoverState(fixture, 'read');

@@ -52,6 +52,58 @@ const buttonComponentCssPath = path.join(
 const componentUrl = 'http://album-track-table-component.test/album-track-table';
 const detailsComponentUrl = 'http://album-track-table-component.test/album-details';
 
+for (const width of [390, 960]) {
+  test(`long track artist credits pan without moving the row at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await page.setContent('<div id="table"></div>');
+    await page.addStyleTag({ path: compactDataTableCssPath });
+    await page.addStyleTag({ path: albumTrackTableCssPath });
+    await page.evaluate(() => {
+      window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+      window.ButtonComponent = { renderIconSvg: () => '' };
+    });
+    for (const file of ['compact-player-helpers.js', 'compact-data-table.js', 'album-track-table.js']) {
+      await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
+    }
+    await page.evaluate(() => {
+      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ playingAnimation: false, groups: [{ tracks: [
+        { title: 'Track with guests', secondaryArtist: 'Featured guest artist and orchestra with a very long complete credit '.repeat(5), duration: '3:42' },
+        { title: 'Short credit', secondaryArtist: 'Guest', duration: '2:10' },
+      ] }] });
+    });
+    await page.evaluate(() => syncAlbumTrackCreditMotion(document.getElementById('table')));
+    const rows = page.locator('.album-track-table__row');
+    const before = await rows.first().boundingBox();
+    const credit = page.locator('.album-track-table__secondary').first();
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await credit.locator('span').evaluate(node => {
+      const animation = node.getAnimations()[0];
+      animation.pause();
+      animation.currentTime = 11000;
+    });
+    const boxes = await credit.evaluate(node => ({ outer: node.getBoundingClientRect().toJSON(), inner: node.firstElementChild.getBoundingClientRect().toJSON() }));
+    expect(boxes.inner.left).toBeLessThan(boxes.outer.left);
+    expect(boxes.inner.right).toBeCloseTo(boxes.outer.right, 0);
+    expect(await rows.first().boundingBox()).toEqual(before);
+    const short = page.locator('.album-track-table__secondary').last();
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
+    expect(await short.locator('span').evaluate(node => node.getAnimations().length)).toBe(0);
+    await short.evaluate(node => { node.style.width = '10px'; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await short.evaluate(node => { node.style.width = ''; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await expect(credit).toHaveAttribute('title', /Featured guest artist/);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'album-track-credit-pan');
+    await page.evaluate(() => disposeAlbumTrackCreditMotion(document.getElementById('table')));
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.setViewportSize({ width: width + 20, height: 720 });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+  });
+}
+
 async function mountAlbumTrackTable(page) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',
@@ -410,7 +462,7 @@ test('Editorial table aligns left while its final 1px outline fades into the ori
 
 
 test('decoded Album Details artwork stays square and visible while only tracks scroll at short desktop heights', async ({ page }) => {
-  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="teal"/></svg>');
+  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360"><rect width="480" height="360" fill="teal"/></svg>');
   for (const { height, trackCount } of [{ height: 960, trackCount: 5 }, { height: 400, trackCount: 30 }]) {
     await page.setViewportSize({ width: 1440, height });
     await page.route('http://album-track-table-component.test/artwork', route => route.fulfill({
@@ -441,11 +493,14 @@ test('decoded Album Details artwork stays square and visible while only tracks s
       const rect = img.getBoundingClientRect(), cover = img.closest('.track-modal-cover').getBoundingClientRect();
       const list = document.querySelector('.track-modal-list'), dialog = document.querySelector('.track-modal-dialog');
       return { width: rect.width, height: rect.height, coverHeight: cover.height, complete: img.complete, naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight, objectFit: getComputedStyle(img).objectFit,
         listScroll: list.scrollHeight > list.clientHeight, listOverflow: getComputedStyle(list).overflowY,
         dialogOverflow: getComputedStyle(dialog).overflowY, dialogBottom: dialog.getBoundingClientRect().bottom };
     });
     expect(geometry.complete).toBe(true);
     expect(geometry.naturalWidth).toBe(480);
+    expect(geometry.naturalHeight).toBe(360);
+    expect(geometry.objectFit).toBe('fill');
     expect(geometry.width).toBeGreaterThan(0);
     expect(geometry.width).toBeCloseTo(geometry.height, 0);
     expect(geometry.height).toBeLessThanOrEqual(geometry.coverHeight);

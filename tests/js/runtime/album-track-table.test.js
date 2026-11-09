@@ -106,7 +106,7 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
   assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
-  assert.match(html, /class="album-track-table__secondary">Guest Artist<\/span>/);
+  assert.match(html, /class="album-track-table__secondary" title="Guest Artist"><span>Guest Artist<\/span>/);
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
   assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
   assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
@@ -190,6 +190,17 @@ test('playing spectra share the exact row outline path at opposite offsets and f
   assert.match(css, /\.album-track-table__total\s*\{[^}]*border-left:\s*0[^}]*border-top:\s*0/s);
   assert.match(css, /linear-gradient\(to left/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+});
+
+test('collapsing any loose-track section also collapses the aggregate length', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  assert.match(
+    css,
+    /\.album-track-table:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\) \.album-track-table__total\s*\{[^}]*display:\s*none/s,
+  );
 });
 
 test('the final table right outline fades into the footer without a corner glow layer', () => {

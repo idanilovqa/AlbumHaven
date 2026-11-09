@@ -6,6 +6,48 @@ from tests.e2e.support import isolatedPostgres
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 
 
+@pytest.mark.parametrize("field,value,query", [
+    ("year", 2001, "2001"),
+    ("artist", "Scan Artist", "Scan Artist"),
+    ("album_artist", "Scan Owner", "Scan Owner"),
+    ("album", "Scan Release", "Scan Release"),
+    ("title", "Don't Stop", "Dont Stop"),
+    ("title", "Morning", "Mornng"),
+    ("album_artist", "Raw Artist", "Canonical Artist"),
+    ("exception_type", "non album rarity", "Non-album rarity"),
+    ("override", "Custom Collection", "Custom Collection"),
+])
+def test_global_loose_track_search_keeps_persisted_field_matches(
+    watcher_repair_inventory, field, value, query,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    track = fixture.entry("Generic/Folder/audio.flac", album="", exception="Interview")
+    unrelated = fixture.entry("Generic/Other/unrelated.flac", album="", exception="Interview")
+    fixture.seed(track, unrelated)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        if field == "override":
+            connection.execute("""
+                insert into library.exception_overrides(library_id, track_key, override_payload)
+                select library_id, track_key, %s::jsonb from library.local_tracks where track_key = %s
+            """, (Jsonb({"exception_type": value}), track["path"]))
+        else:
+            connection.execute("""
+                update library.local_track_files set metadata = jsonb_set(
+                  metadata, array['scan_cache','file_entry',%s], %s::jsonb)
+                where private_path = %s
+            """, (field, Jsonb(value), track["path"]))
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    _, entries = repository._load_non_album_entries(
+        view_state={"visible_library_categories": ["main_library"]},
+        alias_to_canonical={"Raw Artist": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Raw Artist"]}, query=query,
+        include_library_wide=True,
+    )
+    assert [entry["path"] for entry in entries] == [track["path"]]
+
+
 @pytest.mark.parametrize("source, exception", [
     ("stored", "Interview"), ("stored", " non album rarity "),
     ("path_override", "INTERVIEW"), ("track_override", "Interview"),

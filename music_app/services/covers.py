@@ -5,8 +5,10 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 from threading import Lock, RLock
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 try:
@@ -235,13 +237,29 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
             pass
 
 
+def _album_image_has_bytes(folder: Path, excluded: Path, data: bytes) -> bool:
+    for root, directories, files in os.walk(folder):
+        directories[:] = [name for name in directories if not is_managed_preview_path(Path(root) / name)]
+        for name in files:
+            path = Path(root) / name
+            if path == excluded or path.suffix.lower() not in _COVER_IMAGE_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size == len(data) and path.read_bytes() == data:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
-    if images_are_visually_similar(current_cover, raw_bytes):
-        return None
     current_bytes = current_cover.read_bytes()
+    # Keep the replaced cover only when no other album image already holds its bytes.
+    if current_bytes == raw_bytes or _album_image_has_bytes(folder, current_cover, current_bytes):
+        return None
     index = 1
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"
@@ -829,9 +847,14 @@ def queue_cover_display_variant_generation(
     )
 
 
-def image_dimensions(path: Path, *, raise_errors: bool = False) -> tuple[int, int]:
+def image_dimensions(
+    path: str | os.PathLike[str],
+    *,
+    raise_errors: bool = False,
+) -> tuple[int, int]:
     if Image is None:
         return (0, 0)
+    path = Path(path)
     normalized_path = str(path)
     signature = _image_dimensions_signature(path)
     with _IMAGE_DIMENSIONS_CACHE_LOCK:
@@ -874,6 +897,11 @@ def score_image(path: Path) -> tuple[float, int, int]:
     area = width * height
     return (ratio_delta, -area, len(path.name))
 
+def _local_cover_name_rank(path: Path) -> int:
+    tokens = set(re.split(r"[^a-z0-9]+", cover_stem(path)))
+    return 0 if tokens & {"cover", "front"} else 1
+
+
 def find_cover_image(folder: Path, image_extensions: set[str]) -> Path | None:
     if folder is None or not folder.exists() or not folder.is_dir():
         return None
@@ -888,4 +916,4 @@ def find_cover_image(folder: Path, image_extensions: set[str]) -> Path | None:
         return None
     if not candidates:
         return None
-    return min(candidates, key=score_image)
+    return min(candidates, key=lambda path: (_local_cover_name_rank(path), *score_image(path)))

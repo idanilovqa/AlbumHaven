@@ -573,6 +573,31 @@ test('streaming terminal ended finalizes and releases ownership exactly once', a
   assert.equal(uiUpdates, 1);
 });
 
+test('ended hands the queue to a track that needs another sample rate', async () => {
+  const track = { path: '/music/a.mp3', title: 'A' };
+  const nextTrack = { path: '/music/b.flac', title: 'B' };
+  const { context } = loadHelper({
+    state: { player: { current: track, listenSession: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 42 }),
+    releasePlaybackOwnership: () => {},
+  });
+  const played = [];
+  context.finalizeListenSession = async () => {};
+  context.updatePlayerUi = () => {};
+  context.peekNextQueuedTrack = () => nextTrack;
+  context.getNextQueuedTrack = () => nextTrack;
+  context.playTrackFromPayload = async (queued, options) => played.push({ queued, options });
+
+  await context.handleStreamingPlaybackEnded({
+    generation: 3, streamId: 9, trackPath: track.path, currentTime: 42,
+    sampleRateChangeTrackPath: nextTrack.path,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(played)), [
+    { queued: nextTrack, options: { allowSuspendedAutoplayFallback: true } },
+  ]);
+});
+
 test('play command after terminal EOS opens a fresh generation at frame zero before requesting resume', async () => {
   const track = {
     src: '/track?path=song.flac',
@@ -3315,4 +3340,24 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   context.state.player.current = { ...context.state.player.current, title: 'Hydrated title' };
   document.dispatch('pointerup', { pointerId: 7 });
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
+});
+
+test('a clicked track shows as playing before streaming starts', async () => {
+  let finishStart;
+  const shown = [];
+  const { context } = loadHelper({
+    state: { player: { current: { path: 'old.flac' }, selectedTrack: null, loopActive: false } },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 42 }),
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    getPlayerElements: () => ({}),
+    refreshTrackModalPlaybackState: () => shown.push(context.state.player.selectedTrack?.path || ''),
+    refreshNonAlbumModalPlaybackState: () => {},
+  });
+
+  const playing = context.playTrackFromPayload({ path: 'new.flac', src: 'new' });
+
+  assert.deepEqual(shown, ['new.flac'], 'the row updates before the switch completes');
+  finishStart(null);
+  await assert.rejects(playing, /did not start/);
+  assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
 });

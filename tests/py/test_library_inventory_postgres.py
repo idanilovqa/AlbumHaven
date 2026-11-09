@@ -426,6 +426,13 @@ def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
         assert forbidden not in sql
 
 
+def test_non_album_candidates_read_stored_membership_without_per_row_cte_scans():
+    sql = " ".join(inventory_module._non_album_candidates_sql().lower().split())
+    assert "(select problem from local_album_membership" not in sql
+    assert "exists (select 1 from local_album_membership" not in sql
+    assert "library.local_track_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'" in sql
+
+
 def test_non_album_candidate_query_projects_custom_collection_name():
     sql = " ".join(inventory_module._non_album_candidates_sql().lower().split())
 

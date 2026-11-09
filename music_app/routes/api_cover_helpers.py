@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import inspect
 from pathlib import Path
 
 from music_app.services.cache import (
@@ -11,6 +10,7 @@ from music_app.services.cache import (
 from music_app.services.cover_lookup_tasks import (
     clear_completed_cover_lookup_tasks,
     list_cover_lookup_task_summaries,
+    mark_cover_lookup_notifications_action_taken_for_track_paths,
     mark_cover_lookup_task_notification_action_taken,
 )
 from music_app.services.cover_state import (
@@ -18,21 +18,7 @@ from music_app.services.cover_state import (
     find_albums_by_track_paths as find_albums_by_track_paths_in_albums,
 )
 from music_app.services.covers import image_dimensions
-from music_app.services.problematic_albums import (
-    find_problematic_album_by_track_paths as find_problematic_album_by_track_paths_in_payload,
-)
-from music_app.services.repair_previews import build_problematic_albums_payload
-
-
-def _builder_accepts_explicit_dependencies(builder) -> bool:
-    try:
-        signature = inspect.signature(builder)
-    except (TypeError, ValueError):
-        return True
-    return "config" in signature.parameters or any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    )
+from music_app.services.repair_previews import build_problematic_album_detail_payload
 
 
 def apply_cover_path_for_tracks(
@@ -51,6 +37,7 @@ def apply_cover_path_for_tracks(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
         track_paths,
@@ -67,6 +54,7 @@ def apply_cover_path_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
+        include_problematic_album=include_problematic_album,
         manual_selection=True,
     )
 
@@ -134,6 +122,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -149,17 +138,17 @@ def apply_cover_selection_for_tracks(
         )
 
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
-        if not _builder_accepts_explicit_dependencies(build_problematic_albums_payload):
-            build_payload = build_problematic_albums_payload
-        else:
-            build_payload = lambda: build_problematic_albums_payload(
-                config=resolved_config,
-                library_state=resolved_state,
-                logger=resolved_logger,
-            )
-        return find_problematic_album_by_track_paths_in_payload(
-            updated_track_paths,
-            build_problematic_albums_payload=build_payload,
+        if not include_problematic_album:
+            return None
+        updated_albums = find_updated_albums(updated_track_paths)
+        album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
+        if not album_key:
+            return None
+        return build_problematic_album_detail_payload(
+            album_key,
+            config=resolved_config,
+            library_state=resolved_state,
+            logger=resolved_logger,
         )
 
     return apply_cover_selection_service(

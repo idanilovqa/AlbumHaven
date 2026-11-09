@@ -14,6 +14,18 @@ test('artist navigation requests summaries while explicit full and sidebar tiers
 });
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 
+test('selected artist gallery requests its scoped loose tracks in the first response', () => {
+  const { buildApiUrl } = loadHelpers();
+  const view = { selected_artist: '3', gallery_scope: 'all' };
+  const params = options => new URL(buildApiUrl(view, options), 'http://localhost').searchParams;
+  assert.equal(params({ omitSidebar: true }).get('include_non_album'), '1');
+  assert.equal(params({ omitSidebar: true }).has('include_library_wide_non_album'), false);
+  assert.equal(params({ omitSidebar: true }).get('payload_tier'), 'gallery_summary');
+  assert.equal(params({ rootSidebar: true }).has('include_non_album'), false);
+  assert.equal(params({ payloadTier: 'sidebar' }).has('include_non_album'), false);
+  assert.equal(new URL(buildApiUrl({ gallery_scope: 'all' }), 'http://localhost').searchParams.has('include_non_album'), false);
+});
+
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
   path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'),
@@ -265,7 +277,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -282,7 +294,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -321,7 +333,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 

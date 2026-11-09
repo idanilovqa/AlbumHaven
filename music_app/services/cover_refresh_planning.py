@@ -32,6 +32,11 @@ def build_cover_refresh_jobs(
             continue
 
         folder_key = str(folder)
+        entry_album_id = (
+            entry.get("album_id")
+            if isinstance(entry.get("album_id"), int) and entry["album_id"] > 0
+            else None
+        )
         job = jobs_by_folder.setdefault(
             folder_key,
             {
@@ -41,15 +46,17 @@ def build_cover_refresh_jobs(
                 "album": "",
                 "edition": "",
                 "year": None,
-                "album_id": None,
+                "album_id": entry_album_id,
                 "cover_selection_origin": None,
                 "cover_selection_provenance": None,
                 "selected_cover_revision": entry.get("selected_cover_revision", entry.get("cover_revision")),
                 "selected_remote_cover_url": entry.get("selected_remote_cover_url", entry.get("remote_cover_url")),
                 "selected_remote_cover_width": entry.get("selected_remote_cover_width", entry.get("remote_cover_width")),
                 "selected_remote_cover_height": entry.get("selected_remote_cover_height", entry.get("remote_cover_height")),
-                "selected_cover_path": (str(entry.get("selected_cover_path") or "").strip() or None)
-                if isinstance(entry.get("album_id"), int) and entry["album_id"] > 0 else None,
+                "selected_cover_path": (
+                    str(entry.get("selected_cover_path") or "").strip() or None
+                ) if entry_album_id is not None else None,
+                "selected_cover_path_conflict": False,
                 "needs_cover_fetch": False,
             },
         )
@@ -64,25 +71,76 @@ def build_cover_refresh_jobs(
             job["edition"] = str(entry.get("edition") or "").strip()
         if job.get("year") is None and isinstance(entry.get("year"), int):
             job["year"] = entry.get("year")
-        if job.get("album_id") is None and isinstance(entry.get("album_id"), int):
-            job["album_id"] = entry.get("album_id")
-        if entry.get("album_id") != job.get("album_id") or (str(entry.get("selected_cover_path") or "").strip() or None) != job.get("selected_cover_path"):
-            job["selected_cover_path"] = None
-        stored_origin = str(entry.get("selected_cover_origin", entry.get("cover_selection_origin")) or "").strip().casefold()
-        if stored_origin == "user" or (
-            stored_origin == "automatic" and job.get("cover_selection_origin") != "user"
+        if job.get("album_id") is None and entry_album_id is not None:
+            for field in (
+                "selected_cover_path",
+                "selected_cover_revision",
+                "selected_remote_cover_url",
+                "selected_remote_cover_width",
+                "selected_remote_cover_height",
+                "cover_selection_origin",
+                "cover_selection_provenance",
+            ):
+                job[field] = None
+            job["album_id"] = entry_album_id
+        entry_selected_cover_path = str(entry.get("selected_cover_path") or "").strip() or None
+        if entry_album_id is not None and entry_album_id != job.get("album_id"):
+            job["selected_cover_path_conflict"] = True
+            for field in (
+                "selected_cover_path",
+                "selected_cover_revision",
+                "selected_remote_cover_url",
+                "selected_remote_cover_width",
+                "selected_remote_cover_height",
+                "cover_selection_origin",
+                "cover_selection_provenance",
+            ):
+                job[field] = None
+        elif (
+            entry_album_id is not None
+            and entry_selected_cover_path
+            and not job.get("selected_cover_path_conflict")
         ):
-            job["cover_selection_origin"] = stored_origin
-        if entry.get("selected_cover_provenance", entry.get("cover_selection_provenance")) == "explicit":
-            job["cover_selection_provenance"] = "explicit"
+            if job.get("selected_cover_path") not in {None, entry_selected_cover_path}:
+                job["selected_cover_path"] = None
+                job["selected_cover_path_conflict"] = True
+            else:
+                job["selected_cover_path"] = entry_selected_cover_path
+        stored_origin = str(entry.get("selected_cover_origin", entry.get("cover_selection_origin")) or "").strip().casefold()
+        selection_identity_matches = (
+            entry_album_id == job.get("album_id")
+            and not job.get("selected_cover_path_conflict")
+        )
+        if selection_identity_matches:
+            if stored_origin == "user" or (
+                stored_origin == "automatic" and job.get("cover_selection_origin") != "user"
+            ):
+                job["cover_selection_origin"] = stored_origin
+            if entry.get("selected_cover_provenance", entry.get("cover_selection_provenance")) == "explicit":
+                job["cover_selection_provenance"] = "explicit"
 
-        cover_value = str(entry.get("selected_cover_path") or entry.get("cover_path") or "").strip()
+        if selection_identity_matches and (
+            stored_origin == "user" or job.get("cover_selection_provenance") == "explicit"
+        ):
+            for field in (
+                "selected_cover_revision",
+                "selected_remote_cover_url",
+                "selected_remote_cover_width",
+                "selected_remote_cover_height",
+            ):
+                value = entry.get(field, entry.get(field.removeprefix("selected_")))
+                if value not in {None, ""}:
+                    job[field] = value
+
+        entry_cover_path = entry.get("cover_path") if selection_identity_matches else None
+        cover_value = str(job.get("selected_cover_path") or entry_cover_path or "").strip()
         cover_path = Path(cover_value) if cover_value else None
         minimum_edge = 1200 if job.get("cover_selection_provenance") == "explicit" else automatic_cover_repair_minimum_edge()
         if cover_path is None:
             if job.get("selected_remote_cover_url") and all(
                 int(job.get(field) or 0) >= minimum_edge for field in ("selected_remote_cover_width", "selected_remote_cover_height")
             ):
+                job["needs_cover_fetch"] = False
                 continue
             job["needs_cover_fetch"] = True
             continue
@@ -107,9 +165,12 @@ def build_cover_refresh_jobs(
             )
         if cover_needs_fetch[decision_key]:
             job["needs_cover_fetch"] = True
+        elif job.get("selected_cover_path"):
+            job["needs_cover_fetch"] = False
 
     jobs: list[dict[str, object]] = []
     for job in jobs_by_folder.values():
+        job.pop("selected_cover_path_conflict", None)
         artist = str(job.get("artist") or "").strip()
         album = str(job.get("album") or "").strip()
         needs_cover_fetch = bool(job.get("needs_cover_fetch"))

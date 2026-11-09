@@ -122,6 +122,59 @@ def test_mixed_random_folder_duplicate_does_not_join_real_album_or_replace_its_c
     assert {str(track.path) for track in album.tracks} == set(proper_paths)
     assert str(album.cover_path) == proper_cover
     assert {track.disc_number for track in album.tracks} == {1, 2}
+    unrelated_album = next(album for album in albums if album.name == "Other Album")
+    assert [str(track.path) for track in unrelated_album.tracks] == [unrelated]
+    assert unrelated_album.cover_path is None
+
+
+def test_disc_total_and_title_survive_album_projection(tmp_path):
+    path = str(tmp_path / "Artist" / "Album" / "CD2" / "01 Bonus.mp3")
+    entries = {
+        path: {
+            **_entry(
+                path=path,
+                title="Bonus Track",
+                artist="Artist",
+                album_artist="Artist",
+                album="Album",
+                track_number=1,
+            ),
+            "disc_number": 2,
+            "disc_number_raw": "2/2",
+            "total_discs": 2,
+            "disc_subtitle": "Bonus",
+        }
+    }
+
+    album = build_albums_from_file_cache(entries)[0]
+    track = album.tracks[0]
+    payload_track = album_to_dict(album)["tracks"][0]
+
+    assert track.total_discs == 2
+    assert track.disc_subtitle == "Bonus"
+    assert payload_track["total_discs"] == 2
+    assert payload_track["disc_subtitle"] == "Bonus"
+
+
+def test_album_type_survives_album_rebuild_and_serialization(tmp_path):
+    track_path = str(tmp_path / "Artist" / "Single" / "01 Song.mp3")
+    entry = {
+        **_entry(
+            path=track_path,
+            title="Song",
+            artist="Artist",
+            album_artist="Artist",
+            album="Single",
+            track_number=1,
+        ),
+        "album_type": "Single",
+    }
+
+    album = build_albums_from_file_cache({track_path: entry})[0]
+
+    assert album.release_type == "Single"
+    assert album.tracks[0].album_type == "Single"
+    assert album_to_dict(album)["release_type"] == "Single"
 
 
 def test_partial_orphan_album_source_is_excluded_but_complete_copies_and_editions_remain(tmp_path):
@@ -173,6 +226,40 @@ def test_build_albums_reclassifies_stale_local_membership_marker(tmp_path):
     albums = build_albums_from_file_cache(entries)
 
     assert len(albums) == 1
+    assert {str(track.path) for track in albums[0].tracks} == set(entries)
+
+
+def test_track_level_variation_does_not_create_album_or_edition_buckets(tmp_path):
+    album_folder = tmp_path / "Artist" / "Album"
+    entries = {}
+    for index, (track_number, artist, title) in enumerate(
+        [
+            ("1", "Artist", "1. Opening"),
+            ("2/5", "Guest One", "002 Middle"),
+            ("03", "Artist feat. Guest Two", "17 - Interlude"),
+            ("4/5", "Guest Three", "Track Four"),
+            ("5/5", "Artist", "0005 Finale"),
+        ],
+        start=1,
+    ):
+        path = str(album_folder / f"{index:02}.mp3")
+        entries[path] = {
+            **_entry(
+                path=path,
+                title=title,
+                artist=artist,
+                album_artist="Artist",
+                album="Album",
+                track_number=index,
+            ),
+            "track_number": track_number,
+            "cover_path": str(album_folder / f"track-{index}.jpg"),
+        }
+
+    albums = build_albums_from_file_cache(entries)
+
+    assert len(albums) == 1
+    assert albums[0].edition is None
     assert {str(track.path) for track in albums[0].tracks} == set(entries)
 
 
@@ -286,6 +373,48 @@ def test_build_albums_from_file_cache_preserves_persisted_non_compilation_family
         {"MUSIC_DIR": Path("C:/Music")},
     )
     assert inferred_relation_views["folder_related"] == {}
+
+
+def test_build_albums_from_file_cache_infers_split_from_two_track_artists():
+    album_name = "Watcher Joint Credit Release"
+    member_artists = ("Jordsjø", "Breidablik")
+    file_cache = {
+        f"track-{track_number}": _entry(
+            path=f"C:/Music/Shared/{album_name}/{track_number:02}.mp3",
+            title=f"Track {track_number}",
+            artist=member_artist,
+            album_artist="Various Artists",
+            album=album_name,
+            track_number=track_number,
+        )
+        for track_number, member_artist in enumerate(member_artists, start=1)
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+
+    assert len(albums) == 1
+    assert albums[0].is_compilation is True
+    assert albums[0].album_artist == "Jordsjø / Breidablik"
+    assert albums[0].artists == list(member_artists)
+
+
+@pytest.mark.parametrize("album_artist", ["Various Artists", "First Artist / Absent Artist"])
+def test_explicit_split_keeps_both_main_artists_with_unequal_track_counts(album_artist):
+    file_cache = {
+        f"track-{index}": {
+            **_entry(
+                path=f"C:/Music/Split/{index:02}.mp3", title=f"Track {index}",
+                artist=artist, album_artist=album_artist, album="Explicit Split",
+                track_number=index,
+            ),
+            "album_type": "Split",
+        }
+        for index, artist in enumerate(["First Artist"] * 5 + ["Second Artist"], 1)
+    }
+    album = build_albums_from_file_cache(file_cache)[0]
+    assert album.artists == ["First Artist", "Second Artist"]
+    assert album.album_artist == "First Artist / Second Artist"
+    assert [track.artist for track in album.tracks] == ["First Artist"] * 5 + ["Second Artist"]
 
 
 def test_build_albums_from_file_cache_deduplicates_repeated_composite_album_artist_names():
@@ -1684,6 +1813,30 @@ def test_track_album_container_preserves_path_normalization_contract(raw, as_pat
     assert str(value) == (str(Path(raw)) if as_path else raw)
 
 
+def test_disjoint_bonus_tracks_are_not_duplicate_album_sources(tmp_path):
+    from music_app.services import library
+
+    def track(folder, title):
+        return Track(path=tmp_path / folder / f'{title}.mp3', title=title,
+                     album_artist='Beardfish', album='+4626-COMFORTZONE', year=2015,
+                     track_number=1, duration_seconds=180)
+
+    main = track('Album', 'Hold On')
+    bonus = track('Album/The Early Years - Outtakes and Demos', 'Poison Ivy')
+    album = Album(key='album', name='+4626-COMFORTZONE', album_artist='Beardfish', tracks=[main, bonus])
+    library._link_duplicate_album_sources([album])
+    assert get_album_duplicate_sources(album) == []
+    contexts = library._link_duplicate_album_sources([album], defer_source_payloads=True)
+    assert contexts[0]['has_duplicate_files'] is False
+
+    copy = Album(key='copy', name=album.name, album_artist='Beardfish', tracks=[track('Copy', 'Hold On')])
+    bonus_album = Album(key='bonus', name=album.name, album_artist='Beardfish', tracks=[bonus])
+    main_album = Album(key='main', name=album.name, album_artist='Beardfish', tracks=[main])
+    contexts = library._link_duplicate_album_sources([main_album, copy, bonus_album], defer_source_payloads=True)
+    assert [context['has_duplicate_files'] for context in contexts] == [True, True, False]
+    assert len(contexts[0]['materialize_sources']()) == 2
+
+
 def test_link_duplicate_album_sources_resolves_each_sibling_container_once(monkeypatch, tmp_path):
     from music_app.services import library
 
@@ -1722,7 +1875,7 @@ def test_link_duplicate_album_sources_keeps_separatorless_path_kinds_distinct(mo
         album_artist="Artist",
         tracks=[
             Track(path=Path("01.flac"), title="One", album_artist="Artist", album="Album", year=2001),
-            Track(path=Path("C:02.flac"), title="Two", album_artist="Artist", album="Album", year=2001),
+            Track(path=Path("C:02.flac"), title="One", album_artist="Artist", album="Album", year=2001),
         ],
     )
     resolved = []
@@ -1747,7 +1900,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
                 library_root_id="old-root")
     replacement = Track(path=shared_path, title="Replacement", album_artist="Artist", album="Album", year=2001,
                         library_root_id="replacement-root")
-    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Companion",
+    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Replacement",
                       album_artist="Artist", album="Album", year=2001, library_root_id="companion-root")
     mixed = [
         Track(path=tmp_path / "Mixed" / f"{index}.mp3", title=str(index),
@@ -1765,7 +1918,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
     sources = albums[0]._cached_duplicate_sources
     assert [source["folder_name"] for source in sources] == ["Copy A", "Copy B"]
     assert [source["label"] for source in sources] == ["1", "2"]
-    assert [[track["title"] for track in source["tracks"]] for source in sources] == [["Companion"], ["Replacement"]]
+    assert [[track["title"] for track in source["tracks"]] for source in sources] == [["Replacement"], ["Replacement"]]
     assert albums[1]._cached_duplicate_sources == sources
     assert albums[2]._cached_duplicate_sources == []
     assert albums[0].tracks == [old, companion]
@@ -1773,7 +1926,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
     assert albums[1].root_provenance["root_ids"] == ["replacement-root", "companion-root"]
 
 
-def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_identity(monkeypatch):
+def test_get_album_duplicate_sources_rejects_disjoint_tracks_for_same_album_identity(monkeypatch):
     serialized_titles: list[str] = []
 
     def fake_track_to_dict(track):
@@ -1819,9 +1972,9 @@ def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_id
 
     payload = get_album_duplicate_sources(album)
 
-    assert len(payload) == 2
+    assert payload == []
     assert getattr(album, "_cached_duplicate_sources") == payload
-    assert serialized_titles == ["Alpha", "Gamma"]
+    assert serialized_titles == []
 
 
 def test_build_album_base_payload_keeps_shared_album_fields():
@@ -2176,3 +2329,33 @@ def test_album_preview_to_dict_normalizes_viewer_scoped_listen_through_contract(
         "can_edit_viewer_filters": False,
     }
     assert payload["gallery_list_block"]["summary"]["album_preference"] == payload["album_preference"]
+
+
+def test_explicit_separate_release_splits_conflicting_file_years():
+    entries = {
+        "C:/Music/Artist/Album/01.flac": {
+            "path": "C:/Music/Artist/Album/01.flac",
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "First",
+            "track_number": 1,
+            "year": 2004,
+        },
+        "C:/Music/Artist/Album/02.flac": {
+            "path": "C:/Music/Artist/Album/02.flac",
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Second",
+            "track_number": 2,
+            "year": 2014,
+        },
+    }
+
+    albums = build_albums_from_file_cache(entries, {"artist::album"})
+
+    assert [(album.key, [track.title for track in album.tracks]) for album in albums] == [
+        ("artist::album::year::2004", ["First"]),
+        ("artist::album::year::2014", ["Second"]),
+    ]

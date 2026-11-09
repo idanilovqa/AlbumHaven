@@ -19,6 +19,20 @@ test('remaining UI confirmations stay compact and Appearance offers explicit saf
   assert.match(bridge, /danger:\s*true/);
 });
 
+test('Edit Tags header uses the shared modal close action', () => {
+  const markup = read('music_app/templates/partials/primary-modals.html');
+  const modalStart = markup.indexOf('<div class="tag-editor-modal"');
+  const modal = markup.slice(modalStart, markup.indexOf('<div class="track-modal"', modalStart));
+  const close = modal.match(/{% call action_button\('Close tag editor'[^]*?{% endcall %}/)?.[0] || '';
+
+  assert.match(close, /class_name='tag-editor-close'/);
+  assert.match(close, /attributes=\{'data-close-tag-editor': '1'\}/);
+  assert.match(close, /<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true">/);
+  assert.match(close, /<path d="m5 5 10 10M15 5 5 15"/);
+  assert.doesNotMatch(modal, /<button class="icon-button tag-editor-close"/);
+  assert.doesNotMatch(modal, />x<\/button>/);
+});
+
 test('alerts wrap adjacent actions and lightbox closure restores focus without closing its parent', () => {
   const alertCss = read('music_app/static/css/runtime/alert-components.css');
   const lightbox = read('music_app/static/js/runtime/track-modal-lightbox-helpers.js');
@@ -30,7 +44,7 @@ test('alerts wrap adjacent actions and lightbox closure restores focus without c
   assert.doesNotMatch(closeLightbox, /closeCoverLookupModal\s*\(/);
 });
 
-test('Cover Look Up puts its full-search action and description in the footer', () => {
+test('Cover Look Up puts one full-search action in the footer without redundant helper text', () => {
   const markup = read('music_app/templates/partials/primary-modals.html');
   const modalStart = markup.indexOf('<div class="cover-lookup-modal"');
   const modal = markup.slice(modalStart, markup.indexOf('<div class="non-album-modal"', modalStart));
@@ -42,8 +56,15 @@ test('Cover Look Up puts its full-search action and description in the footer', 
   assert.equal((modal.match(/id="cover-lookup-find-better-button"/g) || []).length, 1);
   assert.doesNotMatch(modal.slice(0, footerStart), /Find Better Art|cover-lookup-search-action/);
   assert.doesNotMatch(modal, /Find better cover art|Search for higher-quality artwork/);
-  assert.match(footer, /aria-describedby="cover-lookup-search-hint"/);
-  assert.match(footer, /id="cover-lookup-search-hint">Runs a full cover art search/);
+  assert.doesNotMatch(footer, /aria-describedby="cover-lookup-search-hint"/);
+  assert.doesNotMatch(footer, /id="cover-lookup-search-hint"/);
+});
+
+test('Cover Look Up keeps search and save actions on one desktop footer row', () => {
+  const css = read('music_app/static/css/runtime/cover-lookup-modal.css');
+
+  assert.match(css, /\.cover-lookup-modal-actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*align-items:\s*flex-start/s);
+  assert.match(css, /\.cover-lookup-modal-status\s*\{[^}]*min-width:\s*0/s);
 });
 
 test('Album Details supplies mock-approved cover actions to AlbumArtbox', () => {
@@ -72,7 +93,7 @@ test('failed notification retry and clear remain separate actions that do not ac
   for (const source of [handlers.replace(/\r\n/g, '\n'), handlers.replace(/\r?\n/g, '\r\n')]) {
     const retryHandler = source.match(/const retryCoverLookupTaskButton[^]*?\r?\n\s*}\r?\n\r?\n/)?.[0] || '';
     assert.match(retryHandler, /event\.stopPropagation\(\)/);
-    assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true \}\)/);
+    assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true, taskId \}\)/);
   }
 });
 
@@ -95,9 +116,9 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
   assert.match(drawer, /cover-lookup-task-card \$\{taskStateClass\}/);
   assert.doesNotMatch(drawer, /cover-lookup-task-card navigation-tree-item/);
-  assert.match(drawer, /taskStateClass = status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
+  assert.match(drawer, /taskStateClass = artChosen[^]*'is-completed'[^]*status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
   assert.match(drawer, /cover-lookup-task-status-label \$\{taskStateClass\}/);
-  assert.match(drawer, /ui-button--icon[^>]*cover-lookup-task-retry[^>]*aria-label="Retry lookup"[^]*?<svg/);
+  assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'refresh',[^]*?ariaLabel: 'Retry lookup',[^]*?className: 'cover-lookup-task-retry'/);
   assert.doesNotMatch(drawer, /data-retry-cover-lookup-task="[^]*>Retry<\/button>/);
   assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'delete',\s*semantic: 'destructive',[^]*?className: 'cover-lookup-task-clear',[^]*?'data-clear-cover-lookup-task': task.id/);
   assert.doesNotMatch(css, /\.cover-lookup-task-clear(?::hover)?\s*\{/);
@@ -107,7 +128,7 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
   assert.doesNotMatch(css, /\.cover-lookup-drawer-button\.has-active-lookups\s*\{[^}]*border-color:[^;}]*appearance-accent/s);
   assert.match(css, /\.cover-lookup-drawer-badge\s*\{[^}]*background:\s*var\(--appearance-info,\s*#64a8ff\)/s);
   assert.match(css, /\.cover-lookup-task-card:hover[^}]*background:\s*var\(--appearance-item-hover/s);
-  assert.match(css, /\.cover-lookup-task-card\s*\{[^}]*min-height:\s*66px[^}]*border-color:\s*var\(--appearance-line/s);
+  assert.match(css, /\.cover-lookup-task-card\s*\{[^}]*height:\s*86px[^}]*border-color:\s*var\(--appearance-line/s);
   assert.match(css, /\.cover-lookup-drawer-body\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
   assert.match(css, /\.cover-lookup-task-open:hover[^}]*background:\s*transparent/s);
   assert.match(css, /\.cover-lookup-task-card\.is-running[^]*\.cover-lookup-task-progress span[^}]*var\(--appearance-info/s);

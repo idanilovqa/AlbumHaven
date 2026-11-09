@@ -568,6 +568,50 @@ test('navigation-owned Problematic Files loading paints the bounded page before 
   await load;
 });
 
+test('navigation-owned Problematic Files loading paints active-query matches before completion', async () => {
+  const fullResponse = createDeferred();
+  const { context, calls } = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        problematicNavigationActiveToken: {},
+        searchQuery: 'First',
+      },
+    },
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              complete: false,
+              items: [{ key: 'first', name: 'First', detail_loaded: false }],
+            };
+          },
+        };
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, {
+    render: false,
+    renderInitialPage: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(context.state.utility.problematicFiles[0]?.key, 'first');
+  assert.ok(calls.renders >= 1, 'navigation must paint the bounded page');
+
+  fullResponse.resolve({
+    ok: true,
+    status: 200,
+    async json() { return { items: [{ key: 'first', name: 'First', detail_loaded: false }] }; },
+  });
+  await load;
+});
+
 test('loadProblematicFiles commits a forced canonical summary without initial or final rendering when render is false', async () => {
   const { context, calls } = loadHelper({
     async fetch() {
@@ -1050,6 +1094,10 @@ test('loadProblematicFiles rejects a JSON HTTP error without committing empty su
 
   assert.equal(context.state.utility.problematicFiles.length, 0);
   assert.equal(context.state.utility.loaded, false);
+  assert.equal(
+    context.state.utility.problematicLoadError,
+    'Problematic-file projection is temporarily unavailable.',
+  );
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(calls.consoleErrors.length, 1);
@@ -1174,6 +1222,7 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 0);
+  assert.match(context.state.utility.problematicLoadError, /Unexpected end (?:of )?JSON input/);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, false);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.match(context.state.utility.problematicDiagnostics.summaryLoad.error, /Unexpected end of JSON input/);
@@ -1188,6 +1237,7 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].key, 'album-1');
+  assert.equal(context.state.utility.problematicLoadError, '');
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, true);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.error, null);

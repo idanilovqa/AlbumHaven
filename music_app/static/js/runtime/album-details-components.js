@@ -35,7 +35,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     const missingClass = label.toLowerCase() === 'missing' ? ' album-details-header__tag--missing' : '';
     return `<span class="album-details-header__tag${missingClass}">${escapeHtml(label)}</span>`;
   });
-  const tagHtml = tagParts.join('');
+  const sourceMarkersHtml = String(config.sourceMarkersHtml || '');
+  const tagHtml = sourceMarkersHtml + tagParts.join('');
   const compactIdentity = [artist, album, year].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const stackedPrimary = [artist, album].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const secondaryValues = layout === 'editorial_canvas'
@@ -44,7 +45,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const secondaryParts = secondaryValues
     .filter((part) => part.value)
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
-  const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
+  const secondaryHtml = [...secondaryParts, sourceMarkersHtml, ...tagParts].join('');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
   return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
@@ -104,11 +105,10 @@ function buildLooseTracksHeaderActionsHtml() {
 }
 
 function buildMissingAlbumDetailsHtml(config = {}) {
-  const albumKey = escapeHtml(config.albumKey || '');
   const removeButton = config.canRemove
-    ? `<button class="button ui-button ui-button--primary ui-button--medium on-page-alert__remove" type="button" data-remove-missing-album="1" data-album-key="${albumKey}"><span class="ui-button__content">Remove from library</span></button>`
+    ? ButtonComponent.renderButton({ label: 'Remove from library', variant: 'primary', size: 'small', className: 'on-page-alert__remove', attributes: { 'data-remove-missing-album': '1', 'data-album-key': config.albumKey || '' } })
     : '';
-  const keepButton = '<button class="button ui-button ui-button--secondary ui-button--medium" type="button" data-close-track-modal="1"><span class="ui-button__content">Keep as missing</span></button>';
+  const keepButton = ButtonComponent.renderButton({ label: 'Keep as missing', size: 'small', attributes: { 'data-close-track-modal': '1' } });
   const message = config.canRemove
     ? 'This album cannot be found under the current libraries. Its library entry is still saved.'
     : 'This album cannot be found under the current libraries. Ask an owner or administrator to remove it.';
@@ -149,9 +149,9 @@ function syncMobileAlbumComposition(album) {
   let identity = body.querySelector('.mobile-album-identity');
   let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const mobileHeader = document.getElementById('mobile-page-header');
-  const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
+  const freshSourceMarkers = overlay.querySelector('.album-details-header .album-details-cover-source-markers');
   const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
+    || mobileHeader?.querySelector('.album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
   }
@@ -174,9 +174,8 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (inline && rail) rail.appendChild(sourceMarkers);
-    else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
-    else cover.appendChild(sourceMarkers);
+    if (mobile && mobileHeader) mobileHeader.querySelector('.gallery-bar__context').appendChild(sourceMarkers);
+    else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
   }
   if (identity) {
     identity.hidden = !inline;
@@ -185,13 +184,14 @@ function syncMobileAlbumComposition(album) {
       const artist = album.album_artist || album.artist || '';
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
-        title: album.name || 'Album',
-        eyebrow: centered ? [artist, album.year].filter(Boolean).join(' • ') : artist,
-        subtitle: centered ? '' : [album.year, album.total_duration_display].filter(Boolean).join(' • '),
+        title: album.display_name || album.name || 'Album',
+        eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
+        subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
         poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
+      if (sourceMarkers) identity.querySelector('.album-details-header__copy').appendChild(sourceMarkers);
     }
   }
   const freshActions = cover.querySelector('.album-artbox__overlay');

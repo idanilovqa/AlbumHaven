@@ -388,6 +388,7 @@ document.addEventListener('contextmenu', (event) => {
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
+  clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
@@ -497,4 +498,10 @@ if (tagEditorFooter) {
     secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
     primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
   });
+}
+
+// Standalone admin pages link back to the library-owned Settings surface.
+if (new URL(window.location.href).searchParams.get("settings") === "appearance") {
+  setUtilityActiveTab("appearance");
+  openUtilityModal();
 }

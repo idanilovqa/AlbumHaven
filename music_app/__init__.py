@@ -415,6 +415,7 @@ def create_asgi_app():
         TargetedLibraryReconciler,
     )
     from music_app.services.targeted_reconciliation_scheduler import (
+        LibraryRootUnavailableError,
         TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
@@ -426,6 +427,7 @@ def create_asgi_app():
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
         invalidate_targeted_library_projections,
+        queue_watcher_cover_refresh_for_track_paths_for_state,
         start_background_refresh_for_state,
     )
 
@@ -459,6 +461,9 @@ def create_asgi_app():
                     record_generated_preview(
                         preview_storage_repository, source_path, preview_path
                     )
+                    relocation_worker = _app.state.generated_preview_relocation
+                    if relocation_worker is not None:
+                        relocation_worker.wake()
                 except Exception:
                     runtime.logger.exception(
                         "Generated preview inventory record failed for %s.",
@@ -598,6 +603,21 @@ def create_asgi_app():
                 ),
                 max_outstanding=1,
             )
+            def after_targeted_reconciliation_commit(result) -> None:
+                invalidate_targeted_library_projections(
+                    runtime.library_state,
+                    runtime.config,
+                    revision=result.revision,
+                    affected_album_keys=result.affected_album_keys,
+                )
+                queue_watcher_cover_refresh_for_track_paths_for_state(
+                    runtime.library_state,
+                    runtime.config,
+                    runtime.logger,
+                    set(result.new_track_paths),
+                    affected_album_keys=result.affected_album_keys,
+                )
+
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
                 repository=select_scan_cache_adapter(runtime.config),
@@ -605,12 +625,7 @@ def create_asgi_app():
                 exception_overrides_provider=lambda: load_exception_overrides(
                     runtime.config
                 ),
-                after_commit=lambda result: invalidate_targeted_library_projections(
-                    runtime.library_state,
-                    runtime.config,
-                    revision=result.revision,
-                    affected_album_keys=result.affected_album_keys,
-                ),
+                after_commit=after_targeted_reconciliation_commit,
                 reservation_acquirer=acquire_structural_tag_edit_reservation,
                 publication_guard=runtime.library_watch_health_service.publication_guard,
             )
@@ -646,7 +661,8 @@ def create_asgi_app():
 
         def persist_library_watch_health(event) -> None:
             try:
-                runtime.library_watch_health_service.record_event(event)
+                if runtime.library_watch_health_service.record_event(event):
+                    targeted_executor.request_catch_up(frozenset({event.root_id}))
             except Exception:
                 runtime.logger.exception(
                     "Unable to persist library watcher health event."
@@ -676,9 +692,7 @@ def create_asgi_app():
                     )
                 root_path = Path(str(root.get("path") or ""))
                 if not root_path.is_dir():
-                    raise OSError(
-                        f"Library watcher catch-up root is unavailable: {root_id}"
-                    )
+                    raise LibraryRootUnavailableError(root_id)
                 result = targeted_reconciler.reconcile(
                     TargetedReconciliationRequest(
                         root_id=root_id,
@@ -767,6 +781,17 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        try:
+            configured_root_ids = {
+                str(root.get("id") or "") for root in get_library_roots(runtime.config)
+            }
+            targeted_executor.request_catch_up(frozenset(
+                problem.root_id
+                for problem in runtime.library_watch_health_service.load_problems()
+                if problem.root_id in configured_root_ids
+            ))
+        except Exception:
+            runtime.logger.exception("Unable to schedule persisted library watcher recovery.")
         try:
             yield
         finally:

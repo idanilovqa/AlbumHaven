@@ -107,6 +107,19 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   }
 });
 
+test('local functional runner does not promote bootstrap stderr notices to terminating errors', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const start = source.indexOf('function Invoke-PostgresBootstrap');
+  const end = source.indexOf('\n$environmentKeys', start);
+  const bootstrapFunction = source.slice(start, end);
+
+  assert.match(bootstrapFunction, /\$previousErrorActionPreference\s*=\s*\$ErrorActionPreference/i);
+  assert.match(bootstrapFunction, /\$ErrorActionPreference\s*=\s*['"]Continue['"]/i);
+  assert.match(bootstrapFunction, /\$bootstrapExitCode\s*=\s*\$LASTEXITCODE/i);
+  assert.match(bootstrapFunction, /finally\s*\{[\s\S]*?\$ErrorActionPreference\s*=\s*\$previousErrorActionPreference/i);
+  assert.match(bootstrapFunction, /if\s*\(\$bootstrapExitCode\s*-ne\s*0\)/i);
+});
+
 test('local functional runner preserves fixtures and stops all shards after process cleanup failure', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   const loopStart = source.indexOf('$overallFailed = $false');
@@ -184,7 +197,7 @@ ConvertTo-Json -InputObject @($results) -Compress
     { selected: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
     { error: 'PowerShell executable was not found.' },
   ]);
-  assert.match(source, /& \$bootstrapPowerShell @bootstrapArguments \| Where-Object/);
+  assert.match(source, /& \$bootstrapPowerShell @bootstrapArguments 2>&1 \| Where-Object/);
 });
 
 test('npm aliases and local guide expose only the supported runner', () => {
@@ -200,7 +213,7 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.equal(fs.existsSync(guidePath), true, 'Missing docs/local-functional-e2e.md');
   const guide = fs.readFileSync(guidePath, 'utf8');
   assert.match(guide, /npm run test:e2e:functional:local:list/);
-  assert.match(guide, /npm run test:e2e:functional:local -- -Shard gallery-search-visual/);
+  assert.match(guide, /npm run test:e2e:functional:local -- -Shard gallery-search-visual-1/);
   assert.match(guide, /npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007/);
   assert.match(guide, /npm run test:e2e:functional:local -- -All/);
   assert.match(guide, /localhost/);

@@ -13,13 +13,22 @@ from typing import Callable
 
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
-from music_app.services.generated_preview_storage import is_managed_preview_path
+from music_app.services.generated_preview_storage import (
+    is_generated_cover_artifact,
+    is_managed_preview_path,
+)
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 
 _ALBUM_DISC_MARKER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_ALBUM_RELEASE_PART_FOLDER_RE = re.compile(
+    r"^(?:(?:cd|disc|disk|lp)\s*[-_.]?\s*"
+    r"(?:\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"|bonus\s+(?:disc|tracks?))(?:\s*[-_.]\s*.*)?$",
     re.IGNORECASE,
 )
 _LOCAL_COVER_SELECTION_LOCKS_GUARD = Lock()
@@ -55,6 +64,44 @@ def is_disc_like_folder(path: Path) -> bool:
     return bool(_ALBUM_DISC_MARKER_RE.search(path.name or ""))
 
 
+def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str]) -> Path:
+    resolved_album_root = album_root.resolve(strict=False)
+    represented_roots: dict[str, Path] = {}
+    for raw_path in track_paths:
+        if not str(raw_path or "").strip():
+            continue
+        track_root = Path(str(raw_path)).resolve(strict=False).parent
+        represented_roots[os.path.normcase(str(track_root))] = track_root
+    if len(represented_roots) != 1:
+        return resolved_album_root
+    track_root = next(iter(represented_roots.values()))
+    if (
+        track_root == resolved_album_root
+        or track_root.parent != resolved_album_root
+        or not is_disc_like_folder(track_root)
+    ):
+        return resolved_album_root
+    try:
+        has_unrepresented_disc_sibling = any(
+            child.is_dir()
+            and is_disc_like_folder(child)
+            and child.resolve(strict=False) != track_root
+            for child in resolved_album_root.iterdir()
+        )
+    except OSError:
+        return track_root
+    return track_root if has_unrepresented_disc_sibling else resolved_album_root
+
+
+def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> bool:
+    child_paths = [path for path in paths if path != album_root]
+    return bool(child_paths) and all(
+        path.parent == album_root
+        and bool(_ALBUM_RELEASE_PART_FOLDER_RE.search(path.name or ""))
+        for path in child_paths
+    )
+
+
 def resolve_album_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
@@ -66,6 +113,7 @@ def resolve_album_root_from_track_paths(
         if isinstance(root, dict) and str(root.get("path") or "").strip()
     ]
     resolved_dirs: list[Path] = []
+    has_existing_track = False
     for raw_path in track_paths:
         raw_text = str(raw_path or "")
         if not raw_text:
@@ -76,12 +124,19 @@ def resolve_album_root_from_track_paths(
             configured_root_paths=configured_root_paths,
         )
         if resolved is None:
-            return None
-        parent = resolved.parent
-        if is_disc_like_folder(parent) and parent.parent != parent:
-            parent = parent.parent
-        resolved_dirs.append(parent)
-    if not resolved_dirs:
+            resolved = resolve_configured_media_path(
+                config,
+                raw_text,
+                require_file=False,
+                require_exists=False,
+                configured_root_paths=configured_root_paths,
+            )
+            if resolved is None or resolved.exists():
+                return None
+        else:
+            has_existing_track = True
+        resolved_dirs.append(resolved.parent)
+    if not resolved_dirs or not has_existing_track:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
     enforce_layout_depth = False
@@ -101,8 +156,21 @@ def resolve_album_root_from_track_paths(
         else:
             if not all(_is_path_within(path, common_root) for path in resolved_album_roots):
                 return None
+            if not _is_explicit_release_part_layout(common_root, resolved_album_roots):
+                return None
             album_root = common_root
             enforce_layout_depth = True
+    if len(resolved_album_roots) == 1 and is_disc_like_folder(album_root):
+        parent_roots = _matching_library_roots(
+            config,
+            album_root.parent,
+            configured_roots=configured_roots,
+        )
+        if len(parent_roots) == 1:
+            parent_config, parent_root = parent_roots[0]
+            parent_depth = len(album_root.parent.relative_to(parent_root).parts)
+            if parent_depth == _minimum_album_folder_depth(parent_config):
+                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths)
     if not _is_valid_album_root(
         config,
         album_root,
@@ -126,6 +194,22 @@ def resolve_album_context(
     if album_root is None or not track_paths:
         return None
     return CoverAlbumContext(album_root=album_root, track_paths=track_paths)
+
+
+def resolve_album_write_root_from_track_paths(
+    config: dict[str, object],
+    track_paths: set[str],
+) -> Path | None:
+    album_root = resolve_album_root_from_track_paths(config, track_paths)
+    if album_root is not None or len(track_paths) < 2:
+        return album_root
+    contexts = [
+        resolve_album_context(config, {"tracks": [{"path": path}]})
+        for path in sorted(track_paths)
+    ]
+    if any(context is None for context in contexts):
+        return None
+    return contexts[0].album_root
 
 
 def _is_path_within(path: Path, root: Path) -> bool:
@@ -188,8 +272,17 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
-def validate_local_cover_source(config: dict[str, object], album_root: Path, source_path: str) -> Path:
-    resolved_album_root = album_root.resolve(strict=False)
+def validate_local_cover_source(
+    config: dict[str, object],
+    album_root: Path,
+    source_path: str,
+    *,
+    track_paths: set[str] | None = None,
+) -> Path:
+    resolved_album_root = restrict_album_root_to_represented_disc(
+        album_root,
+        track_paths or set(),
+    )
     if not any(_is_path_within(resolved_album_root, root) for root in iter_library_root_paths(config)):
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
@@ -219,20 +312,17 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
         raw_bytes = base64.b64decode(encoded, validate=True)
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
-    target = album_root / "cover.jpg"
-    with suppress_library_watch_events((target,)):
-        if Image is None:
-            if mime_type != "image/jpeg":
-                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-            target.write_bytes(raw_bytes)
-            return target
-        try:
-            with Image.open(io.BytesIO(raw_bytes)) as img:
-                converted = img.convert("RGB")
-                converted.save(target, format="JPEG", quality=95)
-        except Exception as exc:
-            raise ValueError("Clipboard image could not be processed.") from exc
-    return target
+    if Image is None:
+        if mime_type != "image/jpeg":
+            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+        target = album_root / "cover.jpg"
+        reserve_existing_cover_variant(album_root, raw_bytes)
+        _atomic_replace_file_bytes(target, raw_bytes)
+        return target
+    saved = write_remote_cover_bytes_as_authoritative_cover(album_root, raw_bytes)
+    if saved is None:
+        raise ValueError("Clipboard image could not be processed.")
+    return saved
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:
@@ -422,6 +512,7 @@ def begin_local_image_promotion(
                 else None
             ),
         )
+        promotion.reserve_artifact = reserve_existing_cover_variant(album_root, raw_bytes)
         _atomic_replace_file_bytes(target, raw_bytes)
     except Exception:
         if "promotion" in locals():
@@ -684,7 +775,7 @@ def choose_best_remaining_local_cover(
         for path in album_root.rglob("*")
         if path.is_file()
         and path.suffix.lower() in image_extensions
-        and not is_managed_preview_path(path)
+        and not is_generated_cover_artifact(path, album_root)
     ]
     if not candidates:
         return None

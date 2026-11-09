@@ -6,8 +6,12 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.covers import image_dimensions
-from music_app.services.generated_preview_storage import is_managed_preview_path
+from music_app.services.generated_preview_storage import (
+    is_generated_cover_artifact,
+    is_managed_preview_path,
+)
 from music_app.services.library import album_to_dict
+from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 
 
 def _active_cover_state_for_track_paths(
@@ -66,6 +70,8 @@ def active_remote_cover_for_track_paths(
 def resolve_authoritative_album_track_paths(
     library_state: dict[str, object],
     selected_track_paths: set[str],
+    *,
+    album_key: str | None = None,
 ) -> set[str]:
     """Resolve selected paths to exactly one complete live album inventory."""
     normalized_selected_paths = {
@@ -75,6 +81,23 @@ def resolve_authoritative_album_track_paths(
     }
     if not normalized_selected_paths:
         raise ValueError("Cover selection requires at least one live track path.")
+
+    normalized_album_key = str(album_key or "").strip().casefold()
+    if normalized_album_key:
+        keyed_albums = [
+            album
+            for album in list(library_state.get("albums", []) or [])
+            if str(getattr(album, "key", "") or "").strip().casefold()
+            == normalized_album_key
+        ]
+        if len(keyed_albums) == 1:
+            keyed_track_paths = {
+                str(getattr(track, "path", "") or "").strip()
+                for track in list(getattr(keyed_albums[0], "tracks", []) or [])
+                if str(getattr(track, "path", "") or "").strip()
+            }
+            if normalized_selected_paths <= keyed_track_paths:
+                return keyed_track_paths
 
     matching_album_track_sets: list[set[str]] = []
     resolved_selected_paths: set[str] = set()
@@ -100,6 +123,27 @@ def resolve_authoritative_album_track_paths(
     return authoritative_track_paths
 
 
+def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> list[Path]:
+    paths: list[Path] = []
+    pending_directories = [album_root]
+    while pending_directories:
+        directory = pending_directories.pop()
+        # An unreadable directory is unknown inventory, never an empty gallery.
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    directory_path = Path(entry.path)
+                    if not is_managed_preview_path(directory_path):
+                        pending_directories.append(directory_path)
+                    continue
+                if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
+                    continue
+                path = Path(entry.path)
+                if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
+                    paths.append(path)
+    return paths
+
+
 def iter_local_cover_candidates(
     album_root: Path,
     *,
@@ -109,43 +153,23 @@ def iter_local_cover_candidates(
     active_cover_path: Path | None,
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
-    pending_directories = [album_root]
-    while pending_directories:
-        directory = pending_directories.pop()
-        try:
-            entries = list(os.scandir(directory))
-        except OSError:
-            continue
-        for entry in entries:
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    directory_path = Path(entry.path)
-                    if not is_managed_preview_path(directory_path):
-                        pending_directories.append(directory_path)
-                    continue
-                if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
-                    continue
-            except OSError:
-                continue
-            path = Path(entry.path)
-            if is_managed_preview_path(path):
-                continue
-            width, height = image_dimensions(path)
-            relative_path = path.relative_to(album_root)
-            candidates.append(
-                {
-                    "path": str(path),
-                    "filename": path.name,
-                    "relative_path": str(relative_path),
-                    "width": width,
-                    "height": height,
-                    "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
-                    "is_squareish": is_squareish_cover(width, height),
-                    "is_active": bool(active_cover_path and path == active_cover_path),
-                    "area": width * height if width > 0 and height > 0 else 0,
-                    "depth": len(relative_path.parts),
-                }
-            )
+    for path in _iter_local_image_paths(album_root, image_extensions):
+        width, height = image_dimensions(path)
+        relative_path = path.relative_to(album_root)
+        candidates.append(
+            {
+                "path": str(path),
+                "filename": path.name,
+                "relative_path": str(relative_path),
+                "width": width,
+                "height": height,
+                "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
+                "is_squareish": is_squareish_cover(width, height),
+                "is_active": bool(active_cover_path and path == active_cover_path),
+                "area": width * height if width > 0 and height > 0 else 0,
+                "depth": len(relative_path.parts),
+            }
+        )
     if (
         active_cover_path
         and active_cover_path.suffix.lower() in image_extensions
@@ -236,12 +260,22 @@ def serialize_cover_gallery_payload(
     is_squareish_cover,
     task_payload: dict[str, object] | None = None,
     candidate_snapshot: Mapping[str, object] | None = None,
+    include_local: bool = True,
 ) -> dict[str, object]:
+    album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
         file_cache,
         track_paths,
     )
     active_remote_cover = active_remote_cover_for_track_paths(file_cache, track_paths)
+    if not include_local:
+        return {
+            "ok": True,
+            "local_inventory_complete": False,
+            "remote_cover": active_remote_cover,
+            "task": task_payload or None,
+            "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
+        }
     local_candidates = iter_local_cover_candidates(
         album_root,
         image_extensions=image_extensions,
@@ -263,6 +297,7 @@ def serialize_cover_gallery_payload(
                 candidate["cover_revision"] = active_cover_revision
     return {
         "ok": True,
+        "local_inventory_complete": True,
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
         "selected_source_path": selected_source_path,

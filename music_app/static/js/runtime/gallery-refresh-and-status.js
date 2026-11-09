@@ -985,6 +985,46 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// Watcher changes reach the tree on their own, without reloading the gallery or an open album.
+async function refreshArtistTreeAfterInventoryMutation(revision) {
+  const treeRevision = Number(state.ui.appliedArtistTreeInventoryMutationRevision);
+  if (Number.isSafeInteger(treeRevision) && treeRevision >= revision) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A search tree lists only its matches, so the next search response owns it.
+  if (String(state.view?.query || '').trim()
+    || !Array.isArray(state.view?.artists_sidebar) || !state.view.artists_sidebar.length) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A gallery request in flight owns the view; the tree waits for the next poll.
+  const viewBusy = () => Boolean(state.ui.pendingViewTransition || state.ui.activeViewRequestUrl);
+  if (viewBusy()) return;
+  const viewRevision = readViewStateRevision();
+  const treeUrl = buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' });
+  // The purpose header marks a tree-only read; a failed read is retried by the next poll.
+  const response = await fetch(treeUrl, {
+    headers: { Accept: 'application/json', 'X-Album-Haven-View-Purpose': 'artist-tree' },
+  });
+  const data = await response.json();
+  if (!response.ok || !Array.isArray(data?.artists_sidebar)) {
+    throw new Error(data?.error || 'Failed to load the artist tree.');
+  }
+  if (viewBusy() || readViewStateRevision() !== viewRevision
+    || String(state.view?.query || '').trim()) return;
+  state.view.artists_sidebar = data.artists_sidebar;
+  if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
+    state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
+  }
+  const responseRevision = Number(data.inventory_mutation_revision);
+  state.ui.appliedArtistTreeInventoryMutationRevision = Number.isSafeInteger(responseRevision)
+    ? responseRevision
+    : revision;
+  state.ui.pendingArtistTreeRefresh = false;
+  renderSidebar();
+}
+
 async function fetchGalleryViewResponse(url, signal) {
   const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
   return retryPendingGalleryViewResponse(response, url, signal);
@@ -1544,6 +1584,24 @@ async function fetchAndRender(url, push = true, options = {}) {
         'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
+    const responseInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    if (Number.isSafeInteger(responseInventoryMutationRevision) && responseInventoryMutationRevision >= 0) {
+      [
+        payloadToApply?.primary_artist_groups,
+        payloadToApply?.family_artist_groups,
+        payloadToApply?.artist_groups,
+      ].forEach((groups) => {
+        if (!Array.isArray(groups)) return;
+        groups.forEach((group) => {
+          if (!Array.isArray(group?.albums)) return;
+          group.albums.forEach((album) => {
+            if (album && typeof album === 'object') {
+              album.identity_revision = responseInventoryMutationRevision;
+            }
+          });
+        });
+      });
+    }
     applyViewPayload(payloadToApply, responseApplyOptions);
     const previousAppliedInventoryMutationRevision = Number(
       state.ui.appliedViewInventoryMutationRevision,
@@ -1555,6 +1613,11 @@ async function fetchAndRender(url, push = true, options = {}) {
         !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
+    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && Array.isArray(payloadToApply?.artists_sidebar)) {
+      state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;
+    }
     if (Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
@@ -1602,7 +1665,12 @@ async function fetchAndRender(url, push = true, options = {}) {
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
       invalidateAllHydratedTrackModalAlbumDetails();
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
-        await refreshOpenTrackModalAfterInventoryMutation();
+        // An open album that no longer exists must not leave the applied gallery half-finished.
+        try {
+          await refreshOpenTrackModalAfterInventoryMutation();
+        } catch (modalRefreshError) {
+          console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+        }
       }
     }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -2306,6 +2374,7 @@ async function pollStatus() {
         state.ui.pendingInventoryMutationViewRefresh = true;
       }
     }
+    if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
@@ -2481,6 +2550,18 @@ async function pollStatus() {
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
           inventoryRefreshError,
+        );
+      }
+    }
+    if (state.ui.pendingArtistTreeRefresh && !busyNow && !state.busy && !hasPendingSidebarNavigation()) {
+      try {
+        await refreshArtistTreeAfterInventoryMutation(currentInventoryRevision);
+        if (!ownsStatus()) return;
+      } catch (treeRefreshError) {
+        if (!ownsStatus()) return;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the artist tree after an inventory change.',
+          treeRefreshError,
         );
       }
     }

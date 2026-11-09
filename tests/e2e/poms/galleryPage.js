@@ -261,6 +261,7 @@ export class GalleryPage extends BasePage {
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
+    this.gallerySurface = page.locator('.shell-main-surface:has(> [data-gallery-bar-instance="gallery"])');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
@@ -381,6 +382,51 @@ export class GalleryPage extends BasePage {
   albumRowsByArtistName(artistName) {
     return this.sectionByArtistHeading(artistName)
       .locator(this.albumRowWithinSectionSelector);
+  }
+
+  albumRowsByArtistAndAlbumName(artistName, albumName) {
+    return this.albumRowsByArtistName(artistName).filter({
+      has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({
+        hasText: exactNormalizedText(albumName),
+      }),
+    });
+  }
+
+  async readAlbumSubsectionTitle(artistName, albumName) {
+    const row = this.albumRowsByArtistAndAlbumName(artistName, albumName).first();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read the production subsection preceding one owned album row
+    return row.evaluate((element) => {
+      let sibling = element.previousElementSibling;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
+  }
+
+  async readArtistDiscographySections(artistName) {
+    const section = this.sectionByArtistHeading(artistName);
+    // parity-check: allow-read-only-measurement-evaluate -- read visible production headings and card labels in DOM order
+    return section.evaluate((element, selectors) => {
+      const sections = [{ title: null, albums: [] }];
+      for (const block of element.querySelector('.artist-rows').children) {
+        const heading = block.querySelector('.artist-subsection-title');
+        if (heading) {
+          sections.push({ title: heading.textContent.trim(), albums: [] });
+        } else {
+          for (const card of block.querySelectorAll(selectors.card)) {
+            sections.at(-1).albums.push({
+              name: card.querySelector(selectors.title).textContent.trim(),
+              subtitle: card.querySelector(selectors.subtitle)?.textContent.trim() || '',
+              key: card.getAttribute('data-gallery-card-key'),
+            });
+          }
+        }
+      }
+      return sections;
+    }, {
+      card: this.albumCardWithinSectionSelector,
+      title: this.albumTitleButtonWithinSectionSelector,
+      subtitle: this.albumCard.subtitleWithinCardSelector,
+    });
   }
 
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {

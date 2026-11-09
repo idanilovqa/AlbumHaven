@@ -1183,15 +1183,18 @@ async function prewarmFunctionalFixture(port, options = {}) {
       headers: requestHeaders,
     });
     if (viewResponse?.ok) break;
-    let pendingCode = null;
+    let pendingBody = {};
     try {
-      pendingCode = JSON.parse(String(viewResponse?.body || '')).code;
+      pendingBody = JSON.parse(String(viewResponse?.body || ''));
     } catch {
       // Non-JSON errors are terminal warmup failures.
     }
-    if (Number(viewResponse?.statusCode) !== 503
-      || !['search_projection_pending', 'gallery_projection_pending'].includes(pendingCode)
-      || nowFn() >= deadline) {
+    const statusCode = Number(viewResponse?.statusCode);
+    const projectionPending = statusCode === 503
+      && ['search_projection_pending', 'gallery_projection_pending'].includes(pendingBody?.code);
+    // The library changed during this read; a fresh read is the requested restart.
+    const browseRestartRequired = statusCode === 409 && pendingBody?.restart_required === true;
+    if ((!projectionPending && !browseRestartRequired) || nowFn() >= deadline) {
       reportFailure('view-data', viewResponse);
       return false;
     }
@@ -1499,7 +1502,7 @@ function writeJsonAtomically(targetPath, value) {
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
   const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
   const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
-  if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+  if (!['watcher-reconciliation', 'watcher-artist-collation-curly', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
     throw new Error('Watcher cleanup requires a runner-owned directory identity.');
   }
   const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
@@ -1655,7 +1658,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
       ? String(request.ownedDirectoryName || 'watcher-reconciliation').trim()
       : null;
     if (operation === 'watcher-cleanup'
-        && !['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+        && !['watcher-reconciliation', 'watcher-artist-collation-curly', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
       throw new Error('Watcher cleanup requires a runner-owned directory identity.');
     }
     return { nonce, operation, ownedDirectoryName };

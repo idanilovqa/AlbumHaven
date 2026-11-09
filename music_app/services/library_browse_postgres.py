@@ -24,6 +24,7 @@ from music_app.routes.api_rules_helpers import (
     year_problem_reason,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -52,6 +53,7 @@ from music_app.services.listen_through import (
 from music_app.services.library_roots import (
     build_root_provenance_payload,
     configured_library_root_paths_snapshot,
+    library_category_slug,
     summarize_root_provenance_payloads,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
@@ -76,6 +78,7 @@ from music_app.services.utility_rule_fallbacks import fallback_version_album_pay
 from music_app.services.utils import (
     MOJIBAKE_CANDIDATE_PATTERN,
     MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+    artist_collation_key,
     format_duration,
 )
 from version import RELEASE_VERSION
@@ -495,8 +498,7 @@ class PostgresLibraryBrowseRepository:
             for value in visible_artist_names
             if str(value or "").strip()
         ]
-        scoped_query = str(query or "").strip()
-        scope_inventory_query = bool(scoped_artist_names or scoped_query) and not include_library_wide
+        scope_inventory_query = bool(scoped_artist_names) and not include_library_wide
         cached = (
             self._get_cached_utility_projection(kind)
             if fingerprint and not scope_inventory_query
@@ -508,19 +510,9 @@ class PostgresLibraryBrowseRepository:
             generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
-            if scoped_artist_names:
-                options["artist_names"] = scoped_artist_names
-            if scoped_query:
-                from music_app.services.view_search import split_search_terms
-
-                options["query_terms"] = sorted(
-                    {
-                        word
-                        for term in split_search_terms(scoped_query)
-                        for word in term.split()
-                        if word
-                    }
-                )
+            options["artist_names"] = scoped_artist_names
+        # Exact SQL text filtering can discard fuzzy and canonical-alias matches.
+        # Keep bounded eligibility/artist reads; the Python matcher owns text search.
         rows = [] if reuse and not options["track_ids"] else self._inventory_repository.load_non_album_candidates(
             limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
         )
@@ -547,6 +539,7 @@ class PostgresLibraryBrowseRepository:
             ),
             alias_to_canonical=alias_to_canonical,
             canonical_to_aliases=canonical_to_aliases,
+            query=query,
         )
 
     def build_root_counts_payload(
@@ -705,8 +698,10 @@ class PostgresLibraryBrowseRepository:
         ordered_artist_keys = sorted(
             artist_counts,
             key=lambda key: (
-                artist_sort_values.get(key, artist_displays.get(key, key)).casefold(),
-                artist_displays.get(key, key).casefold(),
+                artist_collation_key(
+                    artist_sort_values.get(key, artist_displays.get(key, key))
+                ),
+                artist_collation_key(artist_displays.get(key, key)),
             ),
         )
         artists_sidebar = [
@@ -943,6 +938,8 @@ class PostgresLibraryBrowseRepository:
                         or hydrated.get(occurrence["album_key"])
                     )
                     if album is None:
+                        if projection_stale:
+                            raise GalleryProjectionPending("Gallery is being prepared.")
                         raise ValueError("Gallery changed; restart required.")
                     album = _copy_album_for_artist_occurrence(album, occurrence)
                     group = groups.setdefault(occurrence["artist_id"], dict(artist=artist,
@@ -981,8 +978,10 @@ class PostgresLibraryBrowseRepository:
                 ordered_sidebar_keys = sorted(
                     sidebar_counts,
                     key=lambda key: (
-                        sidebar_sort_values.get(key, sidebar_displays[key]).casefold(),
-                        sidebar_displays[key].casefold(),
+                        artist_collation_key(
+                            sidebar_sort_values.get(key, sidebar_displays[key])
+                        ),
+                        artist_collation_key(sidebar_displays[key]),
                     ),
                 )
                 if not sidebar_only:
@@ -2233,9 +2232,34 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
+                direct_content_artists = set()
+                for row in [*canonical_search_rows, *_canonicalize_artist_rows(search_missing_album_rows or [], alias_to_canonical)]:
+                    evidence = _row_mapping(row)
+                    source_artist_id = _coerce_int(evidence.get("source_artist_id"))
+                    matched_ids = evidence.get("search_matched_track_artist_ids") or []
+                    if (
+                        source_artist_id > 0 and source_artist_id in matched_ids
+                        or evidence.get("search_album_title_match") is True
+                        and _album_artist_relationship([evidence]) == "owned"
+                    ):
+                        direct_content_artists.add(_artist_display_dedupe_key(evidence.get("artist_name")))
+                matching_sidebar_artists = [
+                    str(group.get("artist") or "").strip()
+                    for group in sidebar_artist_groups
+                    if _artist_display_dedupe_key(group.get("artist")) in direct_content_artists
+                    or _artist_name_matches_search_query(
+                        query,
+                        str(group.get("artist") or "").strip(),
+                        canonical_to_aliases.get(
+                            str(group.get("artist") or "").strip(),
+                            [],
+                        ),
+                    )
+                ]
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
                     sidebar_artist_groups,
+                    artists=[exact_artist_match, *matching_sidebar_artists],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups
@@ -2464,7 +2488,8 @@ class PostgresLibraryBrowseRepository:
             ]
         )
         load_non_album_tracks = _should_load_non_album_tracks(params)
-        non_album_entries = (
+        include_library_wide_non_album = _request_flag(params.get("include_library_wide_non_album"))
+        loaded_non_album_entries = (
             self._load_non_album_entries(
                 view_state=view_state,
                 alias_to_canonical=(
@@ -2480,10 +2505,16 @@ class PostgresLibraryBrowseRepository:
                 visible_artist_names=non_album_scope_artists,
                 query=query,
                 connection=connection,
+                include_library_wide=include_library_wide_non_album,
             )
             if load_non_album_tracks
             else []
         )
+        library_non_album_entries = None
+        if isinstance(loaded_non_album_entries, tuple):
+            non_album_entries, library_non_album_entries = loaded_non_album_entries
+        else:
+            non_album_entries = loaded_non_album_entries
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
             config=self._config,
@@ -2601,6 +2632,11 @@ class PostgresLibraryBrowseRepository:
         }
         if search_context is not None:
             payload["search_context"] = search_context
+        if library_non_album_entries is not None:
+            payload["library_non_album_tracks"] = build_non_album_track_list(
+                library_non_album_entries,
+                config=self._config,
+            )
         phase_ms["finalize"] = (
             perf_counter() - finalize_started_at
         ) * 1000
@@ -2872,6 +2908,15 @@ class PostgresLibraryBrowseRepository:
             if path not in normalized_paths:
                 continue
             file_entry = dict(_row_json_mapping(row_payload.get("file_entry")))
+            album_cover_path = str(row_payload.get("album_cover_path") or "").strip()
+            if album_cover_path:
+                file_entry["cover_path"] = album_cover_path
+            album_cover_revision = str(
+                _row_json_mapping(row_payload.get("album_metadata")).get("cover_revision")
+                or ""
+            ).strip()
+            if album_cover_revision:
+                file_entry["cover_revision"] = album_cover_revision
             file_entry.update(
                 {
                     "album_id": row_payload.get("album_id"),
@@ -3974,6 +4019,7 @@ def _non_album_entries_from_inventory_candidates(
     visible_artist_names: Iterable[object] = (),
     query: object = "",
 ) -> list[dict[str, object]]:
+    from music_app.services.relation_projection_builder import root_relative_parts
     from music_app.services.view_search import (
         normalize_search_text,
         search_terms_match_fields,
@@ -3995,7 +4041,13 @@ def _non_album_entries_from_inventory_candidates(
         )
         if normalize_search_text(alias)
     }
-    query_terms = split_search_terms(str(query or ""))
+    # Match each word on its own: whole-phrase fuzzy matching accepts any field word
+    # contained in the phrase, so "Scan Owner" would match every "Owner" track.
+    query_words = sorted({
+        word
+        for term in split_search_terms(str(query or ""))
+        for word in term.split()
+    })
     normalized_alias_to_canonical = {
         local_inventory_identity_key(alias): canonical
         for alias, canonical in alias_to_canonical.items()
@@ -4023,7 +4075,9 @@ def _non_album_entries_from_inventory_candidates(
         entry["exception_type"] = exception_type
         if not entry_visible_in_categories(entry, visible_library_categories):
             continue
-        relative_path = str(payload.get("relative_path") or "").strip()
+        relative_path = str(
+            payload.get("relative_path") or payload.get("private_path") or ""
+        ).strip()
         path_parts = {
             normalize_search_text(part)
             for part in Path(relative_path).parts[:-1]
@@ -4035,7 +4089,9 @@ def _non_album_entries_from_inventory_candidates(
             and not visible_path_parts.intersection(path_parts)
         ):
             continue
-        if query_terms:
+        if query_words:
+            # The library-relative path only: the absolute path's machine folders would match queries.
+            root_relative = root_relative_parts({**payload, "library_root_id": payload.get("root_id")})
             search_fields = [
                 normalize_search_text(str(value or ""))
                 for value in (
@@ -4046,12 +4102,11 @@ def _non_album_entries_from_inventory_candidates(
                     entry.get("title"),
                     entry.get("year"),
                     entry.get("exception_type"),
-                    payload.get("relative_path"),
-                    payload.get("private_path"),
+                    " ".join(root_relative[1]) if root_relative else "",
                 )
                 if str(value or "").strip()
             ]
-            if not search_terms_match_fields(query_terms, search_fields):
+            if not search_terms_match_fields(query_words, search_fields):
                 continue
         entries.append(entry)
     return entries
@@ -4183,7 +4238,8 @@ def _prepare_root_gallery_snapshot(
         ):
             occurrences[occurrence_key] = row
     ordered = sorted(occurrences.values(), key=lambda row: (
-        row["artist_sort_name"].casefold(), str(row["artist_name"]).casefold(), str(row["artist_id"]),
+        artist_collation_key(row["artist_sort_name"]),
+        artist_collation_key(row["artist_name"]), str(row["artist_id"]),
         _coerce_int(row.get("album_release_year")) if row.get("album_release_year") else 9999,
         str(row.get("album_title") or "").casefold(), row["album_key"]))
     # Membership and order are the revision authority. Cover/rating changes do not
@@ -4887,9 +4943,13 @@ def _duplicate_sources_from_rows(
             path=path, title=str(entry.get("title") or ""),  # type: ignore[arg-type]
             album=entry.get("album"), album_artist=entry.get("album_artist"),
             artist=entry.get("artist"), year=entry.get("year"),
-            disc_number=entry.get("disc_number"), track_number=entry.get("track_number"),
+            disc_number=entry.get("disc_number"),
+            disc_number_raw=entry.get("disc_number_raw"),
+            total_discs=entry.get("total_discs"),
+            disc_subtitle=entry.get("disc_subtitle"),
+            track_number=entry.get("track_number"),
             duration_seconds=_coerce_duration_seconds(payload.get("duration_seconds")),
-            edition=entry.get("edition"), release_date=entry.get("release_date"),
+            edition=entry.get("edition"), album_type=entry.get("album_type"), release_date=entry.get("release_date"),
             cover_path=cover_path if cover_path else None,
             library_root_id=payload.get("file_library_root_id") or file_entry.get("library_root_id"),
             library_root_category=payload.get("file_library_root_category") or file_entry.get("library_root_category"),
@@ -5225,6 +5285,14 @@ def _missing_album_projection_payloads(
             row.get("file_scan_cache_stale") is True for row in album_rows
         ):
             continue
+        # Transitional arrivals disappear after deletion; permanent sources
+        # retain their missing-album warning until the owner confirms removal.
+        album_rows = [
+            row for row in album_rows
+            if library_category_slug(row.get("file_library_root_category")) != "new_arrivals"
+        ]
+        if not album_rows:
+            continue
         first = album_rows[0]
         metadata = _problematic_album_metadata_from_row(first)
         artists = metadata.get("artists")
@@ -5419,6 +5487,8 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "track_number": raw_track_number,
         "disc_number": file_entry.get("disc_number", row_payload.get("disc_number")),
         "disc_number_raw": file_entry.get("disc_number_raw"),
+        "total_discs": file_entry.get("total_discs"),
+        "disc_subtitle": file_entry.get("disc_subtitle"),
         "duration_seconds": file_entry.get("duration_seconds", row_payload.get("duration_seconds")),
         "cover_path": file_entry.get("cover_path", row_payload.get("album_cover_path")),
         "cover_revision": file_entry.get("cover_revision", row_payload.get("album_cover_revision")),
@@ -5984,6 +6054,8 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield "Mixed album metadata in one folder"
     if entry.get("local_album_membership_problem"):
         yield str(entry["local_album_membership_problem"])
+    if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+        yield "Edition descriptor in album name"
 
 
 def _iter_problematic_track_reasons(
@@ -6980,8 +7052,15 @@ def _group_rows_by_artist_identity(rows: list[object]) -> list[tuple[str, list[o
     ordered_artist_ids = sorted(
         rows_by_artist,
         key=lambda artist_identity: (
-            artist_sort_values.get(artist_identity, artist_displays.get(artist_identity, artist_identity)).casefold(),
-            artist_displays.get(artist_identity, artist_identity).casefold(),
+            artist_collation_key(
+                artist_sort_values.get(
+                    artist_identity,
+                    artist_displays.get(artist_identity, artist_identity),
+                )
+            ),
+            artist_collation_key(
+                artist_displays.get(artist_identity, artist_identity)
+            ),
         ),
     )
     return [
@@ -7156,10 +7235,8 @@ def _queue_display_cover_variants_for_groups(
                     source_path,
                     cache_root=display_cover_variant_cache_root(
                         source_path,
-                        data_dir=config.get("DATA_DIR") if cover_revision else None,
-                        storage_policy=config.get(
-                            "_GENERATED_PREVIEW_STORAGE_POLICY"
-                        ),
+                        data_dir=config.get("DATA_DIR"),
+                        storage_policy=config.get("_GENERATED_PREVIEW_STORAGE_POLICY"),
                     ),
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
                     **revision_options,
@@ -7697,6 +7774,7 @@ def _selected_artist_album_payloads(
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
+                "is_split_album": bool(metadata.get("is_split_album")),
                 "root_provenance": dict(root_provenance),
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
@@ -7727,6 +7805,7 @@ def _selected_artist_album_payloads(
                 "title": str(row_payload.get("track_title") or "").strip(),
                 "artist": str(
                     file_entry.get("artist")
+                    or track_metadata.get("artist")
                     or row_payload.get("track_artist_name")
                     or album.get("album_artist")
                     or artist_display
@@ -7740,6 +7819,8 @@ def _selected_artist_album_payloads(
                 "cover_revision": album.get("cover_revision"),
                 "disc_number": row_payload.get("disc_number"),
                 "disc_number_raw": file_entry.get("disc_number_raw"),
+                "total_discs": file_entry.get("total_discs"),
+                "disc_subtitle": file_entry.get("disc_subtitle"),
                 "track_number": row_payload.get("track_number"),
                 "duration_seconds": duration_seconds,
                 "duration_display": format_duration(duration_seconds),
@@ -7847,6 +7928,7 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
+            "is_split_album": bool(metadata.get("is_split_album")),
             "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
             "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
@@ -7886,16 +7968,23 @@ def _root_album_browse_album_payloads(
 
 
 def _album_artist_relationship(rows: Iterable[object]) -> str:
+    from music_app.services.selected_artist_membership import album_artist_relationship
+
+    payloads = [_row_mapping(row) for row in rows]
     kinds = {
-        str(_row_mapping(row).get("featured_kind") or "").strip().casefold()
-        for row in rows
+        str(payload.get("featured_kind") or "").strip().casefold()
+        for payload in payloads
     }
-    return (
-        "featured"
-        if "owner" not in kinds
-        and kinds & {"featured_member", "featured_track_artist"}
-        else "owned"
-    )
+    if "owner" in kinds or not kinds & {"featured_member", "featured_track_artist"}:
+        return "owned"
+    for payload in payloads:
+        album_artist = _row_json_mapping(payload.get("album_metadata")).get("album_artist")
+        if album_artist and album_artist_relationship(
+            SimpleNamespace(album_artist=album_artist),
+            str(payload.get("artist_name") or ""), {},
+        ) == "owned":
+            return "owned"
+    return "featured"
 
 
 def _copy_album_for_artist_occurrence(
@@ -7982,7 +8071,9 @@ def _merge_missing_albums_into_artist_groups(
                     str(item.get("name") or "").casefold(),
                 )
             )
-    artist_groups.sort(key=lambda group: str(group.get("artist") or "").casefold())
+    artist_groups.sort(
+        key=lambda group: artist_collation_key(group.get("artist") or "")
+    )
 
 
 def _replace_active_albums_with_missing(
@@ -8085,14 +8176,23 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
 def _merge_artist_groups_for_sidebar(
     primary_groups: list[dict[str, object]],
     extra_groups: list[dict[str, object]],
+    *,
+    artists: Iterable[object] | None = None,
 ) -> list[dict[str, object]]:
     merged: list[dict[str, object]] = []
     seen_keys: set[str] = set()
+    selected_keys = {
+        _artist_display_dedupe_key(artist)
+        for artist in (artists or [])
+        if str(artist or "").strip()
+    }
     for group in [*list(primary_groups or []), *list(extra_groups or [])]:
-        artist = str(group.get("artist") or "").strip()
-        if not artist:
+        group_artist = str(group.get("artist") or "").strip()
+        if not group_artist:
             continue
-        artist_key = _artist_display_dedupe_key(artist)
+        artist_key = _artist_display_dedupe_key(group_artist)
+        if selected_keys and artist_key not in selected_keys:
+            continue
         if artist_key in seen_keys:
             continue
         seen_keys.add(artist_key)
@@ -8428,12 +8528,12 @@ def _selected_artist_sql() -> str:
             false
           ) as exception_override_present
         from selected_artist_albums
-        left join library.local_tracks
+        join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
          and library.local_tracks.album_id = selected_artist_albums.album_id
-        left join library.local_track_files
+        join library.local_track_files
           on library.local_track_files.track_id = library.local_tracks.id
-         and coalesce((library.local_track_files.metadata #>> '{{scan_cache,stale}}')::boolean, false) is false
+         and library.local_track_files.scan_cache_stale is false
         left join lateral (
           select library.exception_overrides.override_payload
           from library.exception_overrides
@@ -8619,7 +8719,7 @@ def _album_detail_sql() -> str:
         from library.local_albums
         join bootstrap_context
           on bootstrap_context.library_id = library.local_albums.library_id
-        join library.local_artists
+        left join library.local_artists
           on library.local_artists.library_id = library.local_albums.library_id
          and library.local_artists.id = library.local_albums.artist_id
         left join library.local_album_cover_candidate_snapshots cover_candidate_snapshots
@@ -8794,9 +8894,13 @@ from library.local_artists
           offset 0
         )
         order by
-          lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+          regexp_replace(
+            translate(lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)), U&'\\2018\\2019', U&'\\0027\\0027'),
+            '^[[:punct:][:space:]]+',
+            ''
+          ),
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name),
-          lower(library.local_artists.name),
+          regexp_replace(translate(lower(library.local_artists.name), U&'\\2018\\2019', U&'\\0027\\0027'), '^[[:punct:][:space:]]+', ''),
           library.local_artists.name
         limit {normalized_candidate_limit};
     """
@@ -8929,9 +9033,17 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             canonical_artist_sort_values.*,
             dense_rank() over (
               order by
-                lower(canonical_artist_sort_values.canonical_sort_name),
+                regexp_replace(
+                  translate(lower(canonical_artist_sort_values.canonical_sort_name), U&'\\2018\\2019', U&'\\0027\\0027'),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_sort_name,
-                lower(canonical_artist_sort_values.canonical_artist_name),
+                regexp_replace(
+                  translate(lower(canonical_artist_sort_values.canonical_artist_name), U&'\\2018\\2019', U&'\\0027\\0027'),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_artist_name
             ) as canonical_artist_rank
           from canonical_artist_sort_values
@@ -9814,14 +9926,20 @@ def _search_preview_sql(
           where ({_visible_album_clause("library.local_albums")})
         ),
         eligible_matched_track_album_ids as materialized (
-          select distinct
+          select
             matched_track_album_ids.library_id,
-            matched_track_album_ids.album_id
+            matched_track_album_ids.album_id,
+            array_agg(distinct library.local_tracks.artist_id)
+              filter (where library.local_tracks.artist_id is not null) as matched_artist_ids
           from matched_track_album_ids
           join eligible_album_tracks
             on eligible_album_tracks.library_id = matched_track_album_ids.library_id
            and eligible_album_tracks.album_id = matched_track_album_ids.album_id
            and eligible_album_tracks.track_id = matched_track_album_ids.track_id
+          join library.local_tracks
+            on library.local_tracks.library_id = matched_track_album_ids.library_id
+           and library.local_tracks.id = matched_track_album_ids.track_id
+          group by matched_track_album_ids.library_id, matched_track_album_ids.album_id
         ),
         matched_album_ids as materialized (
           select album_title_matches.album_id
@@ -10008,6 +10126,13 @@ def _search_preview_sql(
           active_preview_rows as (
             select
               'active'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = matched_album_rows.library_id
+                  and album_title_matches.album_id = matched_album_rows.album_id
+              ) as search_album_title_match,
+              coalesce(eligible_matched_track_album_ids.matched_artist_ids, array[]::bigint[])
+                as search_matched_track_artist_ids,
               matched_album_rows.artist_id,
               matched_album_rows.display_artist as artist_name,
               matched_album_rows.artist_sort_name,
@@ -10031,12 +10156,26 @@ def _search_preview_sql(
               coalesce(track_rollups.track_count, 0) as track_count,
               coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
             from matched_album_rows
+            left join eligible_matched_track_album_ids
+              on eligible_matched_track_album_ids.library_id = matched_album_rows.library_id
+             and eligible_matched_track_album_ids.album_id = matched_album_rows.album_id
             left join track_rollups
               on track_rollups.album_id = matched_album_rows.album_id
           ),
           missing_preview_rows as (
             select
               'missing'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = missing_album_ids.library_id
+                  and album_title_matches.album_id = missing_album_ids.album_id
+              ) as search_album_title_match,
+              case when exists (
+                select 1 from matched_track_album_ids
+                where matched_track_album_ids.library_id = missing_album_ids.library_id
+                  and matched_track_album_ids.track_id = library.local_tracks.id
+              ) then array[library.local_tracks.artist_id] else array[]::bigint[] end
+                as search_matched_track_artist_ids,
               library.local_artists.id as artist_id,
               library.local_artists.name as artist_name,
               library.local_artists.sort_name as artist_sort_name,
@@ -10688,9 +10827,6 @@ def _problematic_files_sql(
     duplicate_candidates: bool = False,
     duplicate_sources_only: bool = False,
 ) -> str:
-    physical_album_container = _physical_album_container_sql(
-        "library.local_track_files.private_path"
-    )
     spotify_quota_cte = "" if duplicate_sources_only else """
         spotify_quota_albums as materialized (
           select tasks.task_key
@@ -10845,13 +10981,15 @@ def _problematic_files_sql(
         ),
     """
     physical_file_ctes = (
-        local_album_membership_ctes_sql()
+        physical_scope_ctes
+        + local_album_membership_ctes_sql(scope_file_ids=not inventory_physical_context)
         + ","
-        + physical_scope_ctes
         + physical_file_ctes.replace(
             "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
         ).replace(
-            "__PHYSICAL_ALBUM_CONTAINER__", physical_album_container,
+            # Computed once per row so the duplicate join can hash on it.
+            "__PHYSICAL_ALBUM_CONTAINER__",
+            _physical_album_container_sql("library.local_track_files.private_path"),
         )
     )
     candidate_ctes = ""

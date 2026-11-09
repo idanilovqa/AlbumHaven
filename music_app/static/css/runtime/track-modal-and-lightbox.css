@@ -44,14 +44,6 @@
   padding: 0 10px;
   white-space: nowrap;
 }
-.track-modal-edit-tags,
-.track-modal-folder,
-.track-modal-close {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  font-size: 1rem;
-}
 .track-modal-edit-tags {
   transform: scaleX(-1);
 }
@@ -144,6 +136,26 @@
 }
 .track-modal-duplicate-tabs[hidden] {
   display: none;
+}
+.track-modal-duplicate-folder.ui-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+.track-modal-duplicate-folder::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background: currentColor;
+  mask: url('/static/images/icons/tabler-folder-open.svg') center / contain no-repeat;
+  -webkit-mask: url('/static/images/icons/tabler-folder-open.svg') center / contain no-repeat;
+}
+.track-modal-duplicate-folder .ui-button__content {
+  position: relative;
+  padding-top: 3px;
+  font-size: 10px;
 }
 .track-modal-duplicate-tab {
   border: 1px solid var(--border);
@@ -266,7 +278,6 @@
 .track-modal-cover img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   display: block;
 }
 .track-modal-cover-tool {
@@ -305,7 +316,7 @@
 }
 .track-modal-list {
   margin: 0;
-  padding-left: 20px;
+  padding-left: 0;
   font-size: 0.8rem;
   line-height: 1.3;
 }
@@ -473,7 +484,6 @@
 .track-modal-cover-button img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   display: block;
 }
 .image-lightbox {
@@ -499,7 +509,27 @@
   place-items: center;
   pointer-events: none;
 }
+.image-lightbox-error {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  color: #f8fafc;
+  text-align: center;
+}
+.image-lightbox-retry {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3;
+  width: max-content;
+  max-width: calc(100vw - 40px);
+  white-space: normal;
+  text-align: center;
+}
 .image-lightbox-loading[hidden],
+.image-lightbox-error[hidden],
+.image-lightbox-retry[hidden],
 .image-lightbox-image[hidden] {
   display: none;
 }
@@ -536,9 +566,11 @@
   will-change: transform;
   cursor: zoom-in;
   user-select: none;
+  touch-action: manipulation;
 }
 .image-lightbox-image.is-zoomed {
   cursor: grab;
+  touch-action: none;
 }
 .image-lightbox-image.is-dragging {
   cursor: grabbing;
@@ -546,12 +578,8 @@
 }
 .image-lightbox-close {
   position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: 12px;
-  display: grid; place-items: center; width: 44px; height: 44px;
-  border: 0; border-radius: 6px; background: transparent;
-  color: var(--lightbox-control-ink); cursor: pointer;
+  color: var(--lightbox-control-ink);
 }
-.image-lightbox-close svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
-.image-lightbox-close:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--lightbox-control-ink) 10%, transparent); }
 .image-lightbox-nav {
   position: absolute;
   top: 50%;
@@ -569,6 +597,12 @@
   font-size: 2rem;
   line-height: 1;
   z-index: 2;
+  outline: none !important;
+}
+.image-lightbox-close:focus-visible,
+.image-lightbox-nav:focus-visible {
+  outline: 2px solid var(--lightbox-control-accent) !important;
+  outline-offset: 2px !important;
 }
 .image-lightbox-nav:hover {
   border-color: var(--lightbox-control-accent);

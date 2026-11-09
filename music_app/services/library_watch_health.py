@@ -29,6 +29,7 @@ _HEALTH_EVENT_KINDS = {
 }
 _HEALTH_PROBLEM_STATES = {
     "overflow",
+    "root_unavailable",
     "reconciliation_failed",
     "stable_write_unavailable",
 }

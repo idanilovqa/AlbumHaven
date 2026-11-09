@@ -183,6 +183,8 @@ def test_record_inventory_upserts_only_published_preview_metadata():
     assert "reconciliation_requested as" in sql
     assert "requested_mode = storage.mode" in sql
     assert "requested_root = storage.active_root" in sql
+    assert "operation_id = gen_random_uuid()" in sql
+    assert "operation_state = 'queued'" in sql
     assert "total_count = total_count +" in sql
     assert params["current_path"].endswith("aabb.jpg")
     assert params["byte_count"] == 123
@@ -301,6 +303,8 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     sql, params = connection.calls[0]
     assert "update app.generated_preview_relocation_items" in sql
     assert "finished_at = now()" in sql
+    assert "set current_path = finished.target_path" in sql
+    assert "and %(status)s <> 'failed'" in sql
     assert params["status"] == status
 
 

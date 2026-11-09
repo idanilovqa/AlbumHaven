@@ -163,6 +163,44 @@ def test_build_encoding_repair_preview_includes_alias_and_disc_marker_repairs():
     ]
 
 
+def test_file_backed_problem_detail_exposes_reviewable_edition_title_proposal():
+    track_path = r"C:\Music\Artist\300\song.flac"
+    album = SimpleNamespace(
+        name="300 (The Collector's Edition)",
+        album_artist="Artist",
+        tracks=[SimpleNamespace(path=track_path)],
+    )
+    file_cache = {
+        track_path: {
+            "path": track_path,
+            "album": "300 (The Collector's Edition)",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Song",
+            "edition": "",
+            "year": "2006",
+            "disc_number": "1",
+            "track_number": "1",
+        }
+    }
+
+    preview = _build_encoding_repair_preview(
+        album,
+        file_cache,
+        ignored_row_keys=set(),
+        alias_to_canonical={},
+    )
+
+    proposal = next(
+        item for item in preview["suggested_edits"]
+        if item["field"] == "album_edition"
+    )
+    assert proposal["updates"] == {
+        "album": "300",
+        "edition": "The Collector's Edition",
+    }
+
+
 def test_build_encoding_repair_preview_can_skip_preview_rows_for_summary_only_calls():
     track_path = r"C:\Music\Artist\Album\song.mp3"
     album = SimpleNamespace(

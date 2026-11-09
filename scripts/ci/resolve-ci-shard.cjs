@@ -1,7 +1,11 @@
 const FUNCTIONAL_SHARDS = Object.freeze({
-  'gallery-search-visual': {
-    displayName: 'Gallery, Search & Visual',
+  'gallery-search-visual-1': {
+    displayName: 'Gallery, Search & Visual 1',
     portBase: 5200,
+  },
+  'gallery-search-visual-2': {
+    displayName: 'Gallery, Search & Visual 2',
+    portBase: 5250,
   },
   'cover-providers-1': {
     displayName: 'Cover Providers 1',

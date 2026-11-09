@@ -102,7 +102,13 @@ def _merge_rebuilt_albums(existing_albums: list, rebuilt_albums: list, affected_
     merged = [
         album
         for album in existing_albums
-        if str(getattr(album, "key", "") or "") not in affected_album_keys
+        if not any(
+            str(getattr(album, "key", "") or "") == affected_key
+            or str(getattr(album, "key", "") or "").startswith(
+                f"{affected_key}::year::"
+            )
+            for affected_key in affected_album_keys
+        )
     ]
     merged.extend(rebuilt_albums)
     merged.sort(
@@ -138,7 +144,7 @@ def rebuild_affected_albums_in_state(
     affected_entries = {
         path_str: entry
         for path_str, entry in updated_file_cache.items()
-        if _cache_entry_album_key(entry, separate_release_keys) in affected_album_keys
+        if _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
     }
     rebuilt_albums = build_albums_from_file_cache(affected_entries, separate_release_keys)
     st["albums"] = _merge_rebuilt_albums(list(st.get("albums", []) or []), rebuilt_albums, affected_album_keys)
@@ -162,7 +168,7 @@ def build_affected_album_dicts(
     affected_entries = {
         path_str: entry
         for path_str, entry in updated_file_cache.items()
-        if _cache_entry_album_key(entry, separate_release_keys) in affected_album_keys
+        if _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
     }
     rebuilt_albums = build_albums_from_file_cache(affected_entries, separate_release_keys)
     return find_album_dicts_by_track_paths(rebuilt_albums, track_paths)

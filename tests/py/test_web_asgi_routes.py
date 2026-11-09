@@ -421,6 +421,31 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     assert b"Discovery Center" in news_body
 
 
+def test_selected_artist_search_reload_requests_lightweight_summary(monkeypatch):
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+
+    captured = []
+
+    class SummaryRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, *, query_params, library_state):
+            captured.append(query_params)
+            return {"selected_artist": "Hans Zimmer", "artist_groups": [], "artists_sidebar": []}
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
+    web_asgi._build_postgres_selected_artist_startup_view(
+        config={}, library_state={},
+        query_args=QueryParams("artist=Hans+Zimmer&q=hans+zimmer&category=hoard&category=main_library"),
+    )
+    assert captured[0].get("payload_tier") == "gallery_summary"
+    assert captured[0].get("q") == "hans zimmer"
+    assert captured[0].getlist("category") == ["hoard", "main_library"]
+    assert captured[0].get("root_sidebar") is None
+
+
 @pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
 def test_selected_artist_startup_requests_summary_without_losing_repeated_filters(monkeypatch, requested_tier, expected_tier):
     from starlette.datastructures import QueryParams
@@ -1788,6 +1813,149 @@ def test_asgi_cover_serves_opaque_png_display_variant_as_jpeg(app, monkeypatch):
     with image_module.open(io.BytesIO(body)) as rendered:
         assert rendered.format == "JPEG"
         assert rendered.size == (480, 480)
+    assert list((app.config["DATA_DIR"] / "display-cover-cache").rglob("*.jpg"))
+    assert not (cover_path.parent / ".album-haven").exists()
+
+
+def test_asgi_cover_snapshots_new_variant_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    image_module = pytest.importorskip("PIL.Image")
+    cover_path = (Path(app.config["MUSIC_DIR"]) / "relocating-cover.png").resolve()
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    image_module.new("RGB", (1200, 1200), color=(64, 128, 192)).save(
+        cover_path,
+        format="PNG",
+    )
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    original_response = web_asgi._conditional_file_response
+    relocated_paths = []
+
+    def relocate_before_send(request, path, **kwargs):
+        if path != cover_path:
+            assert kwargs.get("content") == path.read_bytes()
+            assert kwargs.get("stat_result") is not None
+            relocated_paths.append(path)
+            path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(app),
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert relocated_paths
+    assert headers.get("content-type") == "image/jpeg"
+    with image_module.open(io.BytesIO(body)) as rendered:
+        assert rendered.size == (480, 480)
+
+
+def test_asgi_cover_snapshots_existing_active_variant_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+    from music_app.services.covers import resolve_cover_display_variant
+
+    image_module = pytest.importorskip("PIL.Image")
+    cover_path = (Path(app.config["MUSIC_DIR"]) / "active-relocating-cover.png").resolve()
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    image_module.new("RGB", (1200, 1200), color=(96, 64, 192)).save(
+        cover_path,
+        format="PNG",
+    )
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    active_variant = resolve_cover_display_variant(
+        cover_path,
+        cache_root=Path(app.config["DATA_DIR"]) / "display-cover-cache",
+        max_size=480,
+    )
+
+    original_response = web_asgi._conditional_file_response
+    relocated_paths = []
+
+    def relocate_before_send(request, path, **kwargs):
+        if path == active_variant:
+            assert kwargs.get("content") == path.read_bytes()
+            assert kwargs.get("stat_result") is not None
+            relocated_paths.append(path)
+            path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(app),
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert relocated_paths == [active_variant]
+    assert headers.get("content-type") == "image/jpeg"
+    with image_module.open(io.BytesIO(body)) as rendered:
+        assert rendered.size == (480, 480)
+
+
+def test_asgi_cover_snapshots_legacy_fallback_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = (Path(app.config["MUSIC_DIR"]) / "legacy-cover.jpg").resolve()
+    revision = "a" * 64
+    legacy_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=Path(app.config["DATA_DIR"]) / "display-cover-cache",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    expected = b"legacy-relocation-safe-cover-bytes"
+    legacy_variant.parent.mkdir(parents=True, exist_ok=True)
+    legacy_variant.write_bytes(expected)
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    asgi_app = _make_asgi_app(app)
+    asgi_app.state.generated_preview_storage_policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(mode="album_folders")
+    )
+
+    original_response = web_asgi._conditional_file_response
+
+    def relocate_before_send(request, path, **kwargs):
+        assert path == legacy_variant
+        assert kwargs.get("content") == expected
+        assert kwargs.get("stat_result") is not None
+        path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(
+        web_asgi,
+        "_conditional_file_response",
+        relocate_before_send,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(source_path), "size": "480", "v": revision},
+    )
+
+    assert status == 200
+    assert body == expected
 
 
 def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):

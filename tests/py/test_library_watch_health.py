@@ -764,7 +764,7 @@ def test_reconciliation_admission_overflow_blocks_destructive_work_until_manual_
 
 @pytest.mark.parametrize("reconciliation_health", ["stable_write_unavailable", "healthy", "cancelled", None])
 def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher_health(
-    monkeypatch, reconciliation_health,
+    monkeypatch, tmp_path, reconciliation_health,
 ):
     import music_app
     from types import SimpleNamespace
@@ -785,10 +785,29 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     callbacks = {}
     recorded = []
     reconciled = []
+    watcher_cover_refreshes = []
+    recovery_calls = []
 
     class HealthService:
         def __init__(self, _store):
-            self._unhealthy_roots = set()
+            self._unhealthy_roots = {"main-root", "removed-root"}
+
+        def load_problems(self):
+            return [SimpleNamespace(root_id=root_id) for root_id in self._unhealthy_roots]
+
+        def record_event(self, event):
+            recovery_calls.append(("event", event.root_id))
+            self._unhealthy_roots.add(event.root_id)
+            return True
+
+        def recovery_publication_guard(self, started_at):
+            assert started_at
+            return self.publication_guard
+
+        def clear_after_reconciliation(self, *, observed_root_ids, reconciliation_started_at):
+            assert reconciliation_started_at
+            recovery_calls.append(("clear", observed_root_ids))
+            self._unhealthy_roots.difference_update(observed_root_ids)
 
         def record_problem(self, problem):
             recorded.append(problem)
@@ -853,15 +872,33 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
             return None
 
     class TargetedReconciler:
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, **kwargs):
+            self.after_commit = kwargs["after_commit"]
 
-        def reconcile(self, request, *, root_healthy):
+        def reconcile(self, request, *, root_healthy, publication_guard=None):
+            if publication_guard is not None:
+                assert root_healthy
+                assert request.paths == request.deleted_subtrees == frozenset({tmp_path})
+                recovery_calls.append(("recover", request.root_id))
+                return SimpleNamespace(health="healthy")
             if request.root_id == "failed-root":
                 raise RuntimeError("database temporarily unavailable")
             reconciled.append((request.root_id, root_healthy))
             if request.root_id == "sampling-source":
                 return SimpleNamespace(health=reconciliation_health)
+            if request.root_id == "healthy-source":
+                result = SimpleNamespace(
+                    revision=12,
+                    affected_album_keys=("artist::new album",),
+                    active_track_paths=(
+                        "C:/Existing Album/01.flac",
+                        "C:/Destination/01.flac",
+                    ),
+                    new_track_paths=("C:/Destination/01.flac",),
+                    health="healthy",
+                )
+                self.after_commit(result)
+                return result
             return root_healthy
 
         def replace_roots(self, _roots):
@@ -897,7 +934,10 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     monkeypatch.setattr(
         library_roots,
         "get_library_roots",
-        lambda _config: ({"id": "main-root", "path": "C:/Music"},),
+        lambda _config: (
+            {"id": "main-root", "path": str(tmp_path)},
+            {"id": "offline-root", "path": str(tmp_path / "disconnected")},
+        ),
     )
     monkeypatch.setattr(
         scan_cache_persistence,
@@ -918,6 +958,18 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         state,
         "ensure_runtime_relation_projection_ready",
         lambda _runtime: None,
+    )
+    monkeypatch.setattr(
+        state,
+        "queue_watcher_cover_refresh_for_track_paths_for_state",
+        lambda _library_state,
+        _config,
+        _logger,
+        track_paths,
+        *,
+        affected_album_keys: watcher_cover_refreshes.append(
+            (set(track_paths), set(affected_album_keys))
+        ),
     )
     monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
@@ -949,6 +1001,25 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
 
     async def exercise_problem_callback():
         async with app.router.lifespan_context(app):
+            assert recovery_calls == [
+                ("recover", "main-root"), ("clear", frozenset({"main-root"})),
+            ]
+            from music_app.services.library_watch import LibraryEvent, LibraryEventKind
+            callbacks["emit_health_event"](LibraryEvent(
+                kind=LibraryEventKind.OVERFLOW, root_id="main-root", path=tmp_path,
+            ))
+            assert recovery_calls[-3:] == [
+                ("event", "main-root"), ("recover", "main-root"),
+                ("clear", frozenset({"main-root"})),
+            ]
+            before_recovery = list(recovery_calls)
+            callbacks["emit_health_event"](LibraryEvent(
+                kind=LibraryEventKind.ROOT_UNAVAILABLE,
+                root_id="offline-root", path=tmp_path / "disconnected",
+            ))
+            assert recovery_calls == [*before_recovery, ("event", "offline-root")]
+            assert recorded[-1].root_id == "offline-root"
+            assert recorded[-1].code == "root_unavailable"
             with pytest.raises(OSError):
                 app.state.replace_library_watch_roots([{"id": "attach-failed", "path": "C:/Unattached"}])
             assert recorded[-1].root_id == "attach-failed"
@@ -1020,6 +1091,12 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     asyncio.run(exercise_problem_callback())
 
     assert recorded[0] == problem
+    assert watcher_cover_refreshes == [
+        (
+            {"C:/Destination/01.flac"},
+            {"artist::new album"},
+        )
+    ]
     assert reconciled == [
         ("main-root", False),
         ("healthy-source", False),

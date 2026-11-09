@@ -172,7 +172,7 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   white-space: nowrap;
 }
 .on-page-alert__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.on-page-alert__actions .ui-button {
+.on-page-alert__actions .ui-button:not(.ui-button--small) {
   min-height: 44px;
   padding: 0 16px;
   border-radius: 10px;
@@ -197,7 +197,6 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 }
 .on-page-alert__actions .ui-button:hover:not(:disabled) {
   filter: brightness(1.12);
-  transform: translateY(-1px);
 }
 .on-page-alert__actions .ui-button--primary:hover:not(:disabled),
 .on-page-alert__actions .ui-button--primary:active:not(:disabled) {

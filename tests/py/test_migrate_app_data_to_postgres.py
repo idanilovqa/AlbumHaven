@@ -433,12 +433,12 @@ def test_dry_run_reports_library_cache_local_inventory_source_counts(tmp_path: P
         if summary["source_family"] == "local_library_inventory"
     )
     assert inventory_summary["source_path"] == str(data_dir / "library_cache.json")
-    assert inventory_summary["source_count"] == 6
+    assert inventory_summary["source_count"] == 5
     assert inventory_summary["artist_count"] == 1
     assert inventory_summary["album_count"] == 1
     assert inventory_summary["track_count"] == 1
     assert inventory_summary["track_file_count"] == 1
-    assert inventory_summary["featured_artist_count"] == 2
+    assert inventory_summary["featured_artist_count"] == 1
     assert inventory_summary["target_count"] == 0
 
 
@@ -452,7 +452,7 @@ def test_dry_run_uses_library_cache_payload_identity_for_local_inventory(tmp_pat
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["source_count"] == 6
+    assert inventory_summary["source_count"] == 5
 
 
 def test_apply_writes_local_inventory_to_expected_library_tables(tmp_path: Path):
@@ -473,8 +473,8 @@ def test_apply_writes_local_inventory_to_expected_library_tables(tmp_path: Path)
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["source_count"] == 6
-    assert inventory_summary["target_count"] == 6
+    assert inventory_summary["source_count"] == 5
+    assert inventory_summary["target_count"] == 5
 
 
 def test_apply_writes_local_track_file_relative_path_from_library_cache_root(tmp_path: Path):
@@ -526,7 +526,7 @@ def test_apply_batches_local_inventory_rows_when_target_supports_batches(tmp_pat
         summary for summary in report["summaries"]
         if summary["source_family"] == "local_library_inventory"
     )
-    assert inventory_summary["target_count"] == 6
+    assert inventory_summary["target_count"] == 5
 
 
 def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
@@ -541,7 +541,7 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
                 key="artist one::album one",
                 name="Album One",
                 album_artist="Artist One",
-                artists=["Artist One"],
+                artists=["Artist One", "ARTIST ONE."],
                 year=2024,
                 cover_path=None,
                 edition=None,
@@ -550,7 +550,7 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
                     SimpleNamespace(
                         path="C:/Music/Artist One/Album One/01 Song One.flac",
                         title="Song One",
-                        artist="Artist One feat. Guest One",
+                        artist="ARTIST ONE. feat. Guest One",
                         album="Album One",
                         album_artist="Artist One",
                         disc_number=1,
@@ -590,9 +590,147 @@ def test_local_inventory_rows_split_featured_track_artists_into_featured_rows(
         for row in rows["featured_artists"]
     } == {
         ("artist one", "owner"),
-        ("artist one", "featured_track_artist"),
         ("guest one", "featured_track_artist"),
     }
+
+
+def test_legacy_inventory_splits_semicolon_track_credits_without_composites(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    module = _load_script_module()
+    track_artists = (
+        "Maroon 5; Megan Thee Stallion",
+        "Maroon 5",
+        "Maroon 5; Blackbear",
+        "Maroon 5",
+        "Maroon 5; Stevie Nicks",
+        "Maroon 5",
+        "Maroon 5; Bantu",
+        "Maroon 5; H.E.R.",
+        "Maroon 5",
+        "Maroon 5; Juice Wrld",
+        "Maroon 5",
+        "Maroon 5; Nipsey Hussle; YG",
+        "Maroon 5; Anuel Aa; Tainy",
+        "Jason Derulo; Adam Levine",
+    )
+    paths = tuple(
+        f"C:/Music/Maroon 5/JORDI/{track_number:02d}.flac"
+        for track_number in range(1, 15)
+    )
+    tracks = [
+        SimpleNamespace(
+            path=path,
+            title=f"Track {track_number}",
+            artist=track_artist,
+            album="JORDI",
+            album_artist="Maroon 5",
+            disc_number=1,
+            track_number=track_number,
+            duration_seconds=180,
+            root_provenance={"root": "main"},
+        )
+        for track_number, (path, track_artist) in enumerate(
+            zip(paths, track_artists, strict=True),
+            start=1,
+        )
+    ]
+    monkeypatch.setattr(
+        module,
+        "build_albums_from_file_cache",
+        lambda _file_cache: [
+            SimpleNamespace(
+                key="maroon 5::jordi",
+                name="JORDI",
+                album_artist="Maroon 5",
+                artists=["Maroon 5"],
+                year=2021,
+                cover_path=None,
+                edition=None,
+                root_provenance={"root": "main"},
+                tracks=tracks,
+            )
+        ],
+    )
+    file_cache = {
+        path: {
+            "path": path,
+            "mtime": 1710000000.0,
+            "size": 123456,
+            "album": "JORDI",
+            "album_artist": "Maroon 5",
+            "artist": track.artist,
+            "title": track.title,
+            "track_number": track.track_number,
+            "disc_number": 1,
+            "duration_seconds": 180,
+            "cover_path": None,
+            "year": 2021,
+            "library_root_id": "main",
+            "library_root_category": "albums",
+        }
+        for path, track in zip(paths, tracks, strict=True)
+    }
+
+    rows = module._local_inventory_rows_from_file_cache(file_cache)
+
+    assert {row["artist_key"] for row in rows["artists"]} == {
+        "maroon 5",
+        "megan thee stallion",
+        "blackbear",
+        "stevie nicks",
+        "bantu",
+        "h.e.r.",
+        "juice wrld",
+        "nipsey hussle",
+        "yg",
+        "anuel aa",
+        "tainy",
+        "jason derulo",
+        "adam levine",
+    }
+    assert [row["artist_key"] for row in rows["tracks"]] == [
+        *("maroon 5" for _ in range(13)),
+        "jason derulo",
+    ]
+    assert [row["metadata"]["artist"] for row in rows["tracks"]] == list(
+        track_artists
+    )
+    assert [row["metadata"]["artists"] for row in rows["tracks"]] == [
+        ["Maroon 5", "Megan Thee Stallion"],
+        ["Maroon 5"],
+        ["Maroon 5", "Blackbear"],
+        ["Maroon 5"],
+        ["Maroon 5", "Stevie Nicks"],
+        ["Maroon 5"],
+        ["Maroon 5", "Bantu"],
+        ["Maroon 5", "H.E.R."],
+        ["Maroon 5"],
+        ["Maroon 5", "Juice Wrld"],
+        ["Maroon 5"],
+        ["Maroon 5", "Nipsey Hussle", "YG"],
+        ["Maroon 5", "Anuel Aa", "Tainy"],
+        ["Jason Derulo", "Adam Levine"],
+    ]
+    assert {
+        row["artist_key"]
+        for row in rows["featured_artists"]
+        if row["featured_kind"] == "featured_track_artist"
+    } == {
+        "megan thee stallion",
+        "blackbear",
+        "stevie nicks",
+        "bantu",
+        "h.e.r.",
+        "juice wrld",
+        "nipsey hussle",
+        "yg",
+        "anuel aa",
+        "tainy",
+        "jason derulo",
+        "adam levine",
+    }
+    assert not any(";" in row["artist_key"] for row in rows["artists"])
 
 
 def test_dry_run_reports_library_root_settings_source_counts(

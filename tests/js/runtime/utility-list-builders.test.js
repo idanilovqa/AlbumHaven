@@ -2430,6 +2430,49 @@ test('applyUpdatedAlbumsToCurrentView restores compact source membership from th
   );
 });
 
+test('moving tracks into an album whose details are loaded shows the merged album at once', () => {
+  const context = loadHelpers();
+  const artist = 'Мумий Тролль';
+  const name = '8 (Часть 1)';
+  const makeAlbum = (albumName, start, count, extra = {}) => ({
+    key: `мумий тролль::${albumName.toLowerCase()}`,
+    album_ref: `мумий тролль::${albumName.toLowerCase()}`,
+    name: albumName, album_artist: artist, artists: [artist], display_artist: artist,
+    year: 2008, edition: null, preview_only: false, track_count_preview: count,
+    total_duration_seconds: count * 4,
+    tracks: Array.from({ length: count }, (_, index) => ({
+      path: `owned-track-${start + index}.mp3`, title: `Track ${start + index}`,
+      album: albumName, album_artist: artist, artist, year: 2008, edition: null,
+      track_number: start + index, disc_number: 1, duration_seconds: 4,
+    })),
+    ...extra,
+  });
+  const loadedDestination = makeAlbum(name, 1, 8, { album_id: 739000 });
+  // The gallery card is a preview: its track list was never loaded.
+  const previewDestination = { ...loadedDestination, preview_only: true, tracks: [] };
+  const original = makeAlbum(`${name}332`, 9, 2);
+  const groups = [{ artist, albums: [previewDestination, original] }];
+  context.state.view = {
+    ...context.state.view, selected_artist: artist, related_artists: [],
+    artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [],
+  };
+  context.getAlbumRequestKey = album => album.album_ref || album.key;
+  context.getAlbumIdentity = album => album.key;
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  context.formatAlbumDuration = () => '';
+  context.findVisibleAlbumByTrackPaths = () => original;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  context.getCachedHydratedTrackModalAlbum = key => (key === loadedDestination.key ? loadedDestination : null);
+  const updates = Object.fromEntries(original.tracks.map(track => [track.path, { album: name }]));
+
+  const [merged] = context.buildOptimisticUpdatedAlbumsFromEdits(original, updates);
+
+  assert.equal(merged.key, loadedDestination.key);
+  assert.equal(merged.album_id, 739000);
+  assert.deepEqual(Array.from(merged.tracks, track => track.track_number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(merged.track_count_preview, 10);
+});
+
 test('album-name merge keeps all sixteen tracks visible before canonical refresh', () => {
   const context = loadHelpers();
   const artist = 'DDT';

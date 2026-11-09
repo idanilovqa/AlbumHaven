@@ -34,7 +34,7 @@ function runtime(initial = {}) {
   const retry = element({ hidden: true });
   const status = element({ hidden: true });
   const error = element({ hidden: true });
-  const browse = element({ disabled: false });
+  const browse = element({ disabled: true, hasAttribute: (name) => name === 'data-path-input-browsable' });
   const fields = {
     '[data-preview-mode="album_folders"]': albumFolders,
     '[data-preview-mode="custom"]': custom,
@@ -230,7 +230,7 @@ test('folder browse fills the special path and is disabled for album folders', a
   const chosen = [];
   await mount(ui, { chooseFolder: async settings => { chosen.push(settings.title); return 'F:/Album previews'; } });
 
-  assert.equal(ui.browse.disabled, true);
+  assert.equal(ui.browse.disabled, true, 'album folders keep the folder picker disabled');
   ui.albumFolders.checked = false;
   ui.custom.checked = true;
   await ui.custom.listeners.get('change')();
@@ -277,4 +277,13 @@ test('active relocation retries polling after a transient status failure', async
   await ui.polls[0].callback();
   assert.equal(ui.polls.length, 2);
   cleanup();
+});
+
+test('folder browse stays disabled without the browse permission', async () => {
+  const ui = runtime({ mode: 'custom', requested_root: 'C:/Previews', revision: 2, operation_state: 'idle' });
+  ui.browse.hasAttribute = () => false;
+  await mount(ui);
+  assert.equal(ui.custom.checked, true);
+  assert.equal(ui.pathInput.disabled, false);
+  assert.equal(ui.browse.disabled, true);
 });

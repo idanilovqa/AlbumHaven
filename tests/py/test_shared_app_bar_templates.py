@@ -395,6 +395,9 @@ def test_server_settings_compose_shared_radio_path_and_button_components(render)
     browse = path_input.parent.one("button", **{"data-path-input-browse": None})
     assert "action-button" in browse.attrs["class"].split()
     assert "disabled" in path_input.attrs and "disabled" in browse.attrs, "The path stays disabled until Special path is chosen"
+    assert "data-path-input-browsable" in browse.attrs, "Browse permission survives the initial disabled state"
+    plain = render("admin-server.html", extra_actions=("system.preview_storage.read",), can_browse_server_folders=False)
+    assert "data-path-input-browsable" not in plain.one("button", **{"data-path-input-browse": None}).attrs
     save = form.one("button", **{"data-preview-save": None})
     assert {"ui-button", "ui-button--primary"} <= set(save.attrs["class"].split())
     assert "disabled" in save.attrs

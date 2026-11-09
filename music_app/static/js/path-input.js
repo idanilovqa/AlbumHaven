@@ -14,7 +14,8 @@
       ariaLabel: options.browseLabel || 'Choose folder',
       title: options.browseLabel || 'Choose folder',
       disabled: Boolean(options.disabled || !options.canBrowse),
-      attributes: { 'data-path-input-browse': true, ...(options.browseAttributes || {}) },
+      // Browse permission is explicit so hosts can toggle the button without losing it.
+      attributes: { 'data-path-input-browse': true, 'data-path-input-browsable': Boolean(options.canBrowse), ...(options.browseAttributes || {}) },
     });
     return `<div class="ui-path-input ui-input-action${options.className ? ` ${escape(options.className)}` : ''}"><input type="text" autocomplete="off" value="${escape(options.value || '')}" aria-label="${escape(options.ariaLabel || 'Server path')}" placeholder="${escape(options.placeholder || '')}"${options.disabled ? ' disabled' : ''}${inputAttributes}>${browse}${options.trailingHtml || ''}</div>`;
   }

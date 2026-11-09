@@ -503,6 +503,27 @@ test('artist non-album tracks stay clickable while deferred without a second gal
   assert.equal(button['aria-description'], 'Contains tracks matching your search');
 });
 
+test('the phone Loose Tracks tab shows the search dot like the desktop button', () => {
+  const tab = { dataset: {}, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { query: 'Dragonland', selected_artist: '' } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: selector => (selector === '.mobile-artists-mode-button[data-navigation-mode="collections"]' ? tab : null),
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.hasNonAlbumSearchMatches = options => options.libraryWide === true;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'true');
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'false');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,

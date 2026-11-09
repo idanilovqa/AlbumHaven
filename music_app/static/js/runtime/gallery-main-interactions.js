@@ -482,6 +482,13 @@ function updateGalleryMainControls() {
     button.dataset.searchMatch = String(Boolean(matches));
     button.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
   });
+  // On a phone, Loose Tracks is a tab of the Artists panel; it carries the same search dot.
+  const mobileLooseTracks = document.querySelector('.mobile-artists-mode-button[data-navigation-mode="collections"]');
+  if (mobileLooseTracks) {
+    const matches = typeof hasNonAlbumSearchMatches === 'function' && hasNonAlbumSearchMatches({ libraryWide: true });
+    mobileLooseTracks.dataset.searchMatch = String(Boolean(matches));
+    mobileLooseTracks.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
+  }
   const viewCluster = document.querySelector('[data-gallery-view-cluster]');
   if (viewCluster) {
     viewCluster.querySelectorAll('[data-gallery-view-choice]').forEach(button => {

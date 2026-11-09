@@ -905,6 +905,34 @@ test('Album Details falls back to natural filename order when track numbers are 
   );
 });
 
+test('one CD with some tracks missing the disc tag shows as one track list in track order', () => {
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+  });
+  const tracks = [7, 8, 1, 2, 3, 4, 5, 6].map((number) => ({
+    key: `track-${number}`,
+    path: `C:\\Music\\Archspire\\The Vessel\\${number}.flac`,
+    disc_number: number > 6 ? null : 1,
+    disc_number_raw: number > 6 ? '' : '1',
+    track_number: number,
+  }));
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 1);
+  assert.equal(grouped.multiDisc, false);
+  assert.deepEqual(
+    Array.from(grouped.groups[0].tracks, (track) => track.track_number),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  const html = context.buildTrackListHtml(tracks);
+  assert.doesNotMatch(html, /CD ?1/);
+});
+
 test('Album Details ignores bonus-like album and path words when the raw disc label is ordinary', () => {
   const context = loadHelper([]);
   const grouped = context.groupAlbumTracks([

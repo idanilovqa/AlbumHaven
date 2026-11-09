@@ -36346,6 +36346,12 @@ function groupAlbumTracks(tracks) {
   const hasExplicitCd1 = explicitDiscs.includes(1);
   const hasLaterExplicitDiscs = explicitDiscs.some((disc) => disc > 1);
   const inferredCd1FromMissingTags = hasLaterExplicitDiscs && !hasExplicitCd1;
+  // One CD with some tracks missing the disc tag is still one CD.
+  const soleDisc = explicitDiscs.length === 1
+    && explicitLabels.length === 1
+    && explicitLabels[0] === `CD${explicitDiscs[0]}`
+    ? explicitDiscs[0]
+    : null;
 
   const groups = new Map();
 
@@ -36357,6 +36363,9 @@ function groupAlbumTracks(tracks) {
     if (!discLabel && inferredCd1FromMissingTags) {
       discLabel = 'CD1';
       effectiveDisc = 1;
+    } else if (!discLabel && soleDisc != null) {
+      discLabel = `CD${soleDisc}`;
+      effectiveDisc = soleDisc;
     }
 
     const key = discLabel || (effectiveDisc ? `CD${effectiveDisc}` : 'single');
@@ -36389,6 +36398,11 @@ function groupAlbumTracks(tracks) {
     return String(ga.discLabel || '').localeCompare(String(gb.discLabel || ''), undefined, { sensitivity: 'base' });
   });
 
+  // Tracks inferred onto a disc sorted apart from it; within a disc, track order rules.
+  const withoutDisc = (track) => ({ ...track, disc_number: null });
+  groups.forEach((group) => group.tracks.sort((left, right) => (
+    compareAlbumTracks(withoutDisc(left), withoutDisc(right))
+  )));
   const multiDisc = orderedKeys.length > 1;
 
   return {

@@ -326,6 +326,11 @@ if (shouldStartImmediateHydration) {
   }
 }
 
+// A page shown from the Android app's copy brings its view up to date in place once the server
+// answers, keeping its scroll position and open album (app-copy.js).
+window.AlbumHavenAppCopy?.onServerAnswer(() => {
+  void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+});
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');

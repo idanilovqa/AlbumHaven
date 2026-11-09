@@ -56,6 +56,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
+    ("GET", "/app-copy/account"): "app.shell.read",
+    ("GET", "/app-copy-worker.js"): "app.shell.read",
     ("GET", "/status"): "app.status.read",
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",

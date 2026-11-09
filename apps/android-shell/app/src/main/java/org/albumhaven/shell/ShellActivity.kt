@@ -68,6 +68,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private lateinit var preferences: ShellPreferences
     private lateinit var sandboxes: SandboxChoice
+    private lateinit var copies: AppCopies
 
     // Unset only while a sandbox build waits for its first sandbox; every page belongs to it.
     private lateinit var siteOrigin: String
@@ -102,6 +103,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 service.port,
                 updater?.let(::ShellUpdatePort),
                 FileSaves(MediaStoreDownloads(contentResolver), ioExecutor, mainHandler::post, ::onFileSaved),
+                object : AppCopyPort {
+                    override fun reported(stored: Boolean) = copies.reported(siteOrigin, stored)
+                    override val forgetPending get() = copies.forgetPending(siteOrigin)
+                },
             )
             service.setEventListener { event -> bridge.emit(event) }
             updater?.addListener(updateEvents)
@@ -156,6 +161,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         preferences = ShellPreferences(this)
         sandboxes = SandboxChoice(originPolicy, preferences)
+        copies = AppCopies(preferences)
         val origin = sandboxes.origin
         updater = Updates.get(this)
         // Once per process: a cold launch checks when the last successful check is six hours old.
@@ -245,7 +251,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         CookieManager.getInstance().flush()
         // Only a page the user actually sees is pictured; never a native screen or an older picture.
         val url = page.url
-        if (url != null && ::siteOrigin.isInitialized && !recovery.showing && !lastScreenView.isVisible) {
+        if (url != null && ::siteOrigin.isInitialized && !recovery.showing && !lastScreenView.isVisible && !copies.exists(siteOrigin)) {
             lastScreen.capture(this, webView, siteOrigin, url)
         }
     }
@@ -321,7 +327,25 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         recovery.showSandboxChoice(initialSlot) { slot -> sandboxes.choose(slot)?.let(::switchTo) }
     }
 
+    /** The page of the sandbox being left deletes its copy first, if it still answers. */
     private fun switchTo(origin: String) {
+        val leaving = if (::siteOrigin.isInitialized && siteOrigin != origin) siteOrigin else null
+        if (leaving == null) return openSwitched(origin)
+        copies.leaving(leaving)
+        if (!::bridge.isInitialized) return openSwitched(origin)
+        var switched = false
+        val proceed = {
+            if (!switched && !isDestroyed) {
+                switched = true
+                openSwitched(origin)
+            }
+        }
+        bridge.requestCopyForget(proceed)?.let { id ->
+            mainHandler.postDelayed({ bridge.abandonPageCommand(id) }, COPY_FORGET_TIMEOUT_MS)
+        }
+    }
+
+    private fun openSwitched(origin: String) {
         siteOrigin = origin
         // Playback, its claim and its queue stay with the origin that started them.
         playback?.selectOrigin(origin)
@@ -384,14 +408,18 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     }
 
     /**
-     * Covers the page until [url] first draws: with the picture of it [asLeft] by the user when there
-     * is one, else with the Connecting screen, which also replaces a picture that waits too long.
+     * Covers the page until [url] first draws: not at all when its origin has a copy of its last
+     * view, which draws at once; else with the picture of it [asLeft] by the user when there is one,
+     * else with the Connecting screen, which also replaces a picture that waits too long.
      */
     private fun open(url: String, asLeft: Boolean = false) {
         mainFrameFailed = false
-        val picture = if (asLeft) lastScreen.load(siteOrigin, url, resources.configuration.orientation) else null
+        val cached = copies.exists(siteOrigin)
+        val picture = if (asLeft && !cached) lastScreen.load(siteOrigin, url, resources.configuration.orientation) else null
         hideLastScreen()
-        if (picture != null) {
+        if (cached) {
+            recovery.hide()
+        } else if (picture != null) {
             recovery.hide()
             lastScreenView.setImageBitmap(picture)
             lastScreenView.isVisible = true
@@ -523,7 +551,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 getSystemService(DownloadManager::class.java).enqueue(request)
             }
         }
-        pending?.let { mainHandler.postDelayed({ bridge.abandonDownloadLink(it) }, BRIDGE_TIMEOUT_MS) }
+        pending?.let { mainHandler.postDelayed({ bridge.abandonPageCommand(it) }, BRIDGE_TIMEOUT_MS) }
     }
 
     private fun onFileSaved(saved: Boolean) {
@@ -569,6 +597,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            // The sign-in page means signed out: the page's copy went as it left (app-copy-worker.js).
+            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) copies.reported(siteOrigin, stored = false)
             // The same origin's next document re-attaches to the running queue from its handshake.
             documentGone()
             incompatibleWeb = false
@@ -660,5 +690,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         /** A page still not drawn after this long shows the Connecting screen, so a picture never looks frozen. */
         const val LAST_SCREEN_MAX_MS = 6_000L
+
+        /** How long a sandbox switch waits for the page it leaves to delete its copy. */
+        const val COPY_FORGET_TIMEOUT_MS = 1_500L
+        const val SIGN_IN_PATH = "/login"
     }
 }

@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
+    "music_app/services/app_copy.py",
+    "music_app/static/js/app-copy.js",
+    "music_app/static/js/app-copy-worker.js",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/relation_projection_postgres.py",
     "music_app/services/gallery_projection_postgres.py",
@@ -67,6 +70,10 @@
     {
       "paths": ["music_app/services/runtime_asset_versions.py"],
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
+    },
+    {
+      "paths": ["music_app/services/app_copy.py", "music_app/static/js/app-copy.js", "music_app/static/js/app-copy-worker.js"],
+      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
     },
     {
       "paths": [

@@ -66,7 +66,7 @@ test('scan and cover refresh idle wait includes queued post-scan cover work', as
   assert.equal(result.pending_cover_refresh_after_scan, false);
 });
 
-test('cover cache diagnostics inspect the production unversioned key and exact stored epoch', async () => {
+test('cover cache diagnostics inspect the opaque production key and exact stored epoch', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
   const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';
   const matchedKeys = [];
@@ -76,6 +76,8 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
       const context = {
         URL,
         globalThis: {
+          crypto: globalThis.crypto,
+          TextEncoder,
           __ALBUM_HAVEN_GALLERY_COVER_CACHE__: {
             activeCount: 48,
             activeProductionUrls: [],
@@ -92,7 +94,9 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
                     headers: {
                       get(header) {
                         if (String(header).toLowerCase() === 'content-type') return 'image/jpeg';
-                        if (header === 'X-Album-Haven-Cover-Production-Url') return storedProductionUrl;
+                        if (header === 'X-Album-Haven-Cover-Version') {
+                          return require('node:crypto').createHash('sha256').update(storedProductionUrl).digest('hex');
+                        }
                         return '';
                       },
                     },
@@ -112,7 +116,8 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
 
   const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
 
-  assert.deepEqual(matchedKeys, ['http://127.0.0.1:4173/cover?path=album-cover&size=480']);
+  const opaqueKey = require('node:crypto').createHash('sha256').update('/cover?path=album-cover&size=480').digest('hex');
+  assert.deepEqual(matchedKeys, [`http://127.0.0.1:4173/__album-haven-cover/${opaqueKey}`]);
   assert.equal(state.cached, true);
   assert.equal(state.cachedStatus, 200);
   assert.equal(state.cachedType, 'image/jpeg');

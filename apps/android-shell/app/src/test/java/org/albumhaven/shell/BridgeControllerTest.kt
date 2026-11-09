@@ -66,6 +66,13 @@ class BridgeControllerTest {
         override fun install() = applies.also { calls += "install" }
     }
 
+    private class FakeCopies : AppCopyPort {
+        val reports = mutableListOf<Boolean>()
+        override var forgetPending = false
+        override fun reported(stored: Boolean) { reports += stored }
+    }
+
+    private val copies = FakeCopies()
     private val host = FakeHost()
     private val updates = FakeUpdates()
     private val playback = ControllerHarness()
@@ -74,10 +81,16 @@ class BridgeControllerTest {
     private val files = FileSaves({ name, _, _ -> savedFiles.add(name) }, { it.run() }, Runnable::run) {}
     private val sandbox = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox")
 
-    private fun controller(channel: ShellChannel, id: String, updates: UpdatePort? = this.updates, files: FileSaves? = this.files) =
+    private fun controller(
+        channel: ShellChannel,
+        id: String,
+        updates: UpdatePort? = this.updates,
+        files: FileSaves? = this.files,
+        copies: AppCopyPort? = this.copies,
+    ) =
         BridgeController(
             ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachment = attachments::add),
-            updates, files,
+            updates, files, copies,
         )
 
     private fun send(
@@ -581,9 +594,9 @@ class BridgeControllerTest {
         negotiated()
         val links = mutableListOf<String?>()
         val id = sandbox.requestDownloadLink("/a") { links += it }!!
-        sandbox.abandonDownloadLink(id)
+        sandbox.abandonPageCommand(id)
         send(sandbox, answer(id, """{"ok":true,"url":"$link"}"""))
-        sandbox.abandonDownloadLink(id)
+        sandbox.abandonPageCommand(id)
         assertEquals(listOf<String?>(null), links)
     }
 
@@ -600,5 +613,56 @@ class BridgeControllerTest {
         assertFalse(names.contains("files.save.v1"))
         assertTrue(names.contains("downloads.link.v1"))
         assertEquals("unsupported_command", errorCode(send(plain, command("files.save", file))))
+    }
+
+    @Test
+    fun aPageReportsItsCopyAndIsToldWhenASwitchLeftItsOriginUnannounced() {
+        send(sandbox, handshake())
+        assertTrue(ok(send(sandbox, command("copy.state", """{"stored":true}"""))))
+        assertTrue(ok(send(sandbox, command("copy.state", """{"stored":false}"""))))
+        assertEquals(listOf(true, false), copies.reports)
+        for (invalid in listOf("""{}""", """{"stored":"true"}""", """{"stored":true,"url":"/"}""")) {
+            assertEquals(invalid, "invalid_payload", errorCode(send(sandbox, command("copy.state", invalid))))
+        }
+        assertEquals(listOf(true, false), copies.reports)
+
+        copies.forgetPending = true
+        val payload = send(sandbox, handshake())!!.getJSONObject("payload")
+        assertTrue(payload.getJSONObject("appCopy").getBoolean("forget"))
+    }
+
+    @Test
+    fun aShellWithoutCopiesOffersNoneAndForgetsAtOnce() {
+        val plain = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox", copies = null)
+        val payload = send(plain, handshake())!!.getJSONObject("payload")
+        val names = payload.getJSONArray("capabilities").let { array -> (0 until array.length()).map(array::getString) }
+        assertFalse(names.contains("app.copy.v1"))
+        assertFalse(payload.has("appCopy"))
+        assertEquals("unsupported_command", errorCode(send(plain, command("copy.state", """{"stored":true}"""))))
+        var forgotten = 0
+        assertNull(plain.requestCopyForget { forgotten++ })
+        assertEquals(1, forgotten)
+    }
+
+    @Test
+    fun theShellAsksThePageToForgetItsCopyBeforeASwitch() {
+        val sent = negotiated()
+        var forgotten = 0
+        val id = sandbox.requestCopyForget { forgotten++ }!!
+        val asked = sent.single()
+        assertEquals("command", asked.getString("type"))
+        assertEquals("copy.forget", asked.getString("name"))
+        assertEquals(0, asked.getJSONObject("payload").length())
+        // An answer named for another command is not this one's.
+        send(sandbox, """{"protocol":1,"id":"$id","type":"response","name":"downloads.link","payload":{"ok":true}}""")
+        assertEquals(0, forgotten)
+        send(sandbox, """{"protocol":1,"id":"$id","type":"response","name":"copy.forget","payload":{"ok":true}}""")
+        assertEquals(1, forgotten)
+
+        // Unanswered, the switch still goes ahead once the shell stops waiting, or the page goes.
+        sandbox.abandonPageCommand(sandbox.requestCopyForget { forgotten++ }!!)
+        sandbox.requestCopyForget { forgotten++ }
+        sandbox.reset()
+        assertEquals(3, forgotten)
     }
 }

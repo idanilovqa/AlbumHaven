@@ -9,6 +9,7 @@
       return Object.freeze({
         actions: Object.freeze({ ...actions }),
         deniedSelectors: Array.isArray(payload.denied_selectors) ? payload.denied_selectors : [],
+        readOnlySelectors: Array.isArray(payload.read_only_selectors) ? payload.read_only_selectors : [],
         deniedTabs: Array.isArray(payload.denied_tabs) ? payload.denied_tabs : [],
         availableTabs: Object.freeze(Array.isArray(payload.available_tabs)
           ? payload.available_tabs.filter(tab => typeof tab === 'string') : []),
@@ -38,16 +39,33 @@
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
+    // The Android app's offline copy (app-copy.js) hides permitted writes the same way as denied
+    // ones until the server answers.
+    const readOnlySelectors = policy ? policy.readOnlySelectors.join(',\n') : '';
+    let readOnlyStyle = null;
+    const setReadOnly = (on) => {
+      if (Boolean(on) === Boolean(readOnlyStyle) || !readOnlySelectors) return;
+      if (readOnlyStyle) {
+        readOnlyStyle.remove();
+        readOnlyStyle = null;
+        return;
+      }
+      readOnlyStyle = document.createElement('style');
+      readOnlyStyle.id = 'capability-read-only';
+      readOnlyStyle.textContent = `${readOnlySelectors} { display: none !important; }`;
+      document.head.append(readOnlyStyle);
+    };
     const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate, isAndroidShell,
-      clientSurface: policy?.clientSurface || 'private_web' });
+      setReadOnly, clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;
     const denied = policy.deniedSelectors.join(',');
-    if (denied) {
+    if (denied || readOnlySelectors) {
       // CSS is applied before first paint. This capture guard also rejects
       // synthetic activation of a hidden control; the server remains decisive.
       document.addEventListener('click', (event) => {
-        if (event.target?.closest?.(denied)) {
+        const target = event.target;
+        if ((denied && target?.closest?.(denied)) || (readOnlyStyle && target?.closest?.(readOnlySelectors))) {
           event.preventDefault();
           event.stopImmediatePropagation();
         }

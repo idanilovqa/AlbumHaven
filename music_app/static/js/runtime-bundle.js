@@ -12138,7 +12138,8 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "downloads.link.v1": "optional",
-    "files.save.v1": "optional"
+    "files.save.v1": "optional",
+    "app.copy.v1": "optional"
   }
 } /* end android-bridge-policy */;
 const ANDROID_BRIDGE_PROTOCOL_MIN = ANDROID_BRIDGE_POLICY.protocolMin;
@@ -12262,6 +12263,7 @@ function connectAndroidBridge() {
       androidBridge.info = info;
       if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
       if (hasAndroidCapability(ANDROID_DOWNLOAD_LINKS_CAPABILITY)) androidBridge.commands.set('downloads.link', answerAndroidDownloadLink);
+      adoptAndroidAppCopy(info);
       // Settings (android-settings.js) takes the shell's update and sandbox state from every success.
       if (typeof adoptAndroidSettingsHandshake === 'function') adoptAndroidSettingsHandshake(info);
       return info;
@@ -12273,6 +12275,25 @@ function connectAndroidBridge() {
     });
   }
   return androidBridge.connection;
+}
+
+// ---- The app's copy of the last view (app.copy.v1) ----
+// A shell that offers it skips its Connecting screen while this origin has a copy (app-copy.js
+// keeps it). The page tells the shell whether one exists; the shell asks it to forget the copy
+// before a sandbox switch, and says in the handshake when a switch happened while no page could.
+const ANDROID_APP_COPY_CAPABILITY = 'app.copy.v1';
+
+function adoptAndroidAppCopy(info) {
+  const appCopy = window.AlbumHavenAppCopy;
+  if (!appCopy) return;
+  if (!hasAndroidCapability(ANDROID_APP_COPY_CAPABILITY)) {
+    appCopy.adoptShell(null);
+    return;
+  }
+  androidBridge.commands.set('copy.forget', () => appCopy.forget());
+  appCopy.adoptShell({ forget: info.appCopy?.forget === true }, {
+    report: stored => sendAndroidBridgeCommand('copy.state', { stored }),
+  });
 }
 
 // ---- Cookie-less downloads (downloads.link.v1) ----
@@ -39519,13 +39540,17 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
 // BEGIN js/runtime/gallery-cover-preview-cache.js
 
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v3';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
+// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
+// SHA-256 of the cover URL without its version), and the exact URL is kept as its SHA-256.
+const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
+const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
+const MAX_REMEMBERED_COVER_KEYS = 4096;
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -39544,6 +39569,8 @@ class GalleryCoverPreviewCache {
     this.liveFetches = new Map();
     this.keyGenerations = new Map();
     this.latestRequestedProductionUrls = new Map();
+    // Each production URL's stored key and version, hashed once.
+    this.coverKeys = new Map();
     this.openPromise = null;
     this.generation = 0;
     this.requestSequence = 0;
@@ -39690,7 +39717,34 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob, productionUrl) {
+  async sha256Hex(text) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  // [productionUrl]'s stored key (the same key as app-copy-worker.js coverKey: one per cover and
+  // size, whatever version) and its version tag.
+  coverKeyFor(productionUrl) {
+    let keys = this.coverKeys.get(productionUrl);
+    if (!keys) {
+      const url = new URL(productionUrl);
+      url.searchParams.delete('v');
+      keys = Promise.all([
+        this.sha256Hex(`${url.pathname}${url.search}`),
+        this.sha256Hex(productionUrl),
+      ]).then(([key, version]) => ({ key: `${url.origin}${GALLERY_COVER_KEY_PREFIX}${key}`, version }));
+      if (this.coverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.coverKeys.clear();
+      this.coverKeys.set(productionUrl, keys);
+      keys.catch(() => this.coverKeys.delete(productionUrl));
+    }
+    return keys;
+  }
+
+  async storedCoverKey(productionUrl) {
+    return (await this.coverKeyFor(productionUrl)).key;
+  }
+
+  createCacheableResponse(response, blob, versionTag) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
@@ -39698,7 +39752,7 @@ class GalleryCoverPreviewCache {
       statusText: String(response?.statusText || ''),
       headers: {
         ...(contentType ? { 'Content-Type': contentType } : {}),
-        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+        [GALLERY_COVER_VERSION_HEADER]: versionTag,
       },
     });
   }
@@ -39823,14 +39877,15 @@ class GalleryCoverPreviewCache {
           && !signal?.aborted
           && this.isLatestRequestedProductionUrl(productionUrl)
         );
+        const storedKey = await this.storedCoverKey(productionUrl);
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          await cache.put(baseKey, cacheCandidate);
+          await cache.put(storedKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(baseKey);
+            await cache.delete(storedKey);
           }
           return {
             blob,
@@ -39858,10 +39913,10 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cacheKey = this.baseCacheKey(productionUrl);
+    const { key: cacheKey, version: versionTag } = await this.coverKeyFor(productionUrl);
     const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_VERSION_HEADER) === versionTag) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -39915,7 +39970,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
+        cacheCandidate = this.createCacheableResponse(response, blob, versionTag);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -40199,7 +40254,7 @@ class GalleryCoverPreviewCache {
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
+      return Boolean(await cache.delete(await this.storedCoverKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;
@@ -51538,6 +51593,11 @@ if (shouldStartImmediateHydration) {
   }
 }
 
+// A page shown from the Android app's copy brings its view up to date in place once the server
+// answers, keeping its scroll position and open album (app-copy.js).
+window.AlbumHavenAppCopy?.onServerAnswer(() => {
+  void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+});
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');

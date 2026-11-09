@@ -51,6 +51,7 @@ from music_app.services.playlist_read_seams import build_view_surface_payload, r
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
+from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -1058,6 +1059,7 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
+    copy_account = app_copy_account(request.state.current_actor) if app_copy_requested(request) else ""
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
@@ -1079,10 +1081,14 @@ async def index(request: Request) -> Response:
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "bootstrap_payload": bootstrap_payload,
             "startup_preview": startup_preview,
+            "app_copy_account": copy_account,
         },
     )
     template_elapsed_ms = round((time.perf_counter() - template_started_at) * 1000, 2)
-    response.headers["Cache-Control"] = "no-store, max-age=0"
+    if copy_account:
+        mark_app_copy(response, copy_account, request.app.state.runtime_asset_version)
+    else:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
         try:
@@ -1208,6 +1214,28 @@ async def bootstrap_data(request: Request) -> JSONResponse:
         request_started_epoch_ms=request_started_epoch_ms,
     )
     return JSONResponse(bootstrap_payload)
+
+
+@router.get("/app-copy/account")
+async def app_copy_account_route(request: Request) -> JSONResponse:
+    """The account the Android app's copy must belong to; answered only while signed in."""
+    return JSONResponse(
+        {"account": app_copy_account(request.state.current_actor)},
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+_APP_COPY_WORKER = Path(__file__).resolve().parent.parent / "static" / "js" / "app-copy-worker.js"
+
+
+@router.get("/app-copy-worker.js")
+async def app_copy_worker() -> Response:
+    # Served from the origin root, so its scope covers the app page; always revalidated.
+    return FileResponse(
+        _APP_COPY_WORKER,
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.post("/refresh-api")

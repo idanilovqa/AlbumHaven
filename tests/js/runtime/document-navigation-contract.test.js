@@ -15,6 +15,8 @@ test('full-document JavaScript navigation is limited to authentication and fatal
     ['music_app/static/js/startup-progress.js', ["window.location.reload()"]],
     ['music_app/static/js/settings-navigation.js', ["window.location.assign('/login')"]],
     ['music_app/static/js/admin-members.js', ["window.location.assign('/login')"]],
+    // A copy of the last view for an account no longer signed in gives way to the network page.
+    ['music_app/static/js/app-copy.js', ['location.reload()']],
     ['music_app/static/js/runtime/discovery-center-navigation.js', ["window.location.assign('/login')"]],
     ['music_app/static/js/runtime/gallery-refresh-and-status.js', ["window.location.assign('/login')"]],
   ]);

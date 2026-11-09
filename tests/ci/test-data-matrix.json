@@ -6739,6 +6739,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
+    "case": "the album cover lookup dims a picture that matches the second artbox",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover lookup dims a picture that matches the second artbox"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/modalEscape.spec.js",
     "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
     "profile": null,

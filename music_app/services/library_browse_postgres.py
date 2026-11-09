@@ -1876,6 +1876,9 @@ class PostgresLibraryBrowseRepository:
             connection=connection,
             include_disc_ratings=True,
         )
+        musicbrainz_artist = _album_musicbrainz_artist(connection, first_row_payload.get("album_id"))
+        if musicbrainz_artist:
+            detail_album["musicbrainz_artist"] = musicbrainz_artist
         _annotate_album_payload_problematic_tracks([detail_album], rows)
         detail_album["poor_art_quality"] = (
             "Poor art quality" in _problematic_album_reasons(detail_album)
@@ -8117,12 +8120,46 @@ def _root_album_browse_artist_groups(rows: list[object]) -> list[dict[str, objec
     return artist_groups
 
 
+def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, object] | None:
+    """The MusicBrainz artist the album certainly belongs to, for album details."""
+    if not album_id:
+        return None
+    row = _row_mapping(connection.execute(
+        """
+        select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
+               identity.tag_differs
+        from library.local_albums album
+        join library.local_album_artist_identities identity
+          on identity.library_id = album.library_id and identity.album_key = album.album_key
+        join integration.musicbrainz_artists artist on artist.mbid = identity.artist_mbid
+        where album.id = %(album_id)s
+        """,
+        {"album_id": album_id},
+    ).fetchone())
+    if not row.get("mbid"):
+        return None
+    return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
+            "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
+            "tag_differs": bool(row.get("tag_differs"))}
+
+
 def _artist_musicbrainz_projection(
     row: Mapping[str, object],
 ) -> dict[str, object] | None:
     artist_mbid = str(row.get("artist_mbid") or "").strip().lower()
     if not artist_mbid:
-        return None
+        identities = row.get("artist_identities")
+        if isinstance(identities, str):
+            identities = json.loads(identities)
+        if not isinstance(identities, list) or not identities:
+            return None
+        # A local name whose albums belong to several MusicBrainz artists.
+        return {"identities": [
+            {"artist_mbid": str(item.get("artist_mbid")),
+             "musicbrainz_url": f"https://musicbrainz.org/artist/{item.get('artist_mbid')}",
+             "canonical_name": item.get("canonical_name"), "disambiguation": item.get("disambiguation") or None,
+             "album_count": int(item.get("album_count") or 0)}
+            for item in identities if isinstance(item, Mapping) and item.get("artist_mbid")]}
     raw_genres = row.get("artist_genres")
     genres = (
         [
@@ -8572,6 +8609,7 @@ def _artist_musicbrainz_projection_columns_sql() -> str:
           musicbrainz_artist.preferred_native_name as artist_native_name,
           musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
           artist_match.credit_name as artist_credit_name,
+          artist_identities.identities as artist_identities,
           coalesce(artist_country.country_name, artist_country.country_code)
             as artist_country,
           coalesce(artist_genres.names, array[]::text[]) as artist_genres,
@@ -8606,6 +8644,31 @@ def _artist_musicbrainz_projection_joins_sql(
           where display_genres.artist_mbid = artist_match.artist_mbid
             and display_genres.display_rank <= 3
         ) artist_genres on true
+        left join library.local_artist_musicbrainz_matches split_match
+          on split_match.library_id = {library_id}
+         and split_match.local_artist_id = {artist_id}
+         and split_match.state = 'per_album'
+        left join lateral (
+          -- The MusicBrainz artists a split local name's albums belong to (Amarok).
+          select jsonb_agg(jsonb_build_object(
+                   'artist_mbid', grouped.artist_mbid, 'canonical_name', grouped.canonical_name,
+                   'disambiguation', grouped.disambiguation, 'album_count', grouped.album_count)
+                 order by grouped.album_count desc, grouped.canonical_name, grouped.artist_mbid) as identities
+          from (
+            select identity.artist_mbid::text as artist_mbid, identity_artist.canonical_name,
+                   identity_artist.disambiguation, count(*) as album_count
+            from library.local_albums identity_album
+            join library.local_album_artist_identities identity
+              on identity.library_id = identity_album.library_id
+             and identity.album_key = identity_album.album_key
+            join integration.musicbrainz_artists identity_artist
+              on identity_artist.mbid = identity.artist_mbid
+            where split_match.local_artist_id is not null
+              and identity_album.library_id = {library_id}
+              and identity_album.artist_id = {artist_id}
+            group by 1, 2, 3
+          ) grouped
+        ) artist_identities on true
     """.strip()
 
 
@@ -8724,6 +8787,7 @@ def _selected_artist_sql() -> str:
           musicbrainz_artist.preferred_native_name as artist_native_name,
           musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
           artist_match.credit_name as artist_credit_name,
+          artist_identities.identities as artist_identities,
           coalesce(artist_country.country_name, artist_country.country_code)
             as artist_country,
           coalesce(artist_genres.names, array[]::text[]) as artist_genres,
@@ -10250,6 +10314,7 @@ def _search_preview_sql(
                    'artist_native_name', musicbrainz_artist.preferred_native_name,
                    'artist_discogs_artist_id', musicbrainz_artist.discogs_artist_id,
                    'artist_credit_name', artist_match.credit_name,
+                   'artist_identities', artist_identities.identities,
                    'artist_country', coalesce(
                      artist_country.country_name,
                      artist_country.country_code
@@ -10425,6 +10490,7 @@ def _search_preview_sql(
                null::text as artist_native_name,
                null::bigint as artist_discogs_artist_id,
                null::text as artist_credit_name,
+               null::jsonb as artist_identities,
                null::text as artist_country,
                array[]::text[] as artist_genres,
                null::jsonb as album_featured_artists,

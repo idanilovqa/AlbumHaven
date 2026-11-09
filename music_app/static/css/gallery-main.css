@@ -222,6 +222,8 @@
 .artist-info-overlay__body [data-artist-info-summary] { white-space: pre-line; }
 .artist-info-overlay__links { padding: 8px 0 14px; }
 .artist-info-overlay__source { color: var(--muted); font-size: .7rem; }
+.artist-info-overlay__identities ul { list-style: none; margin: 4px 0 12px; padding: 0; display: grid; gap: 6px; }
+.artist-info-overlay__identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 @media (max-width: 480px) {
   .artist-info-overlay__image { width: 132px; height: 132px; flex-basis: 132px; }
 }

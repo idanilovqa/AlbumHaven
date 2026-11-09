@@ -26,6 +26,14 @@ function galleryCountryName(country) {
 }
 
 // Country and genre pills only; the album count follows the artist name.
+// An artist matched under another name shows its MusicBrainz name. Display only: the
+// tag changes only through an approved tag edit.
+function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
+  const credited = String(artistMusicBrainz?.credited_as || '').trim();
+  const canonical = String(artistMusicBrainz?.canonical_name || '').trim();
+  return credited && canonical ? canonical : String(artist || '');
+}
+
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
@@ -214,7 +222,9 @@ function buildGalleryBarHtml(config = {}) {
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
-  const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
+  const title = isArtist
+    ? galleryArtistDisplayName(config.artist, config.artist_musicbrainz)
+    : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;

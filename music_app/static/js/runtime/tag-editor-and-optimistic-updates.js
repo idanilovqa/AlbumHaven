@@ -1953,11 +1953,11 @@ function renderTrackModalRelease(album) {
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
-      artist: album.album_artist || '',
+      artist: albumDisplayArtist(album),
       album: album.name || 'Album',
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
-      tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });

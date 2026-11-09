@@ -6093,3 +6093,48 @@ def test_live_disc_rating_follows_an_album_key_rename(watcher_repair_inventory):
     assert [(row["album_key"], row["rating"]) for row in _disc_rating_rows(fixture.setup_url)] == [
         ("owner::renamed", 8),
     ]
+
+
+def _find_artist_projections(value):
+    if isinstance(value, dict):
+        if isinstance(value.get("artist_musicbrainz"), dict):
+            yield value["artist_musicbrainz"]
+        for item in value.values():
+            yield from _find_artist_projections(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _find_artist_projections(item)
+
+
+def test_live_album_details_and_artist_header_show_each_album_s_musicbrainz_artist(watcher_repair_inventory):
+    """Owner decision 2026-11-08: each album takes the MusicBrainz artist it certainly matches."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Hope/01.flac", album="Hope"), fixture.entry("Owner/Sol/01.flac", album="Sol"))
+    polish, spanish = "75d43a2e-ba60-427c-b2c7-bb666053d2f1", "b42d111d-5932-4c00-8562-8bbf7203f850"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = {row["title"]: row for row in connection.execute(
+            "select library_id, album_key, artist_id, title from library.local_albums where title in ('Hope', 'Sol')")}
+        for mbid, disambiguation in ((polish, "Polish progressive rock band"), (spanish, "Spanish fusion band")):
+            connection.execute("insert into integration.musicbrainz_artists (mbid, canonical_name, disambiguation, refreshed_at)"
+                               " values (%s, 'Amarok', %s, now())", (mbid, disambiguation))
+        for title, mbid in (("Hope", polish), ("Sol", spanish)):
+            connection.execute(
+                "insert into library.local_album_artist_identities (library_id, album_key, artist_mbid, tag_differs, matcher_version)"
+                " values (%s, %s, %s, %s, 4)", (albums[title]["library_id"], albums[title]["album_key"], mbid, title == "Sol"))
+        connection.execute(
+            "insert into library.local_artist_musicbrainz_matches (library_id, local_artist_id, state, decision_source,"
+            " evidence_summary) values (%s, %s, 'per_album', 'automatic', 'Your albums belong to 2 MusicBrainz artists.')",
+            (albums["Hope"]["library_id"], albums["Hope"]["artist_id"]))
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+
+    detail = repository.build_album_detail_payload(albums["Sol"]["album_key"])
+    payload = repository.build_selected_artist_payload(query_params={"artist": "Owner"})
+
+    assert detail["musicbrainz_artist"] == {
+        "artist_mbid": spanish, "musicbrainz_url": f"https://musicbrainz.org/artist/{spanish}",
+        "canonical_name": "Amarok", "disambiguation": "Spanish fusion band", "tag_differs": True}
+    identities = [projection["identities"] for projection in _find_artist_projections(payload) if "identities" in projection]
+    assert identities and all(
+        {(item["artist_mbid"], item["album_count"]) for item in found} == {(polish, 1), (spanish, 1)} for found in identities)

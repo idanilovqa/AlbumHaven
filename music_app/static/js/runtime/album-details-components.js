@@ -5,6 +5,19 @@ function normalizeAlbumDetailsLayout(value) {
     : 'classic_bar';
 }
 
+// The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
+// else. Display only: the tag itself changes only through an approved tag edit.
+function albumDisplayArtist(album) {
+  const tagged = album?.album_artist || album?.artist || '';
+  const identity = album?.musicbrainz_artist;
+  return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
+}
+
+function albumTaggedArtistNote(album) {
+  const tagged = album?.album_artist || album?.artist || '';
+  return albumDisplayArtist(album) !== tagged && tagged ? `Tagged as ${tagged}` : '';
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';
@@ -182,7 +195,7 @@ function syncMobileAlbumComposition(album) {
     identity.hidden = !inline;
     if (inline) {
       const centered = layout === 'editorial_canvas';
-      const artist = album.album_artist || album.artist || '';
+      const artist = albumDisplayArtist(album);
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
         title: album.name || 'Album',

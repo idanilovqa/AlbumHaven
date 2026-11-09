@@ -196,3 +196,26 @@ def test_browse_queries_carry_only_the_stored_discogs_artist_id(query_factory):
 
     sql = _normalized(getattr(browse, query_factory)())
     assert "musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id" in sql
+
+
+def test_a_split_artist_projects_the_musicbrainz_artists_its_albums_belong_to():
+    """Owner decision 2026-11-08: Amarok's albums belong to two MusicBrainz artists."""
+    from music_app.services import library_browse_postgres as browse
+
+    polish, spanish = "75d43a2e-ba60-427c-b2c7-bb666053d2f1", "b42d111d-5932-4c00-8562-8bbf7203f850"
+    row = {**_stored_artist_row(), "artist_name": "Amarok", "artist_mbid": None, "artist_canonical_name": None,
+           "artist_identities": [
+               {"artist_mbid": polish, "canonical_name": "Amarok", "disambiguation": "Polish progressive rock band",
+                "album_count": 4},
+               {"artist_mbid": spanish, "canonical_name": "Amarok", "disambiguation": None, "album_count": 3}]}
+
+    group = browse._root_album_browse_artist_groups([row])[0]
+
+    assert group["artist_musicbrainz"] == {"identities": [
+        {"artist_mbid": polish, "musicbrainz_url": f"https://musicbrainz.org/artist/{polish}", "canonical_name": "Amarok",
+         "disambiguation": "Polish progressive rock band", "album_count": 4},
+        {"artist_mbid": spanish, "musicbrainz_url": f"https://musicbrainz.org/artist/{spanish}", "canonical_name": "Amarok",
+         "disambiguation": None, "album_count": 3}]}
+    # An artist with neither a match nor identities projects nothing.
+    assert "artist_musicbrainz" not in browse._root_album_browse_artist_groups(
+        [{**row, "artist_identities": None}])[0]

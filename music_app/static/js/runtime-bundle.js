@@ -3519,7 +3519,7 @@ function renderLibraryWarning(data = {}, options = {}) {
   const loader = document.getElementById('library-loader');
   const scanPageVisible = options.scanPageVisible
     ?? Boolean(loader?.classList?.contains('is-scan-page'));
-  const hidden = !model.warning || !model.dismissed || !scanPageVisible;
+  const hidden = !model.warning || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
   if (libraryHealth && libraryHealth.hidden !== hidden) libraryHealth.hidden = hidden;
   loader?.classList?.toggle?.('has-library-health', !hidden);
@@ -3527,12 +3527,18 @@ function renderLibraryWarning(data = {}, options = {}) {
   const problems = health.problems || [];
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
+  const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
+  const operationalItemsHtml = problems.length
+    ? `<ul>${problems.map(() => '<li data-operational-item>Library recovery is required.</li>').join('')}</ul>`
+    : '';
+  const actionHtml = canRefresh
+    ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
+    : '';
   const message = unavailable
-    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
-    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: canRefresh
-      ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
+    detailsHtml: operationalItemsHtml, actionsHtml: actionHtml});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }
 
@@ -4272,10 +4278,11 @@ function buildOnPageAlertHtml(config = {}) {
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
+  const detailsHtml = String(config.detailsHtml || '');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${detailsHtml}${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
 }
 
 if (typeof window !== 'undefined') {
@@ -5831,7 +5838,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   });
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
-    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
+    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
+    && Number(data.album_total || 0) > 0;
   // The dedicated page hides, but deliberately retains, the previous gallery and
   // query. Its Browse action must not wait for that retained view to become empty.
   const retainedBrowseAvailable = scanPageVisible
@@ -16434,6 +16442,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     // Artwork published after this request started owns the album cover state.
     if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
       return false;
@@ -16887,6 +16903,7 @@ function openScanPage() {
   }
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
+  scheduleStatusPoll(0);
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -17220,6 +17237,7 @@ async function pollStatus() {
   try {
     if (
       !knownBusy
+      && !state.ui.scanPageReturnContext
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
@@ -19116,6 +19134,90 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
 }
 
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums, committedInventoryRevision) {
+  const committedRevision = Number(committedInventoryRevision);
+  const snapshotRevision = Number(payload?.inventory_mutation_revision);
+  if (Number.isSafeInteger(committedRevision) && committedRevision > 0
+    && Number.isSafeInteger(snapshotRevision) && snapshotRevision >= 0) {
+    return snapshotRevision >= committedRevision;
+  }
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
+const CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS = [125, 250, 500, 1000, 2000];
+
+async function waitForCommittedInventoryRevision(committedInventoryRevision) {
+  const targetRevision = Number(committedInventoryRevision);
+  if (!Number.isSafeInteger(targetRevision) || targetRevision <= 0) return;
+  for (let attempt = 0; attempt <= CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch('/status');
+      if (response.ok) {
+        const status = await response.json();
+        if (Number(status?.inventory_mutation_revision || 0) >= targetRevision) return;
+      }
+    } catch (_error) {
+      // The canonical view request below remains the final source of truth.
+    }
+    if (attempt < CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length) {
+      await waitForBrowserTimeout(CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 function albumsShareTrackPath(left, rightPaths) {
   if (!rightPaths?.size) return false;
   return Array.from(getAlbumTrackPaths(left))
@@ -19264,11 +19366,17 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+const activeTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return activeTagEditViewMutations.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
-  if (Object.values(updates || {}).some((edits) => (
+  const hasEdits = Object.values(updates || {}).some((edits) => (
     edits && typeof edits === 'object' && Object.keys(edits).length > 0
-  ))) {
+  ));
+  if (hasEdits) {
     state.ui = state.ui || {};
     state.ui.tagEditOptimisticMutationRevision = Number(
       state.ui.tagEditOptimisticMutationRevision || 0,
@@ -19276,6 +19384,7 @@ function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
+  if (hasEdits) activeTagEditViewMutations.add(generation);
   const resourceKeys = new Set();
   getAlbumRuntimeIdentityAliases(album).forEach((alias) => {
     resourceKeys.add(`album:${alias.toLocaleLowerCase()}`);
@@ -19366,6 +19475,7 @@ function pruneSettledTagEditViewMutationClaims() {
 function settleTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   settledTagEditViewMutations.add(generation);
   pruneSettledTagEditViewMutationClaims();
 }
@@ -19373,6 +19483,7 @@ function settleTagEditViewMutation(claim) {
 function releaseFailedTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     const remainingClaims = claims.filter((value) => value !== generation);
     if (remainingClaims.length) {
@@ -20885,19 +20996,34 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              if (structuralPartialMembershipRequiresCanonicalRefresh) {
+                await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
+              }
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
-                  ...(!structuralTagEditRequiresCanonicalView
+                  preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                  ...(
+                    !structuralTagEditRequiresCanonicalView
+                    && !structuralPartialMembershipRequiresCanonicalRefresh
                     ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
+                    : {}
+                  ),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: responseData => (
+                  shouldApplyResponse: (payload) => (
                     !mutationWasSuperseded()
-                    && responseContainsCommittedInventoryMutation(responseData)
+                    && responseContainsCommittedInventoryMutation(payload)
+                    && (
+                      !structuralPartialMembershipRequiresCanonicalRefresh
+                      || canonicalViewPayloadCoversExpectedTagEdit(
+                        payload,
+                        originalAlbum,
+                        context.optimisticAlbums,
+                        data.inventory_mutation_revision,
+                      )
+                    )
                   ),
                 },
               );
@@ -26139,8 +26265,10 @@ function validateProblematicSummaryPayload(payload) {
     const rootKey = String(item.root_key || '').trim();
     if (
       ![
+        'cross_root_uncertain',
         'overflow',
         'reconciliation_failed',
+        'rollback_pending_work',
         'root_unavailable',
         'stable_write_unavailable',
       ].includes(stateValue)
@@ -31956,6 +32084,17 @@ async function confirmManualTagEdit() {
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
+  const preEditCanonicalReadinessAlbums = (
+    typeof collectVisibleAlbumsUnique === 'function'
+    && typeof getAlbumTrackPaths === 'function'
+    && typeof albumsShareTrackPath === 'function'
+    && typeof albumsShareRuntimeIdentityAlias === 'function'
+  )
+    ? collectVisibleAlbumsUnique().filter((visibleAlbum) => (
+      !albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(album))
+      && !albumsShareRuntimeIdentityAlias(visibleAlbum, album)
+    ))
+    : [];
   const pendingProblematicEntry = registerPendingProblematicOptimisticEdit(
     album,
     optimisticUpdatedAlbums,
@@ -31999,6 +32138,11 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       tagEdits: updates,
     },
+  );
+  const optimisticCanonicalReadinessAlbums = (
+    preEditCanonicalReadinessAlbums.length
+      ? [...preEditCanonicalReadinessAlbums, ...optimisticUpdatedAlbums]
+      : reconciledOptimisticAlbums
   );
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
@@ -32097,7 +32241,7 @@ async function confirmManualTagEdit() {
         ? { absoluteScrollOwnerGeneration }
         : {}),
       problematicMutationOriginKey,
-      optimisticAlbums: optimisticUpdatedAlbums,
+      optimisticAlbums: optimisticCanonicalReadinessAlbums,
       pendingProblematicEntry,
       tagEditAlert,
     };
@@ -42475,6 +42619,8 @@ function handleGalleryBootstrapClick(event) {
     ) {
       return;
     }
+    if (window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allows('library.refresh')) return;
     triggerLibraryRefresh();
     return;
   }

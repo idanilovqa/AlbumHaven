@@ -79,4 +79,3 @@ def test_load_folder_files_skips_unreadable_metadata(tmp_path, monkeypatch):
     )
 
     assert [Path(track["path"]).name for track in payload["tracks"]] == ["one.mp3"]
-

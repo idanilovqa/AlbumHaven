@@ -12,6 +12,48 @@ from music_app.services import state as state_module
 from tests.py.runtime_testing import configure_test_app_paths
 
 
+def test_durable_inventory_sync_ignores_legacy_timestamp_recovery_marker(monkeypatch):
+    marker = {
+        "inventory_mutation_revision": 41,
+        "scan_started_at": "2026-09-24T10:00:00+00:00",
+        "observed_root_ids": ["root-a"],
+    }
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {
+            "inventory_mutation_revision": 41,
+            "manual_scan_recovery": marker,
+        },
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+
+    library_state = {"inventory_mutation_revision": 41}
+    config = {
+        "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": lambda **values: calls.append(values)
+    }
+
+    assert state_module.sync_durable_inventory_revision(library_state, config) == 41
+
+    assert calls == []
+    assert "_manual_scan_recovery_revision" not in library_state
+    assert not hasattr(state_module, "_WATCH_RECOVERY_LOCK")
+
+
+def test_durable_inventory_without_manual_recovery_does_not_restart_watcher(monkeypatch):
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {"inventory_mutation_revision": 41},
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+    state_module.sync_durable_inventory_revision(
+        {"inventory_mutation_revision": 41},
+        {"_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": lambda **values: calls.append(values)},
+    )
+    assert calls == []
+
+
 class _LoggerStub:
     def __init__(self) -> None:
         self.handlers = []
@@ -365,6 +407,44 @@ def test_automatic_write_guard_rolls_back_cover_and_new_reserve_when_commit_fail
     assert exc_info.value is commit_error
     assert cover_path.read_bytes() == prior_cover_bytes
     assert reserve_path.exists() is False
+
+
+def test_automatic_write_guard_uses_claimed_selection_persister(tmp_path: Path):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover_path = folder / "cover.jpg"
+    replacement_bytes = b"claimed-cover-bytes"
+    captured = {}
+
+    def write_action():
+        cover_path.write_bytes(replacement_bytes)
+        return cover_path
+
+    write_action.selected_cover_path = cover_path
+    write_action.provisional_cover_revision = hashlib.sha256(
+        replacement_bytes
+    ).hexdigest()
+
+    def persist(track_paths, selected_cover_path, **kwargs):
+        captured.update(
+            track_paths=track_paths,
+            selected_cover_path=selected_cover_path,
+            **kwargs,
+        )
+        return kwargs["commit_guard"](lambda: None) or {
+            "album_rows_updated": 1,
+            "track_file_rows_updated": 1,
+        }
+
+    guard = cover_refresh_execution._build_automatic_cover_write_guard(
+        config={"CLAIMED_COVER_SELECTION_PERSISTER": persist},
+        folder=folder,
+        track_paths={str(folder / "song.mp3")},
+    )
+
+    assert guard(write_action, cover_selection_origin="automatic") == cover_path
+    assert captured["selected_cover_path"] == cover_path
+    assert captured["cover_selection_origin"] == "automatic"
 
 
 def test_automatic_write_guard_removes_new_cover_when_commit_fails_without_prior_cover(
@@ -3923,6 +4003,42 @@ def test_cover_request_persisted_no_candidate_is_completed(provider_outcome_requ
     assert request.case.state["covers_completed"] == 1
     assert request.case.state["covers_outcome"] == "completed"
     assert len(request.completions) == 1
+
+
+def test_cover_request_prefers_claimed_provider_outcome_persister(
+    provider_outcome_request, monkeypatch
+):
+    request = provider_outcome_request
+    recorded = []
+    request.case.kwargs["config"][
+        "CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"
+    ] = lambda **outcome: recorded.append(outcome)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "execute_cover_job",
+        lambda **_kwargs: (
+            None,
+            False,
+            {
+                "reason": "remote_search_returned_no_candidate",
+                "resolver_trace": [
+                    {"resolver": "_search_spotify", "status": "no_candidate"}
+                ],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_provider_outcomes",
+        lambda *_args, **_kwargs: pytest.fail(
+            "claimed workers must not use direct provider-outcome DML"
+        ),
+    )
+
+    result = request.run()
+
+    assert recorded[0]["outcomes"]["search_spotify"]["category"] == "no_candidate"
+    assert result["job_results"][0]["reason"] == "remote_search_returned_no_candidate"
 
 
 def test_run_cover_jobs_logs_publisher_failure_and_continues_cover_processing(

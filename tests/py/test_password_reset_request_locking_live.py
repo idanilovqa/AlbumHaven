@@ -64,7 +64,9 @@ def test_live_reset_request_refreshes_time_after_lock_wait(
         try:
             results.append(PostgresPasswordResetRequestService(config, connect=connect,
                 clock=lambda: clock[0], audit_repository=audit).request_reset(
-                    candidate="auth.race", source_key="203.0.113.9", request_ref="reset-clock-wait"))
+                    candidate="auth.race", source_key="203.0.113.9", request_ref="reset-clock-wait",
+                    request_origin_ref="browser:reset-clock-wait",
+                    deployment_mode="self_hosted_private_web"))
         except BaseException as exc:
             failures.append(exc)
 
@@ -102,7 +104,8 @@ def test_live_reset_request_refreshes_time_after_lock_wait(
         tokens = connection.execute("""select id, created_at, expires_at, revoked_at
             from app.password_reset_tokens where account_id = %s order by id""",
             (fixture.target_id,)).fetchall()
-        outbox = connection.execute("select created_at from app.mail_outbox where account_id = %s",
+        outbox = connection.execute("select created_at, lifecycle_expires_at, reset_token_id, current_job_id "
+            "from app.mail_outbox where account_id = %s",
             (fixture.target_id,)).fetchall()
         events = connection.execute("""select occurred_at, outcome from app.security_audit_events
             where request_ref = 'reset-clock-wait'""").fetchall()
@@ -112,19 +115,19 @@ def test_live_reset_request_refreshes_time_after_lock_wait(
     assert tokens[0]["id"] == old_id
     assert events == [{"occurred_at": clock[0], "outcome": "throttled" if remains_blocked else "success"}]
     if remains_blocked:
-        assert results[0].delivery is None
+        assert results[0].accepted_job is None
         assert len(tokens) == 1 and tokens[0]["revoked_at"] is None
         assert outbox == []
         assert [row["failure_count"] for row in budgets] == [0, 0, 1]
         assert budgets[-1]["window_started_at"] == fixture.now
         assert budgets[-1]["updated_at"] == fixture.now
     else:
-        assert results[0].delivery is not None
-        assert len(tokens) == 2 and tokens[0]["revoked_at"] == clock[0]
-        assert tokens[1]["created_at"] == clock[0]
-        assert tokens[1]["expires_at"] == clock[0] + timedelta(seconds=10)
-        assert tokens[1]["revoked_at"] is None
-        assert outbox == [{"created_at": clock[0]}]
+        assert results[0].accepted_job is not None
+        # Acceptance is tokenless; the claimed worker owns issuance and rotation.
+        assert len(tokens) == 1 and tokens[0]["revoked_at"] is None
+        assert outbox == [{"created_at": clock[0],
+            "lifecycle_expires_at": clock[0] + timedelta(seconds=10),
+            "reset_token_id": None, "current_job_id": results[0].accepted_job.job_id}]
         assert len(budgets) == 3
         for row in budgets:
             assert row["failure_count"] == 1

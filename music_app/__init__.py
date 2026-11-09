@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
+import time
+from uuid import uuid4
 from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -62,7 +64,6 @@ def _start_library_warmup(
     runtime,
     hydrate,
     ensure_relations,
-    start_refresh,
     prewarm_postgres,
     hydrate_metadata=None,
     recover_persistence=None,
@@ -113,13 +114,12 @@ def _start_library_warmup(
             ):
                 if stop_requested.is_set():
                     return
-                start_refresh(
-                    library_state,
-                    runtime.config,
-                    runtime.logger,
-                    force=True,
-                    scan_mode="background",
-                )
+                with runtime.cold_scan_handoff_lock:
+                    library_state["cold_scan_pending"] = True
+                    library_state["cold_scan_force"] = True
+                    library_state["cold_scan_is_cold_start"] = False
+                    library_state["cold_scan_handoff_status"] = "pending"
+                    library_state["cold_scan_handoff_error"] = ""
             if (
                 not hydrated
                 and not library_state.get("last_error")
@@ -154,9 +154,42 @@ def _stop_library_watch_runtime(
     *,
     watch_service,
     event_coordinator,
-    targeted_executor,
+    targeted_executor=None,
     targeted_reconciler=None,
+    watcher_session_controller=None,
+    deadline=None,
 ) -> None:
+    if watcher_session_controller is not None:
+        if deadline is None:
+            deadline = time.monotonic() + 5.0
+        errors = []
+        watch_stopped = True
+        if watch_service is not None:
+            try:
+                watch_service.stop(timeout=max(0.0, deadline - time.monotonic()))
+            except BaseException as exc:
+                watch_stopped = False
+                errors.append(exc)
+        flush_succeeded = False
+        try:
+            watcher_session_controller.stop_retry_and_flush(deadline=deadline)
+            flush_succeeded = True
+        except BaseException as exc:
+            errors.append(exc)
+        if watch_stopped and flush_succeeded:
+            try:
+                if not watcher_session_controller.finish(deadline=deadline):
+                    raise RuntimeError("watcher runtime session finish failed")
+            except BaseException as exc:
+                errors.append(exc)
+        if event_coordinator is not None:
+            try:
+                event_coordinator.stop()
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+        return
     try:
         if watch_service is not None:
             watch_service.stop()
@@ -172,49 +205,6 @@ def _stop_library_watch_runtime(
                 if targeted_executor is not None:
                     targeted_executor.shutdown(wait=False, cancel_futures=True)
 
-
-def _recover_library_watch_after_manual_scan(
-    *,
-    health_service,
-    targeted_reconciler,
-    watch_service,
-    root_definitions,
-    scan_mode,
-    scan_started_at,
-    observed_root_ids,
-) -> int:
-    clear_error = None
-    cleared = 0
-    try:
-        cleared = health_service.clear_after_scan(
-            scan_mode=scan_mode,
-            scan_started_at=scan_started_at,
-            observed_root_ids=observed_root_ids,
-        )
-    except Exception as exc:
-        clear_error = exc
-    normalized_roots = tuple(dict(root) for root in root_definitions)
-    targeted_reconciler.replace_roots(normalized_roots)
-    try:
-        watch_service.replace_roots(normalized_roots)
-    except Exception:
-        from music_app.services.library_event_coordinator import CoordinatorProblem
-
-        for root in normalized_roots:
-            try:
-                health_service.record_problem(
-                    CoordinatorProblem("reconciliation_failed", str(root.get("id") or ""))
-                )
-            except Exception:
-                # record_problem retains pending health before persistence;
-                # continue protecting every root and preserve the replacement error.
-                logging.getLogger("music_app").exception(
-                    "Unable to persist library watcher recovery problem."
-                )
-        raise
-    if clear_error is not None:
-        raise clear_error
-    return cleared
 
 def _build_runtime_config() -> dict[str, object]:
     from config import APP_NAME, APP_VERSION, Config
@@ -383,7 +373,6 @@ def create_asgi_app():
     from fastapi import FastAPI
 
     from config import APP_NAME, APP_VERSION
-    from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
     from music_app.services.generated_preview_relocation import (
         GeneratedPreviewRelocationWorker,
@@ -396,27 +385,19 @@ def create_asgi_app():
         PostgresGeneratedPreviewStorageRepository,
         is_generated_preview_storage_postgres_available,
     )
-    from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
         WatchdogLibraryEventSource,
     )
     from music_app.services.library_roots import get_library_roots
     from music_app.services.library_event_coordinator import (
-        CoordinatorProblem,
         LibraryEventCoordinator,
-        TargetedReconciliationRequest,
     )
-    from music_app.services.exception_overrides import load_exception_overrides
-    from music_app.services.runtime_shutdown import create_daemon_executor
-    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
-    from music_app.services.save_tasks import acquire_structural_tag_edit_reservation
-    from music_app.services.targeted_library_reconciliation import (
-        TargetedLibraryReconciler,
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.watcher_recovery_postgres import (
+        PostgresWatcherRecoveryRepository,
     )
-    from music_app.services.targeted_reconciliation_scheduler import (
-        TargetedReconciliationScheduler,
-    )
+    from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
@@ -425,8 +406,6 @@ def create_asgi_app():
         hydrate_runtime_library_state_on_startup,
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
-        invalidate_targeted_library_projections,
-        start_background_refresh_for_state,
     )
 
     runtime = _create_asgi_runtime_state()
@@ -479,6 +458,15 @@ def create_asgi_app():
             runtime.config,
             logger=runtime.logger,
         )
+        _app.state.library_warmup_thread = None
+        targeted_database_url = str(
+            runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+        ).strip()
+        targeted_roots = (
+            tuple(get_library_roots(runtime.config))
+            if targeted_database_url
+            else ()
+        )
         _app.state.generated_preview_relocation = None
         if preview_storage_repository is not None:
             preview_relocation_active: bool | None = None
@@ -509,29 +497,34 @@ def create_asgi_app():
                     _app.state.cover_preview_backfill.inventory_existing_previews
                 ),
             )
-            update_preview_storage_policy(preview_storage_state or {})
-            _app.state.generated_preview_relocation.start()
-        else:
-            _app.state.cover_preview_backfill.start()
-        _app.state.library_warmup_thread = _start_library_warmup(
-            runtime,
-            hydrate_runtime_library_state_on_startup,
-            ensure_runtime_relation_projection_ready,
-            start_background_refresh_for_state,
-            prewarm_connection_pool,
-            hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
-            recover_persistence=recover_runtime_library_persistence_on_startup,
-        )
-        lastfm_started = False
-        welcome_worker = None
-        targeted_executor = None
-        targeted_reconciler = None
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
+        watcher_session_controller = None
+        watcher_lifecycle_lock = threading.Lock()
+        watcher_stopping = False
+
+        def stop_library_watcher() -> None:
+            nonlocal watcher_stopping
+            watcher_stopping = True
+            deadline = time.monotonic() + 5.0
+            if not watcher_lifecycle_lock.acquire(
+                timeout=max(0.0, deadline - time.monotonic())
+            ):
+                raise TimeoutError("watcher lifecycle stop deadline exhausted")
+            try:
+                _stop_library_watch_runtime(
+                    watch_service=runtime.library_watch_service,
+                    event_coordinator=runtime.library_event_coordinator,
+                    watcher_session_controller=watcher_session_controller,
+                    deadline=deadline,
+                )
+            finally:
+                watcher_lifecycle_lock.release()
 
         async def shutdown_resources() -> None:
-            _app.state.library_warmup_thread.request_stop()
-            runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
+            warmup = _app.state.library_warmup_thread
+            if warmup is not None:
+                warmup.request_stop()
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 (
@@ -546,26 +539,11 @@ def create_asgi_app():
                 ),
                 (
                     "library warmup",
-                    _app.state.library_warmup_thread.stop,
-                ),
-                (
-                    "welcome mail retry worker",
-                    lambda: welcome_worker.stop() if welcome_worker is not None else None,
+                    warmup.stop if warmup is not None else lambda: None,
                 ),
                 (
                     "library filesystem watcher",
-                    lambda: _stop_library_watch_runtime(
-                        watch_service=runtime.library_watch_service,
-                        event_coordinator=runtime.library_event_coordinator,
-                        targeted_executor=targeted_executor,
-                        targeted_reconciler=targeted_reconciler,
-                    ),
-                ),
-                (
-                    "Last.fm retry worker",
-                    lambda: stop_lastfm_retry_worker(runtime)
-                    if lastfm_started
-                    else None,
+                    stop_library_watcher,
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
@@ -587,181 +565,173 @@ def create_asgi_app():
                     f"application shutdown failed: {details}"
                 ) from shutdown_errors[0][1]
 
-        lastfm_started = True
-        try:
-            start_lastfm_retry_worker(runtime)
-            welcome_worker = start_welcome_retry_worker(_app)
-            targeted_executor = _BoundedExecutorAdmission(
-                create_daemon_executor(
-                    max_workers=1,
-                    thread_name_prefix="albumhaven-targeted-reconciliation",
-                ),
-                max_outstanding=1,
-            )
-            targeted_reconciler = TargetedLibraryReconciler(
-                runtime.config,
-                repository=select_scan_cache_adapter(runtime.config),
-                root_definitions=get_library_roots(runtime.config),
-                exception_overrides_provider=lambda: load_exception_overrides(
-                    runtime.config
-                ),
-                after_commit=lambda result: invalidate_targeted_library_projections(
-                    runtime.library_state,
-                    runtime.config,
-                    revision=result.revision,
-                    affected_album_keys=result.affected_album_keys,
-                ),
-                reservation_acquirer=acquire_structural_tag_edit_reservation,
-                publication_guard=runtime.library_watch_health_service.publication_guard,
-            )
-        except BaseException:
-            await shutdown_resources()
-            raise
-
-        def targeted_request_root_ids(request) -> tuple[str, ...]:
-            root_ids = {str(request.root_id)}
-            for move in request.moves:
-                root_ids.add(str(move.source_root_id))
-                root_ids.add(str(move.destination_root_id))
-            return tuple(sorted(root_id for root_id in root_ids if root_id))
-
-        def reconcile_targeted_request(request) -> None:
-            root_healthy = all(
-                runtime.library_watch_health_service
-                .root_allows_destructive_reconciliation(root_id)
-                for root_id in targeted_request_root_ids(request)
-            )
-            result = targeted_reconciler.reconcile(
-                request,
-                root_healthy=root_healthy,
-            )
-            if getattr(result, "health", None) == "stable_write_unavailable":
-                for root_id in targeted_request_root_ids(request):
-                    persist_library_watch_problem(
-                        CoordinatorProblem("stable_write_unavailable", root_id)
-                    )
-
-        def submit_targeted_reconciliation(request) -> None:
-            targeted_executor.submit(request)
-
-        def persist_library_watch_health(event) -> None:
-            try:
-                runtime.library_watch_health_service.record_event(event)
-            except Exception:
-                runtime.logger.exception(
-                    "Unable to persist library watcher health event."
-                )
-
-        def persist_library_watch_problem(problem) -> None:
-            try:
-                runtime.library_watch_health_service.record_problem(problem)
-            except Exception:
-                runtime.logger.exception(
-                    "Unable to persist library watcher health problem."
-                )
-
-        automatic_recovery_started_at: dict[frozenset[str], str] = {}
-
-        def catch_up_library_roots(root_ids: frozenset[str]) -> None:
-            recovery_started_at = datetime.now(timezone.utc).isoformat()
-            roots_by_id = {
-                str(root.get("id") or ""): dict(root)
-                for root in get_library_roots(runtime.config)
-            }
-            for root_id in sorted(root_ids):
-                root = roots_by_id.get(root_id)
-                if root is None:
-                    raise RuntimeError(
-                        f"Library watcher catch-up root is no longer configured: {root_id}"
-                    )
-                root_path = Path(str(root.get("path") or ""))
-                if not root_path.is_dir():
-                    raise OSError(
-                        f"Library watcher catch-up root is unavailable: {root_id}"
-                    )
-                result = targeted_reconciler.reconcile(
-                    TargetedReconciliationRequest(
-                        root_id=root_id,
-                        paths=frozenset({root_path}),
-                        deleted_subtrees=frozenset({root_path}),
-                    ),
-                    root_healthy=True,
-                    publication_guard=(
-                        runtime.library_watch_health_service
-                        .recovery_publication_guard(recovery_started_at)
-                    ),
-                )
-                if getattr(result, "health", None) != "healthy":
-                    raise RuntimeError(
-                        f"Library watcher catch-up failed for root {root_id}."
-                    )
-            automatic_recovery_started_at[root_ids] = recovery_started_at
-
-        def clear_recovered_library_roots(root_ids: frozenset[str]) -> None:
-            recovery_started_at = automatic_recovery_started_at.pop(root_ids)
-            runtime.library_watch_health_service.clear_after_reconciliation(
-                observed_root_ids=root_ids,
-                reconciliation_started_at=recovery_started_at,
-            )
-
-        targeted_executor = TargetedReconciliationScheduler(
-            reconcile=reconcile_targeted_request,
-            catch_up=catch_up_library_roots,
-            record_problem=persist_library_watch_problem,
-            clear_recovered=clear_recovered_library_roots,
-            executor=targeted_executor,
-            logger=runtime.logger,
+        scan_jobs = PostgresScanJobRepository(
+            database_url=targeted_database_url
+        )
+        _app.state.scan_job_repository = scan_jobs
+        _app.state.cover_job_repository = (
+            PostgresCoverJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
+        from music_app.services.lastfm_retry_jobs_postgres import (
+            PostgresLastfmRetryJobRepository,
         )
 
+        _app.state.lastfm_retry_job_repository = (
+            PostgresLastfmRetryJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
+        watcher_library_id = (
+            host_scope.library_id if targeted_database_url and host_scope is not None else None
+        )
+        watcher_recovery = (
+            PostgresWatcherRecoveryRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
+        _app.state.watcher_recovery_repository = watcher_recovery
+
+        def configure_durable_health(library_id: int) -> None:
+            from music_app.services.library_watch_health import (
+                LibraryWatchHealthService,
+                PostgresLibraryWatchHealthStore,
+            )
+
+            if watcher_recovery is None:
+                return
+            if runtime.library_watch_health_service.uses_durable_repository(
+                watcher_recovery,
+                library_id,
+            ):
+                return
+            durable_health_service = LibraryWatchHealthService(watcher_recovery)
+            if durable_health_service is not runtime.library_watch_health_service:
+                durable_health_service.configure_mixed_version_read(
+                    legacy_store=PostgresLibraryWatchHealthStore(runtime.config),
+                    library_id=library_id,
+                )
+                runtime.library_watch_health_service = durable_health_service
+                _app.state.library_watch_health_service = durable_health_service
+
+        if watcher_library_id is not None:
+            configure_durable_health(watcher_library_id)
+
+        def observation_time(value) -> datetime:
+            if not isinstance(value, datetime):
+                return datetime.now(timezone.utc)
+            if value.tzinfo is None:
+                raise ValueError("watcher observation time must be timezone-aware")
+            return value.astimezone(timezone.utc)
+
+        def accept_library_watch_event(event) -> None:
+            library_id = watcher_library_id
+            if library_id is None or watcher_recovery is None:
+                raise RuntimeError("durable watcher admission is unavailable")
+            watcher_recovery.accept_event(
+                library_id=library_id,
+                event=event,
+                accepted_at=observation_time(event.observed_at),
+            )
+
+        def persist_library_watch_problem(problem) -> None:
+            library_id = watcher_library_id
+            if library_id is None or watcher_recovery is None:
+                raise RuntimeError("durable watcher admission is unavailable")
+            watcher_recovery.record_problem(
+                library_id=library_id,
+                problem=problem,
+                observed_at=datetime.now(timezone.utc),
+            )
+
+        configured_root_ids = tuple(str(root["id"]) for root in targeted_roots)
+
+        def report_watcher_admission_failure(logical_root_ids) -> None:
+            if watcher_session_controller is not None:
+                watcher_session_controller.report_admission_failure(
+                    logical_root_ids=tuple(logical_root_ids)
+                )
+
         try:
+            if watcher_recovery is not None:
+                from music_app.services.watcher_session_recovery import (
+                    WatcherSessionRecoveryController,
+                )
+
+                if watcher_library_id is None:
+                    watcher_library_id = scan_jobs.resolve_local_library_id()
+                if (
+                    isinstance(watcher_library_id, bool)
+                    or not isinstance(watcher_library_id, int)
+                    or watcher_library_id <= 0
+                ):
+                    raise RuntimeError("durable watcher library is unavailable")
+                _app.state.media_host_library_id = watcher_library_id
+                configure_durable_health(watcher_library_id)
+                controller = WatcherSessionRecoveryController(watcher_recovery)
+                controller.start(
+                    library_id=watcher_library_id,
+                    session_token=uuid4(),
+                    logical_root_ids=configured_root_ids,
+                    started_at=datetime.now(timezone.utc),
+                )
+                watcher_session_controller = controller
             runtime.library_event_coordinator = LibraryEventCoordinator(
-                emit_request=submit_targeted_reconciliation,
-                emit_health_event=persist_library_watch_health,
-                emit_problem=persist_library_watch_problem,
-                drain_at_capacity=True,
-                auto_schedule=True,
+                accept_library_watch_event,
+                record_problem=persist_library_watch_problem,
+                report_admission_failure=report_watcher_admission_failure,
             )
             runtime.library_watch_service = LibraryWatchService(
-                WatchdogLibraryEventSource(get_library_roots(runtime.config)),
+                WatchdogLibraryEventSource(
+                    targeted_roots if watcher_session_controller is not None else (),
+                    report_unattributed_failure=report_watcher_admission_failure,
+                ),
                 runtime.library_event_coordinator.accept,
             )
             _app.state.library_watch_service = runtime.library_watch_service
+            if _app.state.generated_preview_relocation is not None:
+                update_preview_storage_policy(preview_storage_state or {})
+                _app.state.generated_preview_relocation.start()
+            else:
+                _app.state.cover_preview_backfill.start()
+            _app.state.library_warmup_thread = _start_library_warmup(
+                runtime,
+                hydrate_runtime_library_state_on_startup,
+                ensure_runtime_relation_projection_ready,
+                prewarm_connection_pool,
+                hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
+                recover_persistence=recover_runtime_library_persistence_on_startup,
+            )
         except BaseException:
             await shutdown_resources()
             raise
 
         def replace_live_library_roots(roots) -> None:
+            nonlocal configured_root_ids
             root_definitions = tuple(dict(root) for root in roots)
-            targeted_reconciler.replace_roots(root_definitions)
-            try:
-                runtime.library_watch_service.replace_roots(root_definitions)
-            except Exception:
-                for root in root_definitions:
-                    persist_library_watch_problem(CoordinatorProblem("reconciliation_failed", str(root.get("id") or "")))
-                raise
+            requested_ids = tuple(str(root["id"]) for root in root_definitions)
+            with watcher_lifecycle_lock:
+                if watcher_stopping:
+                    raise RuntimeError("watcher runtime is stopping")
+                if watcher_session_controller is None:
+                    raise RuntimeError("durable watcher session is unavailable")
+                watcher_session_controller.expand_participants(requested_ids)
+                affected_ids = tuple(dict.fromkeys((*configured_root_ids, *requested_ids)))
+                try:
+                    runtime.library_watch_service.replace_roots(root_definitions)
+                    configured_root_ids = requested_ids
+                    watcher_session_controller.set_participants(requested_ids)
+                except Exception:
+                    try:
+                        report_watcher_admission_failure(affected_ids)
+                    except Exception:
+                        logging.getLogger(__name__).error("watcher replacement recovery reporting failed")
+                    raise
 
         runtime.replace_library_watch_roots = replace_live_library_roots
         _app.state.replace_library_watch_roots = replace_live_library_roots
 
-        def recover_library_watch_after_manual_scan(
-            *,
-            scan_mode,
-            scan_started_at,
-            observed_root_ids,
-        ) -> int:
-            return _recover_library_watch_after_manual_scan(
-                health_service=runtime.library_watch_health_service,
-                targeted_reconciler=targeted_reconciler,
-                watch_service=runtime.library_watch_service,
-                root_definitions=get_library_roots(runtime.config),
-                scan_mode=scan_mode,
-                scan_started_at=scan_started_at,
-                observed_root_ids=observed_root_ids,
-            )
-
-        runtime.config["_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"] = (
-            recover_library_watch_after_manual_scan
-        )
         try:
             runtime.library_watch_service.start()
         except BaseException:

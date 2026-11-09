@@ -455,6 +455,7 @@ def begin_prepared_remote_cover_promotion(
     prepared_bytes: bytes,
     *,
     serialize_selection: bool = False,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> LocalCoverPromotion | None:
     decoded = decode_image_bytes(prepared_bytes)
     if decoded is None:
@@ -473,6 +474,12 @@ def begin_prepared_remote_cover_promotion(
     target = album_root / "cover.jpg"
     promotion: LocalCoverPromotion | None = None
     try:
+        if should_cancel is not None and should_cancel():
+            if selection_lock is not None:
+                canceled_lock = selection_lock
+                selection_lock = None
+                _release_local_cover_selection_lock(lock_key, canceled_lock)
+            return None
         prior_cover_existed = target.is_file()
         prior_cover_stat = target.stat() if prior_cover_existed else None
         prior_cover_bytes = target.read_bytes() if prior_cover_existed else None
@@ -499,6 +506,12 @@ def begin_prepared_remote_cover_promotion(
             album_root,
             prepared_bytes,
         )
+        if should_cancel is not None and should_cancel():
+            canceled_promotion = promotion
+            promotion = None
+            selection_lock = None
+            rollback_local_image_promotion(canceled_promotion)
+            return None
         _atomic_replace_file_bytes(target, prepared_bytes)
     except Exception:
         if promotion is not None:
@@ -514,6 +527,7 @@ def begin_remote_cover_promotion(
     raw_bytes: bytes,
     *,
     serialize_selection: bool = False,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> LocalCoverPromotion | None:
     prepared_bytes = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes)
     if prepared_bytes is None:
@@ -522,6 +536,7 @@ def begin_remote_cover_promotion(
         album_root,
         prepared_bytes,
         serialize_selection=serialize_selection,
+        should_cancel=should_cancel,
     )
 
 

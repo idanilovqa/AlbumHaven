@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.datastructures import QueryParams
 from music_app.routes import api_read_asgi_routes as routes
+from music_app.services.allowed_actions import AllowedActions
 from music_app.services import current_actor_asgi, private_route_boundary as boundary
 
 
@@ -27,7 +28,7 @@ def scoped(monkeypatch):
     monkeypatch.setattr(current_actor_asgi,'current_actor_from_request',resolve)
     monkeypatch.setattr(routes,'current_actor_from_request',resolve,raising=False)
     monkeypatch.setattr(routes,'_app_config',lambda req:req.app.state.config)
-    monkeypatch.setattr(routes,'allowed_actions_for_request',lambda *_args:SimpleNamespace(as_payload=lambda:{}))
+    monkeypatch.setattr(routes,'allowed_actions_for_request',lambda *_args:AllowedActions(()))
 
 @pytest.mark.parametrize('method,path,action',[('GET','/utilities/log-history','library.logs.read'),('POST','/utilities/log-history/export','library.logs.export')])
 def test_history_perimeter_requires_its_exact_capability_before_handler(monkeypatch,method,path,action):

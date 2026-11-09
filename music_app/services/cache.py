@@ -14,6 +14,8 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
     {
         "cover_path",
         "cover_revision",
+        "cover_selection_origin",
+        "cover_selection_provenance",
         "local_cover_width",
         "local_cover_height",
         "cover_validation_path",
@@ -29,6 +31,7 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
     }
 )
 _MISSING_CACHE_FIELD = object()
+_INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "album_rating"})
 
 
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
@@ -36,8 +39,14 @@ def _cache_rebase_comparison_value(key: str, value: object) -> object:
         return normalize_exception_value(value)
     if key == "custom_collection_name" and value is not _MISSING_CACHE_FIELD:
         return str(value or "").strip()
-    if key in {"year", "track_number", "disc_number"} and value is not _MISSING_CACHE_FIELD:
-        return str(value or "").strip()
+    if key in _INTEGER_TAG_FIELDS and value is not _MISSING_CACHE_FIELD:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return value
     return value
 
 

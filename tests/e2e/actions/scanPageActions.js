@@ -63,6 +63,25 @@ export class ScanPageActions {
     await expect(this.scanPage.healthWarning.getByRole('button', { name: 'Full Rescan', exact: true })).toBeVisible();
   }
 
+  async expectRepairAvailable() {
+    await expect(this.scanPage.healthWarning).toBeVisible();
+    await expect(this.scanPage.repairLibraryButton).toBeVisible();
+  }
+
+  async expectRepairUnavailable() {
+    await expect(this.scanPage.repairLibraryButton).toHaveCount(0);
+  }
+
+  async startRepair() {
+    const responsePromise = this.scanPage.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/refresh-api'
+    ));
+    await this.scanPage.repairLibraryButton.click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+  }
+
   async expectLibraryGalleryBarRestored(options = {}) {
     await expect(this.scanPage.statusGalleryBar).toHaveCount(0);
     await expect(this.scanPage.libraryGalleryBar).toHaveCount(1);

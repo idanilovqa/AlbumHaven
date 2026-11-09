@@ -1468,6 +1468,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     // Artwork published after this request started owns the album cover state.
     if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
       return false;
@@ -1921,6 +1929,7 @@ function openScanPage() {
   }
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
+  scheduleStatusPoll(0);
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -2254,6 +2263,7 @@ async function pollStatus() {
   try {
     if (
       !knownBusy
+      && !state.ui.scanPageReturnContext
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {

@@ -559,6 +559,49 @@ def test_queued_cache_update_never_rebases_authoritative_cover_fields():
     }
 
 
+def test_queued_cache_update_preserves_newer_explicit_cover_provenance():
+    track_path = "C:/Music/song.mp3"
+    baseline = {
+        "path": track_path,
+        "title": "Old Title",
+        "cover_selection_origin": "auto",
+        "cover_selection_provenance": "legacy",
+    }
+    latest = {
+        **baseline,
+        "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit",
+    }
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {
+            **baseline,
+            "title": "New Title",
+            "cover_selection_origin": None,
+            "cover_selection_provenance": None,
+        }},
+        latest_file_cache={track_path: latest},
+    )
+
+    assert rebased[track_path]["title"] == "New Title"
+    assert rebased[track_path]["cover_selection_origin"] == "user"
+    assert rebased[track_path]["cover_selection_provenance"] == "explicit"
+
+
+def test_queued_cache_update_accepts_committed_trimmed_collection_name():
+    track_path = "C:/Music/song.mp3"
+    baseline = {"path": track_path, "custom_collection_name": "Old Collection"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {**baseline, "custom_collection_name": "  New Collection  "}},
+        latest_file_cache={track_path: {**baseline, "custom_collection_name": "New Collection"}},
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == "  New Collection  "
+
+
 def test_queued_cache_update_rejects_divergent_same_field_conflict():
     track_path = "C:/Music/song.mp3"
 

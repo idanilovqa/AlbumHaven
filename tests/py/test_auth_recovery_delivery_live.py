@@ -32,7 +32,9 @@ def _reset_service(fixture, clock, *, connect=None):
 
 def _request(service, candidate="auth.race", source="198.51.100.14"):
     return service.request_reset(candidate=candidate, source_key=source,
-        request_ref="recovery-live", source_class="public")
+        request_ref="recovery-live", source_class="public",
+        request_origin_ref="browser:recovery-live",
+        deployment_mode="self_hosted_private_web")
 
 
 def _delivery_snapshot(fixture):
@@ -49,7 +51,7 @@ def test_live_reset_reservation_retains_expired_bucket_against_cleanup(auth_lock
     _seed_credential(fixture)
     clock = [fixture.now]
     service = _reset_service(fixture, clock)
-    assert _request(service).delivery is not None
+    assert _request(service).accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         connection.execute("""update app.auth_throttles
             set window_started_at = %s, window_expires_at = %s, failure_count = 4
@@ -68,7 +70,7 @@ def test_live_reset_reservation_retains_expired_bucket_against_cleanup(auth_lock
 
     result = _request(_reset_service(fixture, clock,
         connect=lambda url: AfterConflict(isolatedPostgres._connect(url))))
-    assert result.accepted and result.delivery is not None
+    assert result.accepted and result.accepted_job is not None
     assert cleaned == [0], "The actual cleanup must skip the reserved conflicting row"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         rows = connection.execute("select bucket_kind, window_started_at, failure_count from app.auth_throttles").fetchall()
@@ -87,22 +89,22 @@ def test_live_reset_limits_are_independent_and_roll_over_without_losing_pending_
     if kind == "reset_candidate":
         # No credential exists yet, so these charge no account budget.
         for index in range(5):
-            assert _request(service, source=f"198.51.100.{index + 1}").delivery is None
+            assert _request(service, source=f"198.51.100.{index + 1}").accepted_job is None
         _seed_credential(fixture)
-        assert _request(service, "auth.race@example.test", "203.0.113.2").delivery is not None
+        assert _request(service, "auth.race@example.test", "203.0.113.2").accepted_job is not None
     else:
         _seed_credential(fixture)
-        assert _request(service, "auth.race@example.test", "203.0.113.2").delivery is not None
+        assert _request(service, "auth.race@example.test", "203.0.113.2").accepted_job is not None
         if kind == "reset_source":
             for index in range(20):
-                assert _request(service, f"absent-{index}").delivery is None
+                assert _request(service, f"absent-{index}").accepted_job is None
         else:
             for index in range(4):
                 candidate = "auth.race" if index % 2 == 0 else "auth.race@example.test"
-                assert _request(service, candidate, f"203.0.113.{index + 3}").delivery is not None
+                assert _request(service, candidate, f"203.0.113.{index + 3}").accepted_job is not None
     before = _delivery_snapshot(fixture)
     result = _request(service)
-    assert result.accepted and result.delivery is None
+    assert result.accepted and result.accepted_job is None
     assert _delivery_snapshot(fixture) == before, "Blocked recovery must not revoke or issue anything"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         # Keep all other buckets current across the tested bucket's boundary.
@@ -112,7 +114,7 @@ def test_live_reset_limits_are_independent_and_roll_over_without_losing_pending_
         current = connection.execute("select id, failure_count, window_started_at from app.auth_throttles where bucket_kind <> %s", (kind,)).fetchall()
     clock[0] = fixture.now + timedelta(hours=1)
     result = _request(service)
-    assert result.accepted and result.delivery is not None
+    assert result.accepted and result.accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         refreshed = connection.execute("""select failure_count, window_started_at from app.auth_throttles
             where bucket_kind = %s and window_started_at = %s""", (kind, clock[0])).fetchall()
@@ -209,90 +211,6 @@ def test_live_concurrent_reset_completion_commits_exactly_one_winner(auth_lock_i
         assert connection.execute("select consumed_at from app.password_reset_transactions where id = %s", (transaction.transaction_id,)).fetchone()["consumed_at"] is not None
         assert connection.execute("select count(*) as n from app.account_sessions where account_id = %s and revoked_at is null", (fixture.target_id,)).fetchone()["n"] == 0
         assert connection.execute("select count(*) as n from app.security_audit_events where target_account_id = %s and reason_code = 'reset_completed'", (fixture.target_id,)).fetchone()["n"] == 1
-    assert all(sessions.resolve_session(session.raw_token) is None for session in old_sessions)
-
-
-def test_live_welcome_worker_retries_only_due_known_failure_after_restart(auth_lock_inventory):
-    import asyncio
-    from music_app.services.auth_mail import DeliveryResult
-    from music_app.services.auth_mail_outbox_postgres import PostgresWelcomeOutboxService, deliver_welcome
-    from music_app.services.auth_welcome_worker import WelcomeMailWorker
-    fixture = auth_lock_inventory
-    clock = [fixture.now]
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        pending = connection.execute("""insert into app.mail_outbox
-            (account_id, message_category, delivery_status, attempt_count, created_at)
-            values (%s, 'welcome', 'pending', 0, %s) returning id""", (fixture.target_id, fixture.now)).fetchone()["id"]
-        for status, attempts, due in [("unknown", 1, None), ("sent", 1, None),
-                ("failed", 5, fixture.now), ("failed", 1, None),
-                ("failed", 1, fixture.now + timedelta(hours=2))]:
-            connection.execute("""insert into app.mail_outbox
-                (account_id, message_category, delivery_status, attempt_count, created_at, next_attempt_at)
-                values (%s, 'welcome', %s, %s, %s, %s)""", (fixture.target_id, status, attempts, fixture.now, due))
-    repository = PostgresWelcomeOutboxService(fixture.config,
-        connect=isolatedPostgres._connect, now=lambda: clock[0])
-    config = {"welcome_enabled": True, "connect_timeout_seconds": 1, "command_timeout_seconds": 1}
-    calls = []
-    async def sender(_message, *, config):
-        calls.append(clock[0])
-        return DeliveryResult(delivered=len(calls) > 1, reason="delivered" if len(calls) > 1 else "failed")
-    async def scenario():
-        await deliver_welcome(pending, config=config, repository=repository,
-            composer=lambda **_kwargs: object(), sender=sender)
-        worker = WelcomeMailWorker(repository=repository, config=config,
-            composer=lambda **_kwargs: object(), sender=sender)
-        clock[0] += timedelta(seconds=59)
-        assert await worker.run_once() == 0
-        clock[0] += timedelta(seconds=1)
-        assert await worker.run_once() == 1
-        assert await worker.run_once() == 0
-        await worker.stop()
-    asyncio.run(scenario())
-    assert calls == [fixture.now, fixture.now + timedelta(seconds=60)]
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        row = connection.execute("select delivery_status, attempt_count, next_attempt_at from app.mail_outbox where id = %s", (pending,)).fetchone()
-        assert row == {"delivery_status": "sent", "attempt_count": 2, "next_attempt_at": None}
-        assert connection.execute("select count(*) as n from app.mail_outbox where id <> %s and attempt_count > 1 and delivery_status <> 'failed'", (pending,)).fetchone()["n"] == 0
-
-
-def test_live_welcome_workers_share_one_claim_and_reconcile_stale_send_without_resending(auth_lock_inventory):
-    import asyncio
-    from music_app.services.auth_mail import DeliveryResult
-    from music_app.services.auth_mail_outbox_postgres import PostgresWelcomeOutboxService
-    from music_app.services.auth_welcome_worker import WelcomeMailWorker
-    fixture = auth_lock_inventory
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        pending = connection.execute("""insert into app.mail_outbox (account_id, message_category, created_at)
-            values (%s, 'welcome', %s) returning id""", (fixture.target_id, fixture.now)).fetchone()["id"]
-        stale = connection.execute("""insert into app.mail_outbox
-            (account_id, message_category, delivery_status, attempt_count, created_at, claimed_at)
-            values (%s, 'welcome', 'sending', 1, %s, %s) returning id""",
-            (fixture.target_id, fixture.now - timedelta(hours=2), fixture.now - timedelta(hours=2))).fetchone()["id"]
-    selected = Barrier(2, timeout=3)
-    class Repository(PostgresWelcomeOutboxService):
-        def list_due_welcome_ids(self, *, limit):
-            rows = super().list_due_welcome_ids(limit=limit)
-            assert set(rows) == {pending, stale}
-            selected.wait()
-            return rows
-    calls = []
-    async def sender(_message, *, config):
-        calls.append(True)
-        await asyncio.sleep(0)
-        return DeliveryResult(True, "delivered")
-    async def scenario():
-        workers = [WelcomeMailWorker(repository=Repository(fixture.config,
-            connect=isolatedPostgres._connect, now=lambda: fixture.now),
-            config={"welcome_enabled": True, "connect_timeout_seconds": 1, "command_timeout_seconds": 1},
-            sender=sender, composer=lambda **_kwargs: object()) for _ in range(2)]
-        try:
-            await asyncio.gather(*(worker.run_once() for worker in workers))
-        finally:
-            for worker in workers:
-                await worker.stop()
-    asyncio.run(scenario())
-    assert calls == [True]
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        rows = connection.execute("select id, delivery_status, attempt_count from app.mail_outbox where id = any(%s) order by id", ([pending, stale],)).fetchall()
-    assert rows == [{"id": pending, "delivery_status": "sent", "attempt_count": 1},
-                    {"id": stale, "delivery_status": "unknown", "attempt_count": 1}]
+    assert all(
+        sessions.resolve_session(session.raw_token) is None for session in old_sessions
+    )

@@ -86,6 +86,7 @@ const MANAGED_ISOLATED_REUSE_STATE_ENV = 'ALBUM_HAVEN_E2E_REUSE_STATE';
 const MANAGED_ISOLATED_RESTART_REQUEST_FILE = 'restart-request.json';
 const MANAGED_ISOLATED_RESTART_ACK_FILE = 'restart-ack.json';
 const MANAGED_ISOLATED_RESTART_POLL_INTERVAL_MS = 100;
+const MANAGED_ISOLATED_APP_SHUTDOWN_COMMAND = 'shutdown\n';
 const SCAN_STATUS_SAMPLES_ENV = 'ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH';
 const MANAGED_SCAN_APP_STARTUP_TIMEOUT_MS = 120000;
 const MANAGED_ISOLATED_APP_STARTUP_TIMEOUT_MS = 120000;
@@ -132,6 +133,7 @@ const SAFE_LIFECYCLE_EXIT_REASONS = new Set([
   'fake-database-cleanup-error',
   'managed-scan-cleanup-error',
   'managed-isolated-app-cleanup-error',
+  'managed-isolated-app-unexpected-exit',
   'owned-process-cleanup-error',
   'owned-temp-cleanup-error',
   'unknown',
@@ -181,6 +183,33 @@ function safeLifecycleStage(stage, extraFields = []) {
   return safeStage;
 }
 
+const SAFE_MANAGED_ISOLATED_APP_OPERATIONS = new Set([
+  'restart',
+  'watcher-cleanup',
+  'watcher-recovery-cleanup',
+]);
+const SAFE_MANAGED_ISOLATED_APP_ACK_STATUSES = new Set(['pending', 'failed', 'ready']);
+const SAFE_MANAGED_ISOLATED_APP_EVENTS = new Set(['exit', 'close']);
+const SAFE_MANAGED_ISOLATED_APP_PHASES = new Set(['playwright-run', 'start-replacement']);
+
+function safeManagedIsolatedAppExit(exit) {
+  if (!exit || typeof exit !== 'object') return null;
+  const timestamp = String(exit.timestamp || '');
+  return {
+    operation: safeClosedValue(exit.operation, SAFE_MANAGED_ISOLATED_APP_OPERATIONS),
+    ackStatus: safeClosedValue(exit.ackStatus, SAFE_MANAGED_ISOLATED_APP_ACK_STATUSES),
+    generation: safeNonnegativeInteger(exit.generation),
+    pid: safeNonnegativeInteger(exit.pid),
+    phase: safeClosedValue(exit.phase, SAFE_MANAGED_ISOLATED_APP_PHASES),
+    event: safeClosedValue(exit.event, SAFE_MANAGED_ISOLATED_APP_EVENTS),
+    exitCode: Number.isInteger(exit.exitCode) ? exit.exitCode : null,
+    signal: /^[A-Z][A-Z0-9]{0,31}$/.test(String(exit.signal || ''))
+      ? String(exit.signal)
+      : null,
+    timestamp: Number.isNaN(Date.parse(timestamp)) ? null : timestamp,
+  };
+}
+
 function buildAuthoritativePassFinalDecisionDiagnostic(result) {
   const exitCode = typeof result?.exitCode === 'number' && Number.isInteger(result.exitCode)
     ? result.exitCode
@@ -212,6 +241,9 @@ function buildAuthoritativePassFinalDecisionDiagnostic(result) {
       listOnly: lifecycle.listOnly === true,
     },
     exitReason: safeClosedValue(lifecycle.exitReason, SAFE_LIFECYCLE_EXIT_REASONS),
+    ...(lifecycle.managedIsolatedAppExit ? {
+      managedIsolatedAppExit: safeManagedIsolatedAppExit(lifecycle.managedIsolatedAppExit),
+    } : {}),
   };
 }
 
@@ -1378,7 +1410,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
     {
       cwd: repoRoot,
       env: managedEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     },
@@ -1426,10 +1458,12 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         options.waitForFunctionalFixtureBackgroundIdleFn
         || waitForFunctionalFixtureBackgroundIdle
       );
-      await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
-        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
-        requestHeaders,
-      });
+      if (options.waitForBackgroundIdle !== false) {
+        await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
+          fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+          requestHeaders,
+        });
+      }
     }
     return child;
   } catch (error) {
@@ -1448,40 +1482,144 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
   if (!child) return;
   const expectedCreationIdentity = String(child.albumHavenCreationIdentity || '');
   const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
+  const readProcessTreeIdentitiesFn = options.readProcessTreeIdentitiesFn
+    || readProcessTreeIdentities;
   const stopProcessTreeFn = options.stopProcessTreeFn || stopProcessTree;
+  const waitForDirectChildExitFn = options.waitForDirectChildExitFn || waitForDirectChildExit;
   const waitForReclaimedProcessesExitedFn = options.waitForReclaimedProcessesExitedFn
     || waitForReclaimedProcessesExited;
   const waitForPortReleasedFn = options.waitForPortReleasedFn || waitForPortReleased;
+  const processOwner = {
+    pid: child.pid,
+    creationIdentity: expectedCreationIdentity,
+  };
+  const waitForExactProcesses = (owners) => waitForReclaimedProcessesExitedFn(owners, {
+    timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+    pollIntervalMs: 250,
+  });
+  const waitForPorts = async () => {
+    for (const port of [...new Set(Array.isArray(ports) ? ports : [])]) {
+      const released = await waitForPortReleasedFn(port, {
+        timeoutMs: MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS,
+        pollIntervalMs: 250,
+        // The owned process tree has already exited with its creation identity
+        // verified. A stable exclusive bind proves that each loopback port is
+        // reusable, including when an unrelated process races to claim it,
+        // without repeatedly launching the expensive Windows TCP-owner probe.
+        readPortOwningProcessesFn: () => [],
+      });
+      if (!released) {
+        throw new Error(`Managed isolated app port ${port} was not reusable after teardown.`);
+      }
+    }
+  };
+
   if (!expectedCreationIdentity) {
     await (options.abortManagedIsolatedAppStartupFn || abortManagedIsolatedAppStartup)(child, options);
-  } else {
-    const currentIdentity = readProcessCreationIdentityFn(child.pid);
-    if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
-      throw new Error(`Managed isolated app PID ${child.pid} changed creation identity before teardown.`);
+    await waitForPorts();
+    return;
+  }
+
+  const currentIdentity = readProcessCreationIdentityFn(child.pid);
+  if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
+    throw new Error(`Managed isolated app PID ${child.pid} changed creation identity before teardown.`);
+  }
+
+  let processOwners = [processOwner];
+  let gracefulError = null;
+  try {
+    if (!currentIdentity) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} lost its creation identity before graceful teardown.`,
+      );
     }
-    if (currentIdentity === expectedCreationIdentity) {
-      stopProcessTreeFn(child.pid, { expectedCreationIdentity });
-      await waitForReclaimedProcessesExitedFn([
-        { pid: child.pid, creationIdentity: expectedCreationIdentity },
-      ], {
-        timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
-        pollIntervalMs: 250,
+    const processTree = readProcessTreeIdentitiesFn(child.pid);
+    const root = processTree.find((owner) => owner.pid === child.pid);
+    if (root?.creationIdentity !== expectedCreationIdentity) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} changed creation identity before graceful teardown.`,
+      );
+    }
+    processOwners = processTree;
+
+    const input = child.stdin;
+    if (
+      !input
+      || typeof input.write !== 'function'
+      || typeof input.end !== 'function'
+      || input.destroyed
+      || input.writable === false
+      || input.writableEnded
+    ) {
+      throw new Error(`Managed isolated app PID ${child.pid} had no writable stdin.`);
+    }
+
+    let rejectInputError = () => {};
+    const inputErrorPromise = new Promise((_resolve, reject) => {
+      rejectInputError = reject;
+    });
+    const onInputError = (error) => rejectInputError(error);
+    const removeInputErrorListener = () => input.removeListener?.('error', onInputError);
+    input.once?.('error', onInputError);
+    input.once?.('close', removeInputErrorListener);
+    const exitPromise = waitForDirectChildExitFn(child, {
+      timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+    });
+    const exitOrInputError = Promise.race([exitPromise, inputErrorPromise]);
+    try {
+      input.write(MANAGED_ISOLATED_APP_SHUTDOWN_COMMAND, (error) => {
+        if (error) rejectInputError(error);
       });
+      input.end();
+    } catch (error) {
+      rejectInputError(error);
+    }
+    await exitOrInputError;
+
+    if (child.exitCode !== 0 || child.signalCode != null) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} did not exit cleanly `
+        + `(code=${String(child.exitCode)}, signal=${String(child.signalCode)}).`,
+      );
+    }
+    await waitForExactProcesses(processOwners);
+  } catch (error) {
+    gracefulError = error;
+  }
+
+  const cleanupErrors = [];
+  if (gracefulError) {
+    try {
+      if (readProcessCreationIdentityFn(child.pid) === expectedCreationIdentity) {
+        stopProcessTreeFn(child.pid, { expectedCreationIdentity });
+      }
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      await waitForExactProcesses(processOwners);
+    } catch (error) {
+      cleanupErrors.push(error);
     }
   }
-  for (const port of [...new Set(Array.isArray(ports) ? ports : [])]) {
-    const released = await waitForPortReleasedFn(port, {
-      timeoutMs: MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS,
-      pollIntervalMs: 250,
-      // The owned process tree has already exited with its creation identity
-      // verified. A stable exclusive bind proves that each loopback port is
-      // reusable, including when an unrelated process races to claim it,
-      // without repeatedly launching the expensive Windows TCP-owner probe.
-      readPortOwningProcessesFn: () => [],
-    });
-    if (!released) {
-      throw new Error(`Managed isolated app port ${port} was not reusable after teardown.`);
-    }
+
+  try {
+    await waitForPorts();
+  } catch (error) {
+    if (!gracefulError) throw error;
+    cleanupErrors.push(error);
+  }
+
+  if (gracefulError) {
+    const causes = [gracefulError, ...cleanupErrors];
+    const failure = new AggregateError(
+      causes,
+      `Managed isolated app graceful stop failed: ${
+        causes.map((error) => String(error?.message || error)).join('; ')
+      }`,
+    );
+    failure.code = 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED';
+    throw failure;
   }
 }
 
@@ -1497,17 +1635,34 @@ function writeJsonAtomically(targetPath, value) {
 }
 
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
-  const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
-  const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
-  if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
-    throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+  let cleanupArguments;
+  if (options.recovery === true) {
+    const configuredTempRoot = String(childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+    if (
+      !configuredTempRoot
+      || !fs.existsSync(configuredTempRoot)
+      || !fs.statSync(configuredTempRoot).isDirectory()
+    ) {
+      throw new Error('Runner-owned watcher recovery cleanup requires its temp root.');
+    }
+    const tempRoot = fs.realpathSync(configuredTempRoot);
+    cleanupArguments = [
+      '--recovery-manifest',
+      path.join(tempRoot, 'app-data', 'watcher-recovery-fixture.json'),
+    ];
+  } else {
+    const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
+    const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
+    if (!['watcher-reconciliation', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+      throw new Error('Watcher cleanup requires a runner-owned directory identity.');
+    }
+    const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
+      allowedProfiles: ['functional-core', 'synthetic-large-library'],
+    });
+    cleanupArguments = ['--owned-root', path.join(mediaRoot, 'cases', ownedDirectoryName)];
   }
-  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
-    allowedProfiles: ['functional-core', 'synthetic-large-library'],
-  });
-  const ownedRoot = path.join(mediaRoot, 'cases', ownedDirectoryName);
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
-    '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
+    '-m', 'tests.e2e.support.watcherFixture', ...cleanupArguments,
   ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
   if (result.error || result.signal || result.status !== 0) {
     throw new Error('Runner-owned watcher inventory cleanup failed; evidence retained.');
@@ -1528,9 +1683,11 @@ function createManagedIsolatedAppRestartController(options = {}) {
     throw new Error('Managed isolated restart controller requires a runner-owned temp root.');
   }
 
-  const resolvedOwnedRoot = path.resolve(ownedIsolatedTempRoot);
+  const resolvedOwnedRoot = fs.realpathSync(ownedIsolatedTempRoot);
   const controlDirectory = path.resolve(resolvedOwnedRoot, 'restart-control');
-  if (path.dirname(controlDirectory) !== resolvedOwnedRoot) {
+  if (path.dirname(controlDirectory) !== resolvedOwnedRoot
+      || (fs.existsSync(controlDirectory)
+        && fs.realpathSync(controlDirectory) !== controlDirectory)) {
     throw new Error('Managed isolated restart control directory escaped its runner-owned temp root.');
   }
   fs.mkdirSync(controlDirectory, { recursive: true });
@@ -1585,6 +1742,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
       child,
       generation: ++childGeneration,
       intentionalStop: false,
+      operation: null,
+      ackStatus: null,
       phase: String(phase || 'playwright-run'),
       terminated: false,
     };
@@ -1594,15 +1753,19 @@ function createManagedIsolatedAppRestartController(options = {}) {
       record.terminated = true;
       if (record.intentionalStop || record !== currentChildRecord || failure) return;
       const termination = {
+        operation: record.operation,
+        ackStatus: record.ackStatus,
         generation: record.generation,
         pid: Number.isInteger(Number(child.pid)) ? Number(child.pid) : null,
-        creationIdentity: String(child.albumHavenCreationIdentity || '') || null,
         event,
         exitCode: Number.isInteger(exitCode) ? exitCode : null,
         signal: signal ? String(signal) : null,
         phase: record.phase,
         timestamp: new Date().toISOString(),
       };
+      // Preserve the pre-existing initial-child shape without retaining its
+      // process creation identity. Replacement evidence uses the closed schema.
+      if (!record.operation) termination.creationIdentity = null;
       const error = new Error(
         `Managed isolated app generation ${record.generation} PID ${String(termination.pid)} unexpectedly exited.`,
       );
@@ -1646,7 +1809,15 @@ function createManagedIsolatedAppRestartController(options = {}) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
     const operation = request.operation ?? request.action ?? 'restart';
-    if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (![
+      'restart', 'stop', 'report-failure', 'watcher-cleanup', 'watcher-recovery-cleanup',
+    ].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (
+      operation === 'watcher-recovery-cleanup'
+      && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))
+    ) {
+      throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
+    }
     if (operation === 'watcher-cleanup'
         && Object.keys(request).some((key) => !['nonce', 'operation', 'ownedDirectoryName'].includes(key))) {
       throw new Error('Watcher cleanup accepts only a runner-owned directory identity.');
@@ -1692,12 +1863,12 @@ function createManagedIsolatedAppRestartController(options = {}) {
           if (currentChild === childToStop) updateCurrentChild(null);
         }
 
-        if (request.operation === 'watcher-cleanup') {
+        if (['watcher-cleanup', 'watcher-recovery-cleanup'].includes(request.operation)) {
           phase = 'fixture-cleanup';
           try {
-            await cleanupWatchedInventoryFn(childEnv, {
-              ownedDirectoryName: request.ownedDirectoryName,
-            });
+            await cleanupWatchedInventoryFn(childEnv, request.operation === 'watcher-recovery-cleanup'
+              ? { recovery: true }
+              : { ownedDirectoryName: request.ownedDirectoryName });
           } catch (error) {
             error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
             error.lifecycle = { exitReason: 'fake-database-cleanup-error',
@@ -1716,18 +1887,29 @@ function createManagedIsolatedAppRestartController(options = {}) {
           [MANAGED_ISOLATED_PRESERVE_ON_SHUTDOWN_ENV]: '1',
           [MANAGED_ISOLATED_REUSE_STATE_ENV]: '1',
         };
+        const observeReplacementChild = (child) => {
+          updateCurrentChild(child, 'start-replacement');
+          if (currentChildRecord) {
+            currentChildRecord.operation = request.operation;
+            currentChildRecord.ackStatus = 'pending';
+          }
+        };
         const replacementChild = await startManagedIsolatedAppFn(replacementEnv, {
           port: resolvedAppPort,
           providerPort: resolvedProviderPort,
           seedAllFunctionalCoverMisses,
+          waitForBackgroundIdle: false,
           onSpawnFn(child) {
-            updateCurrentChild(child, 'start-replacement');
+            observeReplacementChild(child);
           },
         });
-        if (currentChild !== replacementChild) updateCurrentChild(replacementChild, 'start-replacement');
-        else if (currentChildRecord) currentChildRecord.phase = 'playwright-run';
+        if (currentChild !== replacementChild) observeReplacementChild(replacementChild);
         phase = 'publish-ready';
         writeJsonAtomically(ackPath, { nonce: request.nonce, status: 'ready' });
+        if (currentChildRecord) {
+          currentChildRecord.ackStatus = 'ready';
+          currentChildRecord.phase = 'playwright-run';
+        }
         return true;
       } catch (error) {
         const recordedFailure = recordFailure(error);
@@ -1742,6 +1924,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
             phase,
             error: safeMessage || 'managed app restart failed',
           });
+          const exitEvidence = recordedFailure.lifecycle?.managedIsolatedAppExit;
+          if (exitEvidence?.ackStatus === 'pending') exitEvidence.ackStatus = 'failed';
         } else {
           fs.rmSync(ackPath, { force: true });
         }
@@ -3129,8 +3313,10 @@ function resolveManagedRestartControlRoot(childEnv = {}, ownedIsolatedTempRoot =
 
   const runnerTemp = String(childEnv.RUNNER_TEMP || '').trim();
   const profileRoot = String(childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
-  const resolvedRunnerTemp = runnerTemp ? path.resolve(runnerTemp) : '';
-  const resolvedProfileRoot = profileRoot ? path.resolve(profileRoot) : '';
+  const resolvedRunnerTemp = runnerTemp && fs.existsSync(runnerTemp)
+    ? fs.realpathSync(runnerTemp) : '';
+  const resolvedProfileRoot = profileRoot && fs.existsSync(profileRoot)
+    ? fs.realpathSync(profileRoot) : '';
   const relativeProfileRoot = resolvedRunnerTemp && resolvedProfileRoot
     ? path.relative(resolvedRunnerTemp, resolvedProfileRoot)
     : '';

@@ -5,6 +5,12 @@
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/relation_projection_postgres.py",
     "music_app/services/gallery_projection_postgres.py",
+    "music_app/jobs/scan_handlers.py",
+    "music_app/services/library_watch.py",
+    "music_app/services/targeted_library_reconciliation.py",
+    "music_app/services/targeted_reconciliation_scheduler.py",
+    "music_app/jobs/cover_handlers.py",
+    "music_app/services/cover_refresh_execution.py",
     "music_app/routes/api_read_asgi_routes.py",
     "music_app/routes/web_asgi.py",
     "music_app/services/library_hydration.py",
@@ -75,6 +81,15 @@
         "music_app/services/gallery_projection_postgres.py"
       ],
       "targets": ["artist-family", "search-all-artists", "search-browse"]
+    },
+    {
+      "paths": [
+        "music_app/jobs/scan_handlers.py",
+        "music_app/services/library_watch.py",
+        "music_app/services/targeted_library_reconciliation.py",
+        "music_app/services/targeted_reconciliation_scheduler.py"
+      ],
+      "targets": ["artist-family", "search-all-artists", "search-browse", "utility-problematic-files", "problematic-files-focused"]
     },
     {
       "paths": [
@@ -184,6 +199,8 @@
         "music_app/services/scan_state.py",
         "music_app/services/edit_workflows.py",
         "music_app/services/cover_state.py",
+      "music_app/jobs/cover_handlers.py",
+      "music_app/services/cover_refresh_execution.py",
         "music_app/services/move_executor.py",
         "music_app/services/save_tasks.py",
         "music_app/services/state.py",

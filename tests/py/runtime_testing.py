@@ -38,7 +38,7 @@ def configure_test_app_paths(tmp_path: Path, monkeypatch) -> dict[str, Path]:
 def stub_targeted_reconciliation_repository(monkeypatch) -> None:
     """Keep unrelated lifespan unit tests off persistence while retaining lifecycle code."""
     from types import SimpleNamespace
-    from music_app.services import exception_overrides, library_roots, scan_cache_persistence
+    from music_app.services import exception_overrides, library_roots, scan_cache_persistence, scan_jobs_postgres
 
     def owned_roots(config):
         settings = library_roots.normalize_library_root_settings(
@@ -54,6 +54,11 @@ def stub_targeted_reconciliation_repository(monkeypatch) -> None:
 
     monkeypatch.setattr(library_roots, "get_library_roots", owned_roots)
     monkeypatch.setattr(exception_overrides, "load_exception_overrides", lambda _config: {})
+    monkeypatch.setattr(
+        scan_jobs_postgres.PostgresScanJobRepository,
+        "resolve_local_library_id",
+        lambda _self: None,
+    )
 
     monkeypatch.setattr(
         scan_cache_persistence,

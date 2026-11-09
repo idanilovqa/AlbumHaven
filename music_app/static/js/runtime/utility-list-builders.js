@@ -592,6 +592,90 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
 }
 
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums, committedInventoryRevision) {
+  const committedRevision = Number(committedInventoryRevision);
+  const snapshotRevision = Number(payload?.inventory_mutation_revision);
+  if (Number.isSafeInteger(committedRevision) && committedRevision > 0
+    && Number.isSafeInteger(snapshotRevision) && snapshotRevision >= 0) {
+    return snapshotRevision >= committedRevision;
+  }
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
+const CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS = [125, 250, 500, 1000, 2000];
+
+async function waitForCommittedInventoryRevision(committedInventoryRevision) {
+  const targetRevision = Number(committedInventoryRevision);
+  if (!Number.isSafeInteger(targetRevision) || targetRevision <= 0) return;
+  for (let attempt = 0; attempt <= CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch('/status');
+      if (response.ok) {
+        const status = await response.json();
+        if (Number(status?.inventory_mutation_revision || 0) >= targetRevision) return;
+      }
+    } catch (_error) {
+      // The canonical view request below remains the final source of truth.
+    }
+    if (attempt < CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length) {
+      await waitForBrowserTimeout(CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 function albumsShareTrackPath(left, rightPaths) {
   if (!rightPaths?.size) return false;
   return Array.from(getAlbumTrackPaths(left))
@@ -740,11 +824,17 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+const activeTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return activeTagEditViewMutations.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
-  if (Object.values(updates || {}).some((edits) => (
+  const hasEdits = Object.values(updates || {}).some((edits) => (
     edits && typeof edits === 'object' && Object.keys(edits).length > 0
-  ))) {
+  ));
+  if (hasEdits) {
     state.ui = state.ui || {};
     state.ui.tagEditOptimisticMutationRevision = Number(
       state.ui.tagEditOptimisticMutationRevision || 0,
@@ -752,6 +842,7 @@ function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
+  if (hasEdits) activeTagEditViewMutations.add(generation);
   const resourceKeys = new Set();
   getAlbumRuntimeIdentityAliases(album).forEach((alias) => {
     resourceKeys.add(`album:${alias.toLocaleLowerCase()}`);
@@ -842,6 +933,7 @@ function pruneSettledTagEditViewMutationClaims() {
 function settleTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   settledTagEditViewMutations.add(generation);
   pruneSettledTagEditViewMutationClaims();
 }
@@ -849,6 +941,7 @@ function settleTagEditViewMutation(claim) {
 function releaseFailedTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     const remainingClaims = claims.filter((value) => value !== generation);
     if (remainingClaims.length) {
@@ -2361,19 +2454,34 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              if (structuralPartialMembershipRequiresCanonicalRefresh) {
+                await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
+              }
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
-                  ...(!structuralTagEditRequiresCanonicalView
+                  preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                  ...(
+                    !structuralTagEditRequiresCanonicalView
+                    && !structuralPartialMembershipRequiresCanonicalRefresh
                     ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
+                    : {}
+                  ),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: responseData => (
+                  shouldApplyResponse: (payload) => (
                     !mutationWasSuperseded()
-                    && responseContainsCommittedInventoryMutation(responseData)
+                    && responseContainsCommittedInventoryMutation(payload)
+                    && (
+                      !structuralPartialMembershipRequiresCanonicalRefresh
+                      || canonicalViewPayloadCoversExpectedTagEdit(
+                        payload,
+                        originalAlbum,
+                        context.optimisticAlbums,
+                        data.inventory_mutation_revision,
+                      )
+                    )
                   ),
                 },
               );

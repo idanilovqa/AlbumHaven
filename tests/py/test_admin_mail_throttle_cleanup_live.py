@@ -42,11 +42,13 @@ def test_admin_mail_reserves_expired_throttle_before_cleanup(auth_lock_inventory
         action = service.queue_welcome if kind == "welcome_account" else service.queue_password_reset
         return action(actor_account_id=fixture.owner_id, actor_session_id=session.session_id,
             actor_authenticated_at=fixture.now, library_id=fixture.library_id,
-            target_account_id=fixture.owner_id, request_ref="owned-admin-throttle-cleanup")
+            target_account_id=fixture.owner_id, request_ref="owned-admin-throttle-cleanup",
+            request_origin_ref="browser:admin-throttle-cleanup",
+            deployment_mode="self_hosted_private_web")
 
     first = queue()
     assert not first.throttled
-    assert first.welcome_outbox_id is not None if kind == "welcome_account" else first.password_reset_delivery is not None
+    assert first.accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         connection.execute("""update app.auth_throttles
             set window_started_at=%s, window_expires_at=%s, failure_count=4
@@ -70,7 +72,7 @@ def test_admin_mail_reserves_expired_throttle_before_cleanup(auth_lock_inventory
     if kind == "welcome_account":
         assert result.welcome_outbox_id is not None
     else:
-        assert result.password_reset_delivery is not None
+        assert result.accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         rows = connection.execute("""select window_started_at, failure_count
             from app.auth_throttles where bucket_kind=%s""", (kind,)).fetchall()

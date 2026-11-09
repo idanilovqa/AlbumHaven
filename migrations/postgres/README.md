@@ -317,6 +317,19 @@ different `0099`. Rows follow album re-keys by cascade; when a scan empties an
 album row, its disc ratings are carried to the successor row like album ratings,
 or the row is kept. Rollback drops the table; album ratings are unaffected.
 
+Migration `0177_create_local_album_artist_identities.sql` adds
+`library.local_album_artist_identities`, one row per local album naming the
+MusicBrainz artist the album certainly belongs to (its title, track titles and
+track count agree with one of that artist's releases), with the matched release
+as evidence and a `tag_differs` flag for a later approved tag correction. It also
+adds the `per_album` state to `local_artist_musicbrainz_matches`, for a local
+name whose albums belong to several MusicBrainz artists. Rows follow an album's
+re-key by cascade and are carried to a successor row like ratings when a scan
+empties an album row. The runtime role may delete rows, because a re-check
+replaces an artist's automatic identities; owner choices are kept. Rollback stops
+the readers, drops the table and restores the state check without `per_album`
+(after re-checking those artists).
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

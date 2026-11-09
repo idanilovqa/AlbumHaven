@@ -355,16 +355,20 @@ def test_new_credit_evidence_scores_an_artist_again_with_its_discs():
     assert "albums" not in entry and "discs_checked" not in entry
 
 
-def test_a_margin_short_only_of_capped_tracklists_compares_the_rest_before_deciding():
-    """Alice Cooper: 12 albums to 6, but only 8 of the 12 had their tracks compared."""
+def test_albums_left_uncompared_by_the_tracklist_cap_are_compared_before_a_split():
+    """12 albums of one band and 6 of another, but only 8 of the 12 had their tracks
+    compared: every album still gets its own certain identity, with no margin."""
     german = [f"German {index}" for index in range(12)]
     trance = [f"Trance {index}" for index in range(6)]
     client, _calls = _client({GERMAN: german, TRANCE: trance})
+    context = {**_context(*german, *trance)}
+    context["albums"] = [{**album, "id": index + 1} for index, album in enumerate(context["albums"])]
 
-    outcome = resolve_artist(_context(*german, *trance), client=client)
+    outcome = resolve_artist(context, client=client)
 
-    assert outcome["classification"] == "found"
-    assert outcome["artist"]["mbid"] == GERMAN
+    assert outcome["classification"] == "per_album"
+    owners = [item["artist_mbid"] for item in outcome["album_identities"]]
+    assert owners.count(GERMAN) == 12 and owners.count(TRANCE) == 6
 
 
 def test_a_merged_mbid_is_the_same_candidate_as_its_current_artist():
@@ -406,3 +410,36 @@ def test_a_bonus_disc_tagged_as_its_own_album_is_kept_as_disc_evidence():
     assert "credit_name" not in outcome
     assert [(item["local_title"], item["disc_position"], item["release_mbid"]) for item in outcome["album_evidence"]] == [
         ("Bonus EP", 2, "00000000-0000-4000-8000-00000000d001")]
+
+
+def test_albums_of_two_same_named_bands_split_the_artist_with_each_album_s_identity():
+    """Amarok: each album takes the band whose release it certainly matches."""
+    client, _calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Dancefloor Mix"]})
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II", "Dancefloor Mix"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "per_album"
+    assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
+        1: GERMAN, 2: GERMAN, 3: TRANCE}
+    assert {artist["mbid"] for artist in outcome["artists"]} == {GERMAN, TRANCE}
+    assert not any(item["tag_differs"] for item in outcome["album_identities"])
+
+
+def test_a_certain_album_under_another_name_matches_and_is_marked_for_tag_correction():
+    """Jay-Z's "The Grey Album" is Danger Mouse's: the artist takes Danger Mouse, display only."""
+    client, _calls = _client({OTHER: ["The Grey Album"]}, search=[],
+                             releases={"The Grey Album": [_release(OTHER, "Axis Mundi", "The Grey Album")]})
+    context = {"local_artist_id": 9, "local_name": "Jay-Z", "albums": [{**albums("The Grey Album")[0], "id": 5}]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == OTHER
+    assert outcome["credit_name"] == "Jay-Z"
+    assert outcome["album_identities"] == [{
+        "local_album_id": 5, "local_title": "The Grey Album", "artist_mbid": OTHER,
+        "release_group_mbid": group_id(OTHER, "The Grey Album"), "release_mbid": outcome["album_identities"][0]["release_mbid"],
+        "disc_position": None, "signals": ["durations", "track_count", "track_list", "year"], "tag_differs": True}]

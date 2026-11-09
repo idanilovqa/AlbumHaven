@@ -275,7 +275,43 @@ def candidate_score(albums: list[dict[str, object]]) -> tuple[int, int, int]:
     return 2 * strong + (agreeing - strong), agreeing, strong
 
 
+# An album certainly belongs to a MusicBrainz artist when its title, track titles and
+# track count agree with one of that artist's releases (owner decision, 2026-11-08).
+_CERTAIN_SIGNALS = frozenset({"track_list", "track_count"})
+
+
+def certain_albums(candidates: list[dict[str, object]]) -> dict[int, dict[str, object]]:
+    """Local albums exactly one candidate certainly matches, by album index."""
+    holders: dict[int, dict[str, dict[str, object]]] = {}
+    for candidate in candidates:
+        for index, album in enumerate(candidate.get("albums") or []):
+            if album.get("level") == "strong" and _CERTAIN_SIGNALS <= set(album.get("signals") or ()):
+                holders.setdefault(index, {})[str(candidate.get("mbid"))] = candidate
+    return {index: next(iter(owners.values())) for index, owners in holders.items() if len(owners) == 1}
+
+
 def decide(candidates: list[dict[str, object]], local_name: object = "") -> dict[str, object]:
+    """Albums decide first: each album that certainly matches one artist takes it, with no
+    margin. Certain albums of one artist match it under any name; certain albums of
+    several artists split the local artist per album (Amarok). Without a certain album,
+    or for a collaboration, the evidence rules below decide. ``certain`` maps each
+    certain album's index to its artist."""
+    candidates = [candidate for candidate in candidates
+                  if str(candidate.get("mbid") or "").lower() not in SPECIAL_PURPOSE_ARTISTS]
+    certain = certain_albums(candidates)
+    if _COLLABORATION.search(str(local_name or "")) or any(candidate.get("joint_credit") for candidate in candidates):
+        certain = {}
+    decision = _decide_on_evidence(candidates, local_name)
+    if not certain:
+        return {**decision, "certain": certain}
+    owners = list({str(owner["mbid"]): owner for owner in certain.values()}.values())
+    if len(owners) == 1:
+        return {"classification": "matched", "selected": owners[0],
+                "candidates": decision.get("candidates") or owners, "certain": certain}
+    return {"classification": "per_album", "candidates": owners, "certain": certain}
+
+
+def _decide_on_evidence(candidates: list[dict[str, object]], local_name: object = "") -> dict[str, object]:
     """Accept one candidate only on decisive album evidence.
 
     Each candidate carries ``albums`` (its evidence per local album), and may carry

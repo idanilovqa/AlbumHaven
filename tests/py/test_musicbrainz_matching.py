@@ -312,3 +312,46 @@ def test_only_trailing_edition_words_are_dropped_from_a_title():
     assert "abbey road" in title_keys("Abbey Road (Remastered 2009)")
     assert "forces" not in title_keys("Special Forces"), "a title that starts with an edition word keeps it"
     assert title_agreement("Special Forces", "Forces") is None
+
+
+# Owner decision 2026-11-08: an album that certainly matches one MusicBrainz artist (title,
+# track titles and track count agree) takes that artist, whatever the artist's other albums
+# show; there is no majority or margin rule.
+CERTAIN = {"year", "track_count", "track_list"}
+
+
+def test_albums_that_certainly_match_two_artists_split_the_local_artist_per_album():
+    # Amarok: four albums are the Polish band's, three the Spanish band's.
+    poland = _candidate("poland", ["strong"] * 4 + [None] * 3, signals=CERTAIN)
+    spain = _candidate("spain", [None] * 4 + ["strong"] * 3, signals=CERTAIN)
+
+    result = decide([poland, spain], "Amarok")
+
+    assert result["classification"] == "per_album"
+    assert {index: owner["mbid"] for index, owner in result["certain"].items()} == {
+        0: "poland", 1: "poland", 2: "poland", 3: "poland", 4: "spain", 5: "spain", 6: "spain"}
+
+
+def test_certain_albums_of_one_artist_match_it_under_any_name_without_a_margin():
+    # Jay-Z's "The Grey Album" is Danger Mouse's; one album is enough.
+    danger_mouse = _candidate("danger-mouse", ["strong"], name=False, signals=CERTAIN, canonical="Danger Mouse")
+
+    result = decide([danger_mouse], "Jay-Z")
+
+    assert result["classification"] == "matched"
+    assert result["selected"]["mbid"] == "danger-mouse"
+
+
+def test_an_album_two_artists_certainly_match_and_weak_evidence_decide_nothing():
+    first, second = (_candidate(mbid, ["strong"], signals=CERTAIN) for mbid in ("first", "second"))
+    assert decide([first, second], "Oasis")["certain"] == {}
+
+    # Track count and lengths without the track titles are not certain (Diatom, Hiroyuki Nanba).
+    loose = _candidate("loose", ["strong"], name=False, signals={"track_count", "durations"}, canonical="Mike Nigro")
+    assert decide([loose], "Diatom")["classification"] == "unconfirmed"
+
+
+def test_a_collaboration_is_never_split_or_given_to_one_member_by_certain_albums():
+    menken = _candidate("menken", ["strong"], name=False, signals=CERTAIN, canonical="Alan Menken")
+
+    assert decide([menken], "Alan Menken & Glenn Slater")["classification"] == "unconfirmed"

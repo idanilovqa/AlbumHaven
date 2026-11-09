@@ -778,3 +778,67 @@ def test_various_and_unknown_artists_are_never_queued_and_lose_automatic_outcome
             "select distinct resolution_source from library.metadata_enrichment_problems where local_artist_id = %s",
             (various_id,)).fetchall()
         assert [row["resolution_source"] for row in resolved] == ["not_an_artist"]
+
+
+def _identities(connection, library_id):
+    return {row["album_key"]: (str(row["artist_mbid"]), row["decision_source"], row["tag_differs"])
+            for row in connection.execute(
+                "select album_key, artist_mbid, decision_source, tag_differs"
+                " from library.local_album_artist_identities where library_id = %s", (library_id,)).fetchall()}
+
+
+def test_albums_of_several_artists_store_their_identities_and_leave_problematic_files(monkeypatch: pytest.MonkeyPatch):
+    """0177, owner decision 2026-11-08: each album takes the artist it certainly matches."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "amarok")
+    with isolatedPostgres._connect(setup_url) as connection:
+        second_album = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
+            " values (%s, %s, 'amarok-second', 'Hope', '{}'::jsonb) returning id", (library_id, artist_id),
+        ).fetchone()["id"]
+        first_album = connection.execute(
+            "select id from library.local_albums where album_key = 'amarok-album'").fetchone()["id"]
+    # The runtime role writes and replaces identities.
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+    repository.replace_candidates(
+        local_artist_id=artist_id, match_state="ambiguous", observed_at=NOW,
+        evidence_summary="MusicBrainz candidates require manual review.",
+        candidates=[{"artist_mbid": GERMAN, "canonical_name": "Amarok", "candidate_score": 1, "evidence_summary": "1 of 2"},
+                    {"artist_mbid": TRANCE, "canonical_name": "Amarok", "candidate_score": 1, "evidence_summary": "1 of 2"}])
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+        evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+        identity_artists=[{"mbid": GERMAN, "canonical_name": "Amarok", "disambiguation": "Spanish fusion band"},
+                          {"mbid": TRANCE, "canonical_name": "Amarok", "disambiguation": "Polish progressive rock band"}],
+        album_identities=[{"local_album_id": first_album, "artist_mbid": GERMAN, "local_title": "Kingdom of the Night",
+                           "signals": ["track_count", "track_list", "bogus"]},
+                          {"local_album_id": second_album, "artist_mbid": TRANCE, "tag_differs": True}])
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        match = connection.execute(
+            "select state, artist_mbid from library.local_artist_musicbrainz_matches where local_artist_id = %s",
+            (artist_id,)).fetchone()
+        assert (match["state"], match["artist_mbid"]) == ("per_album", None)
+        assert _active(connection, artist_id) == []
+        assert _identities(connection, library_id) == {
+            "amarok-album": (GERMAN, "automatic", False), "amarok-second": (TRANCE, "automatic", True)}
+        assert connection.execute(
+            "select evidence from library.local_album_artist_identities where album_key = 'amarok-album'"
+        ).fetchone()["evidence"]["signals"] == ["track_count", "track_list"]
+        # An owner's own choice for one album survives the next re-check.
+        connection.execute(
+            "update library.local_album_artist_identities set decision_source = 'manual' where album_key = 'amarok-second'")
+        # A re-key carries the identity with the album.
+        connection.execute("update library.local_albums set album_key = 'amarok-renamed' where album_key = 'amarok-album'")
+        assert _identities(connection, library_id)["amarok-renamed"] == (GERMAN, "automatic", False)
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz album evidence agreed.",
+        artist={"mbid": GERMAN, "canonical_name": "Amarok", "artist_type": "Group"},
+        album_identities=[{"local_album_id": second_album, "artist_mbid": GERMAN}])
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _identities(connection, library_id) == {"amarok-second": (TRANCE, "manual", True)}

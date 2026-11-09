@@ -552,3 +552,29 @@ def test_a_manual_match_is_never_moved_to_conflict_by_a_recheck():
     )
 
     assert repository.candidate_replacements == []
+
+
+def test_albums_of_several_musicbrainz_artists_store_each_album_s_identity():
+    api = enrichment_api()
+    repository = Repository()
+    repository.claims.append({"id": 18, "local_artist_id": 42, "attempt_count": 0})
+    repository.contexts[18] = {"local_artist_id": 42, "local_name": "Amarok", "manual_decision": False}
+    identities = [{"local_album_id": 1, "artist_mbid": "00000000-0000-4000-8000-000000000001"},
+                  {"local_album_id": 2, "artist_mbid": "00000000-0000-4000-8000-000000000002"}]
+    artists = [{"mbid": "00000000-0000-4000-8000-000000000001", "canonical_name": "Amarok"},
+               {"mbid": "00000000-0000-4000-8000-000000000002", "canonical_name": "Amarok"}]
+    processor = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository,
+        client=object(),
+        resolve_artist=Resolver({"classification": "per_album", "confidence": 1, "album_identities": identities,
+                                 "artists": artists, "evidence_summary": "Your albums belong to 2 MusicBrainz artists."}),
+        now=lambda: NOW,
+    )
+
+    result = processor.process_next(worker_id="worker-a")
+
+    assert result["state"] == "succeeded"
+    stored = repository.automatic_outcomes[0]
+    assert (stored["state"], stored["artist"], stored["album_identities"], stored["identity_artists"]) == (
+        "per_album", None, identities, artists)
+    assert repository.candidate_replacements == []

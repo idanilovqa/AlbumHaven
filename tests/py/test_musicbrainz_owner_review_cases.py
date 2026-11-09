@@ -37,7 +37,6 @@ MATCHED = {
     "Dominici": "f7a459bc-e22a-46bb-9b16-12c94aa8f71f",             # "O3 A Trillogy"
     "Shadowland": "b3fd6f66-a24e-4336-9fdd-2fa249de6d3b",
     "Walrus": "b939eecf-d452-4685-a026-c11a5228d950",              # three self-titled "Walrus"
-    "Alice Cooper": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",        # the singer, 20 albums to 7
     "Dragonfly": "d73fdcaf-bbe1-4a2c-b2ed-7a54606b7c16",           # "Génesis" and "Genesis"
     "Agamemnon": "ebc4aca8-5cb3-4d52-b781-542a0565b268",           # band name in the title
     "3 Crows": "3ef2dc4b-b3a9-4453-85db-3054d3ec0e5d",             # credited "3 Crows" on Chris Buck
@@ -56,6 +55,9 @@ MATCHED.update({
 CREDITED = {"3 Crows": "3 Crows", "Alan Parsons Project": "Alan Parsons Project",
             "Eric Mongrain": "Eric Mongrain", "Birgir": "Birgir"}
 UNCONFIRMED: dict[str, str] = {}
+# Owner decision 2026-11-08: each album takes the artist it certainly matches, with no
+# margin. Alice Cooper's albums are the singer's and the 1969-74 band's.
+PER_ALBUM = {"Alice Cooper": {"ee58c59f-8e7f-4430-b8ca-236c4d3745ae", "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"}}
 
 
 def _client():
@@ -81,10 +83,13 @@ def test_owner_named_artist(case):
         assert outcome.get("credit_name") == CREDITED.get(case["case"])
         if case["case"] in CREDITED:
             assert outcome["album_evidence"], "a credited match keeps the albums that proved it"
+    elif case["case"] in PER_ALBUM:
+        assert outcome["classification"] == "per_album"
+        assert {item["artist_mbid"] for item in outcome["album_identities"]} == PER_ALBUM[case["case"]]
     else:
         assert outcome["classification"] == "unconfirmed"
         assert [candidate["canonical_name"] for candidate in outcome["candidates"]][:1] == [UNCONFIRMED[case["case"]]]
 
 
 def test_every_named_case_is_covered():
-    assert {case["case"] for case in FIXTURE["cases"]} == set(MATCHED) | set(UNCONFIRMED)
+    assert {case["case"] for case in FIXTURE["cases"]} == set(MATCHED) | set(UNCONFIRMED) | set(PER_ALBUM)

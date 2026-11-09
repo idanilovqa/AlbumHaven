@@ -201,6 +201,26 @@ def test_live_move_carries_disc_ratings_to_successor_before_retiring(watcher_rep
     assert _disc_ratings(fixture) == [(_successor_key(fixture, source), "2", 9)]
 
 
+def test_live_move_carries_the_album_s_musicbrainz_artist_identity(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    source = _seed_edition_album(fixture)
+    artist_mbid = "00000000-0000-4000-8000-0000000000c1"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("insert into integration.musicbrainz_artists (mbid, canonical_name, refreshed_at) values (%s, 'Amarok', now())",
+                           (artist_mbid,))
+        connection.execute(
+            "insert into library.local_album_artist_identities (library_id, album_key, artist_mbid, matcher_version)"
+            " select library_id, album_key, %s, 4 from library.local_albums where id = %s", (artist_mbid, source["id"]))
+
+    fixture.seed(*_edition_entries(fixture, ""))
+
+    _assert_moved_to_new_row(fixture, source, source_kept=False)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        carried = connection.execute(
+            "select album_key, artist_mbid::text as mbid from library.local_album_artist_identities").fetchall()
+    assert [(row["album_key"], row["mbid"]) for row in carried] == [(_successor_key(fixture, source), artist_mbid)]
+
+
 def test_live_split_move_keeps_disc_rated_emptied_album(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     source = _seed_edition_album(fixture)

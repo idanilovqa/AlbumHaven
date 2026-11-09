@@ -192,7 +192,7 @@ class MusicBrainzArtistEnrichmentProcessor:
             or safe_error
             or "MusicBrainz evidence requires review."
         )
-        terminal_state = "succeeded" if classification == "found" else "needs_review"
+        terminal_state = "succeeded" if classification in {"found", "per_album"} else "needs_review"
         found_mbid = str((outcome.get("artist") or {}).get("mbid") or "").lower()
         stored_mbid = str(context.get("existing_artist_mbid") or "").lower()
         if (
@@ -230,6 +230,19 @@ class MusicBrainzArtistEnrichmentProcessor:
                 observed_at=observed_at,
                 credit_name=outcome.get("credit_name"),
                 album_evidence=outcome.get("album_evidence"),
+                album_identities=outcome.get("album_identities"),
+            )
+        elif classification == "per_album":
+            # Several MusicBrainz artists share this local name; each album keeps its own.
+            self._repository.record_automatic_outcome(
+                local_artist_id=local_artist_id,
+                state="per_album",
+                artist=None,
+                confidence=outcome.get("confidence", 0),
+                evidence_summary=evidence_summary,
+                observed_at=observed_at,
+                album_identities=outcome.get("album_identities"),
+                identity_artists=outcome.get("artists"),
             )
         elif classification in _CANDIDATE_MATCH_STATES or (
             classification == "permanent_mismatch" and outcome.get("candidates")
@@ -427,13 +440,13 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         if checked:
             _settle_shared_albums(scored, albums, mirror)
             decision = decide(scored, local_name)
-        if decision["classification"] == "ambiguous" and _compare_capped_albums(
+        if decision["classification"] in {"ambiguous", "per_album"} and _compare_capped_albums(
                 decision["candidates"][:2], albums, mirror, keep=max(1, reserve)):
-            # The margin can fail only because tracklists were capped (Alice Cooper:
-            # 19 albums to 7, 11 of them compared on the year alone).
+            # Tracklists were capped: albums compared on the year alone may still be
+            # certain, for a split artist's identities as for the margin.
             decision = decide(scored, local_name)
         unscored =[candidate for candidate in pool.values() if proven(candidate) and candidate.get("albums") is None]
-        if decision["classification"] == "matched" and unscored:
+        if decision["classification"] in {"matched", "per_album"} and unscored:
             # The budget ran out before a candidate found through an album was scored:
             # it could hold the same albums, so never decide early. Same-named
             # artists without an album link cannot outweigh album evidence.
@@ -528,7 +541,22 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         evidence = _album_evidence(selected, albums, credited=not selected.get("name_agrees"))
         if evidence:
             outcome["album_evidence"] = evidence
+        identities = _album_identities(decision.get("certain") or {}, albums)
+        if identities:
+            outcome["album_identities"] = identities
         return outcome
+    if classification == "per_album":
+        # The local name covers several MusicBrainz artists; each certain album keeps its own.
+        artists = []
+        for owner in decision["candidates"]:
+            lookup = mirror.call("lookup_artist", owner["mbid"], accept=("matched",))
+            if lookup is None:
+                return {"classification": "provider_unavailable",
+                        "safe_error": "The MusicBrainz request budget ran out before the albums' artists were confirmed."}
+            artists.append(dict(lookup["artist"]))
+        return {"classification": "per_album", "artists": artists, "confidence": 1,
+                "album_identities": _album_identities(decision["certain"], albums),
+                "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
     if classification == "not_found":
         return {"classification": "not_found",
                 "evidence_summary": "No MusicBrainz artist has this name or one of your albums."}
@@ -542,6 +570,21 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
     return {"classification": classification,
             "candidates": [_candidate_for_storage(candidate) for candidate in candidates],
             "evidence_summary": summary}
+
+
+def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Each album a MusicBrainz artist certainly holds, with the release it matched. An
+    artist named unlike the local tag marks the album for a tag correction (display only)."""
+    identities = []
+    for index, owner in sorted(certain.items()):
+        evidence = owner["albums"][index]
+        identities.append({
+            "local_album_id": albums[index].get("id"), "local_title": albums[index].get("title"),
+            "artist_mbid": owner["mbid"], "release_group_mbid": (evidence.get("group") or {}).get("id"),
+            "release_mbid": evidence.get("release_id"), "disc_position": evidence.get("disc"),
+            "signals": sorted(evidence.get("signals") or ()), "tag_differs": not owner.get("name_agrees"),
+        })
+    return identities
 
 
 def _add_release_credits(add, index: int, release: dict[str, object]) -> None:
@@ -663,13 +706,14 @@ def _match_box_set_discs(candidate, albums, local_name, mirror) -> None:
 
 
 def _compare_capped_albums(candidates, albums, mirror, *, keep: int) -> bool:
-    """Compare the leading candidates' remaining agreeing albums with their tracks,
+    """Compare the leading candidates' remaining agreeing albums (strong ones included,
+    since only tracks make an album certain) with their tracks,
     keeping ``keep`` requests (the album searches, the final artist lookup). True
     when any album was compared."""
     compared = False
     for candidate in candidates:
         for index, evidence in enumerate(candidate["albums"]):
-            if evidence["level"] != "agree":
+            if evidence["level"] not in {"strong", "agree"} or evidence["remote"].get("tracks"):
                 continue
             if mirror.remaining <= keep:
                 return compared

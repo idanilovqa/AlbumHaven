@@ -351,7 +351,6 @@ function renderUtilityRules() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.rulesLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading rules...</div>';
@@ -621,7 +620,6 @@ function renderUtilityLoops() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.loopsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading loops...</div>';
@@ -697,7 +695,6 @@ function renderUtilityAppearance() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
   if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
   const selectedKey = state.utility.appearanceKey;
@@ -766,7 +763,6 @@ function renderUtilityIntegrations() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.integrationsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading integrations...</div>';
@@ -816,7 +812,6 @@ function renderUtilityLogHistory() {
   if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
   if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const scroll = els.list.scrollTop;
   reconcileUtilityLogHistoryTree(els, value);
   els.list.scrollTop = scroll;

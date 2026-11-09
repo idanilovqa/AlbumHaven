@@ -281,7 +281,7 @@ export class UtilityProblematicFilesActions {
 
   async applySingleProblemFilter(problemType) {
     const searchSection = this.utilityProblematicFilesTab.searchSection;
-    if (await searchSection.filterChipByValue(problemType).count()) {
+    if (await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     await searchSection.problemFilterButton.click();
@@ -291,12 +291,12 @@ export class UtilityProblematicFilesActions {
       if (typeof state === 'undefined') return false;
       const selected = state.utility?.selectedProblemFilters || [];
       if (selected.length !== 1 || selected[0] !== expected.problemType) return false;
-      return document.querySelector(expected.filterChipSelector) !== null;
+      return document.querySelector(expected.selectedOptionSelector) !== null;
     }, {
       timeout: 60000,
     }, {
       problemType,
-      filterChipSelector: searchSection.filterChipSelector(problemType),
+      selectedOptionSelector: searchSection.selectedFilterOptionSelector(problemType),
     });
     if (await searchSection.problemFilterMenu.isVisible()) {
       await searchSection.problemFilterButton.click();
@@ -305,8 +305,8 @@ export class UtilityProblematicFilesActions {
   }
 
   async clearProblemFilter(problemType) {
-    const chip = this.utilityProblematicFilesTab.searchSection.filterChipByValue(problemType);
-    if (!await chip.count()) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (!await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     const waitForFilterRemoved = async (timeout = 60000) => {
@@ -318,7 +318,11 @@ export class UtilityProblematicFilesActions {
         timeout,
       }, problemType);
     };
-    await chip.click();
+    if (!await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+      await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu);
+    }
+    await searchSection.filterOptionByValue(problemType).click();
     await waitForFilterRemoved();
     if (await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.isVisible()) {
       await this.utilityProblematicFilesTab.searchSection.problemFilterButton.click();

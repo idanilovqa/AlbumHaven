@@ -235,6 +235,7 @@ box-shadow: none !important;
   cursor: pointer;
 }
 .ui-text-link {
+  text-align: inherit;
   text-decoration: none;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;

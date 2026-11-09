@@ -13487,7 +13487,6 @@ function getUtilityModalElements() {
     search: document.getElementById('utility-problematic-search'),
     problemFilterButton: document.getElementById('utility-problem-filter-button'),
     problemFilterMenu: document.getElementById('utility-problem-filter-menu'),
-    problemFilterChips: document.getElementById('utility-problem-filter-chips'),
     list: document.getElementById('utility-problematic-list'),
     detail: document.getElementById('utility-problematic-detail'),
   };
@@ -20456,7 +20455,7 @@ function buildProblematicAlbumDetail(album) {
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
       <div class="utility-detail-summary">
-        <h3 class="utility-detail-title">${escapeHtml(displayName)}</h3>
+        <h3 class="utility-detail-title"><button class="ui-text-link" type="button" data-open-problematic-album-details="1">${escapeHtml(displayName)}</button></h3>
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
@@ -20469,10 +20468,10 @@ function buildProblematicAlbumDetail(album) {
         ` : ''}
       </div>
         <div class="utility-detail-context-actions">
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
-          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
@@ -22962,17 +22961,6 @@ function renderProblemFilterControls(els) {
           </button>
         `).join('')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
-  }
-
-  if (els.problemFilterChips) {
-    els.problemFilterChips.innerHTML = selected.length
-      ? selected.map((reason) => `
-          <button class="utility-problem-filter-chip" type="button" data-remove-problem-filter="${escapeHtml(reason)}" title="Remove problem filter">
-            <span>${escapeHtml(reason)}</span>
-            <span aria-hidden="true">x</span>
-          </button>
-        `).join('')
-      : '';
   }
 }
 
@@ -25503,7 +25491,6 @@ function renderUtilityRules() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.rulesLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading rules...</div>';
@@ -25773,7 +25760,6 @@ function renderUtilityLoops() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.loopsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading loops...</div>';
@@ -25849,7 +25835,6 @@ function renderUtilityAppearance() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
   if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
   const selectedKey = state.utility.appearanceKey;
@@ -25918,7 +25903,6 @@ function renderUtilityIntegrations() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.integrationsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading integrations...</div>';
@@ -25968,7 +25952,6 @@ function renderUtilityLogHistory() {
   if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
   if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const scroll = els.list.scrollTop;
   reconcileUtilityLogHistoryTree(els, value);
   els.list.scrollTop = scroll;
@@ -43818,7 +43801,7 @@ async function handleUtilityBootstrapClick(event) {
     });
   }
 
-  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
+  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
     renderProblemFilterControls(getUtilityModalElements());
   }
@@ -43936,20 +43919,6 @@ async function handleUtilityBootstrapClick(event) {
       renderUtilityModalContent();
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
-    return;
-  }
-
-  const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
-  if (removeProblemFilter) {
-    event.preventDefault();
-    const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
-    const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
-    state.utility.selectedProblemFilters = nextSelectedFilters;
-    state.utility.deferProblematicAutoSelection = true;
-    reconcileProblematicSelectionForFilters(nextSelectedFilters);
-    state.utility.problemDropdownOpen = false;
-    state.utility.showRepairedDisplay = true;
-    renderUtilityModalContent();
     return;
   }
 
@@ -44260,6 +44229,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicOpenButton) {
     event.preventDefault();
     openAlbumInExplorer(getSelectedProblematicAlbum());
+    return;
+  }
+
+  if (event.target.closest('[data-open-problematic-album-details="1"]')) {
+    event.preventDefault();
+    openTrackModal(getSelectedProblematicAlbum(), { foreground: true });
     return;
   }
 

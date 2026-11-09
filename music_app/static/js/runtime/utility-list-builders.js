@@ -521,7 +521,7 @@ function buildProblematicAlbumDetail(album) {
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
       <div class="utility-detail-summary">
-        <h3 class="utility-detail-title">${escapeHtml(displayName)}</h3>
+        <h3 class="utility-detail-title"><button class="ui-text-link" type="button" data-open-problematic-album-details="1">${escapeHtml(displayName)}</button></h3>
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
@@ -534,10 +534,10 @@ function buildProblematicAlbumDetail(album) {
         ` : ''}
       </div>
         <div class="utility-detail-context-actions">
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
-          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
@@ -3027,17 +3027,6 @@ function renderProblemFilterControls(els) {
           </button>
         `).join('')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
-  }
-
-  if (els.problemFilterChips) {
-    els.problemFilterChips.innerHTML = selected.length
-      ? selected.map((reason) => `
-          <button class="utility-problem-filter-chip" type="button" data-remove-problem-filter="${escapeHtml(reason)}" title="Remove problem filter">
-            <span>${escapeHtml(reason)}</span>
-            <span aria-hidden="true">x</span>
-          </button>
-        `).join('')
-      : '';
   }
 }
 

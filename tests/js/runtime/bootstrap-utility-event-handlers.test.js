@@ -373,7 +373,7 @@ test('Fast Cover Search hydrates its album and passes its clicked control to imm
   assert.equal(startCall.options.triggerButton, button);
 });
 
-for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {
+for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-button']) {
   test(`clicking within ${ancestor} preserves its normal dropdown behavior`, async () => {
     const { context, calls } = createContext();
     const element = createElement();
@@ -526,7 +526,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   });
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -553,7 +553,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -581,7 +581,7 @@ test('applying a problem filter responds before the complete Problematic Files s
   };
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -643,29 +643,22 @@ for (const initiallySelected of [false, true]) {
   });
 }
 
-test('removing a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
-  const { context } = createContext({
-    problematicFiles: [
-      { key: 'album-1', problem_reasons: ['Poor art quality', 'Missing year'] },
-      { key: 'album-2', problem_reasons: ['Missing year'] },
-    ],
-    selectedProblematicKey: 'album-1',
-    selectedProblemFilters: ['Poor art quality', 'Missing year'],
-  });
-  const filterContainer = createElement();
-  const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
-    '[data-remove-problem-filter]': createElement({
-      'data-remove-problem-filter': 'Poor art quality',
-    }),
+test('clicking the Problematic Files album name opens its Album Details above Settings', () => {
+  const album = { key: 'album-1', name: 'Ремиксы', tracks: [] };
+  const { context } = createContext({ problematicFiles: [album], selectedProblematicKey: 'album-1' });
+  const opened = [];
+  context.getSelectedProblematicAlbum = () => album;
+  context.openTrackModal = (...args) => opened.push(args);
+  const { event, wasPrevented } = createEvent({
+    '[data-open-problematic-album-details="1"]': createElement(),
   });
 
   context.handleUtilityBootstrapClick(event);
 
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Missing year']);
-  assert.equal(context.state.utility.deferProblematicAutoSelection, true);
-  assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(wasPrevented(), true);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], album);
+  assert.deepEqual(JSON.parse(JSON.stringify(opened[0][1])), { foreground: true });
 });
 
 test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', async () => {
@@ -1079,7 +1072,7 @@ test('applying the base incomplete-order filter preserves a selection after deta
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Incomplete track order',
     }),

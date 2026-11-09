@@ -1599,7 +1599,6 @@ function getUtilityModalElements() {
     search: document.getElementById('utility-problematic-search'),
     problemFilterButton: document.getElementById('utility-problem-filter-button'),
     problemFilterMenu: document.getElementById('utility-problem-filter-menu'),
-    problemFilterChips: document.getElementById('utility-problem-filter-chips'),
     list: document.getElementById('utility-problematic-list'),
     detail: document.getElementById('utility-problematic-detail'),
   };

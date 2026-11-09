@@ -178,7 +178,20 @@
 #utility-modal .search-field { --search-field-background: var(--appearance-control, var(--panel-2)); }
 #utility-modal .search-field-action > .utility-problem-filter-button[hidden] { display: none; }
 .utility-problem-filter-button.is-active {
+  position: relative;
   color: var(--text);
+}
+/* Selected problem types are edited in the menu; the dot only says some are on. */
+.utility-problem-filter-button.is-active::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  pointer-events: none;
 }
 .utility-problem-filter-menu {
   position: absolute;
@@ -248,33 +261,6 @@
   padding: 10px;
   color: var(--muted);
   font-size: 0.82rem;
-}
-.utility-problem-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.utility-problem-filter-chip {
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(96,165,250,0.35);
-  background: rgba(96,165,250,0.12);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.utility-problem-filter-chip span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .utility-count {
   color: var(--muted);

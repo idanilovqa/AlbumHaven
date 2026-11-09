@@ -55,7 +55,7 @@ async function handleUtilityBootstrapClick(event) {
     });
   }
 
-  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
+  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
     renderProblemFilterControls(getUtilityModalElements());
   }
@@ -173,20 +173,6 @@ async function handleUtilityBootstrapClick(event) {
       renderUtilityModalContent();
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
-    return;
-  }
-
-  const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
-  if (removeProblemFilter) {
-    event.preventDefault();
-    const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
-    const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
-    state.utility.selectedProblemFilters = nextSelectedFilters;
-    state.utility.deferProblematicAutoSelection = true;
-    reconcileProblematicSelectionForFilters(nextSelectedFilters);
-    state.utility.problemDropdownOpen = false;
-    state.utility.showRepairedDisplay = true;
-    renderUtilityModalContent();
     return;
   }
 
@@ -497,6 +483,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicOpenButton) {
     event.preventDefault();
     openAlbumInExplorer(getSelectedProblematicAlbum());
+    return;
+  }
+
+  if (event.target.closest('[data-open-problematic-album-details="1"]')) {
+    event.preventDefault();
+    openTrackModal(getSelectedProblematicAlbum(), { foreground: true });
     return;
   }
 

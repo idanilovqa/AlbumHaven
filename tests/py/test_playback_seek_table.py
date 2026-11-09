@@ -118,3 +118,32 @@ def test_the_shared_client_vectors_are_the_reference_lookups_answers():
                 "skipFrames": window.skip_frames,
                 "totalFrames": window.total_frames,
             }) == case["window"], case
+
+
+def test_a_stream_open_waits_for_the_scan_already_running_instead_of_reading_the_file_again(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from music_app.services import mp3_stream_map as module
+
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"x" * 16)
+    reads = []
+
+    def slow_read(_path):
+        reads.append(_path)
+        time.sleep(0.2)
+        return None
+
+    module._cached_stream_map.cache_clear()
+    monkeypatch.setattr(module, "read_mp3_stream_map", slow_read)
+    threads = [threading.Thread(target=module.mp3_stream_map, args=(path,)) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    module._cached_stream_map.cache_clear()
+
+    assert len(reads) == 1
+    assert module._scans == {}
+

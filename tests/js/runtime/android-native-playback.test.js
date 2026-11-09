@@ -423,7 +423,8 @@ test('held references are reused and an expired one is fetched again', async () 
   bridge.event('playback.referenceExpired', state(2, 'error', 0, 1));
   await settle();
   assert.equal(fetches.length, 2);
-  assert.deepEqual(fetches[1].body.tracks.map(track => track.path), tracks.map(track => track.path));
+  // The playing track is asked for first.
+  assert.deepEqual(fetches[1].body.tracks.map(track => track.path), [tracks[1], tracks[2], tracks[0]].map(track => track.path));
 });
 
 test('a refreshed reference keeps the opaque listen key Android tells one listen by', async () => {
@@ -825,4 +826,11 @@ test('a reference that expires again after a recovered one is refreshed again', 
   // A refreshed reference that expires before it plays is a real failure.
   bridge.event('playback.referenceExpired', state(3, 'error', 0, 0));
   assert.equal(api.snapshot().mode, 'error');
+});
+test('references are asked for the started track first, then the ones after it, then the ones before', async () => {
+  const { api, fetches, context } = createHarness();
+  context.state.player.playbackQueue = { tracks, currentIndex: 1 };
+  await api.start(tracks[1]);
+  const refs = fetches.find(({ url }) => String(url) === '/playback/refs');
+  assert.deepEqual(refs.body.tracks.map(track => track.path), [tracks[1].path, tracks[2].path, tracks[0].path]);
 });

@@ -12457,10 +12457,13 @@ function cachedAndroidNativePlaybackRef(path) {
 
 // One bounded batch for the references not already held, immediately before the queue reaches
 // Android; a partial batch never does. Each entry is `{ playbackRef, resumeToken }`; the resume
-// token is null when the server issued none.
-async function requestAndroidNativePlaybackRefs(items) {
+// token is null when the server issued none. The server prepares the tracks in the order asked,
+// so the one about to play goes first, then those after it, then those before.
+async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
   const refs = items.map(item => cachedAndroidNativePlaybackRef(String(item.path)));
-  const missing = items.map((item, index) => ({ index, path: String(item.path) })).filter(({ index }) => !refs[index]);
+  const missing = items.map((item, index) => ({ index, path: String(item.path) }))
+    .filter(({ index }) => !refs[index])
+    .sort((a, b) => (a.index < currentIndex) - (b.index < currentIndex) || a.index - b.index);
   if (!missing.length) return refs;
   const tracks = missing.map(({ path }) => ({ clientKey: createAndroidBridgeMessageId(), path }));
   const response = await fetch('/playback/refs', {
@@ -12575,7 +12578,7 @@ async function startAndroidNativePlaybackTrack(track, {
   let payload;
   let first;
   try {
-    const refs = await requestAndroidNativePlaybackRefs(queueWindow.items);
+    const refs = await requestAndroidNativePlaybackRefs(queueWindow.items, queueWindow.currentIndex);
     if (revision !== native.revision) return null;
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;

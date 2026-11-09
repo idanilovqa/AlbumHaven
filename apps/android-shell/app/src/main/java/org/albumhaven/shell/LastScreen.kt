@@ -29,6 +29,15 @@ internal class LastScreen(private val directory: File, private val io: Executor)
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         val orientation = activity.resources.configuration.orientation
         val area = Rect(at[0], at[1], at[0] + view.width, at[1] + view.height)
+        // A window whose surface is already gone, as when another app's screen covers it, has nothing to copy.
+        try {
+            request(activity, area, bitmap, origin, url, orientation)
+        } catch (_: IllegalArgumentException) {
+            bitmap.recycle()
+        }
+    }
+
+    private fun request(activity: Activity, area: Rect, bitmap: Bitmap, origin: String, url: String, orientation: Int) {
         PixelCopy.request(activity.window, area, bitmap, { result ->
             if (result != PixelCopy.SUCCESS) return@request bitmap.recycle()
             try {

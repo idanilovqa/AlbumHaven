@@ -144,6 +144,9 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        // A paused player keeps the service in the foreground, so Android never freezes the process
+        // while System UI shows its card; it ended a frozen one at the card's next query.
+        setForegroundServiceTimeoutMs(PAUSED_FOREGROUND_MS)
         verifyDecoders()
         origin = host.initialOrigin()
         val preferences = getSharedPreferences(RESTORE_PREFERENCES, MODE_PRIVATE)
@@ -576,6 +579,9 @@ class PlaybackService : MediaLibraryService() {
 
         /** Well inside Android's ten-second start deadline, and after Media3 has handled the key. */
         private const val FOREGROUND_START_CHECK_MS = 3_000L
+
+        /** The owner keeps a paused card for a quick resume; a day stands in for always (Media3 schedules the end). */
+        private const val PAUSED_FOREGROUND_MS = 24L * 60 * 60 * 1000
         private const val UNSERVED_START_NOTIFICATION_ID = 1002
 
         /** The controller's own checkpoint wait is three seconds; this bounds the requests after it. */

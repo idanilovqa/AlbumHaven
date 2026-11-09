@@ -16,6 +16,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -133,6 +134,14 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private val earlyBridgeMessages = mutableListOf<() -> Unit>()
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
+    /** A one-press update waits while Android asks for what lets the updated app come back by itself. */
+    private var downloadAfterAsking: (() -> Unit)? = null
+
+    /** Without "Appear on top", the updated app's notification needs this permission. */
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        downloadAfterAsking?.also { downloadAfterAsking = null }?.invoke()
+    }
+
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         fileChooserCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
         fileChooserCallback = null
@@ -184,7 +193,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         logProcessExitReasons()
         // The page loads while the playback service binds; the bridge answers it once bound.
         // Only a page Android ended in the background comes back as it was; a full restart opens Home.
-        if (startUrl != null) open(startUrl, asLeft = page.url != null) else showSandboxChoice()
+        // After an update the last screen's picture shows the old version, so the page loads without it.
+        if (startUrl != null) open(startUrl, asLeft = page.url != null && updatePage == null) else showSandboxChoice()
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -221,6 +231,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         super.onResume()
         // Returning from Android's install-source setting.
         updater?.onForeground()
+        // Returning from "Appear on top": without it, the updated app can only post a notification.
+        downloadAfterAsking?.let { download ->
+            if (Settings.canDrawOverlays(this) || !askForNotifications()) {
+                downloadAfterAsking = null
+                download()
+            }
+        }
     }
 
     override fun onPause() {
@@ -317,8 +334,31 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private inner class ShellUpdatePort(private val updater: Updater) : UpdatePort {
         override val state get() = updater.state
         override fun check(webProtocols: IntRange) = updater.check(webProtocols)
-        override fun download() = updater.download(thenInstall = ::prepareForPackageReplacement)
+        override fun download(): Boolean {
+            val download = { updater.download(thenInstall = ::prepareForPackageReplacement) }
+            if (updater.state !is UpdateState.Available && updater.state !is UpdateState.Failed) return download()
+            // Asked once: "Appear on top" lets the updated app open itself (UpdatedReceiver).
+            if (!Settings.canDrawOverlays(this@ShellActivity) && preferences.takeFirstAsk(ShellPreferences.ASK_OVERLAY)) {
+                downloadAfterAsking = { download() }
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, "package:$packageName".toUri()))
+                return true
+            }
+            if (!Settings.canDrawOverlays(this@ShellActivity) && askForNotifications()) {
+                downloadAfterAsking = { download() }
+                return true
+            }
+            return download()
+        }
         override fun install() = updater.install(::prepareForPackageReplacement)
+    }
+
+    /** Asks once for notifications, when they are off; returns whether Android is asking. */
+    private fun askForNotifications(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) return false
+        if (!preferences.takeFirstAsk(ShellPreferences.ASK_NOTIFICATIONS)) return false
+        notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        return true
     }
 
     /** Sessions are flushed and playback is stopped, checkpointed and released before the package is replaced. */

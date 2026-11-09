@@ -6,18 +6,26 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellActivity
 import org.albumhaven.shell.ShellPreferences
 
 /**
- * Android ends the app to replace it and may not start it again by itself. After an in-app update
- * (one that kept the page Update was pressed on), a notification opens the new version on that page.
+ * Android ends the app to replace it. After an in-app update (one that kept the page Update was
+ * pressed on), the new version opens itself on that page when it may appear on top; otherwise a
+ * notification offers to open it.
  */
 class UpdatedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED || !ShellPreferences(context).hasUpdatePage) return
+        val activity = Intent(context, ShellActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // "Appear on top" exempts the app from Android's block on starting from the background.
+        if (Settings.canDrawOverlays(context)) {
+            context.startActivity(activity)
+            return
+        }
         val notifications = context.getSystemService(NotificationManager::class.java)
         if (!notifications.areNotificationsEnabled()) return
         notifications.createNotificationChannel(
@@ -26,7 +34,7 @@ class UpdatedReceiver : BroadcastReceiver() {
         val open = PendingIntent.getActivity(
             context,
             0,
-            Intent(context, ShellActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            activity,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

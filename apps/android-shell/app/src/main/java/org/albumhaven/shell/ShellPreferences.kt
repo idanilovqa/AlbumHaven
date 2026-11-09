@@ -37,9 +37,18 @@ class ShellPreferences(context: Context) : SandboxSlots {
         return url
     }
 
-    private companion object {
-        const val KEY_UPDATE_PAGE = "update_page"
-        const val KEY_SLOT = "selected_sandbox_slot"
-        const val KEY_CONNECTED = "connected_sandbox_slot"
+    /** True the first time [key] is asked, so each permission is requested once. */
+    fun takeFirstAsk(key: String): Boolean {
+        if (preferences.getBoolean(key, false)) return false
+        preferences.edit { putBoolean(key, true) }
+        return true
+    }
+
+    companion object {
+        const val ASK_OVERLAY = "asked_overlay"
+        const val ASK_NOTIFICATIONS = "asked_notifications"
+        private const val KEY_UPDATE_PAGE = "update_page"
+        private const val KEY_SLOT = "selected_sandbox_slot"
+        private const val KEY_CONNECTED = "connected_sandbox_slot"
     }
 }

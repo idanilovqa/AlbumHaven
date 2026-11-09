@@ -131,13 +131,31 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       await expect(utilityAppearanceActions.utilityAppearanceTab.documentRoot)
         .toHaveAttribute('data-album-details-layout', layout);
       await settingsModalAppBarActions.closeSettings();
+      // A fresh document has no cached details, so the album opens through its loading state.
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
 
       await searchToolbarActions.search(MULTI_DISC_ALBUM, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
       await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
       await expect(galleryActions.galleryPage.albumCard.coverImageByAlbumName(MULTI_DISC_ALBUM))
         .toHaveCSS('object-fit', 'fill');
-      await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
+      // INT-040 (owner, 11-09): while the details load, the album already shows the chosen layout.
+      let releaseDetails;
+      const detailsHeld = new Promise((resolve) => { releaseDetails = resolve; });
+      let detailsRequested = false;
+      const holdDetails = async (route) => { detailsRequested = true; await detailsHeld; await route.continue(); };
+      await page.route('**/album-details?**', holdDetails);
+      try {
+        await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
+        await expect.poll(() => detailsRequested, { timeout: 10_000 }).toBe(true);
+        await expect(trackModalActions.trackModal.subtitle).toHaveText('Loading album details...');
+        await expect(trackModalActions.trackModal.header).toHaveAttribute('data-album-details-layout', layout);
+        await expect(trackModalActions.trackModal.header).toContainText(MULTI_DISC_ALBUM);
+      } finally {
+        releaseDetails();
+        await page.unroute('**/album-details?**', holdDetails);
+      }
       await trackModalActions.waitForReady();
       await expect(trackModalActions.trackModal.coverImage).toHaveCSS('object-fit', 'fill');
       await expect(trackModalActions.trackModal.header).toHaveAttribute('data-album-details-layout', layout);

@@ -26,11 +26,15 @@ function albumRequiresHydration(album) {
 }
 
 function renderTrackModalLoadingState(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
+  if (els.header && typeof buildTrackModalHeaderHtml === 'function') {
+    els.header.innerHTML = buildTrackModalHeaderHtml(album);
+    els = getTrackModalElements();
+  } else {
+    els.title.textContent = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean).join(' - ');
+  }
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
     els.folder.dataset.album = '';

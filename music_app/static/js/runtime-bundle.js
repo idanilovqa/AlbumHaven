@@ -4791,9 +4791,9 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
   return false;
 }
 
-// UI-14 (owner): the second artbox cannot take the same picture as the album cover, even from another source
-// or size. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
-// well under a millisecond) and compared with the album cover's; a near-identical picture is dimmed and
+// UI-14 (owner): neither artbox can take the other's picture, even from another source or size: choosing the
+// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
+// well under a millisecond) and compared with the other artbox's; a near-identical picture is dimmed and
 // cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
 // The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
 // alike; their average colors must also be close for the pictures to count as the same.
@@ -4857,11 +4857,20 @@ function hashLoadedPreview(image) {
     : new Promise((resolve) => image.addEventListener('load', () => resolve(hashLoadedPreview(image)), { once: true }));
 }
 
-function markSecondArtboxDuplicatePictures(body) {
+function getOtherArtboxPicture(modal) {
+  if (modal.artboxSlot) return { url: buildAlbumDisplayCoverUrl(modal.album), label: 'Same picture as the album cover' };
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  return artwork
+    ? { url: buildAlbumDisplayCoverUrl(buildAdditionalArtworkCoverSource(modal.album, artwork)), label: 'Same picture as the second artbox' }
+    : null;
+}
+
+function markOtherArtboxDuplicatePictures(body) {
   const modal = state.coverLookup?.modal;
-  if (!body?.querySelectorAll || !modal?.artboxSlot || !modal.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
-  const coverUrl = buildAlbumDisplayCoverUrl(modal.album);
-  void hashArtboxPicture(coverUrl).then((coverHash) => {
+  if (!body?.querySelectorAll || !modal?.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
+  const other = getOtherArtboxPicture(modal);
+  if (!other?.url) return;
+  void hashArtboxPicture(other.url).then((coverHash) => {
     if (!coverHash) return;
     body.querySelectorAll('.cover-lookup-art-card:not(.is-disabled) .cover-lookup-art-preview img').forEach((image) => {
       void hashLoadedPreview(image).then((hash) => {
@@ -4874,7 +4883,7 @@ function markSecondArtboxDuplicatePictures(body) {
         card.removeAttribute('tabindex');
         ['data-select-local-cover', 'data-select-remote-cover', 'data-select-pasted-cover'].forEach((name) => card.removeAttribute(name));
         const label = card.querySelector('.cover-lookup-art-action-label');
-        if (label) label.textContent = 'Same picture as the album cover';
+        if (label) label.textContent = other.label;
       });
     });
   });
@@ -12514,28 +12523,6 @@ function normalizeVersionTitle(value) {
     .replace(/[([][^)\]]*[)\]]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-// Versions share at least half of their tracks (by normalized title, against the shorter tracklist).
-function tracklistsShareHalf(leftTitles, rightTitles) {
-  const left = new Set(leftTitles.map(normalizeVersionTitle).filter(Boolean));
-  const right = new Set(rightTitles.map(normalizeVersionTitle).filter(Boolean));
-  if (!left.size || !right.size) return false;
-  let shared = 0;
-  left.forEach((title) => { if (right.has(title)) shared += 1; });
-  return shared / Math.min(left.size, right.size) >= 0.5;
-}
-
-async function filterVersionCandidatesByTracklist(sourceAlbum, candidates) {
-  const titlesOf = async (album) => {
-    const details = await fetchTrackModalAlbumDetails(album?.key, { albumId: album?.album_id });
-    return (Array.isArray(details?.tracks) ? details.tracks : []).map((track) => track?.title || '');
-  };
-  const sourceTitles = await titlesOf(sourceAlbum);
-  const checks = await Promise.all(candidates.map(async (candidate) => {
-    try { return tracklistsShareHalf(sourceTitles, await titlesOf(candidate)); } catch (_error) { return false; }
-  }));
-  return candidates.filter((_candidate, index) => checks[index]);
-}
-
 function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
   const sourceTitle = normalizeVersionTitle(sourceAlbum?.name);
@@ -12600,55 +12587,83 @@ function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
 }
 
 // Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
-// INT-007 (owner, 11-08 evening): albums already linked as versions start selected (even when their name or
-// tracklist would not be offered); clicking a selected album deselects it, and Save then unlinks it.
+// Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): the albums this album already groups with, linked or automatic,
+// start selected, and any number can be selected. The list and selection come from the album's own details:
+// the gallery loads version rules lazily and folds versions into one card, so neither is a reliable source.
+async function loadVersionPickerState(album) {
+  const details = await fetchTrackModalAlbumDetails(album.key, { albumId: album.album_id }).catch(() => null);
+  const albumKey = String(album.key || '');
+  const rules = details?.release_candidate_rules || {};
+  const links = { ...(rules.manual_version_links || {}), ...(state.view?.manual_version_links || {}) };
+  const releaseCandidates = Array.isArray(details?.release_candidates) ? details.release_candidates : null;
+  const releases = getAlbumReleaseSet({ ...album, ...(releaseCandidates ? { release_candidates: releaseCandidates } : {}),
+    release_candidate_rules: { ...rules, manual_version_links: links } }).releases;
+  const current = new Set([
+    ...releases.map((item) => String(item?.key || '')),
+    ...getManualVersionFamilyKeys(albumKey, links),
+  ].filter((key) => key && key !== albumKey));
+  const byKey = new Map();
+  [...(releaseCandidates || []), ...releases, ...flattenVisibleAlbums()].forEach((item) => {
+    const key = String(item?.key || '');
+    if (!key || key === albumKey || byKey.has(key)) return;
+    // The server marks whether a same-name album shares at least half of this album's tracks.
+    const offered = releaseCandidates ? item.shares_tracks === true : getVersionPickerCandidates(album).some((c) => c.key === key);
+    if (offered || current.has(key)) byKey.set(key, item);
+  });
+  return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };
+}
+
+// Save closes at once (UI-11): the version links are library data, not tag writes, so they apply in the background
+// and the gallery follows without a Loading page.
+function applyVersionPickerChanges(album, { current, links }, selected) {
+  const albumKey = String(album.key || '');
+  const added = [...selected].filter((key) => !current.has(key));
+  const removed = [...current].filter((key) => !selected.has(key));
+  void (async () => {
+    for (const key of added) await markAlbumVersion(key, albumKey);
+    for (const key of removed) {
+      if (links[key]) await unmarkAlbumVersion(key);
+      else if (links[albumKey] === key) await unmarkAlbumVersion(albumKey);
+      else await ignoreAlbumVersion(key);
+    }
+  })().catch(() => scheduleVersionGalleryRefresh());
+  return true;
+}
+
 function openVersionPickerModal(album) {
   if (!album) return Promise.resolve(null);
-  let selectedKey = '';
-  let savedKey = '';
+  const selected = new Set();
+  let pickerState = null;
   let onPick = null;
+  const sameSelection = () => selected.size === pickerState.current.size
+    && [...selected].every((key) => pickerState.current.has(key));
   return showAppFormDialog({
     title: 'Mark As A Version',
-    description: `Select another album that is a version of ${String(album.name || 'this album')}.`,
+    description: `Select the albums that are versions of ${String(album.name || 'this album')}.`,
     submitLabel: 'Save',
     submitEnabled: false,
-    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></nav>',
+    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Finding versions…</div></nav>',
     onMount(content, controls) {
-      // Only same-name albums that share at least half of their tracks are offered.
-      const linked = getLinkedVersionKeys(album.key);
-      void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((matches) => {
+      void loadVersionPickerState(album).then((loaded) => {
         const list = content.querySelector?.('[data-version-picker-list]');
         if (!list) return;
+        pickerState = loaded;
+        loaded.current.forEach((key) => selected.add(key));
         list.removeAttribute('aria-busy');
-        const byKey = new Map(matches.map((item) => [String(item.key || ''), item]));
-        flattenVisibleAlbums().forEach((item) => {
-          const key = String(item?.key || '');
-          if (linked.has(key) && !byKey.has(key)) byKey.set(key, item);
-        });
-        const candidates = [...byKey.values()];
-        list.innerHTML = buildVersionPickerListHtml(candidates, linked);
-        // The saved link is the starting selection; Save turns on only for a different choice.
-        savedKey = candidates.map((item) => String(item.key || '')).find((key) => linked.has(key)) || '';
-        selectedKey = savedKey;
+        list.innerHTML = buildVersionPickerListHtml(loaded.candidates, loaded.current);
       });
       onPick = (event) => {
         const option = event.target.closest?.('[data-version-picker-target]');
-        if (!option) return;
+        if (!option || !pickerState) return;
         const key = option.getAttribute('data-version-picker-target') || '';
-        selectedKey = key === selectedKey ? '' : key;
-        content.querySelectorAll('[data-version-picker-target]')
-          .forEach((node) => window.NavigationTree.setItemSelected(node, Boolean(selectedKey) && node === option));
-        controls.setSubmitEnabled(selectedKey !== savedKey);
+        if (selected.has(key)) selected.delete(key); else selected.add(key);
+        window.NavigationTree.setItemSelected(option, selected.has(key));
+        controls.setSubmitEnabled(!sameSelection());
       };
       content.addEventListener('click', onPick);
     },
     onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
-    onSubmit: () => {
-      if (selectedKey) return markAlbumVersion(album.key || '', selectedKey);
-      // Deselected: undo the saved link from whichever side holds it.
-      const links = state.view?.manual_version_links || {};
-      return unmarkAlbumVersion(links[String(album.key || '')] ? album.key : savedKey);
-    },
+    onSubmit: () => applyVersionPickerChanges(album, pickerState, selected),
   });
 }
 
@@ -14262,11 +14277,15 @@ function albumRequiresHydration(album) {
 }
 
 function renderTrackModalLoadingState(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
+  if (els.header && typeof buildTrackModalHeaderHtml === 'function') {
+    els.header.innerHTML = buildTrackModalHeaderHtml(album);
+    els = getTrackModalElements();
+  } else {
+    els.title.textContent = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean).join(' - ');
+  }
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -21010,7 +21029,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title" title="${escapeHtml(album.name || album.key || 'Unknown album')}">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -33772,7 +33791,7 @@ function renderCoverLookupModal() {
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
-  if (typeof markSecondArtboxDuplicatePictures === 'function') markSecondArtboxDuplicatePictures(els.body);
+  if (typeof markOtherArtboxDuplicatePictures === 'function') markOtherArtboxDuplicatePictures(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
@@ -34649,6 +34668,13 @@ async function openCoverLookupModal(album, options = {}) {
     || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);
   state.coverLookup.modal.saving = false;
   if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery);
+  // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
+  // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
+  const awaitIdentity = Boolean(requestedTaskId) && album.identity_resolution !== 'album_split_choice';
+  els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
+  const revealSession = coverLookupModalSession;
+  const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
+  if (awaitIdentity && typeof setTimeout === 'function') setTimeout(reveal, 1200);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
@@ -34658,6 +34684,7 @@ async function openCoverLookupModal(album, options = {}) {
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await refreshCoverLookupGallery(false);
+  reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
     ensureCoverLookupPolling();
@@ -36878,7 +36905,10 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
       manual_version_links: data.manual_version_links && typeof data.manual_version_links === 'object'
         ? data.manual_version_links
         : {},
+      // Owner (11-09): marking albums as versions removes their Separate release exceptions.
+      ...(Array.isArray(data.ignored_version_keys) ? { ignored_version_keys: data.ignored_version_keys } : {}),
     }, { trackSidebarReveal: false });
+    if (state.utility) state.utility.rulesLoaded = false;
     refreshOpenTrackModalVersionState(childKey);
     showToast('Album marked as a version.', 'success', 2600);
     scheduleVersionGalleryRefresh();
@@ -37238,6 +37268,21 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
 
 const renderedTrackModalHeaderHtml = new WeakMap();
 
+// The Album Details header in the chosen layout. The loading state renders it too, so the dialog takes
+// that layout at once instead of after the details arrive (INT-040).
+function buildTrackModalHeaderHtml(album, { versionTabs = false, missing = false } = {}) {
+  return buildAlbumDetailsHeaderHtml({
+    layout: String(document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar').trim().toLowerCase(),
+    artist: album.album_artist || '',
+    album: album.display_name || album.name || 'Album',
+    year: album.display_year || album.year || '',
+    releaseType: album.release_type || 'ALBUM',
+    sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml(album),
+    tags: [versionTabs ? '' : album.edition || '', missing ? 'Missing' : ''].filter(Boolean),
+    actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing }),
+  });
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -37287,21 +37332,8 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
-  const albumDetailsLayout = String(
-    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
-  ).trim().toLowerCase();
   if (els.header) {
-    const headerHtml = buildAlbumDetailsHeaderHtml({
-      layout: albumDetailsLayout,
-      artist: album.album_artist || '',
-      album: album.display_name || album.name || 'Album',
-      year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      sourceMarkersHtml: coverSourceMarkersHtml,
-      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
-    });
+    const headerHtml = buildTrackModalHeaderHtml(album, { versionTabs: hasVersionTabs, missing: albumMissing });
     // The summary render and the hydrated details usually build the same header;
     // rewriting it replaced Close and the header actions under the pointer
     // (a close click then waited ~500 ms for the new button). Other owners edit
@@ -50094,7 +50126,7 @@ function syncMobileUtilityNavigation() {
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
   trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
-  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
+  trigger.querySelector('.ui-button__content').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');
@@ -50421,6 +50453,8 @@ function syncMobileHome() {
       const summary = bar.querySelector('[data-gallery-context-summary]');
       if (name) name.textContent = host.dataset.accountName || 'My music';
       if (summary) summary.textContent = '';
+      // Owner (11-09): Home names the account, not an artist, so the previous artist's "i" never stays beside it.
+      bar.querySelector('[data-artist-info-trigger]')?.remove();
     }
   }
   if (!show) showMobileGalleryPinchHint();

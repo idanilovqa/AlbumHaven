@@ -112,7 +112,7 @@ test('Album Details places source labels in the header and never under artwork',
     assert.ok(html.indexOf('>ALBUM<') < html.indexOf('>Hoard<'));
   }
   const source = fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8');
-  assert.match(source, /sourceMarkersHtml: coverSourceMarkersHtml/);
+  assert.match(source, /sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml\(album\)/);
   assert.equal(source.includes('$' + '{coverSourceMarkersHtml}'), false);
 });
 

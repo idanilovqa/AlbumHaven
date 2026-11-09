@@ -556,6 +556,9 @@ class MusicBrainzEnrichmentPostgresRepository:
                 connection.execute(_upsert_candidate_artists_sql(), params)
                 connection.execute(_insert_candidates_sql(), params)
                 row = _row_mapping(connection.execute(_upsert_candidate_match_sql(), params).fetchone())
+                # A candidate outcome means no album was certain: earlier automatic
+                # album identities no longer hold.
+                connection.execute(_replace_album_identities_sql(), {**params, "album_identities": "[]"})
                 connection.execute(_mark_matcher_version_sql(), params)
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=local_artist_id, observed_at=observed_at,
@@ -1490,11 +1493,11 @@ def _upsert_identity_artists_sql() -> str:
           mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
           disambiguation text, discogs_artist_id bigint)
         on conflict (mbid) do update
+        -- A listing from album credits alone never blanks what a full lookup stored.
         set canonical_name = excluded.canonical_name,
-            sort_name = excluded.sort_name,
-            artist_kind = excluded.artist_kind,
-            disambiguation = excluded.disambiguation,
-            refreshed_at = excluded.refreshed_at,
+            sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
+            artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+            disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
             updated_at = excluded.updated_at;
     """
 

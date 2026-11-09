@@ -842,3 +842,13 @@ def test_albums_of_several_artists_store_their_identities_and_leave_problematic_
 
     with isolatedPostgres._connect(setup_url) as connection:
         assert _identities(connection, library_id) == {"amarok-second": (TRANCE, "manual", True)}
+        connection.execute("update library.local_album_artist_identities set decision_source = 'automatic'")
+
+    # A later re-check that finds no certain album clears the automatic identities.
+    repository.replace_candidates(
+        local_artist_id=artist_id, match_state="ambiguous", observed_at=NOW,
+        evidence_summary="MusicBrainz candidates require manual review.",
+        candidates=[{"artist_mbid": GERMAN, "canonical_name": "Amarok", "candidate_score": 1, "evidence_summary": "1 of 2"},
+                    {"artist_mbid": TRANCE, "canonical_name": "Amarok", "candidate_score": 1, "evidence_summary": "1 of 2"}])
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _identities(connection, library_id) == {}

@@ -278,7 +278,7 @@ def test_candidate_replacement_is_atomic_scoped_and_replaces_the_complete_set():
         },
     ]
     connection = FakeConnection(
-        [FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(row={"candidate_count": 2})]
+        [FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(row={"candidate_count": 2}), FakeCursor()]
     )
 
     count = repository_for(connection).replace_candidates(
@@ -297,6 +297,9 @@ def test_candidate_replacement_is_atomic_scoped_and_replaces_the_complete_set():
     assert "insert into integration.musicbrainz_artists" in combined_sql
     assert "insert into library.local_artist_musicbrainz_candidates" in combined_sql
     assert "local_artist_musicbrainz_matches" in combined_sql
+    # No album was certain: the artist's automatic album identities are cleared in the same transaction.
+    assert "delete from library.local_album_artist_identities" in combined_sql
+    assert connection.calls[-1][1]["album_identities"] == "[]"
     assert "from app.bootstrap_owners" in combined_sql
     assert all(
         params is None or params.get("library_id") is None

@@ -354,6 +354,8 @@ test(
           expect(bounds).not.toBeNull();
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
           const albumFolders = adminServer.mode('album_folders');
+          // The choices render disabled until the page reads the storage state.
+          await expect(albumFolders).toBeEnabled();
           await albumFolders.focus();
           await expect(albumFolders).toBeFocused();
         }

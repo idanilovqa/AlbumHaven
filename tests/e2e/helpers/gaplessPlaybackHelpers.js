@@ -862,6 +862,23 @@ export function assertPersistentWaveformCacheContract(expect, {
   );
 }
 
+/**
+ * Forgets the songs this browser kept (`player-track-cache.js`), so the server-stream protocol a
+ * test asserts is not replaced by a replay from a track an earlier test in the same profile kept.
+ */
+export async function forgetKeptStreamingTracks(page) {
+  // The browser clears the origin's Cache Storage, as a user clearing site data does.
+  const client = await page.context().newCDPSession(page);
+  try {
+    await client.send('Storage.clearDataForOrigin', {
+      origin: new URL(page.url()).origin,
+      storageTypes: 'cache_storage',
+    });
+  } finally {
+    await client.detach();
+  }
+}
+
 export async function readGaplessPlaybackDiagnostics(page) {
   // parity-check: allow-read-only-measurement-evaluate -- production bounded streaming diagnostics and worklet boundary capture
   return page.evaluate(() => {

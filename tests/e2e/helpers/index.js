@@ -103,6 +103,7 @@ export {
   assertSustainedPlaybackContract,
   createPlaybackLifecycleObserver,
   createStreamingReplacementDiagnosticsObserver,
+  forgetKeptStreamingTracks,
   LONG_WAVEFORM_TIMING_BUDGET,
   measureSustainedPlaybackWindow,
   observePlaybackPcmTraffic,

@@ -8,6 +8,7 @@ import {
   assertPersistentWaveformCacheContract,
   createPlaybackLifecycleObserver,
   createStreamingReplacementDiagnosticsObserver,
+  forgetKeptStreamingTracks,
   observeWaveformTraffic,
   readGaplessPlaybackDiagnostics,
   runWithPlaybackEventWindowAttachment,
@@ -33,6 +34,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
   {
     await stepLogger.step('Open the generated lossless-boundary album through visible controls', async () => {
       await galleryActions.goto('/?surface=albums');
+      await forgetKeptStreamingTracks(page);
       await galleryActions.waitForGalleryReady();
       await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('appearance');
@@ -423,6 +425,7 @@ test('FTC-PLAYER-013 immediate Album Details replacement stays audible', async (
 }, testInfo) => {
   await stepLogger.step('Open the generated album through visible controls', async () => {
     await galleryActions.goto('/?surface=albums');
+    await forgetKeptStreamingTracks(page);
     await galleryActions.waitForGalleryReady();
     await searchToolbarActions.search(gaplessPlaybackFixture.album, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(gaplessPlaybackFixture.album);

@@ -8133,11 +8133,13 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     rows = connection.execute(
         """
         select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
-               identity.tag_differs
+               identity.tag_differs, artist_match.state = 'per_album' as split
         from library.local_albums album
         join library.local_album_artist_identities identity
           on identity.library_id = album.library_id and identity.album_key = album.album_key
         join integration.musicbrainz_artists artist on artist.mbid = identity.artist_mbid
+        left join library.local_artist_musicbrainz_matches artist_match
+          on artist_match.library_id = album.library_id and artist_match.local_artist_id = album.artist_id
         where album.id = %(album_id)s
         """,
         {"album_id": album_id},
@@ -8147,7 +8149,7 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
         return None
     return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
             "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
-            "tag_differs": bool(row.get("tag_differs"))}
+            "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
 
 
 def _artist_musicbrainz_projection(

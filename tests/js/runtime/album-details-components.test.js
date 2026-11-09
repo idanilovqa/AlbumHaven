@@ -336,6 +336,10 @@ test('an album whose tag names another artist shows its MusicBrainz artist, disp
   assert.equal(context.albumDisplayArtist(greyAlbum), 'Danger Mouse');
   assert.equal(context.albumTaggedArtistNote(greyAlbum), 'Tagged as Jay-Z');
   // An identity that agrees with the tag, or none, keeps the tag and adds no note.
+  // A split artist's album names its own MusicBrainz artist.
+  assert.equal(context.albumTaggedArtistNote({ album_artist: 'Amarok', musicbrainz_artist: {
+    canonical_name: 'Amarok', disambiguation: 'Spanish fusion band', tag_differs: false, split: true } }),
+  'MusicBrainz: Amarok (Spanish fusion band)');
   for (const album of [{ album_artist: 'Amarok', musicbrainz_artist: { canonical_name: 'Amarok', tag_differs: false } },
     { album_artist: 'Amarok' }]) {
     assert.equal(context.albumDisplayArtist(album), 'Amarok');

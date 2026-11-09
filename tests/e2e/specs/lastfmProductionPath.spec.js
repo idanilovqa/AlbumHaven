@@ -327,6 +327,8 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks over 30 s each scrobble exactly
   });
 
   await stepLogger.step('Show every listen in playback statistics and only the longer tracks as scrobbled', async () => {
+    // The tracks played from Album Details, which covers the app bar until it is closed.
+    await trackModalActions.close();
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('integrations');
     await utilityIntegrationsActions.waitForReady();

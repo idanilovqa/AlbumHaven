@@ -132,7 +132,7 @@ def test_reference_batches_log_their_time_and_size_without_naming_a_track(playba
         def __init__(self, _config):
             pass
 
-        def issue_batch(self, _actor, tracks):
+        def issue_batch(self, _actor, tracks, on_media=None):
             return {"protocol": 1, "tracks": [{"clientKey": track["clientKey"], "playbackRef": "r"} for track in tracks]}
 
     monkeypatch.setattr(playback_control_asgi, "PlaybackReferenceService", References)

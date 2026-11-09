@@ -44554,8 +44554,15 @@ function togglePlayerPlayback(options = {}) {
       const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
         ? resumeStreamingPlayback()
         : null;
+      // The controls follow the sound as soon as it resumes, not after the claim's round trip.
+      Promise.resolve(early).then((resumed) => {
+        if (resumed && selectionToken === playerTrackSelectionToken) updatePlayerUi();
+      }).catch(() => {});
       if (claim !== true && !await claim) {
-        if (early && selectionToken === playerTrackSelectionToken) pauseStreamingPlayback();
+        if (early && selectionToken === playerTrackSelectionToken) {
+          pauseStreamingPlayback();
+          updatePlayerUi();
+        }
         return false;
       }
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;

@@ -68,8 +68,11 @@ def _reference(ffmpeg: str, path: Path) -> array:
 def android_decoder_tool(tmp_path_factory) -> Path:
     make = shutil.which("make")
     compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-    if os.name == "nt" or make is None or compiler is None:
-        message = "the Android decoder gate builds a POSIX host tool with make and a C compiler"
+    message = "the Android decoder gate builds a POSIX host tool with make and a C compiler"
+    if os.name == "nt":
+        # The Android suite runs this gate on Linux; Windows has no POSIX host tool build.
+        pytest.skip(f"{message}; the Android suite runs it on Linux")
+    if make is None or compiler is None:
         if os.environ.get("CI"):
             pytest.fail(message)
         pytest.skip(f"{message}; CI runs it")

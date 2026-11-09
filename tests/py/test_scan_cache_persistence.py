@@ -359,7 +359,7 @@ def test_featured_artist_sync_reconciles_only_current_and_legacy_generated_rows(
 
 
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
-    from music_app.services import scan_cache_persistence
+    from music_app.services import missing_album_auto_removal, scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     class TargetedConnection(FakeConnection):
@@ -370,6 +370,8 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
+            if sql == missing_album_auto_removal._UNTOUCHED_DELETED_ALBUMS_SQL:
+                return FakeCursor([])
             if "from library.separate_releases" in normalized:
                 return FakeCursor([{"release_key": "artist::new album"}])
             if "as album_owner_key" in normalized and self.existing_memberships is not None:

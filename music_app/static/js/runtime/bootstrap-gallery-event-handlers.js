@@ -10,6 +10,12 @@ function handleGalleryBootstrapClick(event) {
     void scrollRootGalleryToArtist(artist);
     return;
   }
+  const keepMissingAlbumButton = event.target.closest('[data-keep-missing-album="1"]');
+  if (keepMissingAlbumButton) {
+    event.preventDefault();
+    void keepMissingAlbum(resolveTrackModalActionAlbum(keepMissingAlbumButton));
+    return;
+  }
   const rescanMissingAlbumButton = event.target.closest('[data-rescan-missing-album="1"]');
   if (rescanMissingAlbumButton) {
     event.preventDefault();

@@ -15,6 +15,7 @@ from music_app.services.album_local_cover_integrity import (
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
+from music_app.services.missing_album_auto_removal import remove_untouched_deleted
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
@@ -691,12 +692,13 @@ class PostgresScanCacheAdapter:
                 track_file_rows,
             )
             inventory_changed = bool(file_cache)
+            missing_file_ids: list[int] = []
             for stale_root_id, stale_targets in sorted(stale_by_root.items()):
                 paths = sorted(stale_targets["paths"])
                 subtrees = sorted(stale_targets["subtrees"])
                 if not paths and not subtrees:
                     continue
-                stale_rows = _mark_missing_track_files(connection, connection.execute(
+                candidates = connection.execute(
                     _targeted_missing_candidates_sql(),
                     {
                         "root_id": stale_root_id,
@@ -707,7 +709,9 @@ class PostgresScanCacheAdapter:
                         ),
                         "source": _SOURCE,
                     },
-                ).fetchall())
+                ).fetchall()
+                missing_file_ids.extend(int(_row_mapping(row)["id"]) for row in candidates)
+                stale_rows = _mark_missing_track_files(connection, candidates)
                 inventory_changed = inventory_changed or bool(stale_rows)
                 affected_album_keys.update(
                     str(_row_mapping(row).get("affected_album_key") or "").strip()
@@ -716,6 +720,9 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            auto_removed = remove_untouched_deleted(connection, missing_file_ids)
+            affected_album_keys.update(auto_removed)
+            inventory_changed = inventory_changed or bool(auto_removed)
             retired = connection.execute(
                 _retire_placeholder_albums_sql(), {"album_ids": sorted(prior_album_ids - {0})},
             ).fetchall()
@@ -2328,20 +2335,24 @@ class PostgresScanCacheAdapter:
                 }
             if publish_paths is None:  # a cache update never marks files stale
                 unreachable_root_ids = list((unreachable_scope or {}).get("root_ids") or [])
+                missing_candidates = connection.execute(
+                    _scan_missing_candidates_sql(),
+                    {
+                        "current_paths": current_private_paths,
+                        "current_path_count": len(current_private_paths),
+                        "source": _SOURCE,
+                        "observed_root_ids": sorted(observed_library_root_ids or set()),
+                        "unreachable_root_ids": unreachable_root_ids,
+                    },
+                ).fetchall()
                 _mark_missing_track_files(
                     connection,
-                    connection.execute(
-                        _scan_missing_candidates_sql(),
-                        {
-                            "current_paths": current_private_paths,
-                            "current_path_count": len(current_private_paths),
-                            "source": _SOURCE,
-                            "observed_root_ids": sorted(observed_library_root_ids or set()),
-                            "unreachable_root_ids": unreachable_root_ids,
-                        },
-                    ).fetchall(),
+                    missing_candidates,
                     unreachable_root_ids=unreachable_root_ids,
                     unreachable_paths=list((unreachable_scope or {}).get("paths") or []),
+                )
+                remove_untouched_deleted(
+                    connection, (int(_row_mapping(row)["id"]) for row in missing_candidates),
                 )
             connection.execute(_retire_placeholder_albums_sql(), {"album_ids": None})
             relation_source_rows = list(

@@ -1911,6 +1911,23 @@ const MISSING_ALBUM_RESCAN_MESSAGES = {
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
 
+async function keepMissingAlbum(album) {
+  const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
+  if (typeof closeTrackModal === 'function') closeTrackModal();
+  if (!albumKey) return false;
+  try {
+    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/keep-missing`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error('Unable to keep this album.');
+    return true;
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error?.message || 'Unable to keep this album.', 'error', 3600);
+    return false;
+  }
+}
+
 async function rescanMissingAlbum(album, button) {
   if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();

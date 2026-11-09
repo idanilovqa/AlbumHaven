@@ -121,7 +121,14 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   const removeButton = config.canRemove
     ? ButtonComponent.renderButton({ label: 'Remove from library', variant: 'primary', size: 'small', className: 'on-page-alert__remove', attributes: { 'data-remove-missing-album': '1', 'data-album-key': config.albumKey || '' } })
     : '';
-  const keepButton = ButtonComponent.renderButton({ label: 'Keep as missing', size: 'small', attributes: { 'data-close-track-modal': '1' } });
+  // A kept album is the user's: it is never removed automatically once its files are deleted.
+  const keepButton = ButtonComponent.renderButton({
+    label: 'Keep as missing',
+    size: 'small',
+    attributes: config.canRemove
+      ? { 'data-keep-missing-album': '1', 'data-album-key': config.albumKey || '' }
+      : { 'data-close-track-modal': '1' },
+  });
   const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
   const message = config.canRemove
     ? `${reason} Its library entry is still saved.`

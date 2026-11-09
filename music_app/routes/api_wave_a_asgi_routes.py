@@ -192,6 +192,19 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     return JSONResponse({"ok": True, **result})
 
 
+@router.post("/api/library/albums/{album_key:path}/keep-missing")
+async def keep_missing_album(request: Request, album_key: str) -> JSONResponse:
+    """The user keeps a missing album; it is never removed automatically afterwards."""
+    await require_action("library.inventory.manage")(request)
+    try:
+        await run_in_threadpool(PostgresMissingAlbumRemovalService(_app_config(request)).keep_missing, album_key)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    except MissingAlbumNotFound:
+        return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
 @router.post("/api/library/albums/{album_key:path}/rescan")
 async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse:
     """Restore a missing album found where it was or where it moved, or say why it is still missing."""

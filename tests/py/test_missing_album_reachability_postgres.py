@@ -139,6 +139,8 @@ def test_live_vanished_folder_under_a_reachable_root_is_deleted_and_an_unreadabl
     locked = fixture.entry("Owner/Locked/01.flac", album="Locked Album")
     stay = fixture.entry("Owner/Stay/01.flac", album="Stay Album")
     fixture.seed(gone, locked, stay)
+    # Rated, so the deleted album stays as Missing instead of being removed as untouched.
+    _rate(fixture, _files(fixture)[gone["path"]][2], 5)
 
     shutil.rmtree(Path(gone["path"]).parent)
     # The walk saw Stay; listing the Locked folder failed, so its files were not reported.
@@ -219,6 +221,9 @@ def test_live_watcher_deletes_while_the_drive_drops_are_unreachable_and_recovery
     back = fixture.entry("Owner/Back Again/01.flac", album="Back Again Album")
     gone = fixture.entry("Owner/Really Gone/01.flac", album="Really Gone Album")
     fixture.seed(going, back, gone)
+    # Rated, so deleted albums stay as Missing instead of being removed as untouched.
+    for entry in (going, back, gone):
+        _rate(fixture, _files(fixture)[entry["path"]][2], 5)
     reconcile = _reconcile(fixture, {})
 
     def deleted(*folders):

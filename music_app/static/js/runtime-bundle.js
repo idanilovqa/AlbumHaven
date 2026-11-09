@@ -5138,7 +5138,14 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   const removeButton = config.canRemove
     ? ButtonComponent.renderButton({ label: 'Remove from library', variant: 'primary', size: 'small', className: 'on-page-alert__remove', attributes: { 'data-remove-missing-album': '1', 'data-album-key': config.albumKey || '' } })
     : '';
-  const keepButton = ButtonComponent.renderButton({ label: 'Keep as missing', size: 'small', attributes: { 'data-close-track-modal': '1' } });
+  // A kept album is the user's: it is never removed automatically once its files are deleted.
+  const keepButton = ButtonComponent.renderButton({
+    label: 'Keep as missing',
+    size: 'small',
+    attributes: config.canRemove
+      ? { 'data-keep-missing-album': '1', 'data-album-key': config.albumKey || '' }
+      : { 'data-close-track-modal': '1' },
+  });
   const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
   const message = config.canRemove
     ? `${reason} Its library entry is still saved.`
@@ -36294,6 +36301,23 @@ const MISSING_ALBUM_RESCAN_MESSAGES = {
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
 
+async function keepMissingAlbum(album) {
+  const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
+  if (typeof closeTrackModal === 'function') closeTrackModal();
+  if (!albumKey) return false;
+  try {
+    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/keep-missing`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error('Unable to keep this album.');
+    return true;
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error?.message || 'Unable to keep this album.', 'error', 3600);
+    return false;
+  }
+}
+
 async function rescanMissingAlbum(album, button) {
   if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -45721,6 +45745,12 @@ function handleGalleryBootstrapClick(event) {
     hideArtistTreeContextMenu();
     closeArtistsDrawer({ restoreFocus: false });
     void scrollRootGalleryToArtist(artist);
+    return;
+  }
+  const keepMissingAlbumButton = event.target.closest('[data-keep-missing-album="1"]');
+  if (keepMissingAlbumButton) {
+    event.preventDefault();
+    void keepMissingAlbum(resolveTrackModalActionAlbum(keepMissingAlbumButton));
     return;
   }
   const rescanMissingAlbumButton = event.target.closest('[data-rescan-missing-album="1"]');

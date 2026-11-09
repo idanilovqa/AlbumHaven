@@ -151,7 +151,9 @@ test('missing Album Details states why the album is missing', () => {
   const viewer = context.buildMissingAlbumDetailsHtml({ canRemove: false, albumKey: 'a', reason: 'unreachable' });
   assert.match(deleted, /The files of this album were deleted from disk\. Its library entry is still saved\./);
   assert.match(unreachable, /drive or network share holding this album cannot be reached/);
-  assert.doesNotMatch(viewer, /Re-scan|Remove from library/);
+  assert.doesNotMatch(viewer, /Re-scan|Remove from library|data-keep-missing-album/);
+  assert.match(viewer, /data-close-track-modal="1"[^>]*>[\s\S]*?Keep as missing/);
+  assert.match(deleted, /data-keep-missing-album="1"[^>]*>[\s\S]*?Keep as missing/);
   assert.match(viewer, /Ask an owner or administrator to remove it\./);
 });
 

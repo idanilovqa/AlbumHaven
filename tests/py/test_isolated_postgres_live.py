@@ -809,6 +809,36 @@ def test_live_watcher_keeps_two_editions_in_separate_folders_as_two_albums(watch
     assert albums[reissue_keys.pop()]["release_year"] == 2014
 
 
+def test_live_guest_artist_track_stays_in_its_soundtrack_album(watcher_repair_inventory):
+    # Owner (MusicBrainz review, sandbox6): «The Hobbit: The Desolation of Smaug»
+    # showed Ed Sheeran's «I See Fire» as its own one-track album. The soundtrack
+    # folder tags most tracks Howard Shore / VA and that one Ed Sheeran.
+    fixture = watcher_repair_inventory
+    album = "The Hobbit: The Desolation of Smaug"
+    folder = "OST/2013 - The Hobbit - The Desolation of Smaug - (Special Edition)"
+    score = [
+        {**fixture.entry(f"{folder}/disc {disc}/{number:02d}.flac", artist="Howard Shore", album=album),
+         "album_artist": "VA" if disc == 1 and number == 1 else "Howard Shore",
+         "edition": "Special Edition", "disc_number": disc, "track_number": number, "year": 2013}
+        for disc in (1, 2) for number in range(1, 15) if (disc, number) != (2, 14)
+    ]
+    guest = {**fixture.entry(f"{folder}/disc 2/14. I See Fire (Ed Sheeran).flac", artist="Ed Sheeran", album=album),
+             "album_artist": "Ed Sheeran", "edition": "Special Edition", "disc_number": 2,
+             "track_number": 14, "year": 2013}
+    fixture.seed(*score, guest)
+
+    albums, members = _live_album_rows(fixture)
+    assert {members[entry["path"]] for entry in (*score, guest)} == {members[guest["path"]]}, "one soundtrack album after a scan"
+
+    # A watcher batch that sees only the guest's file keeps it in the soundtrack.
+    result = _live_reconcile(fixture, {guest["path"]: guest}, Path(guest["path"]).parent)
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    soundtrack = members[score[0]["path"]]
+    assert members[guest["path"]] == soundtrack
+    assert sum(key == soundtrack for key in members.values()) == 28
+
+
 def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_albums(watcher_repair_inventory):
     # Owner 2026-11-04: absent artist/album tags never make "Unknown Artist" or
     # "Unknown Album"; those files are loose tracks flagged in Problematic Files.

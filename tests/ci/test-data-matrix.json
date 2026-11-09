@@ -346,6 +346,31 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:same-name-versions-separated-and-relinked"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-version-rule"
+    ],
+    "expectedContracts": [
+      "version-exception-removed-on-relink",
+      "rule-name-truncated"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-version-rule",
+      "filesystemCopy": "media/cases/watcher-version-rule"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
     "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
     "profile": "functional-core",

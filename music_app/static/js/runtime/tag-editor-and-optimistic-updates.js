@@ -1531,7 +1531,10 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
       manual_version_links: data.manual_version_links && typeof data.manual_version_links === 'object'
         ? data.manual_version_links
         : {},
+      // Owner (11-09): marking albums as versions removes their Separate release exceptions.
+      ...(Array.isArray(data.ignored_version_keys) ? { ignored_version_keys: data.ignored_version_keys } : {}),
     }, { trackSidebarReveal: false });
+    if (state.utility) state.utility.rulesLoaded = false;
     refreshOpenTrackModalVersionState(childKey);
     showToast('Album marked as a version.', 'success', 2600);
     scheduleVersionGalleryRefresh();
@@ -1891,6 +1894,21 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
 
 const renderedTrackModalHeaderHtml = new WeakMap();
 
+// The Album Details header in the chosen layout. The loading state renders it too, so the dialog takes
+// that layout at once instead of after the details arrive (INT-040).
+function buildTrackModalHeaderHtml(album, { versionTabs = false, missing = false } = {}) {
+  return buildAlbumDetailsHeaderHtml({
+    layout: String(document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar').trim().toLowerCase(),
+    artist: album.album_artist || '',
+    album: album.display_name || album.name || 'Album',
+    year: album.display_year || album.year || '',
+    releaseType: album.release_type || 'ALBUM',
+    sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml(album),
+    tags: [versionTabs ? '' : album.edition || '', missing ? 'Missing' : ''].filter(Boolean),
+    actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing }),
+  });
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -1940,21 +1958,8 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
-  const albumDetailsLayout = String(
-    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
-  ).trim().toLowerCase();
   if (els.header) {
-    const headerHtml = buildAlbumDetailsHeaderHtml({
-      layout: albumDetailsLayout,
-      artist: album.album_artist || '',
-      album: album.display_name || album.name || 'Album',
-      year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      sourceMarkersHtml: coverSourceMarkersHtml,
-      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
-    });
+    const headerHtml = buildTrackModalHeaderHtml(album, { versionTabs: hasVersionTabs, missing: albumMissing });
     // The summary render and the hydrated details usually build the same header;
     // rewriting it replaced Close and the header actions under the pointer
     // (a close click then waited ~500 ms for the new button). Other owners edit

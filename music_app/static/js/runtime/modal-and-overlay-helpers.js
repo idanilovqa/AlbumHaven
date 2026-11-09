@@ -100,28 +100,6 @@ function normalizeVersionTitle(value) {
     .replace(/[([][^)\]]*[)\]]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-// Versions share at least half of their tracks (by normalized title, against the shorter tracklist).
-function tracklistsShareHalf(leftTitles, rightTitles) {
-  const left = new Set(leftTitles.map(normalizeVersionTitle).filter(Boolean));
-  const right = new Set(rightTitles.map(normalizeVersionTitle).filter(Boolean));
-  if (!left.size || !right.size) return false;
-  let shared = 0;
-  left.forEach((title) => { if (right.has(title)) shared += 1; });
-  return shared / Math.min(left.size, right.size) >= 0.5;
-}
-
-async function filterVersionCandidatesByTracklist(sourceAlbum, candidates) {
-  const titlesOf = async (album) => {
-    const details = await fetchTrackModalAlbumDetails(album?.key, { albumId: album?.album_id });
-    return (Array.isArray(details?.tracks) ? details.tracks : []).map((track) => track?.title || '');
-  };
-  const sourceTitles = await titlesOf(sourceAlbum);
-  const checks = await Promise.all(candidates.map(async (candidate) => {
-    try { return tracklistsShareHalf(sourceTitles, await titlesOf(candidate)); } catch (_error) { return false; }
-  }));
-  return candidates.filter((_candidate, index) => checks[index]);
-}
-
 function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
   const sourceTitle = normalizeVersionTitle(sourceAlbum?.name);
@@ -186,55 +164,83 @@ function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
 }
 
 // Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
-// INT-007 (owner, 11-08 evening): albums already linked as versions start selected (even when their name or
-// tracklist would not be offered); clicking a selected album deselects it, and Save then unlinks it.
+// Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): the albums this album already groups with, linked or automatic,
+// start selected, and any number can be selected. The list and selection come from the album's own details:
+// the gallery loads version rules lazily and folds versions into one card, so neither is a reliable source.
+async function loadVersionPickerState(album) {
+  const details = await fetchTrackModalAlbumDetails(album.key, { albumId: album.album_id }).catch(() => null);
+  const albumKey = String(album.key || '');
+  const rules = details?.release_candidate_rules || {};
+  const links = { ...(rules.manual_version_links || {}), ...(state.view?.manual_version_links || {}) };
+  const releaseCandidates = Array.isArray(details?.release_candidates) ? details.release_candidates : null;
+  const releases = getAlbumReleaseSet({ ...album, ...(releaseCandidates ? { release_candidates: releaseCandidates } : {}),
+    release_candidate_rules: { ...rules, manual_version_links: links } }).releases;
+  const current = new Set([
+    ...releases.map((item) => String(item?.key || '')),
+    ...getManualVersionFamilyKeys(albumKey, links),
+  ].filter((key) => key && key !== albumKey));
+  const byKey = new Map();
+  [...(releaseCandidates || []), ...releases, ...flattenVisibleAlbums()].forEach((item) => {
+    const key = String(item?.key || '');
+    if (!key || key === albumKey || byKey.has(key)) return;
+    // The server marks whether a same-name album shares at least half of this album's tracks.
+    const offered = releaseCandidates ? item.shares_tracks === true : getVersionPickerCandidates(album).some((c) => c.key === key);
+    if (offered || current.has(key)) byKey.set(key, item);
+  });
+  return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };
+}
+
+// Save closes at once (UI-11): the version links are library data, not tag writes, so they apply in the background
+// and the gallery follows without a Loading page.
+function applyVersionPickerChanges(album, { current, links }, selected) {
+  const albumKey = String(album.key || '');
+  const added = [...selected].filter((key) => !current.has(key));
+  const removed = [...current].filter((key) => !selected.has(key));
+  void (async () => {
+    for (const key of added) await markAlbumVersion(key, albumKey);
+    for (const key of removed) {
+      if (links[key]) await unmarkAlbumVersion(key);
+      else if (links[albumKey] === key) await unmarkAlbumVersion(albumKey);
+      else await ignoreAlbumVersion(key);
+    }
+  })().catch(() => scheduleVersionGalleryRefresh());
+  return true;
+}
+
 function openVersionPickerModal(album) {
   if (!album) return Promise.resolve(null);
-  let selectedKey = '';
-  let savedKey = '';
+  const selected = new Set();
+  let pickerState = null;
   let onPick = null;
+  const sameSelection = () => selected.size === pickerState.current.size
+    && [...selected].every((key) => pickerState.current.has(key));
   return showAppFormDialog({
     title: 'Mark As A Version',
-    description: `Select another album that is a version of ${String(album.name || 'this album')}.`,
+    description: `Select the albums that are versions of ${String(album.name || 'this album')}.`,
     submitLabel: 'Save',
     submitEnabled: false,
-    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Comparing tracklists…</div></nav>',
+    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Finding versions…</div></nav>',
     onMount(content, controls) {
-      // Only same-name albums that share at least half of their tracks are offered.
-      const linked = getLinkedVersionKeys(album.key);
-      void filterVersionCandidatesByTracklist(album, getVersionPickerCandidates(album)).catch(() => []).then((matches) => {
+      void loadVersionPickerState(album).then((loaded) => {
         const list = content.querySelector?.('[data-version-picker-list]');
         if (!list) return;
+        pickerState = loaded;
+        loaded.current.forEach((key) => selected.add(key));
         list.removeAttribute('aria-busy');
-        const byKey = new Map(matches.map((item) => [String(item.key || ''), item]));
-        flattenVisibleAlbums().forEach((item) => {
-          const key = String(item?.key || '');
-          if (linked.has(key) && !byKey.has(key)) byKey.set(key, item);
-        });
-        const candidates = [...byKey.values()];
-        list.innerHTML = buildVersionPickerListHtml(candidates, linked);
-        // The saved link is the starting selection; Save turns on only for a different choice.
-        savedKey = candidates.map((item) => String(item.key || '')).find((key) => linked.has(key)) || '';
-        selectedKey = savedKey;
+        list.innerHTML = buildVersionPickerListHtml(loaded.candidates, loaded.current);
       });
       onPick = (event) => {
         const option = event.target.closest?.('[data-version-picker-target]');
-        if (!option) return;
+        if (!option || !pickerState) return;
         const key = option.getAttribute('data-version-picker-target') || '';
-        selectedKey = key === selectedKey ? '' : key;
-        content.querySelectorAll('[data-version-picker-target]')
-          .forEach((node) => window.NavigationTree.setItemSelected(node, Boolean(selectedKey) && node === option));
-        controls.setSubmitEnabled(selectedKey !== savedKey);
+        if (selected.has(key)) selected.delete(key); else selected.add(key);
+        window.NavigationTree.setItemSelected(option, selected.has(key));
+        controls.setSubmitEnabled(!sameSelection());
       };
       content.addEventListener('click', onPick);
     },
     onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
-    onSubmit: () => {
-      if (selectedKey) return markAlbumVersion(album.key || '', selectedKey);
-      // Deselected: undo the saved link from whichever side holds it.
-      const links = state.view?.manual_version_links || {};
-      return unmarkAlbumVersion(links[String(album.key || '')] ? album.key : savedKey);
-    },
+    onSubmit: () => applyVersionPickerChanges(album, pickerState, selected),
   });
 }
 

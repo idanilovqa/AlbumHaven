@@ -2189,108 +2189,100 @@ test('gallery album menu offers Separate release for versions, not for unversion
   assert.doesNotMatch(menu.innerHTML, /Separate release/);
 });
 
-test('Mark As A Version offers only same-name albums sharing half their tracks, under an explanatory line', async () => {
+function loadVersionPicker({ details, view = {}, visible = [], releaseSet }) {
   const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
   const calls = [];
-  const tracks = {
-    a: ['Starlight', 'Murderer', 'Warrior', 'Victim of Fate'],
-    b: ['Starlight', 'Murderer (Remastered)', 'Warrior', 'Cry for Freedom'],
-    c: ['Walls of Jericho', 'Ride the Sky'],
-  };
   const context = vm.createContext({
+    state: { view },
     escapeHtml: (value) => String(value ?? ''),
-    buildAlbumDisplayCoverUrl: () => '/cover',
     compareAlbumVariants: () => 0,
-    flattenVisibleAlbums: () => [
-      { key: 'a', name: 'Helloween', album_artist: 'Helloween' },
-      { key: 'b', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: '2006' },
-      { key: 'c', name: 'HELLOWEEN [Bonus]', album_artist: 'Helloween' },
-      { key: 'd', name: 'Walls of Jericho', album_artist: 'Helloween' },
-    ],
-    fetchTrackModalAlbumDetails: async (key) => ({ tracks: (tracks[key] || []).map((title) => ({ title })) }),
-    markAlbumVersion: async (child, parent) => { calls.push(['mark', child, parent]); },
+    flattenVisibleAlbums: () => visible,
+    fetchTrackModalAlbumDetails: async (key) => { calls.push(['details', key]); return details; },
+    getAlbumReleaseSet: releaseSet,
+    getManualVersionFamilyKeys: (key, links) => {
+      const family = new Set([key]);
+      Object.entries(links).forEach(([child, parent]) => { if (child === key || parent === key) { family.add(child); family.add(parent); } });
+      return family;
+    },
+    markAlbumVersion: async (...args) => { calls.push(['mark', ...args]); },
+    unmarkAlbumVersion: async (key) => { calls.push(['unmark', key]); },
+    ignoreAlbumVersion: async (key) => { calls.push(['separate', key]); },
+    scheduleVersionGalleryRefresh: () => calls.push(['refresh']),
     showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
   });
   useNavigationTree(context);
   vm.runInContext(source, context);
-  const helloween = { key: 'a', name: 'Helloween', album_artist: 'Helloween' };
-  assert.deepEqual(Array.from(context.getVersionPickerCandidates(helloween), (item) => item.key), ['b', 'c'], 'only albums of the same name');
-  assert.deepEqual(Array.from(context.getVersionPickerCandidates({ key: 'x', name: 'Keeper of the Seven Keys', album_artist: 'Helloween' })), []);
-  await context.openVersionPickerModal(helloween);
-  const options = calls[0][1];
-  assert.equal(options.title, 'Mark As A Version');
-  assert.equal(options.description, 'Select another album that is a version of Helloween.');
-  assert.equal(options.submitEnabled, false);
-  let enabled = false;
+  return { context, calls };
+}
+
+async function mountVersionPicker(context, calls, album) {
+  await context.openVersionPickerModal(album);
+  const options = calls.find(([kind]) => kind === 'dialog')[1];
+  let enabled = null;
   const listeners = {};
-  const option = { getAttribute: () => 'b', classList: { toggle() {}, contains: () => false }, setAttribute() {}, removeAttribute() {} };
   const list = { innerHTML: '', removeAttribute() {} };
+  const nodes = new Map();
   const content = {
     addEventListener: (name, handler) => { listeners[name] = handler; },
-    removeEventListener: (name) => { delete listeners[name]; },
+    removeEventListener() {},
     querySelector: () => list,
-    querySelectorAll: () => [option],
   };
+  context.window.NavigationTree.setItemSelected = (node, value) => { node.selected = value; };
   options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(list.innerHTML, /data-version-picker-target="b"/, 'shares 3 of 4 tracks');
-  assert.doesNotMatch(list.innerHTML, /data-version-picker-target="c"/, 'same name, different tracks');
-  listeners.click({ target: { closest: () => option } });
-  assert.equal(enabled, true);
-  await options.onSubmit();
-  assert.deepEqual(calls[1], ['mark', 'a', 'b']);
-  options.onClose(content);
-  assert.equal(listeners.click, undefined);
+  const click = (key) => {
+    const node = nodes.get(key) || { key, getAttribute: () => key };
+    nodes.set(key, node);
+    listeners.click({ target: { closest: () => node } });
+    return node;
+  };
+  return { options, list, click, enabled: () => enabled };
+}
+
+test('Mark As A Version lists the album details candidates that share tracks, with every current version selected', async () => {
+  // Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): an album that already is a version (linked or automatic)
+  // showed unselected. The gallery loads version rules lazily and folds versions into one card, so the picker reads
+  // the album's own details.
+  const album = { key: 'ayreon::electric castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const remix = { key: 'ayreon::electric castle remix', name: 'Into The Electric Castle (Remix)', album_artist: 'Ayreon', shares_tracks: true };
+  const live = { key: 'ayreon::electric castle live', name: 'Into The Electric Castle (Live)', album_artist: 'Ayreon', shares_tracks: true };
+  const other = { key: 'ayreon::electric castle other', name: 'Into The Electric Castle', album_artist: 'Ayreon', shares_tracks: false };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, remix, live, other], release_candidate_rules: { manual_version_links: { [album.key]: remix.key } } },
+    // The automatic version (live) groups with it; the remix is linked in the album's own rules only.
+    releaseSet: (value) => ({ releases: [value, live] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.equal(picker.options.description, 'Select the albums that are versions of Into The Electric Castle.');
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle remix"/);
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle live"/);
+  assert.doesNotMatch(picker.list.innerHTML, /electric castle other/, 'same name, different songs');
+  for (const key of [remix.key, live.key]) {
+    assert.match(picker.list.innerHTML, new RegExp(`class="[^"]* is-selected[^"]*"[^>]*data-version-picker-target="${key}" aria-current="true"`), key);
+  }
+  assert.equal(picker.enabled(), null, 'nothing changed yet');
 });
 
-test('Mark As A Version starts with linked albums selected, and deselecting one unlinks it on Save', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
-  const run = async (links, sourceKey) => {
-    const calls = [];
-    const context = vm.createContext({
-      state: { view: { manual_version_links: links } },
-      escapeHtml: (value) => String(value ?? ''),
-      compareAlbumVariants: () => 0,
-      // INT-007 (owner): a linked album is listed even when its name or tracklist would not be offered.
-      flattenVisibleAlbums: () => [
-        { key: 'a', name: 'Hilda: Season 2', album_artist: 'Ryan Carlson' },
-        { key: 'z', name: 'Hilda Season Two Score', album_artist: 'Ryan Carlson' },
-      ],
-      fetchTrackModalAlbumDetails: async () => ({ tracks: [] }),
-      markAlbumVersion: async (...args) => { calls.push(['mark', ...args]); },
-      unmarkAlbumVersion: async (key) => { calls.push(['unmark', key]); },
-      showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
-    });
-    useNavigationTree(context);
-    vm.runInContext(source, context);
-    const album = { key: sourceKey, name: sourceKey === 'a' ? 'Hilda: Season 2' : 'Hilda Season Two Score', album_artist: 'Ryan Carlson' };
-    await context.openVersionPickerModal(album);
-    const options = calls[0][1];
-    let enabled = null;
-    const listeners = {};
-    const linkedKey = sourceKey === 'a' ? 'z' : 'a';
-    const selections = [];
-    const option = { getAttribute: () => linkedKey, classList: { toggle() {}, contains: () => true }, setAttribute() {}, removeAttribute() {} };
-    const list = { innerHTML: '', removeAttribute() {} };
-    const content = {
-      addEventListener: (name, handler) => { listeners[name] = handler; },
-      removeEventListener() {},
-      querySelector: () => list,
-      querySelectorAll: () => [option],
-    };
-    context.window.NavigationTree.setItemSelected = (node, value) => selections.push(value);
-    options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.match(list.innerHTML, new RegExp(`data-version-picker-target="${linkedKey}"`), 'the linked album is listed');
-    assert.match(list.innerHTML, new RegExp(`class="[^"]* is-selected[^"]*"[^>]*data-version-picker-target="${linkedKey}" aria-current="true"`), 'and starts selected');
-    listeners.click({ target: { closest: () => option } });
-    assert.deepEqual(selections, [false], 'clicking the selected album deselects it');
-    assert.equal(enabled, true, 'Save turns on for the change');
-    await options.onSubmit();
-    return calls.slice(1);
-  };
-  assert.deepEqual(await run({ a: 'z' }, 'a'), [['unmark', 'a']], 'this album is the linked version');
-  assert.deepEqual(await run({ a: 'z' }, 'z'), [['unmark', 'a']], 'the other album is the linked version');
+test('Mark As A Version saves the changed selection in the background: link, unlink, or separate', async () => {
+  const album = { key: 'a', name: 'Album', album_artist: 'Artist' };
+  const candidates = ['linked', 'automatic', 'new'].map((key) => ({ key, name: 'Album', album_artist: 'Artist', shares_tracks: true }));
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, ...candidates], release_candidate_rules: { manual_version_links: { linked: 'a' } } },
+    releaseSet: (value) => ({ releases: [value, candidates[1]] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  picker.click('linked');
+  picker.click('automatic');
+  picker.click('new');
+  assert.equal(picker.enabled(), true);
+  // UI-11 (owner): Save closes at once; nothing waits for the server.
+  assert.equal(picker.options.onSubmit(), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.filter(([kind]) => ['mark', 'unmark', 'separate'].includes(kind)))).sort(), [
+    ['mark', 'new', 'a'],
+    ['separate', 'automatic'],
+    ['unmark', 'linked'],
+  ]);
 });
 
 test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {

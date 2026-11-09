@@ -102,6 +102,7 @@ from music_app.services.state import (
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.utility_rule_mutations import (
     create_version_exception,
+    clear_version_exceptions,
     mark_manual_version_link,
     revert_rule_key,
     unmark_manual_version_link,
@@ -1619,6 +1620,13 @@ async def mark_album_version(request: Request) -> JSONResponse:
     )
     if mutation_error:
         return _json_response(({"ok": False, "error": mutation_error}, 400))
+    ignored_version_keys = clear_version_exceptions(
+        config,
+        [album_key, parent_album_key],
+        load_keys=load_ignored_version_keys,
+        save_keys=save_ignored_version_keys,
+    )
+    invalidate_utility_rules_payload_cache(library_state)
     log_app_event(
         config,
         logger,
@@ -1627,7 +1635,11 @@ async def mark_album_version(request: Request) -> JSONResponse:
         album_key=album_key,
         parent_album_key=parent_album_key,
      history_scope=history_scope)
-    return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
+    return JSONResponse({
+        "ok": True,
+        "manual_version_links": manual_version_links,
+        "ignored_version_keys": sorted(ignored_version_keys),
+    })
 
 
 @router.post("/versions/unmark")

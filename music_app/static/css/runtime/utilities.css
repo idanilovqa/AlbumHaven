@@ -1970,6 +1970,9 @@
 .utility-rule-target > .album-artbox { width: 44px; height: 44px; flex: 0 0 44px; }
 .utility-rule-target .utility-rule-album-title,
 .utility-rule-target .utility-rule-album-meta { display: block; }
+/* Owner (11-09): a long album name is cut with an ellipsis inside its column (the full name is its tooltip). */
+.utility-rule-target > span:not(.album-artbox) { min-width: 0; overflow: hidden; }
+.utility-rule-target :is(.utility-rule-album-title, .utility-rule-album-meta) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #repair-confirm-text { white-space: pre-line; }
 
 /* Approved Settings integrations compose existing Input, ActionButton and Modal. */

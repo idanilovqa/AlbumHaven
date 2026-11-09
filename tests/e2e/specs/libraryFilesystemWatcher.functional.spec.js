@@ -342,9 +342,23 @@ test('FTC-COVERS-046 a split notification asks during the running search and kee
     // UI-5 point 1 (owner, 11-08 evening): the chooser must show while the search runs, not when it ends.
     await stepLogger.step('UI-5: the notification opens the split chooser while the search is still running', async () => {
       await coverLookupActions.openDrawer();
+      // Owner (11-09): Cover Look Up must not show for a moment before the chooser.
+      // parity-check: allow-read-only-measurement-evaluate -- record, on every frame, whether the lookup is visible
+      await lookup.page.evaluate(() => {
+        window.__lookupFlashFrames = [];
+        const read = () => {
+          const modal = document.getElementById('cover-lookup-modal');
+          const chooser = [...document.querySelectorAll('[role="dialog"]')].some((node) => /Choose the current release/.test(node.textContent || '') && node.checkVisibility());
+          window.__lookupFlashFrames.push({ lookup: Boolean(modal?.checkVisibility?.({ visibilityProperty: true })), chooser });
+          if (!chooser) requestAnimationFrame(read);
+        };
+        requestAnimationFrame(read);
+      });
       await coverLookupActions.openTask(SPLIT_CHOOSER_TARGET.album);
       await expect(lookup.splitReleaseChooser).toBeVisible({ timeout: 10_000 });
       await expect(lookup.splitReleaseChoices).toHaveCount(2);
+      const frames = await lookup.page.evaluate(() => window.__lookupFlashFrames);
+      expect(frames.filter((frame) => frame.lookup), JSON.stringify(frames.slice(-20))).toEqual([]);
       const evidence = await coverLookupActions.readProviderFixtureEvidence();
       expect(evidence.later_provider_completed, 'the chooser came before the search finished').toBe(0);
     });
@@ -390,6 +404,118 @@ test('FTC-COVERS-046 a split notification asks during the running search and kee
     } catch (cleanupError) {
       originalFailure = originalFailure || cleanupError;
     }
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+const VERSION_RULE_TARGET = Object.freeze({
+  artist: 'Watcher Version Rule Artist',
+  album: 'Watcher Version Rule Album With A Very Long Twentieth Anniversary Edition Remix Title',
+  year: 2001,
+  remasterFolder: 'Watcher Version Rule Remaster',
+  remasterYear: 2011,
+});
+
+test('FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception', {
+  tag: '@area:album-details',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  settingsModalAppBarActions,
+  stepLogger,
+  utilityRulesActions,
+  utilityTabBarActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const rules = utilityRulesActions.utilityRulesTab;
+  const menu = galleryActions.galleryPage.albumCard.contextMenu;
+  const exceptionsTable = rules.ruleDetail.getByRole('table', { name: 'Version exceptions', exact: true });
+  const exceptionRow = exceptionsTable.locator('[role="row"]').filter({ hasText: VERSION_RULE_TARGET.album });
+  const openVersionExceptions = async () => {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('rules');
+    await utilityRulesActions.waitForReady();
+    await rules.listItems.filter({ hasText: 'Version exceptions' }).first().click();
+    await rules.ruleTitle.filter({ hasText: 'Version exceptions' }).waitFor({ state: 'visible', timeout: 60000 });
+  };
+  const showAlbum = async () => {
+    await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(VERSION_RULE_TARGET.artist)}`);
+    await galleryActions.waitForGalleryReady();
+  };
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add two same-name releases that share their tracks, so they group as versions', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      fixture = await createWatchedAlbumFixture({
+        artist: VERSION_RULE_TARGET.artist,
+        album: VERSION_RULE_TARGET.album,
+        year: VERSION_RULE_TARGET.year,
+        trackTitles: ['Version Rule One', 'Version Rule Two'],
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+      await fixture.createSiblingAlbum({
+        album: VERSION_RULE_TARGET.album,
+        folderName: VERSION_RULE_TARGET.remasterFolder,
+        year: VERSION_RULE_TARGET.remasterYear,
+        trackTitles: ['Version Rule One', 'Version Rule Two'],
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      await expect(async () => {
+        await showAlbum();
+        await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(1);
+      }).toPass({ timeout: 60000, intervals: [500, 1000, 2000] });
+    });
+
+    await stepLogger.step('Separate release creates a version exception listed in Rules, truncated in its column', async () => {
+      await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+      await menu.getByRole('button', { name: /^Separate release/ }).first().click();
+      await expect(page.getByText('Release separated. The rule is listed in Settings › Rules.')).toBeVisible();
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(2);
+      await openVersionExceptions();
+      await expect(exceptionRow).toHaveCount(1);
+      // Owner (11-09): a long name is cut with an ellipsis inside its column instead of running under the Rule text.
+      const title = exceptionRow.locator('.utility-rule-album-title');
+      const ruleCell = exceptionRow.getByText('Excluded from album version tabs', { exact: true });
+      const [titleBox, ruleBox] = await Promise.all([title.boundingBox(), ruleCell.boundingBox()]);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(ruleBox.x);
+      // parity-check: allow-read-only-measurement-evaluate -- the long title is clipped with an ellipsis
+      expect(await title.evaluate((node) => node.scrollWidth > node.clientWidth
+        && getComputedStyle(node).textOverflow === 'ellipsis')).toBe(true);
+      await expect(title).toHaveAttribute('title', VERSION_RULE_TARGET.album);
+      await settingsModalAppBarActions.closeSettings();
+    });
+
+    // Owner (11-09): "I already returned them to be a version, so this rule should have been reverted and removed."
+    await stepLogger.step('Mark as a version again removes the exception from Rules', async () => {
+      await showAlbum();
+      await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+      await menu.getByRole('button', { name: 'Mark as a version', exact: true }).click();
+      const dialog = page.locator('#app-form-modal');
+      await expect(dialog).toBeVisible();
+      const other = dialog.locator('[data-version-picker-target]').first();
+      await expect(other).toBeVisible();
+      await other.click();
+      await dialog.locator('#app-form-submit').click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText('Album marked as a version.')).toBeVisible();
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(1);
+      await openVersionExceptions();
+      await expect(exceptionRow).toHaveCount(0);
+      await settingsModalAppBarActions.closeSettings();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
     if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
     else if (originalFailure) throw originalFailure;
   }

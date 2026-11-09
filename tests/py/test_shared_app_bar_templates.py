@@ -428,3 +428,12 @@ def test_server_settings_compose_shared_radio_path_and_button_components(render)
     assert not form.find_all("progress"), "Relocation uses concise text, not a progress bar"
     assert "Loading" not in form.text
     assert len(document.find_all(id="app-form-modal")) == 1, "The folder picker dialog is available on direct loads"
+
+
+def test_page_header_hamburger_buttons_have_no_outline(render):
+    # Owner (11-09): "loose outline on this hamburger button everywhere it is used" - the Settings sections and
+    # library navigation hamburgers are bare, like Back and the admin Account navigation hamburger.
+    document = render()
+    for button_id in ("mobile-settings-button", "mobile-library-button"):
+        classes = document.one(id=button_id).attrs["class"].split()
+        assert "action-button--bare" in classes, button_id

@@ -282,6 +282,15 @@ def test_live_album_identity_lineage_rejects_cycles_and_cross_library_moves(
     )["status"] == "invalid"
 
 
+def _finish_live_startup(config):
+    """Startup publishes the relation and gallery baselines that watcher and edit writes need."""
+    from music_app.services.gallery_projection_postgres import initialize_gallery_membership
+    from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+    assert ensure_relation_projection_ready(config).get("ready")
+    initialize_gallery_membership(config)
+
+
 @pytest.fixture
 def watcher_repair_inventory(monkeypatch, tmp_path):
     """Real migrated inventory used only by the bounded watcher repair cases."""
@@ -312,15 +321,11 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
         def seed(*entries):
-            from music_app.services.gallery_projection_postgres import initialize_gallery_membership
-            from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
-
             adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
             # A full scan publishes its relation views; watcher publication
             # requires that ready baseline, as after startup.
-            assert ensure_relation_projection_ready(config).get("ready")
-            initialize_gallery_membership(config)
+            _finish_live_startup(config)
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:
@@ -1331,6 +1336,21 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
             where id = %s
             """,
             (status, builder_version, fingerprint, built_from_fingerprint, library_id),
+        )
+        # Since 7a7dd593 authority also needs the normalized publication both semantics agree on.
+        connection.execute(
+            """insert into library.local_relation_projection_state
+                 (library_id, builder_version, source_fingerprint, last_publication_xid)
+               values (%s, %s, %s, pg_current_xact_id())""",
+            (library_id, builder_version, fingerprint),
+        )
+        connection.execute(
+            """insert into library.local_relation_compatibility_state
+                 (library_id, legacy_semantics, current_semantics, source_fingerprint,
+                  relations_last_built, last_publication_xid)
+               values (%s, 'legacy-v11-broad-aliases', 'current-v11-explicit-collaboration', %s,
+                       extract(epoch from now()), pg_current_xact_id())""",
+            (library_id, fingerprint),
         )
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -3020,6 +3040,7 @@ def test_live_partial_year_split_preserves_source_album_and_selected_file_year(
                 """,
                 {"release_date": "2004-07-16"},
             )
+        _finish_live_startup(config)
         updated = {
             **previous,
             str(selected_path): {
@@ -3667,6 +3688,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             str(row["private_path"]): dict(row)
             for row in before_tracks
         }
+        _finish_live_startup(config)
         updated_selected = {
             **previous[str(selected_path)],
             "album": "Destination Album",
@@ -4046,6 +4068,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
             "mixed-year-restore-root-identity",
             1.0,
         )
+        _finish_live_startup(config)
 
         derived_destination_key = album_separate_release_key(
             "ДДТ",
@@ -5993,6 +6016,7 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
             1.0,
             observed_library_root_ids={"deletion-only-root"},
         )
+        _finish_live_startup(config)
 
         mutation = adapter.persist_targeted_inventory_mutation(
             root_id="deletion-only-root",
@@ -6236,6 +6260,7 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             1.0,
             observed_library_root_ids={"multi-disc-root"},
         )
+        _finish_live_startup(config)
 
         changed.write_bytes(b"disc-one-updated")
         result = TargetedLibraryReconciler(

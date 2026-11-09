@@ -17,7 +17,9 @@ _OWNER_SYNC_REASON = "library_menu_sync"
 # re-checked by the next backfill (migration 0174). Version 3 adds box-set discs,
 # matched siblings, Last.fm album identifiers and per-album assignment. Version 4
 # gives each album the artist it certainly matches, with no margin (owner, 2026-11-08).
-MATCHER_VERSION = 4
+# Version 5 reads every release's title, partial and typo titles with their tracks,
+# other scripts and code pages, and compares a split artist's undecided albums (2026-11-09).
+MATCHER_VERSION = 5
 # Local "artists" that name no artist: never matched, never a problem.
 _PLACEHOLDER_ARTIST_NAMES = ("various artists", "various artist", "various", "va", "v.a.", "v/a",
                              "unknown", "unknown artist", "[unknown]", "artist unknown")

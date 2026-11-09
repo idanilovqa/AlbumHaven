@@ -93,3 +93,13 @@ def test_owner_named_artist(case):
 
 def test_every_named_case_is_covered():
     assert {case["case"] for case in FIXTURE["cases"]} == set(MATCHED) | set(UNCONFIRMED) | set(PER_ALBUM)
+
+
+def test_a_split_artist_compares_its_undecided_albums_by_their_tracks():
+    """Owner review 4: Alice Cooper's solo albums were left undecided on their year alone
+    when the split spent the lookups; each undecided album now has its tracks compared."""
+    case = next(case for case in FIXTURE["cases"] if case["case"] == "Alice Cooper")
+    outcome = resolve_artist(case["context"], client=_client())
+
+    decided = {item["local_title"] for item in outcome["album_identities"]}
+    assert [album["title"] for album in case["context"]["albums"] if album["title"] not in decided] == ["Killer"]

@@ -31,7 +31,16 @@ _EDITION_SUFFIX = re.compile(
     r"(?:\s+(?:\d+(?:th|st|nd|rd)?\s+anniversary|remaster(?:ed)?|deluxe|expanded|edition|reissue|"
     r"bonus\s+tracks?|special|limited|collector'?s?|version|\d{4}))+$"
 )
-_BRACKETS = re.compile(r"[\(\[\{]([^\)\]\}]*)[\)\]\}]")
+_BRACKETS = re.compile(r"[\(\[\{「『【〈《]([^\)\]\}」』】〉》]*)[\)\]\}」』】〉》]")
+_SUBTITLE_SEPARATORS = (":", " - ", " – ", " — ", "～", "〜")
+_NUMBER_WORDS = {word: index for index, word in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen".split())}
+_NUMBER_WORDS.update({word: 10 * index for index, word in enumerate(
+    "twenty thirty forty fifty sixty seventy eighty ninety".split(), start=2)})
+_SPACELESS = "#"  # folded keys hold only word characters and spaces
+_CYRILLIC = re.compile(r"[\u0400-\u04ff]")
+_LATIN = re.compile(r"[a-zA-Z]")
 
 
 def fold(value: object) -> str:
@@ -47,6 +56,42 @@ def _compact(text: str) -> str:
     return text.replace(" ", "")
 
 
+def repaired(value: object) -> str | None:
+    """A tag read with the wrong code page, repaired for comparison only (never written):
+    UTF-8 read as Windows-1252 ("BjÃ¶rk"), or Latin-1 read as Windows-1251, which turns
+    "Öröm" into a word mixing Latin and Cyrillic letters ("Цrцm")."""
+    text = str(value or "")
+    try:
+        fixed = text.encode("cp1252").decode("utf-8")
+        if fixed != text:
+            return fixed
+    except UnicodeError:
+        pass
+    words = text.split(" ")
+    changed = False
+    for position, word in enumerate(words):
+        if _CYRILLIC.search(word) and _LATIN.search(word):
+            try:
+                words[position] = word.encode("cp1251").decode("latin-1")
+                changed = True
+            except UnicodeError:
+                return None
+    return " ".join(words) if changed else None
+
+
+def _numbers_as_digits(text: str) -> str:
+    """Folded English number words as digits: "up to thirty three" is "up to 33"."""
+    out: list[str] = []
+    for word in text.split():
+        value = _NUMBER_WORDS.get(word)
+        if value is not None and value < 10 and out and out[-1].isdigit() and out[-1].endswith("0") \
+                and int(out[-1]) >= 20 and out[-1] != "0":
+            out[-1] = str(int(out[-1]) + value)
+        else:
+            out.append(str(value) if value is not None else word)
+    return " ".join(out)
+
+
 def name_keys(value: object) -> set[str]:
     """Comparison keys for an artist name: its folded form and its accepted variants.
 
@@ -54,7 +99,7 @@ def name_keys(value: object) -> set[str]:
     "Mystakidis, Dimitris" as "Dimitris Mystakidis", and "10cc / 10cc" as "10cc".
     """
     raw = str(value or "").strip()
-    variants = {raw}
+    variants = {raw, repaired(raw) or raw}
     parts = [part for part in re.split(r"\s*(?:/|;)\s*", raw) if part]
     if len(parts) > 1 and len({fold(part) for part in parts}) == 1:
         variants.add(parts[0])
@@ -93,15 +138,24 @@ def candidate_name_keys(candidate: dict[str, object]) -> set[str]:
 def title_keys(title: object, artist_names: tuple[str, ...] = ()) -> set[str]:
     """Comparison keys for an album title.
 
-    Brackets keep their words ("[REDACTED]"), edition suffixes and subtitles are
-    also tried without, and a leading or trailing band name is dropped
-    ("Agamemnon Part I & II" and "Part I & II").
+    Brackets keep their words ("[REDACTED]") and also stand alone, as an original or
+    alternative title does ("Jinsei Game (人生ゲイム)"); each side of a slash is a
+    title of its own ("22 Strings/Cordes"); edition suffixes and subtitles are also
+    tried without; a leading or trailing band name is dropped ("Agamemnon Part I &
+    II" and "Part I & II") or read as its initials ("RTJ3"); number words read as
+    digits ("Up to Thirty"); spacing is ignored ("Seim A New" and "Seim Anew").
     """
     raw = str(title or "")
-    forms = {raw, _BRACKETS.sub(r" \1 ", raw), _BRACKETS.sub(" ", raw)}
-    for separator in (":", " - ", " – ", " — "):
-        if separator in raw:
-            forms.add(raw.split(separator, 1)[0])
+    bases = {raw, repaired(raw) or raw}
+    forms: set[str] = set()
+    for base in bases:
+        forms |= {base, _BRACKETS.sub(r" \1 ", base), _BRACKETS.sub(" ", base), *_BRACKETS.findall(base)}
+        forms |= {part for part in re.split(r"\s*/\s*", _BRACKETS.sub(" ", base)) if part.strip()}
+        # One title written in two scripts ("차연 差延"): each script's words stand alone.
+        forms |= {" ".join(words) for words in _words_by_script(base).values() if words}
+        for separator in _SUBTITLE_SEPARATORS:
+            if separator in base:
+                forms.add(base.split(separator, 1)[0])
     band_keys = [fold(name) for name in artist_names if fold(name)]
     keys: set[str] = set()
     for form in forms:
@@ -109,45 +163,148 @@ def title_keys(title: object, artist_names: tuple[str, ...] = ()) -> set[str]:
         for text in {folded, _EDITION_SUFFIX.sub("", folded)}:
             if not text:
                 continue
-            keys.add(text)
+            found = {text, _numbers_as_digits(text)}
             for band in band_keys:
+                initials = "".join(word[0] for word in band.split()) if len(band.split()) > 1 else ""
                 if text.startswith(band + " "):
-                    keys.add(text[len(band) + 1:])
+                    found.add(text[len(band) + 1:])
+                    if initials:
+                        found.add(initials + text[len(band):])
                 if text.endswith(" " + band):
-                    keys.add(text[:-len(band) - 1])
+                    found.add(text[:-len(band) - 1])
+            # Spacing-free keys agree only exactly, never as a near spelling.
+            keys |= found | {_SPACELESS + _compact(key) for key in found}
     keys.discard("")
     return keys
+
+
+_AKA = re.compile(r"^\s*(?:aka|a\.k\.a\.?|also known as)\s*[:\-]?\s*", re.IGNORECASE)
+
+
+def group_title_keys(group: dict[str, object], artist_names: tuple[str, ...] = ()) -> set[str]:
+    """A release group's title keys, with the alternative title MusicBrainz keeps in its
+    comment (Celeste's 'aka “Principe di un giorno”', Pražský výběr's "Straka v hrsti")."""
+    keys = title_keys(group.get("title"), artist_names)
+    comment = str(group.get("disambiguation") or "").strip()
+    if comment:
+        keys |= title_keys(_AKA.sub("", comment).strip("“”\"'«»„ "), artist_names)
+    return keys
+
+
+def _words_by_script(text: str) -> dict[str, list[str]]:
+    """A title's words grouped by script, only when it mixes Latin, Cyrillic, Han, kana
+    or Hangul words."""
+    groups: dict[str, list[str]] = {}
+    for word in text.split():
+        script = ("hangul" if re.search(r"[가-힯]", word) else
+                  "kana" if re.search(r"[぀-ヿ]", word) else
+                  "han" if re.search(r"[㐀-鿿]", word) else
+                  "cyrillic" if _CYRILLIC.search(word) else
+                  "latin" if _LATIN.search(word) else None)
+        if script:
+            groups.setdefault(script, []).append(word)
+    return groups if len(groups) > 1 else {}
+
+
+def _subtitle_keys(title: object) -> set[str]:
+    """The words after a subtitle separator: part of a title, never the whole of it."""
+    raw = str(title or "")
+    return {fold(raw.split(separator, 1)[1]) for separator in _SUBTITLE_SEPARATORS if separator in raw} - {""}
+
+
+def _within_typo_distance(a: str, b: str) -> bool:
+    """One edit for 5 to 9 characters, two from 10, a swap counting once."""
+    limit = 1 if 5 <= min(len(a), len(b)) <= 9 else 2 if min(len(a), len(b)) >= 10 else 0
+    if not limit or abs(len(a) - len(b)) > limit:
+        return False
+    previous2, previous = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        current = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] != b[j - 1]))
+            if previous2 and i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                current[j] = min(current[j], previous2[j - 2] + 1)
+        previous2, previous = previous, current
+    return previous[-1] <= limit
+
+
+_DENSE_SCRIPT = re.compile(r"[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u9fff\uac00-\ud7af]")
+
+
+def _contained(a: str, b: str) -> bool:
+    """All words of one title of two or more words inside the other (one word in a
+    script written without spaces: "차연" in "차연 差延"), or most words shared with a
+    distinctive one among them ("Keys to the Paradise" and "Keys to the Palace")."""
+    small, large = sorted((set(a.split()), set(b.split())), key=len)
+    if small < large and (len(small) >= 2 or _DENSE_SCRIPT.search(next(iter(small), "")) and len(a) > 1 < len(b)):
+        return True
+    shared = small & large
+    return len(shared) >= 2 and len(shared) / len(small | large) >= 0.5 and any(len(word) >= 4 for word in shared)
 
 
 def _key_agreement(local: set[str], remote: set[str]) -> str | None:
     if local & remote:
         return "exact"
+    local = {key for key in local if not key.startswith(_SPACELESS)}
+    remote = {key for key in remote if not key.startswith(_SPACELESS)}
     for a in local:
         for b in remote:
             # A near spelling only for titles of 8+ characters of about the same length.
             if min(len(a), len(b)) >= 8 and abs(len(a) - len(b)) <= max(len(a), len(b)) // 10 + 1:
                 if SequenceMatcher(None, a, b).ratio() >= 0.9:
                     return "fuzzy"
+    for a in local:
+        for b in remote:
+            if " " in a and " " in b and _within_typo_distance(a, b):
+                return "typo"
     return None
 
 
+def _partial_agreement(local: set[str], remote: set[str]) -> bool:
+    local = {key for key in local if not key.startswith(_SPACELESS)}
+    return any(_contained(a, b) for a in local for b in remote)
+
+
 def title_agreement(local_title: object, remote_title: object, artist_names: tuple[str, ...] = ()) -> str | None:
-    """"exact" when keys agree; "fuzzy" for a near spelling of a title of 8+ characters."""
-    return _key_agreement(title_keys(local_title, artist_names), title_keys(remote_title, artist_names))
+    """"exact" when keys agree; "fuzzy" for a near spelling of a title of 8+ characters;
+    "typo" within a bounded edit distance; "partial" when one title holds the other's
+    words or subtitle. Typo and partial titles count only with a matching tracklist."""
+    local, remote = title_keys(local_title, artist_names), title_keys(remote_title, artist_names)
+    agreement = _key_agreement(local, remote)
+    if agreement:
+        return agreement
+    local |= _subtitle_keys(local_title)
+    remote |= _subtitle_keys(remote_title)
+    return "partial" if local & remote or _partial_agreement(local, remote) else None
 
 
 def best_title_match(local_title: object, groups: list[tuple[dict, set[str]]],
                      artist_names: tuple[str, ...] = ()) -> tuple[dict | None, str | None]:
     """The release group agreeing best with a local album, from groups whose title
     keys were computed once: an exact title wins over a near spelling."""
+    ranked = ranked_title_matches(local_title, groups, artist_names)
+    return ranked[0] if ranked else (None, None)
+
+
+_TITLE_RANK = {"exact": 0, "fuzzy": 1, "typo": 2, "partial": 3}
+
+
+def ranked_title_matches(local_title: object, groups: list[tuple[dict, set[str]]],
+                         artist_names: tuple[str, ...] = ()) -> list[tuple[dict, str]]:
+    """Every release group agreeing with a local album, best first: an exact title before
+    a near spelling, a typo or a partial one, and a group titled exactly like the album
+    before one that only contains it (a "Workin', Relaxin', Steamin'" compilation)."""
     local = title_keys(local_title, artist_names)
+    local_folded = fold(local_title)
+    matches = []
     for group, keys in groups:
-        if local & keys:
-            return group, "exact"
-    for group, keys in groups:
-        if _key_agreement(local, keys):
-            return group, "fuzzy"
-    return None, None
+        agreement = "exact" if local & keys else _key_agreement(local, keys)
+        if not agreement:
+            agreement = "partial" if (local | _subtitle_keys(local_title)) & (keys | _subtitle_keys(group.get("title"))) \
+                or _partial_agreement(local, keys) else None
+        if agreement:
+            matches.append((group, agreement))
+    return sorted(matches, key=lambda item: (_TITLE_RANK[item[1]], fold(item[0].get("title")) != local_folded))
 
 
 def _year(value: object) -> int | None:
@@ -155,11 +312,27 @@ def _year(value: object) -> int | None:
     return int(match.group(1)) if match else None
 
 
+_EVIDENCE_SIGNALS = frozenset({"year", "track_count", "track_list", "durations"})
+
+
+def _track_title_forms(title: object) -> set[str]:
+    """A track title with and without its brackets and edition words ("Malawëlëkaahm
+    (2020 remastered)"), and repaired when its tag was misread."""
+    forms = set()
+    for text in {str(title or ""), repaired(title) or ""}:
+        for form in {text, _BRACKETS.sub(" ", text)}:
+            folded = fold(form)
+            forms |= {folded, _EDITION_SUFFIX.sub("", folded)}
+    return forms - {""}
+
+
 def album_signals(local_album: dict[str, object], remote: dict[str, object]) -> set[str]:
     """The evidence beyond the title that a local album and a remote release share.
 
     ``remote`` carries the release group's first-release date and, once fetched,
-    the closest release's tracks (title, length in milliseconds).
+    the closest release's tracks (title, length in milliseconds). Two markers are
+    not evidence: "lengths_unknown" when MusicBrainz has no lengths to compare, and
+    "tracks_differ" when its fetched tracks agree on neither titles nor lengths.
     """
     signals: set[str] = set()
     local_year, remote_year = _year(local_album.get("year")), _year(remote.get("first_release_date"))
@@ -171,29 +344,57 @@ def album_signals(local_album: dict[str, object], remote: dict[str, object]) -> 
     if local_tracks and remote_count and abs(len(local_tracks) - remote_count) <= 1:
         signals.add("track_count")
     if local_tracks and remote_tracks:
-        remote_titles = {fold(track.get("title")) for track in remote_tracks} - {""}
-        local_titles = [fold(track.get("title")) for track in local_tracks if fold(track.get("title"))]
-        if local_titles and sum(title in remote_titles for title in local_titles) >= max(1, 0.6 * len(local_titles)):
+        remote_by_title = {form: track for track in remote_tracks for form in _track_title_forms(track.get("title"))}
+        local_forms = [_track_title_forms(track.get("title")) for track in local_tracks]
+        local_titles = [forms for forms in local_forms if forms]
+        shared = [forms for forms in local_titles if forms & remote_by_title.keys()]
+        shorter = min(len(local_titles), len(remote_tracks))
+        # Most local titles, or (MusicBrainz listing fewer tracks, Karma's cassette)
+        # nearly all of the shorter list from four tracks.
+        if local_titles and (len(shared) >= max(1, 0.6 * len(local_titles))
+                             or (shorter >= 4 and len(shared) >= 0.9 * shorter)):
             signals.add("track_list")
         local_lengths = [float(track.get("duration_seconds") or 0) for track in local_tracks]
         remote_lengths = [float(track.get("length") or 0) / 1000 for track in remote_tracks]
-        if all(local_lengths) and all(remote_lengths):
-            if len(local_lengths) == len(remote_lengths) and all(
-                abs(a - b) <= 3 for a, b in zip(local_lengths, remote_lengths)
-            ):
-                signals.add("durations")
-            elif abs(sum(local_lengths) - sum(remote_lengths)) <= 0.02 * sum(remote_lengths):
-                signals.add("durations")
+        if all(local_lengths) and not all(remote_lengths):
+            signals.add("lengths_unknown")
+        elif all(local_lengths):
+            if len(local_lengths) == len(remote_lengths):
+                # Equal counts compare track by track: a matching total never hides a
+                # 7:40 track against a 3:00 one. Nearly all within 3 s, none past 15 s.
+                gaps = [abs(a - b) for a, b in zip(local_lengths, remote_lengths)]
+                if sum(gap <= 3 for gap in gaps) >= 0.8 * len(gaps) and max(gaps) <= 15:
+                    signals.add("durations")
+            else:
+                pairs = [(float(track.get("duration_seconds") or 0),
+                          float(remote_by_title[next(iter(forms & remote_by_title.keys()))].get("length") or 0) / 1000)
+                         for track, forms in zip(local_tracks, local_forms) if forms & remote_by_title.keys()]
+                if len(pairs) >= 3 and all(abs(a - b) <= 3 for a, b in pairs) \
+                        or abs(sum(local_lengths) - sum(remote_lengths)) <= 0.02 * sum(remote_lengths):
+                    signals.add("durations")
+        if not signals & {"track_list", "durations"}:
+            signals.add("tracks_differ")
     return signals
 
 
 def album_level(title: str | None, signals: set[str]) -> str | None:
-    """"strong" (title plus two signals), "agree" (title plus one), "title" (title only)."""
+    """"strong" (title plus two signals), "agree" (title plus one), "title" (title only).
+
+    A typo, a partial title or a release matched by its tracks alone counts only with
+    a matching tracklist, and an album whose fetched tracks differ in titles and
+    lengths is never strong."""
     if not title:
         return None
-    if len(signals) >= 2:
+    evidence = signals & _EVIDENCE_SIGNALS
+    if title in {"typo", "partial", "tracks"} and "track_list" not in evidence:
+        return None
+    if title == "tracks" and not signals & {"durations", "lengths_unknown"} or (
+            title == "tracks" and "track_count" not in evidence):
+        # Tracks alone, with no title to agree, need their count and lengths too.
+        return None
+    if len(evidence) >= 2 and "tracks_differ" not in signals:
         return "strong"
-    if signals:
+    if evidence:
         return "agree"
     # A near spelling is never evidence on its own.
     return "title" if title == "exact" else None

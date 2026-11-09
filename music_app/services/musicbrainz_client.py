@@ -348,6 +348,8 @@ class MusicBrainzClient:
                         "id": _valid_mbid(group.get("id")),
                         "title": title,
                         "first_release_date": _text(group.get("first-release-date")) or None,
+                        # An alternative title often lives here ("Straka v hrsti").
+                        "disambiguation": _text(group.get("disambiguation")) or None,
                     })
                     seen.add(release_title_key(title))
             total = _integer(payload.get("release-group-count"))
@@ -398,8 +400,11 @@ class MusicBrainzClient:
             })
         return {"classification": "complete" if releases else "not_found", "releases": releases}
 
-    def release_group_tracks(self, release_group_id: object, *, track_count: int = 0) -> JsonDict:
-        """The tracks of the release in a release group closest to ``track_count``."""
+    def release_group_tracks(self, release_group_id: object, *, track_count: int = 0,
+                             exclude: tuple[str, ...] = ()) -> JsonDict:
+        """The tracks of the release in a release group closest to ``track_count``.
+
+        ``exclude`` skips releases already compared."""
         group = _valid_mbid(release_group_id)
         if not group:
             return {"classification": "invalid_request", "tracks": []}
@@ -414,7 +419,11 @@ class MusicBrainzClient:
         def count(release: JsonDict) -> int:
             return sum(_integer(medium.get("track-count")) for medium in release.get("media") or [] if isinstance(medium, dict))
 
-        best = min(releases, key=lambda release: (abs(count(release) - int(track_count or 0)), _text(release.get("date")) or "9999"))
+        remaining = [release for release in releases if _valid_mbid(release.get("id")) not in exclude]
+        if not remaining:
+            return {"classification": "not_found", "tracks": []}
+        best = min(remaining, key=lambda release: (abs(count(release) - int(track_count or 0)), _text(release.get("date")) or "9999"))
+        others = len(remaining) > 1
         release_id = _valid_mbid(best.get("id"))
         if not release_id:
             return {"classification": "invalid_response", "tracks": []}
@@ -427,7 +436,7 @@ class MusicBrainzClient:
             for medium in payload.get("media") or [] if isinstance(medium, dict)
             for track in medium.get("tracks") or [] if isinstance(track, dict)
         ]
-        return {"classification": "complete", "tracks": tracks, "release_id": release_id}
+        return {"classification": "complete", "tracks": tracks, "release_id": release_id, "other_releases": others}
 
     def browse_release_discs(self, mbid: object, *, max_pages: int = 3, page_size: int = 100) -> JsonDict:
         """An artist's releases with their discs (title, position, format, track count),

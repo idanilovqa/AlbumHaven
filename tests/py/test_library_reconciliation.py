@@ -889,25 +889,29 @@ def test_scan_marks_files_under_an_unreadable_folder_unreachable_not_deleted(
 def test_stale_publication_is_limited_to_observed_roots_and_preserves_first_timestamp():
     from music_app.services import scan_cache_persistence
 
-    sql = " ".join(scan_cache_persistence._mark_stale_track_files_sql().casefold().split())
+    candidates = " ".join(scan_cache_persistence._scan_missing_candidates_sql().casefold().split())
+    update = " ".join(scan_cache_persistence._mark_missing_track_files_sql().casefold().split())
 
-    assert "library.library_roots" in sql
-    assert "metadata ->> 'root_id'" in sql
-    assert "observed_root_ids" in sql
-    assert "scan_cache_stale is false" in sql
-    assert "stale_marked_at" in sql
+    assert "library.library_roots" in candidates
+    assert "metadata ->> 'root_id'" in candidates
+    assert "observed_root_ids" in candidates
+    # An already-missing file is rewritten only when its reason changed.
+    assert "scan_cache_stale is false" in update
+    assert "is distinct from reasons.missing_reason" in update
+    assert "stale_marked_at" in update
 
 
 def test_stale_publication_does_not_reference_update_target_from_join_on_clause():
     from music_app.services import scan_cache_persistence
 
-    sql = " ".join(scan_cache_persistence._mark_stale_track_files_sql().casefold().split())
+    sql = " ".join(scan_cache_persistence._mark_missing_track_files_sql().casefold().split())
 
-    # Roots are joined while choosing candidates; the update itself joins only that result.
-    candidates, update_clause = sql.split("update library.local_track_files", 1)
+    # Roots are joined while choosing candidates; the update itself joins only the reasons.
+    update_clause = sql.split("update library.local_track_files", 1)[1]
     from_clause, where_clause = update_clause.split(" where ", 1)
-    assert from_clause.strip().endswith("from candidates")
-    assert "library.local_track_files.id = candidates.id" in where_clause
+    assert from_clause.strip().endswith("from reasons")
+    assert "library.local_track_files.id = reasons.id" in where_clause
+    candidates = " ".join(scan_cache_persistence._scan_missing_candidates_sql().casefold().split())
     assert "on library.library_roots.id = library.local_track_files.library_root_id" in candidates
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import logging
@@ -14,7 +14,7 @@ from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
-from music_app.services.library_reachability import library_root_missing_reason
+from music_app.services.library_reachability import missing_reasons
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
@@ -696,13 +696,10 @@ class PostgresScanCacheAdapter:
                 subtrees = sorted(stale_targets["subtrees"])
                 if not paths and not subtrees:
                     continue
-                stale_rows = connection.execute(
-                    _mark_targeted_track_files_stale_sql(),
+                stale_rows = _mark_missing_track_files(connection, connection.execute(
+                    _targeted_missing_candidates_sql(),
                     {
                         "root_id": stale_root_id,
-                        "missing_reason": library_root_missing_reason(_row_mapping(
-                            _first_row(connection.execute(_library_root_path_sql(), {"root_id": stale_root_id}))
-                        ).get("root_path")),
                         "deleted_paths": paths,
                         "deleted_subtrees": subtrees,
                         "active_paths": sorted(
@@ -710,7 +707,7 @@ class PostgresScanCacheAdapter:
                         ),
                         "source": _SOURCE,
                     },
-                ).fetchall()
+                ).fetchall())
                 inventory_changed = inventory_changed or bool(stale_rows)
                 affected_album_keys.update(
                     str(_row_mapping(row).get("affected_album_key") or "").strip()
@@ -2330,25 +2327,21 @@ class PostgresScanCacheAdapter:
                     if (payload := _row_mapping(row)).get("private_path")
                 }
             if publish_paths is None:  # a cache update never marks files stale
-                connection.execute(
-                    _mark_stale_track_files_sql(),
-                    {
-                        "current_paths": current_private_paths,
-                        "current_path_count": len(current_private_paths),
-                        "source": _SOURCE,
-                        "observed_root_ids": sorted(observed_library_root_ids or set()),
-                        "unreachable_root_ids": list((unreachable_scope or {}).get("root_ids") or []),
-                        "unreachable_paths": list((unreachable_scope or {}).get("paths") or []),
-                        "stale_metadata": _jsonb(
-                            {
-                                "scan_cache": {
-                                    "source": _SOURCE,
-                                    "stale": True,
-                                    "stale_marked_at": datetime.now(timezone.utc).isoformat(),
-                                }
-                            }
-                        ),
-                    },
+                unreachable_root_ids = list((unreachable_scope or {}).get("root_ids") or [])
+                _mark_missing_track_files(
+                    connection,
+                    connection.execute(
+                        _scan_missing_candidates_sql(),
+                        {
+                            "current_paths": current_private_paths,
+                            "current_path_count": len(current_private_paths),
+                            "source": _SOURCE,
+                            "observed_root_ids": sorted(observed_library_root_ids or set()),
+                            "unreachable_root_ids": unreachable_root_ids,
+                        },
+                    ).fetchall(),
+                    unreachable_root_ids=unreachable_root_ids,
+                    unreachable_paths=list((unreachable_scope or {}).get("paths") or []),
                 )
             connection.execute(_retire_placeholder_albums_sql(), {"album_ids": None})
             relation_source_rows = list(
@@ -7920,21 +7913,10 @@ def _upsert_local_track_file_sql() -> str:
     """
 
 
-def _library_root_path_sql() -> str:
+def _scan_missing_candidates_sql() -> str:
+    """Published files in the scanned roots that the walk did not report, including ones
+    already missing, so a full scan rechecks every missing file's reason."""
     return """
-        select library.library_roots.root_path
-        from library.library_roots
-        where library.library_roots.metadata ->> 'root_id' = %(root_id)s
-        order by library.library_roots.is_active desc
-        limit 1
-    """
-
-
-def _mark_stale_track_files_sql() -> str:
-    return """
-        -- A published file the walk did not report is missing: "unreachable" when its root or a
-        -- folder above it could not be read, otherwise "deleted". Rows are never removed here.
-        -- stale_marked_at is written only on the first active-to-stale transition.
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -7944,24 +7926,13 @@ def _mark_stale_track_files_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
-        ),
-        candidates as (
-          select library.local_track_files.id,
-            case
-              when coalesce(
-                nullif(library.library_roots.metadata ->> 'root_id', ''),
-                library.local_track_files.metadata ->> 'library_root_id'
-              ) = any(%(unreachable_root_ids)s::text[])
-                or exists (
-                  select 1 from unnest(%(unreachable_paths)s::text[]) as failed(path)
-                  where lower(replace(library.local_track_files.private_path, E'\\\\', '/'))
-                        = lower(rtrim(replace(failed.path, E'\\\\', '/'), '/'))
-                     or starts_with(
-                          lower(replace(library.local_track_files.private_path, E'\\\\', '/')),
-                          lower(rtrim(replace(failed.path, E'\\\\', '/'), '/')) || '/')
-                )
-              then 'unreachable' else 'deleted'
-            end as missing_reason
+        )
+          select library.local_track_files.id, library.local_track_files.private_path,
+            coalesce(
+              nullif(library.library_roots.metadata ->> 'root_id', ''),
+              library.local_track_files.metadata ->> 'library_root_id'
+            ) as root_id,
+            library.library_roots.root_path
           from library.local_track_files
           join library.local_tracks on library.local_tracks.id = library.local_track_files.track_id
           join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id
@@ -7985,35 +7956,6 @@ def _mark_stale_track_files_sql() -> str:
                 where current_file.private_path = library.local_track_files.private_path
               )
             )
-        )
-        update library.local_track_files
-           set metadata = jsonb_set(
-                 coalesce(library.local_track_files.metadata, '{}'::jsonb),
-                 '{scan_cache}',
-                 coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
-                   || jsonb_build_object(
-                   'source', %(source)s,
-                   'stale', true,
-                   'stale_marked_at', coalesce(
-                     library.local_track_files.metadata
-                       #>> '{scan_cache,stale_marked_at}',
-                     now()::text
-                   ),
-                   'missing_reason', candidates.missing_reason,
-                   'missing_checked_at', now()::text
-                 ),
-                 true
-               ),
-               last_seen_at = case when library.local_track_files.scan_cache_stale
-                 then library.local_track_files.last_seen_at else now() end
-        from candidates
-        where library.local_track_files.id = candidates.id
-          -- An already-missing file is rewritten only when its reason changed.
-          and (
-            library.local_track_files.scan_cache_stale is false
-            or library.local_track_files.metadata #>> '{scan_cache,missing_reason}'
-               is distinct from candidates.missing_reason
-          );
     """
 
 
@@ -8066,7 +8008,8 @@ def _synchronize_targeted_local_album_featured_artists_sql() -> str:
     """
 
 
-def _mark_targeted_track_files_stale_sql() -> str:
+def _targeted_missing_candidates_sql() -> str:
+    """Published files a watcher batch reports deleted, including ones already missing."""
     return r"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -8077,9 +8020,9 @@ def _mark_targeted_track_files_stale_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
-        ),
-        matched_files as (
-          select library.local_track_files.id
+        )
+          select library.local_track_files.id, library.local_track_files.private_path,
+                 %(root_id)s::text as root_id, library.library_roots.root_path
           from library.local_track_files
           join library.local_tracks
             on library.local_tracks.id = library.local_track_files.track_id
@@ -8093,7 +8036,6 @@ def _mark_targeted_track_files_stale_sql() -> str:
                   library.local_track_files.metadata ->> 'library_root_id'
                 ) = %(root_id)s
             and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
-            and library.local_track_files.scan_cache_stale is false
             and library.local_track_files.private_path
               <> all(%(active_paths)s::text[])
             and (
@@ -8107,6 +8049,20 @@ def _mark_targeted_track_files_stale_sql() -> str:
                 )
               )
             )
+    """
+
+
+def _mark_missing_track_files_sql() -> str:
+    """Mark files missing with their reason; an already-missing file changes only its reason.
+
+    Rows are never removed here. stale_marked_at is written only on the first
+    active-to-missing transition. Returns one row per touched album (a null key for
+    loose tracks), since removing those is still an inventory change.
+    """
+    return """
+        with reasons as (
+          select id, missing_reason
+          from unnest(%(ids)s::bigint[], %(reasons)s::text[]) as reason(id, missing_reason)
         ),
         updated_files as (
           update library.local_track_files
@@ -8115,25 +8071,29 @@ def _mark_targeted_track_files_stale_sql() -> str:
                    '{scan_cache}',
                    coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
                      || jsonb_build_object(
-                     'source', %(source)s,
+                     'source', %(source)s::text,
                      'stale', true,
                      'stale_marked_at', coalesce(
                        library.local_track_files.metadata
                          #>> '{scan_cache,stale_marked_at}',
                        now()::text
                      ),
-                     'missing_reason', %(missing_reason)s::text,
+                     'missing_reason', reasons.missing_reason,
                      'missing_checked_at', now()::text
                    ),
                    true
                  ),
-                 last_seen_at = now()
-          from matched_files
-          where library.local_track_files.id = matched_files.id
+                 last_seen_at = case when library.local_track_files.scan_cache_stale
+                   then library.local_track_files.last_seen_at else now() end
+          from reasons
+          where library.local_track_files.id = reasons.id
+            and (
+              library.local_track_files.scan_cache_stale is false
+              or library.local_track_files.metadata #>> '{scan_cache,missing_reason}'
+                 is distinct from reasons.missing_reason
+            )
           returning library.local_track_files.track_id
         )
-        -- Loose tracks have no album, but removing them is still an inventory
-        -- change: return one row per touched album, or a null key for loose tracks.
         select distinct library.local_albums.album_key as affected_album_key
         from updated_files
         join library.local_tracks
@@ -8141,3 +8101,26 @@ def _mark_targeted_track_files_stale_sql() -> str:
         left join library.local_albums
           on library.local_albums.id = library.local_tracks.album_id;
     """
+
+
+def _mark_missing_track_files(
+    connection: Any,
+    candidates: list[object],
+    *,
+    unreachable_root_ids: Iterable[str] = (),
+    unreachable_paths: Iterable[str] = (),
+) -> list[object]:
+    """Decide each candidate's reason on disk (once per folder), then mark them in one update."""
+    rows = [_row_mapping(row) for row in candidates]
+    if not rows:
+        return []
+    reasons = missing_reasons(
+        ((str(row["private_path"]), str(row.get("root_id") or ""), str(row.get("root_path") or ""))
+         for row in rows),
+        unreachable_root_ids=unreachable_root_ids,
+        unreachable_paths=unreachable_paths,
+    )
+    return connection.execute(
+        _mark_missing_track_files_sql(),
+        {"ids": [int(row["id"]) for row in rows], "reasons": reasons, "source": _SOURCE},
+    ).fetchall()

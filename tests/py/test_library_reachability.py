@@ -10,6 +10,23 @@ def test_a_missing_file_under_a_readable_root_was_deleted(tmp_path):
     assert missing_reason_for_path(root, root / "Gone" / "Album" / "01.flac") == "deleted"
 
 
+def test_missing_files_are_decided_once_per_folder(tmp_path, monkeypatch):
+    from music_app.services import library_reachability
+
+    root = tmp_path / "Music"
+    (root / "Artist").mkdir(parents=True)
+    probes = []
+    real = library_reachability.folder_is_readable
+    monkeypatch.setattr(library_reachability, "folder_is_readable", lambda path: probes.append(path) or real(path))
+    rows = [(str(root / "Artist" / "Album" / f"{index:02}.flac"), "main", str(root)) for index in range(50)]
+    rows.append((str(root / "Gone" / "x.flac"), "unplugged", str(tmp_path / "Unplugged")))
+
+    reasons = library_reachability.missing_reasons(rows, unreachable_paths=[str(root / "Artist" / "Locked")])
+
+    assert reasons == ["deleted"] * 50 + ["unreachable"]
+    assert len(probes) <= 3, "the root, the artist folder and the unplugged root are each probed once"
+
+
 def test_a_missing_file_whose_root_cannot_be_read_is_unreachable(tmp_path):
     assert missing_reason_for_path(tmp_path / "Unplugged", tmp_path / "Unplugged" / "Album" / "01.flac") == "unreachable"
     assert missing_reason_for_path(None, tmp_path / "Album" / "01.flac") == "unreachable"

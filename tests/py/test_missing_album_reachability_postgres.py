@@ -5,6 +5,7 @@ Missing by every scan source, keeps all its data until the user confirms removal
 as it was when its files come back. Album Details "Re-scan" restores one album, also from a
 moved folder.
 """
+import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,6 +171,81 @@ def test_live_watcher_deletion_marks_the_album_missing_and_keeps_its_data(watche
     assert _files(fixture)[demos["path"]][:3] == (True, "deleted", album_key)
     assert ("Transatlantic", "The Transatlantic Demos", "missing") in _gallery(fixture)[1]
     assert _rating(fixture, album_key) == 8
+
+
+def _link_folder(link, target):
+    """A folder that lives elsewhere: a junction on Windows, a symlink elsewhere."""
+    target.mkdir(parents=True, exist_ok=True)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def test_live_album_on_a_dropped_subfolder_share_is_unreachable_while_the_root_is_up(watcher_repair_inventory, tmp_path):
+    fixture = watcher_repair_inventory
+    share = tmp_path / "Share"
+    _link_folder(Path(fixture.roots[0]["path"]) / "Owner" / "On Share", share)
+    kept = fixture.entry("Owner/Kept/01.flac", album="Kept Album")
+    shared = fixture.entry("Owner/On Share/Shared/01.flac", album="Shared Album")
+    fixture.seed(kept, shared)
+    shared_key = _files(fixture)[shared["path"]][2]
+    _rate(fixture, shared_key, 6)
+
+    # The share drops out; the root and its other folders still answer.
+    shutil.rmtree(share)
+    _scan(fixture, [kept])
+
+    files = _files(fixture)
+    assert files[shared["path"]][:2] == (True, "unreachable")
+    assert files[kept["path"]][:2] == (False, None)
+    assert _detail(fixture, shared_key)["missing_reason"] == "unreachable"
+
+    # The share returns: the album comes back as it was.
+    share.mkdir()
+    restored = fixture.entry("Owner/On Share/Shared/01.flac", album="Shared Album")
+    _scan(fixture, [kept, restored])
+    assert _files(fixture)[shared["path"]][:3] == (False, None, shared_key)
+    assert _rating(fixture, shared_key) == 6
+
+
+def test_live_watcher_deletes_while_the_drive_drops_are_unreachable_and_recovery_rechecks_them(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    root = Path(fixture.roots[0]["path"])
+    going = fixture.entry("Owner/Going Down/01.flac", album="Going Down Album")
+    back = fixture.entry("Owner/Back Again/01.flac", album="Back Again Album")
+    gone = fixture.entry("Owner/Really Gone/01.flac", album="Really Gone Album")
+    fixture.seed(going, back, gone)
+    reconcile = _reconcile(fixture, {})
+
+    def deleted(*folders):
+        return SimpleNamespace(root_id="repair-main", paths=(), deleted_paths=(),
+                               deleted_subtrees=tuple(Path(folder) for folder in folders), moves=())
+
+    # An ordinary deletion under a readable root is "deleted"; the user then puts the files back.
+    reconcile(deleted(Path(back["path"]).parent))
+    assert _files(fixture)[back["path"]][:2] == (True, "deleted")
+
+    # Delete events still arriving while the drive goes down.
+    offline = root.with_name(root.name + "-offline")
+    root.rename(offline)
+    reconcile(deleted(Path(going["path"]).parent))
+    assert _files(fixture)[going["path"]][:2] == (True, "unreachable")
+
+    # The drive returns; one album really was deleted meanwhile. The recovery catch-up
+    # re-reads the root, restoring every file that is there and rechecking every reason.
+    offline.rename(root)
+    shutil.rmtree(Path(gone["path"]).parent)
+    _reconcile(fixture, {going["path"]: going, back["path"]: back})(SimpleNamespace(
+        root_id="repair-main", paths=(root,), deleted_paths=(), deleted_subtrees=(root,), moves=(),
+    ))
+    files = _files(fixture)
+    assert files[going["path"]][:2] == (False, None)
+    assert files[back["path"]][:2] == (False, None)
+    assert files[gone["path"]][:2] == (True, "deleted")
 
 
 def test_live_rescan_restores_a_moved_album_with_its_identity_and_data(watcher_repair_inventory):

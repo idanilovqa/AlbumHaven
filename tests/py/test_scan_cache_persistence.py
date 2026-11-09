@@ -257,12 +257,10 @@ def test_structural_album_tag_edit_promotes_renamed_file_path_to_private_path():
     )
 
 
-def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
+def test_missing_file_marking_preserves_nested_scan_cache_file_entry():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(
-        scan_cache_persistence._mark_targeted_track_files_stale_sql()
-    )
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_missing_track_files_sql())
 
     assert "jsonb_set(" in normalized_sql
     assert "'{scan_cache}'" in normalized_sql
@@ -270,7 +268,15 @@ def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "jsonb_build_object(" in normalized_sql
     assert "'stale', true" in normalized_sql
     assert "'{scan_cache,stale_marked_at}'" in normalized_sql
+    assert "'missing_reason', reasons.missing_reason" in normalized_sql
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
+
+
+def test_targeted_missing_candidates_select_only_the_reported_files():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._targeted_missing_candidates_sql())
+
     assert (
         "coalesce( nullif(library.library_roots.metadata ->> 'root_id', ''), "
         "library.local_track_files.metadata ->> 'library_root_id' ) = %(root_id)s"
@@ -283,21 +289,10 @@ def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     assert " like " not in normalized_sql
 
 
-def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
-    from music_app.services import scan_cache_persistence
-
-    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
-
-    assert "jsonb_set(" in normalized_sql
-    assert "coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)" in normalized_sql
-    assert "'stale', true" in normalized_sql
-    assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
-
-
 def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+    normalized_sql = _normalized_sql(scan_cache_persistence._scan_missing_candidates_sql())
 
     # `<> all(array)` compared every candidate file with every current path.
     assert "<> all(" not in normalized_sql
@@ -331,7 +326,7 @@ def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+    normalized_sql = _normalized_sql(scan_cache_persistence._scan_missing_candidates_sql())
 
     assert (
         "coalesce( nullif(btrim(library.local_track_files.metadata #>> "
@@ -387,6 +382,8 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
                                    "album": "New Album", "album_artist": "Artist", "artist": "Artist",
                                    "title": "Track", "track_number": 1, "disc_number": 1},
                 }])
+            if sql == scan_cache_persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{"id": 1, "private_path": "deleted.flac", "root_id": "main", "root_path": ""}])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::old album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -619,6 +616,8 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
+            if sql == scan_cache_persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{"id": 1, "private_path": "deleted.flac", "root_id": "main", "root_path": ""}])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::surviving album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -2891,10 +2890,11 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
     assert sum(track_file_batch_sizes) == row_counts["track_file"]
     assert len(pipelined_execute_indexes) + len(track_execute_indexes) + len(track_file_execute_indexes) == 1_219
     assert max(track_execute_indexes) < min(track_file_execute_indexes)
+    # Missing files are found after every file row is written (marked only when any exist).
     stale_mark_index = next(
         index
         for index, (sql, _params) in enumerate(connection.executed)
-        if "update library.local_track_files" in sql
+        if sql == scan_cache_persistence._scan_missing_candidates_sql()
     )
     assert max(track_file_execute_indexes) < stale_mark_index
     relation_source_index = next(
@@ -2942,7 +2942,7 @@ def test_cache_update_publishes_only_the_changed_files_albums(monkeypatch):
     executed_sql = [sql for sql, _params in connection.executed]
     assert scan_cache_persistence._synchronize_local_album_featured_artists_sql() not in executed_sql
     assert scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql() in executed_sql
-    assert scan_cache_persistence._mark_stale_track_files_sql() not in executed_sql
+    assert scan_cache_persistence._scan_missing_candidates_sql() not in executed_sql
 
 
 def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
@@ -3031,7 +3031,7 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert any("delete from library.local_album_featured_artists" in sql for sql in executed_sql)
     assert any("insert into library.local_tracks" in sql for sql in executed_sql)
     assert any("insert into library.local_track_files" in sql for sql in executed_sql)
-    assert any("update library.local_track_files" in sql for sql in executed_sql)
+    assert scan_cache_persistence._scan_missing_candidates_sql() in executed_sql
     # The full publication advances the inventory revision as its last write,
     # so a whole-library save prepared before it is superseded, not applied.
     assert executed_sql[-1] == scan_cache_persistence._increment_inventory_mutation_revision_sql()
@@ -3063,7 +3063,8 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert cache_only_params["metadata"]["scan_cache"]["cache_only"] is True
     assert cache_only_params["metadata"]["scan_cache"]["file_entry"]["exception_type"] == "missing_tags"
     stale_params = [
-        params for sql, params in connection.executed if "update library.local_track_files" in sql
+        params for sql, params in connection.executed
+        if sql == scan_cache_persistence._scan_missing_candidates_sql()
     ][0]
     assert stale_params["current_paths"] == [
         "C:/Music/Broadcast/Tender Buttons/01 I Found The F.mp3",
@@ -5132,7 +5133,9 @@ def test_targeted_watcher_preserves_detached_prewrite_scope(monkeypatch, change)
                 assert 'library.local_tracks.library_id = bootstrap_context.library_id' in sql
                 return FakeCursor([{'private_path': path, 'album_id': None, 'album_key': None}]
                                   if path in params['active_paths'] else [])
-            if sql == persistence._mark_targeted_track_files_stale_sql():
+            if sql == persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{'id': 1, 'private_path': path, 'root_id': 'main', 'root_path': ''}])
+            if sql == persistence._mark_missing_track_files_sql():
                 return FakeCursor([{'affected_album_key': None}])
             if 'as inventory_mutation_revision' in _normalized_sql(sql):
                 return FakeCursor([{'inventory_mutation_revision': 1}])

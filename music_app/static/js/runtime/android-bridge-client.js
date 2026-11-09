@@ -316,7 +316,9 @@ function androidNativeQueueWindow(track) {
   const following = tracks.slice(start + 1, start + ANDROID_NATIVE_QUEUE_LIMIT);
   // Following tracks keep their place first; earlier ones fill what the limit leaves.
   const earlier = tracks.slice(Math.max(0, start - (ANDROID_NATIVE_QUEUE_LIMIT - 1 - following.length)), start);
-  const items = [...earlier, track, ...following];
+  // A track started from its row carries no album year; its queue entry does.
+  const current = track.year || !tracks[start].year ? track : { ...track, year: tracks[start].year };
+  const items = [...earlier, current, ...following];
   const groups = items.map(() => 0);
   const albums = new Set([String(queue?.albumRef || '')]);
   while (items.length < ANDROID_NATIVE_QUEUE_LIMIT && typeof resolveNextPlaybackContextQueue === 'function') {

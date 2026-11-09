@@ -151,6 +151,11 @@ test('the album year reaches only an album-details-capable shell', async () => {
   const current = createHarness();
   await current.api.start(dated[0]);
   assert.equal(commands(current.bridge, 'playback.loadQueue')[0].payload.items[0].year, '1999');
+  // A track started from its row has no year; its album queue entry gives it.
+  const fromRow = createHarness();
+  fromRow.context.state.player.playbackQueue = { tracks: dated, currentIndex: 0 };
+  await fromRow.api.start(tracks[0]);
+  assert.ok(commands(fromRow.bridge, 'playback.loadQueue')[0].payload.items.every(item => item.year === '1999'));
 
   const withoutDetails = {
     ...handshakePayload,

@@ -8206,8 +8206,9 @@ def _top_search_selected_artist(
 
     counts = [owned_album_count(group) for group in artist_groups if str(group.get("artist") or "").strip()]
     best = max(counts)
-    # Ties, and groups owning nothing, keep the existing group order.
-    return artists[counts.index(best)] if best else artists[0]
+    # Ties keep the existing group order. When no artist owns a matching album (the
+    # title is only a track on someone else's compilation), no artist is selected.
+    return artists[counts.index(best)] if best else ""
 
 
 def _artists_sidebar_from_groups(

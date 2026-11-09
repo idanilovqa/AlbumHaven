@@ -18582,10 +18582,14 @@ def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
     assert browse._top_search_selected_artist(
         groups, query="Armored Lite", canonical_to_aliases={"Armalite": ["Armored Lite"]},
     ) == "Armalite"
-    # Equal ownership, or groups owning nothing, keep the existing order.
+    # Equal ownership keeps the existing order.
     tied = [{"artist": "CAP", "albums": [{"album_artist": "CAP"}]}, {"artist": "Nemo", "albums": [{"album_artist": "Nemo"}]}]
     assert browse._top_search_selected_artist(tied, query="Divine Comedy") == "CAP"
-    assert browse._top_search_selected_artist(groups[:2], query="Divine Comedy") == "Armalite"
+    # Owner (2026-11-09): "tender" matched only a track on a various-artists
+    # compilation, so no artist owns it and none is selected.
+    assert browse._top_search_selected_artist(groups[:2], query="Divine Comedy") == ""
+    christmas = [{"name": "The Best Christmas Album In The World Ever", "album_artist": "Various Artists"}]
+    assert browse._top_search_selected_artist([{"artist": "Broadcast", "albums": christmas}], query="tender") == ""
 
 def test_a_display_correction_is_a_problematic_file_until_written():
     from music_app.services.library_browse_postgres import _physical_file_problem_reasons

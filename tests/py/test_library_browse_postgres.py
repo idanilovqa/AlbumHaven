@@ -15232,6 +15232,49 @@ def test_problematic_files_snapshot_is_stored_only_by_writer_instances(monkeypat
     assert stored == {"items": [{"key": "a"}], browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint"}
 
 
+def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_lists_albums(monkeypatch):
+    # Owner PERF-4: the whole-library candidate query took seconds on every change; the outdated
+    # stored list now only chooses the page's albums, which are evaluated against current data.
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/db"})
+    loaded = {}
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "album_key = any" in sql:
+                assert params == {"keys": ["artist::first", "artist::second"]}
+                return SimpleNamespace(fetchall=lambda: [{"id": 7}, {"id": 9}])
+            return SimpleNamespace(fetchall=lambda: [])
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "_get_cached_utility_projection", lambda _kind: None)
+    monkeypatch.setattr(repository, "_get_stale_utility_projection", lambda _kind: None)
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda allow_outdated=False: {
+        "items": [{"key": "artist::first"}, {"key": "artist::second"}, {"key": "artist::third"}],
+    } if allow_outdated else None)
+    monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
+    monkeypatch.setattr(repository, "_problematic_candidate_album_ids",
+                        lambda _connection: pytest.fail("the whole-library candidate query must not run"))
+    monkeypatch.setattr(repository, "_load_problematic_file_rows",
+                        lambda *, connection, album_ids: loaded.setdefault("album_ids", album_ids) and [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "_build_problematic_files_payload_from_rows",
+                        lambda **_kwargs: {"items": [{"key": "artist::first"}], "count": 1})
+
+    payload = repository.build_problematic_files_page(limit=2)
+
+    assert loaded["album_ids"] == [7, 9]
+    assert payload["projection_cache_status"] == "revalidated"
+    assert payload["complete"] is False
+
+
 def test_problematic_candidate_ids_are_computed_once_per_library_change():
     from music_app.services import library_browse_postgres as browse
 

@@ -2795,17 +2795,36 @@ class PostgresLibraryBrowseRepository:
             cached_payload["total_candidate_count"] = None
             cached_payload["projection_cache_status"] = status
             return cached_payload
+        # After a library change the stored list is out of date, but it still names the albums the
+        # first page most likely shows. Re-evaluating just those albums answers in well under a
+        # second, against seconds for the whole-library candidate query (owner PERF-4); every row
+        # shown is current, and the complete list replaces the page moments later.
+        status = "bounded"
+        outdated_snapshot = self._load_problematic_files_snapshot(allow_outdated=True)
+        outdated_keys = [
+            str(item.get("key") or "") for item in (outdated_snapshot or {}).get("items") or []
+        ][:limit]
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            album_ids = [
-                int(_row_mapping(row)["album_id"])
-                for row in connection.execute(
-                    _problematic_page_album_ids_sql(),
-                    {"candidate_ids": sorted(self._problematic_candidate_album_ids(connection)), "limit": limit},
-                ).fetchall()
-            ]
+            if outdated_keys:
+                status = "revalidated"
+                album_ids = [
+                    int(_row_mapping(row)["id"])
+                    for row in connection.execute(
+                        "select id from library.local_albums where album_key = any(%(keys)s::text[])",
+                        {"keys": outdated_keys},
+                    ).fetchall()
+                ]
+            else:
+                album_ids = [
+                    int(_row_mapping(row)["album_id"])
+                    for row in connection.execute(
+                        _problematic_page_album_ids_sql(),
+                        {"candidate_ids": sorted(self._problematic_candidate_album_ids(connection)), "limit": limit},
+                    ).fetchall()
+                ]
             payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(
@@ -2820,7 +2839,7 @@ class PostgresLibraryBrowseRepository:
             )
         payload["complete"] = False
         payload["total_candidate_count"] = None
-        payload["projection_cache_status"] = "bounded"
+        payload["projection_cache_status"] = status
         return payload
 
     def build_problematic_files_search(self, query: str) -> dict[str, object]:
@@ -4052,7 +4071,12 @@ class PostgresLibraryBrowseRepository:
             and self._database_url not in _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES
         )
 
-    def _load_problematic_files_snapshot(self) -> dict[str, object] | None:
+    def _load_problematic_files_snapshot(self, *, allow_outdated: bool = False) -> dict[str, object] | None:
+        """The last stored list; one from before a later library change only when ``allow_outdated``.
+
+        An outdated list is never served as such: it may name albums since merged, split or
+        removed. It may only choose which albums a first page re-evaluates.
+        """
         if not self._problematic_snapshot_available():
             return None
         try:
@@ -4071,10 +4095,8 @@ class PostgresLibraryBrowseRepository:
         if not isinstance(payload, Mapping):
             return None
         payload = dict(payload)
-        # A list stored before any later library change is never served: it
-        # may list albums since merged, split or removed.
-        if not current_fingerprint or payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None) != current_fingerprint:
-            return None
+        if payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None) != current_fingerprint or not current_fingerprint:
+            return payload if allow_outdated else None
         return payload
 
     def _queue_problematic_files_snapshot_store(self, payload: Mapping[str, object], fingerprint: str) -> None:

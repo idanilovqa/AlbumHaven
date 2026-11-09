@@ -219,3 +219,35 @@ test('connected slot from the shell becomes the approved success status', async 
   assert.equal(api.androidSettings.status.severity, 'success');
   assert.equal(api.androidSettings.status.title, 'Connected to sandbox3.');
 });
+
+test('a shell offering app.copy.v1 hands the page copy its reports and its forget command', async () => {
+  const bridge = fakeBridge(message => (message.name === 'bridge.handshake'
+    ? { ...handshakePayload, appCopy: { forget: true } }
+    : { ok: true }));
+  const context = loadRuntime({ bridge });
+  const adopted = [];
+  let forgotten = 0;
+  context.window.AlbumHavenAppCopy = {
+    adoptShell: (info, port) => adopted.push({ info, port }),
+    forget: async () => { forgotten += 1; return {}; },
+  };
+  await context.api.connectAndroidBridge();
+  assert.equal(adopted.length, 1);
+  assert.deepEqual({ ...adopted[0].info }, { forget: true });
+  await adopted[0].port.report(true);
+  const state = bridge.sent.find(message => message.name === 'copy.state');
+  assert.deepEqual({ ...state.payload }, { stored: true });
+  assert.equal(typeof context.api.androidBridge.commands.get('copy.forget'), 'function');
+  await context.api.androidBridge.commands.get('copy.forget')({});
+  assert.equal(forgotten, 1);
+});
+
+test('a shell without app.copy.v1 makes the page drop any copy it kept', async () => {
+  const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: handshakePayload.capabilities.filter(name => name !== 'app.copy.v1') }));
+  const context = loadRuntime({ bridge });
+  const adopted = [];
+  context.window.AlbumHavenAppCopy = { adoptShell: (info, port) => adopted.push({ info, port }), forget: async () => ({}) };
+  await context.api.connectAndroidBridge();
+  assert.deepEqual(adopted, [{ info: null, port: undefined }]);
+  assert.equal(context.api.androidBridge.commands.has('copy.forget'), false);
+});

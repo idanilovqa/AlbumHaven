@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 
 /** Non-secret shell selection; survives app updates and process death. */
-class ShellPreferences(context: Context) : SandboxSlots {
+class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
     private val preferences = context.getSharedPreferences("shell", Context.MODE_PRIVATE)
 
     override val selectedSandboxSlot: Int?
@@ -44,11 +44,28 @@ class ShellPreferences(context: Context) : SandboxSlots {
         return true
     }
 
+    override fun copySavedAt(origin: String): Long? =
+        preferences.getLong(KEY_COPY_SAVED_AT + origin, 0L).takeIf { it > 0L }
+
+    override fun keepCopy(origin: String, savedAt: Long) = preferences.edit { putLong(KEY_COPY_SAVED_AT + origin, savedAt) }
+
+    override fun dropCopy(origin: String) = preferences.edit { remove(KEY_COPY_SAVED_AT + origin) }
+
+    override fun forgetPending(origin: String): Boolean = origin in preferences.getStringSet(KEY_COPY_FORGET, emptySet()).orEmpty()
+
+    override fun setForgetPending(origin: String, pending: Boolean) {
+        val origins = preferences.getStringSet(KEY_COPY_FORGET, emptySet()).orEmpty()
+        if ((origin in origins) == pending) return
+        preferences.edit { putStringSet(KEY_COPY_FORGET, if (pending) origins + origin else origins - origin) }
+    }
+
     companion object {
         const val ASK_OVERLAY = "asked_overlay"
         const val ASK_NOTIFICATIONS = "asked_notifications"
         private const val KEY_UPDATE_PAGE = "update_page"
         private const val KEY_SLOT = "selected_sandbox_slot"
         private const val KEY_CONNECTED = "connected_sandbox_slot"
+        private const val KEY_COPY_SAVED_AT = "app_copy_saved_at:"
+        private const val KEY_COPY_FORGET = "app_copy_forget"
     }
 }

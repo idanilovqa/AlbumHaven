@@ -39,6 +39,15 @@ interface UpdatePort {
     fun install(): Boolean
 }
 
+/** The shell's record of the current origin's copy of its last view (`app.copy.v1`; see [AppCopies]). */
+interface AppCopyPort {
+    /** The page reports whether its origin now has a copy. */
+    fun reported(stored: Boolean)
+
+    /** The page must delete its copy: a sandbox switch left this origin while no page could. */
+    val forgetPending: Boolean
+}
+
 /** Validates and answers web messages for one document; call [reset] when a page starts or the Activity goes. */
 class BridgeController(
     private val identity: ShellIdentity,
@@ -48,6 +57,8 @@ class BridgeController(
     private val updates: UpdatePort? = null,
     /** Saves page-built files (`files.save.v1`); null where nothing can store them. */
     private val files: FileSaves? = null,
+    /** Opens pages with a copy at once (`app.copy.v1`); null where the shell does not. */
+    private val copies: AppCopyPort? = null,
 ) {
 
     private val playbackBridge = PlaybackBridge(playback)
@@ -59,17 +70,17 @@ class BridgeController(
     /** Posts to the document that negotiated the bridge; events go nowhere before a handshake. */
     private var eventSink: ((String) -> Unit)? = null
 
-    /** Unanswered `downloads.link` requests to that document, by message ID. */
-    private val downloadLinks = mutableMapOf<String, (String?) -> Unit>()
+    /** Commands to that document still unanswered, by message ID: each one's name and who waits. */
+    private val pageCommands = mutableMapOf<String, Pair<String, (JSONObject?) -> Unit>>()
 
     fun reset() {
         negotiatedProtocol = null
         webProtocols = null
         eventSink = null
         files?.reset()
-        val unanswered = downloadLinks.values.toList()
-        downloadLinks.clear()
-        unanswered.forEach { it(null) }
+        val unanswered = pageCommands.values.toList()
+        pageCommands.clear()
+        unanswered.forEach { (_, done) -> done(null) }
         playback.documentDetached()
     }
 
@@ -77,30 +88,46 @@ class BridgeController(
      * Asks the negotiated document for a cookie-less link to its same-origin [path]
      * (`downloads.link.v1`), which the page requests from the server with its own session. [done]
      * gets the page's answer, or null once the page refuses, the document goes, or
-     * [abandonDownloadLink] gives up. Returns the request's ID, or null, after answering null,
+     * [abandonPageCommand] gives up. Returns the request's ID, or null, after answering null,
      * when no document negotiated. Call on the main thread.
      */
-    fun requestDownloadLink(path: String, done: (String?) -> Unit): String? {
+    fun requestDownloadLink(path: String, done: (String?) -> Unit): String? =
+        askPage(DOWNLOAD_LINK, JSONObject().put("path", path)) { payload ->
+            done((payload?.opt("url") as? String)?.takeIf { payload.opt("ok") == true })
+        }
+
+    /**
+     * Asks the negotiated document to delete its origin's copy (`app.copy.v1`) before a sandbox
+     * switch leaves it. [done] runs once the page answered, the document went, or
+     * [abandonPageCommand] gave up; at once when no document offers the capability.
+     */
+    fun requestCopyForget(done: () -> Unit): String? {
+        if (copies == null) {
+            done()
+            return null
+        }
+        return askPage(APP_COPY_FORGET, JSONObject()) { done() }
+    }
+
+    /** Answers null for a command still unanswered; a later answer from the page is ignored. */
+    fun abandonPageCommand(id: String) {
+        pageCommands.remove(id)?.second?.invoke(null)
+    }
+
+    private fun askPage(name: String, payload: JSONObject, done: (JSONObject?) -> Unit): String? {
         if (eventSink == null || negotiatedProtocol == null) {
             done(null)
             return null
         }
         val id = UUID.randomUUID().toString()
-        downloadLinks[id] = done
-        post("command", id, DOWNLOAD_LINK, JSONObject().put("path", path))
+        pageCommands[id] = name to done
+        post("command", id, name, payload)
         return id
     }
 
-    /** Answers null for a request still unanswered; a later answer from the page is ignored. */
-    fun abandonDownloadLink(id: String) {
-        downloadLinks.remove(id)?.invoke(null)
-    }
-
-    private fun answerDownloadLink(message: BridgeMessage) {
-        if (message.name != DOWNLOAD_LINK || message.protocol != negotiatedProtocol) return
-        val done = downloadLinks.remove(message.id) ?: return
-        val payload = message.payload
-        done((payload.opt("url") as? String)?.takeIf { payload.opt("ok") == true })
+    private fun answerPageCommand(message: BridgeMessage) {
+        if (message.protocol != negotiatedProtocol || pageCommands[message.id]?.first != message.name) return
+        pageCommands.remove(message.id)?.second?.invoke(message.payload)
     }
 
     /** Sends a native playback event to the negotiated document. Call on the main thread. */
@@ -139,7 +166,7 @@ class BridgeController(
             return
         }
         if (message.type == "response") {
-            answerDownloadLink(message)
+            answerPageCommand(message)
             return
         }
         if (message.type != "command") return
@@ -159,6 +186,8 @@ class BridgeController(
                 update(message, protocol, updates, reply)
             message.name == FILES_SAVE && files != null ->
                 files.handle(message.payload) { respond(message, protocol, it, reply) }
+            message.name == APP_COPY_STATE && copies != null ->
+                reportCopy(message, protocol, copies, reply)
             else -> respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
         }
     }
@@ -220,6 +249,7 @@ class BridgeController(
             .put("origin", host.selectedOrigin())
             .put("playback", PlaybackBridge.snapshotJson(playback.snapshot))
         updates?.let { payload.put("updates", it.state.toJson()) }
+        copies?.let { payload.put("appCopy", JSONObject().put("forget", it.forgetPending)) }
         if (identity.channel == ShellChannel.SANDBOX) {
             payload.put(
                 "sandbox",
@@ -238,6 +268,17 @@ class BridgeController(
         if (updates != null) add(UPDATES_CAPABILITY)
         add(DOWNLOAD_LINKS_CAPABILITY)
         if (files != null) add(FILES_CAPABILITY)
+        if (copies != null) add(APP_COPY_CAPABILITY)
+    }
+
+    private fun reportCopy(message: BridgeMessage, protocol: Int, copies: AppCopyPort, reply: (String) -> Unit) {
+        val stored = message.payload.opt("stored") as? Boolean
+        if (stored == null || message.payload.length() != 1) {
+            reply(BridgeCodec.failure(message, protocol, "invalid_payload", "Invalid copy state"))
+            return
+        }
+        copies.reported(stored)
+        reply(BridgeCodec.success(message, protocol))
     }
 
     /** Commands take no arguments; progress and results follow as `updates.state` events. */
@@ -286,6 +327,9 @@ class BridgeController(
         /** Same-origin downloads go through a cookie-less link the shell asks the page for. */
         const val DOWNLOAD_LINKS_CAPABILITY = "downloads.link.v1"
         const val FILES_CAPABILITY = "files.save.v1"
+        const val APP_COPY_CAPABILITY = "app.copy.v1"
+        private const val APP_COPY_STATE = "copy.state"
+        private const val APP_COPY_FORGET = "copy.forget"
         private const val DOWNLOAD_LINK = "downloads.link"
         private const val FILES_SAVE = "files.save"
         private const val UPDATE_CHECK = "updates.check"

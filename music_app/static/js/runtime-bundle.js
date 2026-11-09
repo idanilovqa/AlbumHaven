@@ -12138,7 +12138,8 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "downloads.link.v1": "optional",
-    "files.save.v1": "optional"
+    "files.save.v1": "optional",
+    "app.copy.v1": "optional"
   }
 } /* end android-bridge-policy */;
 const ANDROID_BRIDGE_PROTOCOL_MIN = ANDROID_BRIDGE_POLICY.protocolMin;
@@ -12262,6 +12263,7 @@ function connectAndroidBridge() {
       androidBridge.info = info;
       if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
       if (hasAndroidCapability(ANDROID_DOWNLOAD_LINKS_CAPABILITY)) androidBridge.commands.set('downloads.link', answerAndroidDownloadLink);
+      adoptAndroidAppCopy(info);
       // Settings (android-settings.js) takes the shell's update and sandbox state from every success.
       if (typeof adoptAndroidSettingsHandshake === 'function') adoptAndroidSettingsHandshake(info);
       return info;
@@ -12273,6 +12275,25 @@ function connectAndroidBridge() {
     });
   }
   return androidBridge.connection;
+}
+
+// ---- The app's copy of the last view (app.copy.v1) ----
+// A shell that offers it skips its Connecting screen while this origin has a copy (app-copy.js
+// keeps it). The page tells the shell whether one exists; the shell asks it to forget the copy
+// before a sandbox switch, and says in the handshake when a switch happened while no page could.
+const ANDROID_APP_COPY_CAPABILITY = 'app.copy.v1';
+
+function adoptAndroidAppCopy(info) {
+  const appCopy = window.AlbumHavenAppCopy;
+  if (!appCopy) return;
+  if (!hasAndroidCapability(ANDROID_APP_COPY_CAPABILITY)) {
+    appCopy.adoptShell(null);
+    return;
+  }
+  androidBridge.commands.set('copy.forget', () => appCopy.forget());
+  appCopy.adoptShell({ forget: info.appCopy?.forget === true }, {
+    report: stored => sendAndroidBridgeCommand('copy.state', { stored }),
+  });
 }
 
 // ---- Cookie-less downloads (downloads.link.v1) ----
@@ -51528,6 +51549,11 @@ if (shouldStartImmediateHydration) {
   }
 }
 
+// A page shown from the Android app's copy brings its view up to date in place once the server
+// answers, keeping its scroll position and open album (app-copy.js).
+window.AlbumHavenAppCopy?.onServerAnswer(() => {
+  void refreshCurrentViewAfterBackgroundCompletion();
+});
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');

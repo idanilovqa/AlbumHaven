@@ -92,3 +92,38 @@ test('desktop cover selection keeps existing local and manual candidates', () =>
   assert.equal(ui.allowsCoverCandidate({ lookup_group: 'manual_links' }), true);
   assert.equal(ui.allowsCoverCandidate({ lookup_group: 'local' }), true);
 });
+
+test('offline read-only mode hides permitted writes until the server answers, and guards their activation', (t) => {
+  t.after(() => { delete globalThis.AlbumHavenAppCopy; });
+  const appended = [];
+  const document = documentFor({
+    allowed_actions: {}, denied_selectors: [], denied_tabs: [], read_only_selectors: ['[data-open-tag-editor]', '#scan-indicator'],
+  });
+  const style = { remove() { this.removed = true; } };
+  Object.assign(document, {
+    createElement: () => ({ ...style }),
+    head: { append: element => appended.push(element) },
+  });
+  // The copy client may decide before this script runs.
+  globalThis.AlbumHavenAppCopy = { isReadOnly: () => true };
+  const ui = install(document);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].id, 'capability-read-only');
+  assert.equal(appended[0].textContent, '[data-open-tag-editor],\n#scan-indicator { display: none !important; }');
+
+  let prevented = 0;
+  const event = {
+    target: { closest: selector => (selector.includes('[data-open-tag-editor]') ? {} : null) },
+    preventDefault: () => { prevented += 1; },
+    stopImmediatePropagation() {},
+  };
+  document.handlers.get('click')(event);
+  assert.equal(prevented, 1);
+
+  ui.setReadOnly(false);
+  assert.equal(appended[0].removed, true);
+  document.handlers.get('click')(event);
+  assert.equal(prevented, 1);
+  ui.setReadOnly(true);
+  assert.equal(appended.length, 2);
+});

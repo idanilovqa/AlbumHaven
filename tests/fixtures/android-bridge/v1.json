@@ -11,7 +11,8 @@
       "playback.album_details.v1",
       "updates.manual.v1",
       "downloads.link.v1",
-      "files.save.v1"
+      "files.save.v1",
+      "app.copy.v1"
     ],
     "sandbox": [
       "sandbox.select.v1",
@@ -23,7 +24,8 @@
       "playback.album_details.v1",
       "updates.manual.v1",
       "downloads.link.v1",
-      "files.save.v1"
+      "files.save.v1",
+      "app.copy.v1"
     ]
   },
   "handshakeRequest": {
@@ -61,7 +63,8 @@
         "playback.album_details.v1",
         "updates.manual.v1",
         "downloads.link.v1",
-        "files.save.v1"
+        "files.save.v1",
+        "app.copy.v1"
       ],
       "origin": "https://sandbox2.albumhaven.org",
       "playback": {
@@ -84,6 +87,9 @@
       "sandbox": {
         "slot": 2,
         "connectedSlot": null
+      },
+      "appCopy": {
+        "forget": false
       }
     }
   },

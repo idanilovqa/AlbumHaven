@@ -1847,6 +1847,8 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "selection-accent.js",
         "unfolding-action-button.js",
         "startup-progress.js",
+        "app-copy.js",
+        "app-copy-worker.js",
     }
 
 

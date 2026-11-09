@@ -29406,6 +29406,39 @@ function inferOptimisticBlankAlbumMembership(target, tracks) {
     : '';
 }
 
+// Tracks moved into an album that already exists join it, so the optimistic
+// album is the merged one. Only a destination whose track list is fully known
+// can be joined; otherwise the server's answer completes it.
+function joinCompleteDestinationAlbum(bucket, sourceKey, sourceTrackPaths) {
+  const key = String(bucket?.key || '').trim().toLowerCase();
+  if (!key || key === sourceKey) return;
+  const candidates = [
+    typeof getCachedHydratedTrackModalAlbum === 'function' ? getCachedHydratedTrackModalAlbum(key) : null,
+    typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null,
+  ];
+  const destination = candidates.find((candidate) => (
+    candidate
+    && Array.isArray(candidate.tracks)
+    && candidate.tracks.length
+    && !(typeof albumRequiresHydration === 'function' && albumRequiresHydration(candidate))
+  ));
+  if (!destination) return;
+  const movedPaths = new Set(bucket.tracks.map((track) => String(track?.path || '')));
+  const destinationTracks = destination.tracks.filter((track) => {
+    const path = String(track?.path || '');
+    return !movedPaths.has(path) && !sourceTrackPaths.has(path);
+  });
+  if (!destinationTracks.length) return;
+  bucket.tracks = [...deepCloneJson(destinationTracks), ...bucket.tracks];
+  bucket.total_duration_seconds += destinationTracks.reduce((total, track) => total + Number(track?.duration_seconds || 0), 0);
+  if (destination.album_id != null) bucket.album_id = destination.album_id;
+  ['cover_path', 'cover_preview_url'].forEach((field) => {
+    if (destination[field]) bucket[field] = destination[field];
+  });
+  // Server track rows cover only part of the merged list; the tracks describe it.
+  delete bucket.track_rows;
+}
+
 function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTracks = deepCloneJson(Array.isArray(album?.tracks) ? album.tracks : []) || [];
   if (!sourceTracks.length) return [];
@@ -29596,6 +29629,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       groupedAlbum.key = `${baseKey}::year::${year}`;
     }
   });
+  groupedAlbums.forEach((groupedAlbum) => joinCompleteDestinationAlbum(groupedAlbum, sourceKey, sourceTrackPaths));
 
   return groupedAlbums
     .map((bucket) => {
@@ -34986,6 +35020,8 @@ async function confirmManualTagEdit() {
   let failedSaveTaskError = '';
   let failedSavePreservesDraft = false;
   let failedSaveKeptNewTags = false;
+  // No server verdict (connection lost, server restarted): the save may have landed.
+  let saveOutcomeUnknown = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -34998,9 +35034,13 @@ async function confirmManualTagEdit() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload),
+    }).catch((error) => {
+      saveOutcomeUnknown = true;
+      throw error;
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      saveOutcomeUnknown = typeof data.ok !== 'boolean';
       if (
         data.save_task_id
         && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
@@ -35139,6 +35179,17 @@ async function confirmManualTagEdit() {
       );
     }
     console.error('[AlbumHaven][Utilities] Failed to apply manual tag edits.', error);
+    if (saveOutcomeUnknown) {
+      showRepairAlert(
+        'The connection to the server was lost while saving. The tags may already be saved, so the Gallery is reloading to show what the library now holds.',
+        'error',
+      );
+      releaseFailedTagEditViewMutation(tagEditMutationClaim);
+      if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
+        await refreshCurrentViewAfterBackgroundCompletion();
+      }
+      return;
+    }
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)

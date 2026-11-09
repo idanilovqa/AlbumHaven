@@ -888,6 +888,8 @@ async function confirmManualTagEdit() {
   let failedSaveTaskError = '';
   let failedSavePreservesDraft = false;
   let failedSaveKeptNewTags = false;
+  // No server verdict (connection lost, server restarted): the save may have landed.
+  let saveOutcomeUnknown = false;
   try {
     const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
@@ -900,9 +902,13 @@ async function confirmManualTagEdit() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload),
+    }).catch((error) => {
+      saveOutcomeUnknown = true;
+      throw error;
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      saveOutcomeUnknown = typeof data.ok !== 'boolean';
       if (
         data.save_task_id
         && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
@@ -1041,6 +1047,17 @@ async function confirmManualTagEdit() {
       );
     }
     console.error('[AlbumHaven][Utilities] Failed to apply manual tag edits.', error);
+    if (saveOutcomeUnknown) {
+      showRepairAlert(
+        'The connection to the server was lost while saving. The tags may already be saved, so the Gallery is reloading to show what the library now holds.',
+        'error',
+      );
+      releaseFailedTagEditViewMutation(tagEditMutationClaim);
+      if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
+        await refreshCurrentViewAfterBackgroundCompletion();
+      }
+      return;
+    }
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)

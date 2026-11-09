@@ -3121,6 +3121,43 @@ test('a failed tag edit whose files could not be put back says those files keep 
   assert.doesNotMatch(alerts.at(-1)[0], /C:\Music/);
 });
 
+for (const [name, fetchResult] of [
+  ['the connection drops', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ['a proxy answers instead of the server', () => Promise.resolve({ ok: false, json: async () => { throw new SyntaxError('not JSON'); } })],
+]) {
+  test(`a tag save whose answer is lost when ${name} reloads instead of reporting failure`, async () => {
+    const trackPath = 'C:\Music\Artist\Album\01 - Track.flac';
+    const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, album: 'Album' }] };
+    const alerts = [];
+    const restored = [];
+    let refreshes = 0;
+    const closedModal = { hidden: true };
+    const context = loadHelper([album], {
+      document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+      getTagEditConfirmElements() { return { overlay: closedModal }; },
+      getTagEditorElements() { return { overlay: closedModal }; },
+      buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+      buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+      deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+      applyUpdatedAlbumsToCurrentView(albums, options) { if (options?.tagEdits?.[trackPath]?.album === 'Album') restored.push(albums); return albums; },
+      updateOpenTrackModalAfterTagEdit() {},
+      renderView() {},
+      showRepairAlert(...args) { alerts.push(args); },
+      async prependUtilityLogHistoryEntry() {},
+      async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+      fetch: fetchResult,
+    });
+    context.state.ui = { viewStateRevision: 7 };
+    context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+    await context.confirmManualTagEdit();
+
+    assert.match(alerts.at(-1)[0], /may already be saved/);
+    assert.equal(refreshes, 1);
+    assert.deepEqual(restored, []);
+  });
+}
+
 test('failed tag save does not replace a newer tag editor session', () => {
   const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
   const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };

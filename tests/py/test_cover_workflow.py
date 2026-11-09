@@ -1606,3 +1606,32 @@ def test_disc_album_accepts_the_shared_album_folder_cover_but_not_a_sibling_disc
     for outside in (sibling_cover, artist_cover):
         with pytest.raises(ValueError, match="outside the album folder"):
             validate_local_cover_source(config, context.album_root, str(outside), track_paths=context.track_paths)
+
+
+def test_part_folders_with_any_name_save_the_album_folder_cover(config, tmp_path: Path):
+    # Owner (11-09): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4" and cover.jpg in the album folder.
+    # Cover Look Up listed that cover, but saving it said it was outside the album folder.
+    from music_app.services.cover_workflow import resolve_album_write_root_from_track_paths
+
+    library_root = (tmp_path / "Library").resolve()
+    album_folder = (library_root / "Artist" / "2009 - Album").resolve()
+    tracks = [(album_folder / f"Часть {part}" / f"0{part} - Song.mp3").resolve() for part in (1, 2)]
+    cover = (album_folder / "cover.jpg").resolve()
+    for track in tracks:
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"track")
+    cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    artist_cover = (library_root / "Artist" / "artist.jpg").resolve()
+    artist_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    track_paths = {str(track) for track in tracks}
+
+    album_root = resolve_album_write_root_from_track_paths(config, track_paths)
+
+    assert album_root == album_folder
+    assert validate_local_cover_source(config, album_root, str(cover), track_paths=track_paths) == cover
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, album_root, str(artist_cover), track_paths=track_paths)

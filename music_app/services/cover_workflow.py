@@ -212,6 +212,14 @@ def resolve_album_write_root_from_track_paths(
     album_root = resolve_album_root_from_track_paths(config, track_paths)
     if album_root is not None or len(track_paths) < 2:
         return album_root
+    # Owner (11-09): part folders with any name ("Часть 1".."Часть 4") under one album folder: that shared folder
+    # is the album folder, as Cover Look Up already lists it, so the art beside the parts can be saved.
+    folders = {Path(str(path)).resolve(strict=False).parent for path in track_paths}
+    parents = {folder.parent for folder in folders}
+    if len(folders) > 1 and len(parents) == 1:
+        shared = next(iter(parents))
+        if _is_valid_album_root(config, shared, enforce_layout_depth=True):
+            return shared
     contexts = [
         resolve_album_context(config, {"tracks": [{"path": path}]})
         for path in sorted(track_paths)

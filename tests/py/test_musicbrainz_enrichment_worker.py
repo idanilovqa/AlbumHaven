@@ -172,8 +172,7 @@ def test_worker_failure_is_safely_logged_and_does_not_kill_owned_loop():
             await worker.stop()
 
     asyncio.run(scenario())
-    assert logged
-    assert all("private provider payload" not in message for message in logged)
+    assert logged == ["MusicBrainz enrichment pass failed safely (RuntimeError)."]
 
 
 def test_runtime_start_constructs_exactly_one_enabled_worker_and_stop_clears_it(

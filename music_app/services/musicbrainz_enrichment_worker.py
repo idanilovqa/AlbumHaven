@@ -113,8 +113,11 @@ class MusicBrainzEnrichmentWorker:
                 summary = await self.run_once()
                 # Work was found and nothing asked to back off: claim the next batch at once.
                 busy = summary["processed"] > 0 and not summary["rate_limited"]
-            except Exception:
-                self._logger.warning("MusicBrainz enrichment pass failed safely.")
+            except Exception as error:
+                # Name the error type only: its message can carry a provider payload.
+                self._logger.warning(
+                    f"MusicBrainz enrichment pass failed safely ({type(error).__name__})."
+                )
             if busy:
                 continue
             try:

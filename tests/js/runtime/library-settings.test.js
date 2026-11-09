@@ -151,6 +151,7 @@ function loadHelpers(overrides = {}) {
   context.window = context;
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../path-input.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-components.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });

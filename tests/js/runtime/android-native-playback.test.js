@@ -472,8 +472,10 @@ function liveHandshake(playback) {
 test('a loaded queue is remembered for the next document of the origin', async () => {
   const { api, context } = createHarness();
   const { storage } = withPlayer(context);
-  await api.start(tracks[1]);
+  await api.start({ ...tracks[1], year: '1999' });
   const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v1'));
+  // The next document's queue keeps the album year the media card shows.
+  assert.equal(record.tracks[1].year, '1999');
   assert.equal(record.clientId, handshakePayload.playback.clientId);
   assert.equal(record.queueRevision, 1);
   assert.deepEqual(record.tracks.map(track => track.path), tracks.map(track => track.path));

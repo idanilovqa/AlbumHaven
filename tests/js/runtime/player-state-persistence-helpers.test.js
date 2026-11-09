@@ -154,7 +154,7 @@ function loadHelper(overrides = {}) {
   assert.equal('speed' in persisted, false, 'the obsolete bottom-player speed is not serialized');
 }
 
-test('album artist and album snapshot survive streaming persistence and restore', async () => {
+test('album artist, year and album snapshot survive streaming persistence and restore', async () => {
   const playingTrackPath = 'C:/Music/Various Artists/Featured Signal Collection/01 Signal.flac';
   const albumSnapshot = {
     key: 'featured-signal-collection',
@@ -174,6 +174,7 @@ test('album artist and album snapshot survive streaming persistence and restore'
     artist: 'Solo Voice',
     albumArtist: 'Various Artists',
     album: 'Featured Signal Collection',
+    year: '2011',
     coverPath: 'C:/Music/Various Artists/Featured Signal Collection/cover.jpg',
     durationSeconds: 30,
   };
@@ -205,6 +206,8 @@ test('album artist and album snapshot survive streaming persistence and restore'
   assert.equal(persistedState.track.durationSeconds, 30);
   assert.equal(persistedState.playbackQueue.tracks[0].albumArtist, 'Various Artists');
   assert.equal(persistedState.playbackQueue.tracks[0].durationSeconds, 30);
+  assert.equal(persistedState.track.year, '2011');
+  assert.equal(persistedState.playbackQueue.tracks[0].year, '2011');
   assert.equal(persistedState.playbackQueue.albumRef, albumSnapshot.key);
   assert.deepEqual(persistedState.playbackQueue.albumSnapshot, albumSnapshot);
 
@@ -229,6 +232,8 @@ test('album artist and album snapshot survive streaming persistence and restore'
 
   assert.equal(restoredTracks[0].albumArtist, 'Various Artists');
   assert.equal(restoredTracks[0].durationSeconds, 30);
+  assert.equal(restoredTracks[0].year, '2011');
+  assert.equal(restoreContext.state.player.playbackQueue.tracks[0].year, '2011');
   assert.equal(restoreContext.state.player.playbackQueue.albumRef, albumSnapshot.key);
   assert.deepEqual(
     JSON.parse(JSON.stringify(restoreContext.state.player.playbackQueue.albumSnapshot)),

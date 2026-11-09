@@ -12620,6 +12620,7 @@ function androidNativeStoredTrack(track) {
     artist: String(track.artist || ''),
     ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
     album: String(track.album || ''),
+    ...(track.year ? { year: String(track.year) } : {}),
     coverPath: String(track.coverPath || ''),
     ...(track.trackNumber ? { trackNumber: String(track.trackNumber) } : {}),
     ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
@@ -38588,6 +38589,7 @@ function buildPersistedPlaybackQueue(currentTrackPath) {
         artist: String(track.artist || ''),
         ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
         album: String(track.album || ''),
+        ...(track.year ? { year: String(track.year) } : {}),
         coverPath: String(track.coverPath || ''),
         ...(Number(track.durationSeconds) > 0
           ? { durationSeconds: Number(track.durationSeconds) }
@@ -38637,6 +38639,7 @@ function buildPersistedPlayerState(options = {}) {
       artist: String(current.artist || ''),
       ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
       album: String(current.album || ''),
+      ...(current.year ? { year: String(current.year) } : {}),
       coverPath: String(current.coverPath || ''),
       ...(durationSeconds > 0
         ? { durationSeconds }
@@ -38665,6 +38668,7 @@ function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
           artist: String(track.artist || ''),
           ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
           album: String(track.album || ''),
+          ...(track.year ? { year: String(track.year) } : {}),
           coverPath: String(track.coverPath || ''),
           ...(Number(track.durationSeconds) > 0
             ? { durationSeconds: Number(track.durationSeconds) }

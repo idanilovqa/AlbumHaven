@@ -734,6 +734,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
               "area": "cover-providers"

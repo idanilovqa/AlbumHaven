@@ -295,6 +295,57 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:disc-folder-cover-and-second-artbox"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-disc-folder-cover"
+    ],
+    "expectedContracts": [
+      "shared-album-folder-cover-save",
+      "second-artbox-selection",
+      "second-artbox-art-blocked-in-cover-lookup"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-disc-folder-cover",
+      "filesystemCopy": "media/cases/watcher-disc-folder-cover"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:split-during-held-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-split-chooser"
+    ],
+    "expectedContracts": [
+      "split-chooser-during-running-search",
+      "chosen-split-release-final"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-split-chooser",
+      "filesystemCopy": "media/cases/watcher-split-chooser"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
     "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
     "profile": "functional-core",
@@ -10949,7 +11000,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 320px",
+    "case": "mobile classic_bar places Gallery-style source badges for its layout at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10965,7 +11016,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 320px",
+    "case": "mobile stacked_bar places Gallery-style source badges for its layout at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10981,7 +11032,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 320px",
+    "case": "mobile editorial_canvas places Gallery-style source badges for its layout at 320px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10997,7 +11048,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile classic_bar pins colorful source badges to the album art's top-left corner at 390px",
+    "case": "mobile classic_bar places Gallery-style source badges for its layout at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -11013,7 +11064,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile stacked_bar pins colorful source badges to the album art's top-left corner at 390px",
+    "case": "mobile stacked_bar places Gallery-style source badges for its layout at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -11029,7 +11080,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "mobile editorial_canvas pins colorful source badges to the album art's top-left corner at 390px",
+    "case": "mobile editorial_canvas places Gallery-style source badges for its layout at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",

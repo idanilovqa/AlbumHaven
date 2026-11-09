@@ -34,7 +34,7 @@ test('FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after rel
 
 test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button', {
   tag: '@area:gallery-search',
-}, async ({ artistPageSettingsActions, freshBrowserSession, galleryActions, navigationPanelActions, page, stepLogger }) => {
+}, async ({ artistPageSettingsActions, freshBrowserSession, galleryActions, navigationPanelActions, page, searchToolbarActions, stepLogger }) => {
   // Owner rule (11-08): no buttons in the web navigation-tree header; a new side-bar entry goes vertically under
   // the existing side-bar buttons; one control in one place; never an empty or icon-less button.
   const navigation = navigationPanelActions.navigationPanel;
@@ -74,6 +74,42 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
     await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeVisible();
     await expect(page.locator('#non-album-modal-subtitle')).toHaveText(/^\d+ tracks?$/);
+  });
+  await stepLogger.step('NEW-005: a new search from Loose Tracks never flashes the previous search tree entry', async () => {
+    // Owner (11-08 evening): after a Folkstone search, Loose Tracks, then a Devin search, Folkstone blinked as the
+    // selected tree entry before Devin's results. While a search runs the Loading page shows and the tree waits.
+    await searchToolbarActions.search('Metallica', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Metallica');
+    await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeVisible();
+    // The expanded side panel shows Loose Tracks' own tree, as on the owner's screen.
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await expect(page.locator('#sidebar-collections')).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- record, on every frame, which tree entries are visible
+    await page.evaluate(() => {
+      const frames = [];
+      window.__new005Frames = frames;
+      const read = () => {
+        const visible = [...document.querySelectorAll('#sidebar-list [data-sidebar-artist]')]
+          .filter((node) => node.checkVisibility?.({ visibilityProperty: true }))
+          .map((node) => node.getAttribute('data-sidebar-artist'));
+        const loader = document.getElementById('library-loader');
+        frames.push({ metallica: visible.includes('Metallica'), mastodon: visible.includes('Mastodon'),
+          loading: Boolean(loader && !loader.hidden) });
+        if (!window.__new005Stop) requestAnimationFrame(read);
+      };
+      requestAnimationFrame(read);
+    });
+    await searchToolbarActions.search('Mastodon', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Mastodon');
+    await expect(page.locator('#sidebar-list [data-sidebar-artist="Mastodon"]').first()).toBeVisible();
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeHidden();
+    const frames = await page.evaluate(() => { window.__new005Stop = true; return window.__new005Frames; });
+    const firstMastodon = frames.findIndex((frame) => frame.mastodon);
+    expect(firstMastodon, 'the new results render in the tree').toBeGreaterThanOrEqual(0);
+    const beforeResults = frames.slice(0, firstMastodon);
+    expect(beforeResults.filter((frame) => frame.metallica), JSON.stringify(frames.slice(0, firstMastodon + 1))).toEqual([]);
+    expect(frames.slice(firstMastodon).some((frame) => frame.metallica)).toBe(false);
   });
   await stepLogger.step('INT-033: on a phone the Loose Tracks page header shows "Loose Tracks / N tracks"', async () => {
     const desktopCount = (await page.locator('#non-album-modal-subtitle').textContent()).trim();

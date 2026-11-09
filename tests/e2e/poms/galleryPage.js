@@ -1298,13 +1298,18 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(async (url) => {
       const diagnostics = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
       const cache = await globalThis.caches.open(String(diagnostics?.cacheName || ''));
-      const cacheKey = new URL(url);
-      cacheKey.searchParams.delete('v');
-      const response = await cache.match(cacheKey.href);
-      const cachedProductionUrl = String(
-        response?.headers?.get?.('X-Album-Haven-Cover-Production-Url') || '',
-      );
-      const exactResponse = cachedProductionUrl === url ? response : null;
+      // Stored covers name no file path: the key is the SHA-256 of the cover file, and the exact
+      // URL is kept as its SHA-256 (gallery-cover-preview-cache.js storedCoverKey, coverVersionTag).
+      const sha256Hex = async (text) => Array.from(
+        new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(text))),
+        (byte) => byte.toString(16).padStart(2, '0'),
+      ).join('');
+      const unversioned = new URL(url);
+      unversioned.searchParams.delete('v');
+      const source = unversioned.searchParams.get('path') ?? `${unversioned.pathname}${unversioned.search}`;
+      const response = await cache.match(`${unversioned.origin}/__album-haven-cover/${await sha256Hex(source)}`);
+      const cachedVersion = String(response?.headers?.get?.('X-Album-Haven-Cover-Version') || '');
+      const exactResponse = cachedVersion === await sha256Hex(url) ? response : null;
       return {
         active: Array.isArray(diagnostics?.activeProductionUrls)
           && diagnostics.activeProductionUrls.includes(url),

@@ -1,11 +1,14 @@
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v3';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
+// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
+// SHA-256 of the cover file a URL names), and the exact URL a blob came from is kept as its SHA-256.
+const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
+const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -170,7 +173,24 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob, productionUrl) {
+  async sha256Hex(text) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  // The same key as app-copy-worker.js coverKey: one per cover file, whatever size or version.
+  async storedCoverKey(productionUrl) {
+    const url = new URL(productionUrl);
+    url.searchParams.delete('v');
+    const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
+    return `${url.origin}${GALLERY_COVER_KEY_PREFIX}${await this.sha256Hex(source)}`;
+  }
+
+  coverVersionTag(productionUrl) {
+    return this.sha256Hex(productionUrl);
+  }
+
+  createCacheableResponse(response, blob, versionTag) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
@@ -178,7 +198,7 @@ class GalleryCoverPreviewCache {
       statusText: String(response?.statusText || ''),
       headers: {
         ...(contentType ? { 'Content-Type': contentType } : {}),
-        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+        [GALLERY_COVER_VERSION_HEADER]: versionTag,
       },
     });
   }
@@ -303,14 +323,15 @@ class GalleryCoverPreviewCache {
           && !signal?.aborted
           && this.isLatestRequestedProductionUrl(productionUrl)
         );
+        const storedKey = await this.storedCoverKey(productionUrl);
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          await cache.put(baseKey, cacheCandidate);
+          await cache.put(storedKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(baseKey);
+            await cache.delete(storedKey);
           }
           return {
             blob,
@@ -338,10 +359,11 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cacheKey = this.baseCacheKey(productionUrl);
+    const cacheKey = await this.storedCoverKey(productionUrl);
+    const versionTag = await this.coverVersionTag(productionUrl);
     const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_VERSION_HEADER) === versionTag) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -395,7 +417,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
+        cacheCandidate = this.createCacheableResponse(response, blob, versionTag);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -679,7 +701,7 @@ class GalleryCoverPreviewCache {
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
+      return Boolean(await cache.delete(await this.storedCoverKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;

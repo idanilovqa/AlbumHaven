@@ -58,8 +58,11 @@
       await Promise.all(names.map(name => caches.delete(name)));
     }
 
-    // One key per cover file, whatever size or version a page asks for.
-    async function coverKey(url) {
+    // One key per cover file, whatever size or version a page asks for; the gallery's own cover
+    // cache (runtime/gallery-cover-preview-cache.js storedCoverKey) uses the same key.
+    async function coverKey(requested) {
+      const url = new URL(requested);
+      url.searchParams.delete('v');
       const source = url.searchParams.get('path') ?? `${url.pathname}${url.search}`;
       const digest = await subtle.digest('SHA-256', new TextEncoder().encode(source));
       const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');

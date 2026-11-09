@@ -9936,6 +9936,81 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-001: once kept, a start shows the copy at once without asking the server for the page",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-001: once kept, a start shows the copy at once without asking the server for the page"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-005: offline, the copy is read-only with its notice, and recovers without a reload",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-005: offline, the copy is read-only with its notice, and recovers without a reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-006: a copy whose session ended is deleted and the sign-in page replaces it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-006: a copy whose session ended is deleted and the sign-in page replaces it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-006: another account's copy is never left on screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-006: another account's copy is never left on screen"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-007: a copy older than seven days is not shown",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-007: a copy older than seven days is not shown"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js",

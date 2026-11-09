@@ -179,12 +179,14 @@ async function loadVersionPickerState(album) {
     ...releases.map((item) => String(item?.key || '')),
     ...getManualVersionFamilyKeys(albumKey, links),
   ].filter((key) => key && key !== albumKey));
+  // The server marks whether a same-name album shares at least half of this album's tracks; without details,
+  // the gallery's same-name albums are offered.
+  const galleryOffered = releaseCandidates ? null : new Set(getVersionPickerCandidates(album).map((item) => String(item.key)));
   const byKey = new Map();
   [...(releaseCandidates || []), ...releases, ...flattenVisibleAlbums()].forEach((item) => {
     const key = String(item?.key || '');
     if (!key || key === albumKey || byKey.has(key)) return;
-    // The server marks whether a same-name album shares at least half of this album's tracks.
-    const offered = releaseCandidates ? item.shares_tracks === true : getVersionPickerCandidates(album).some((c) => c.key === key);
+    const offered = releaseCandidates ? item.shares_tracks === true : galleryOffered.has(key);
     if (offered || current.has(key)) byKey.set(key, item);
   });
   return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };

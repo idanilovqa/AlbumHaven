@@ -252,9 +252,10 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
 }
 
 // UI-14 (owner): neither artbox can take the other's picture, even from another source or size: choosing the
-// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
-// well under a millisecond) and compared with the other artbox's; a near-identical picture is dimmed and
-// cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
+// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit
+// difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale, well under a
+// millisecond) and compared with the other artbox's; a near-identical picture is dimmed and cannot be chosen.
+// Previews are same-origin (local covers and the remote-image proxy), so they are readable.
 // The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
 // alike; their average colors must also be close for the pictures to count as the same.
 const ARTBOX_DUPLICATE_MAX_DISTANCE = 6;

@@ -409,9 +409,11 @@ test('FTC-COVERS-046 a split notification asks during the running search and kee
   }
 });
 
+// Version exceptions outlive the media folders, so each run owns uniquely named albums.
+const VERSION_RULE_RUN = Date.now().toString(36);
 const VERSION_RULE_TARGET = Object.freeze({
-  artist: 'Watcher Version Rule Artist',
-  album: 'Watcher Version Rule Album With A Very Long Twentieth Anniversary Edition Remix Title',
+  artist: `Watcher Version Rule Artist ${VERSION_RULE_RUN}`,
+  album: `Watcher Version Rule Album With A Very Long Twentieth Anniversary Edition Remix Title ${VERSION_RULE_RUN}`,
   year: 2001,
   remasterFolder: 'Watcher Version Rule Remaster',
   remasterYear: 2011,
@@ -472,7 +474,10 @@ test('FTC-ALBUM-DETAILS-030 marking a separated release as a version again remov
       await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
       await expect(async () => {
         await showAlbum();
-        await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(1);
+        // Both releases show as cards; the card's menu offers Separate release once they group as versions.
+        await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(2);
+        await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+        await expect(menu).toContainText('Separate release', { timeout: 1000 });
       }).toPass({ timeout: 60000, intervals: [500, 1000, 2000] });
     });
 
@@ -508,7 +513,6 @@ test('FTC-ALBUM-DETAILS-030 marking a separated release as a version again remov
       await dialog.locator('#app-form-submit').click();
       await expect(dialog).toBeHidden();
       await expect(page.getByText('Album marked as a version.')).toBeVisible();
-      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(1);
       await openVersionExceptions();
       await expect(exceptionRow).toHaveCount(0);
       await settingsModalAppBarActions.closeSettings();

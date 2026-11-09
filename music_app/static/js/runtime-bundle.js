@@ -4792,9 +4792,10 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
 }
 
 // UI-14 (owner): neither artbox can take the other's picture, even from another source or size: choosing the
-// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
-// well under a millisecond) and compared with the other artbox's; a near-identical picture is dimmed and
-// cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
+// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit
+// difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale, well under a
+// millisecond) and compared with the other artbox's; a near-identical picture is dimmed and cannot be chosen.
+// Previews are same-origin (local covers and the remote-image proxy), so they are readable.
 // The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
 // alike; their average colors must also be close for the pictures to count as the same.
 const ARTBOX_DUPLICATE_MAX_DISTANCE = 6;
@@ -12602,12 +12603,14 @@ async function loadVersionPickerState(album) {
     ...releases.map((item) => String(item?.key || '')),
     ...getManualVersionFamilyKeys(albumKey, links),
   ].filter((key) => key && key !== albumKey));
+  // The server marks whether a same-name album shares at least half of this album's tracks; without details,
+  // the gallery's same-name albums are offered.
+  const galleryOffered = releaseCandidates ? null : new Set(getVersionPickerCandidates(album).map((item) => String(item.key)));
   const byKey = new Map();
   [...(releaseCandidates || []), ...releases, ...flattenVisibleAlbums()].forEach((item) => {
     const key = String(item?.key || '');
     if (!key || key === albumKey || byKey.has(key)) return;
-    // The server marks whether a same-name album shares at least half of this album's tracks.
-    const offered = releaseCandidates ? item.shares_tracks === true : getVersionPickerCandidates(album).some((c) => c.key === key);
+    const offered = releaseCandidates ? item.shares_tracks === true : galleryOffered.has(key);
     if (offered || current.has(key)) byKey.set(key, item);
   });
   return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };

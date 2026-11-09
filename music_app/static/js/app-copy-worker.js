@@ -50,7 +50,8 @@
       headers: { 'Content-Type': 'application/json' },
     }));
 
-    const isFresh = page => Boolean(page) && now() - page.savedAt <= MAX_COPY_AGE_MS;
+    // A copy kept "later" than now (the clock was set back) cannot be aged, so it is not shown.
+    const isFresh = page => Boolean(page) && now() - page.savedAt >= 0 && now() - page.savedAt <= MAX_COPY_AGE_MS;
 
     async function hasFreshCopy() {
       const target = await accountCache();

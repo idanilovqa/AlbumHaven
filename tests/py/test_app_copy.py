@@ -138,6 +138,6 @@ def test_index_template_loads_the_app_copy_client_before_the_app(asgi_app):
     _status, _headers, body = run_asgi_request(asgi_app, "GET", "/")
     text = body.decode("utf-8")
 
-    client = text.index(f'<script src="/static/js/app-copy.js?v={version}"></script>')
+    client = text.index(f'<script src="/static/js/app-copy.js?v={version}" defer></script>')
     assert client < text.index("/static/app.js?v=")
     assert 'id="app-copy-offline-notice"' in text

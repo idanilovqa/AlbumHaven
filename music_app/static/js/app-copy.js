@@ -1,6 +1,7 @@
 // The page side of the Android app's copy (instant return; the worker is app-copy-worker.js).
-// Loaded first on the app page. Only inside an Android shell that offers `app.copy.v1` does it
-// register the worker; the runtime's bridge client calls adoptShell after its handshake.
+// Deferred on the app page, so it runs after the document and capability-ui.js, before app.js.
+// Only inside an Android shell that offers `app.copy.v1` does it register the worker; the
+// runtime's bridge client calls adoptShell after its handshake.
 //
 // A page the worker answered from its copy is marked `content="cache"`. It asks the server which
 // account is signed in: another account, or none, deletes the copy and loads the page again; no
@@ -64,16 +65,12 @@
       location.reload();
     }
 
-    function applyReadOnly() {
-      const notice = document.getElementById('app-copy-offline-notice');
-      if (notice) notice.hidden = !readOnly;
-      capabilities()?.setReadOnly?.(readOnly);
-    }
-
     function setReadOnly(on) {
       if (readOnly === on) return;
       readOnly = on;
-      applyReadOnly();
+      const notice = document.getElementById('app-copy-offline-notice');
+      if (notice) notice.hidden = !on;
+      capabilities()?.setReadOnly?.(on);
     }
 
     async function confirmAccount() {
@@ -133,8 +130,6 @@
       if (document.visibilityState === 'hidden' && shell && !readOnly) void tell({ type: 'save', url: location.href });
     });
     window.addEventListener('online', () => { if (readOnly) void confirmAccount(); });
-    // The notice and the read-only controls are in the document below this script.
-    document.addEventListener('DOMContentLoaded', () => { if (readOnly) applyReadOnly(); });
     if (startedFromCopy) void confirmAccount();
 
     return { startedFromCopy, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };

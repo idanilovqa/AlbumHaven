@@ -40,7 +40,7 @@
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
     // The Android app's offline copy (app-copy.js) hides permitted writes the same way as denied
-    // ones until the server answers; it may decide before or after this script runs.
+    // ones until the server answers.
     const readOnlySelectors = policy ? policy.readOnlySelectors.join(',\n') : '';
     let readOnlyStyle = null;
     const setReadOnly = (on) => {
@@ -71,7 +71,6 @@
         }
       }, true);
     }
-    if (root.AlbumHavenAppCopy?.isReadOnly?.()) setReadOnly(true);
     const ready = () => {
       // Keyboard traversal uses native hidden state, not just CSS visibility.
       document.querySelectorAll?.('[data-utility-tab]').forEach(tab => {

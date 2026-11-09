@@ -329,9 +329,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     /** The page of the sandbox being left deletes its copy first, if it still answers. */
     private fun switchTo(origin: String) {
-        val leaving = if (::siteOrigin.isInitialized) siteOrigin.takeIf { it != origin } else null
-        if (leaving == null || !::bridge.isInitialized) return openSwitched(origin)
+        val leaving = if (::siteOrigin.isInitialized && siteOrigin != origin) siteOrigin else null
+        if (leaving == null) return openSwitched(origin)
         copies.leaving(leaving)
+        if (!::bridge.isInitialized) return openSwitched(origin)
         var switched = false
         val proceed = {
             if (!switched && !isDestroyed) {

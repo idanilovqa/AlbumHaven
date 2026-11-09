@@ -112,6 +112,16 @@ test('IAR-007: a copy older than seven days is not shown and the page loads from
   assert.match(await response.text(), /content="network"/);
 });
 
+test('a copy kept later than now (the clock was set back) is not shown', async () => {
+  const { calls, handle, advance } = setup();
+  await handle(navigation('/'));
+  advance(-1);
+
+  await handle(navigation('/'));
+
+  assert.equal(calls.length, 2);
+});
+
 test('a copy just under seven days old is still shown', async () => {
   const { calls, handle, advance } = setup();
   await handle(navigation('/'));

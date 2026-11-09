@@ -242,7 +242,7 @@
   height: 14px;
   margin-top: 1px;
   justify-self: center;
-  color: var(--appearance-player-accent, #55c7ff);
+  color: var(--appearance-play, #4ade80);
 }
 .utility-problem-filter-check svg {
   width: 100%;

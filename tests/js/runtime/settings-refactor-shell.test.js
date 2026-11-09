@@ -224,6 +224,18 @@ test('S03 a selected problem filter shows a check instead of the word on', () =>
   assert.match(unselected, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
 });
 
+test('S03 the filter menu says more problem types are coming until the full list loads', () => {
+  const { context, els } = harness();
+  context.getProblemReasonTypes = () => ['Missing year'];
+  context.state.utility.problemDropdownOpen = true;
+  context.state.utility.problematicFilesComplete = false;
+  context.renderProblemFilterControls(els);
+  assert.match(els.problemFilterMenu.innerHTML, /Loading more problem types/);
+  context.state.utility.problematicFilesComplete = true;
+  context.renderProblemFilterControls(els);
+  assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
 test('S03 the integrated search control labels Filters without replacing its shared icon', () => {
   const { context, els } = harness();
   context.getProblemReasonTypes = () => ['Missing year'];

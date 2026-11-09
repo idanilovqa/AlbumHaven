@@ -3025,7 +3025,9 @@ function renderProblemFilterControls(els) {
             <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
-        `).join('')
+        `).join('') + (state.utility.problematicFilesComplete === false
+        ? '<div class="utility-problem-filter-empty">Loading more problem types…</div>'
+        : '')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
   }
 }

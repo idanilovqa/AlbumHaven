@@ -523,6 +523,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
       { key: 'album-2', problem_reasons: ['Missing cover art'] },
     ],
     selectedProblematicKey: 'album-1',
+    problemDropdownOpen: true,
   });
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
@@ -538,7 +539,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true, 'the menu stays open for the next pick');
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
 });
@@ -550,6 +551,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
       { key: 'album-2', problem_reasons: ['Poor art quality'] },
     ],
     selectedProblematicKey: 'album-1',
+    problemDropdownOpen: true,
   });
   const filterContainer = createElement();
   const { event } = createEvent({
@@ -564,7 +566,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, '');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true, 'the menu stays open for the next pick');
 });
 
 test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {

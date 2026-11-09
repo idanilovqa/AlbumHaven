@@ -4566,14 +4566,7 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return buildSmallAlertHtml({
-        severity: 'info',
-        tone: category,
-        message: marker.label,
-        iconHtml: buildLibrarySourceGlyphHtml(category),
-        className: `album-details-source-marker album-details-source-marker--${category}`,
-        focusable: true,
-      });
+      return `<span class="album-details-header__tag album-details-source-marker album-details-source-marker--${category}" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}<span>${marker.label}</span></span>`;
     })
     .join('');
 }
@@ -5641,6 +5634,7 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
+      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionPath: '',
@@ -44776,6 +44770,14 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const candidateId = selectRemoteCoverButton.getAttribute('data-select-remote-cover') || '';
     selectRemoteCoverFromLookup(candidateId);
+    return;
+  }
+  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
+  if (currentReleaseButton) {
+    event.preventDefault();
+    void chooseCoverLookupCurrentRelease(
+      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
+    );
     return;
   }
     const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');

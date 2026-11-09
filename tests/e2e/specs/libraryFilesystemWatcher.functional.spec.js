@@ -91,6 +91,7 @@ const DISC_FOLDER_TARGET = Object.freeze({
   artist: 'Watcher Disc Folder Artist',
   album: 'Watcher Disc Folder Album',
   bonusAlbum: 'Watcher Disc Folder Bonus',
+  partsAlbum: 'Watcher Named Parts Album',
   year: 2008,
 });
 
@@ -159,6 +160,16 @@ test('FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox 
         managedAppLifecycle,
       });
       await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      // Owner (11-09): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4" and cover.jpg above them.
+      const partsStatus = await libraryFilesystemWatcherActions.readStatus();
+      await fixture.createSiblingAlbum({
+        album: DISC_FOLDER_TARGET.partsAlbum,
+        year: DISC_FOLDER_TARGET.year,
+        trackTitles: ['Named Part One', 'Named Part Two'],
+        discNumbers: [1, 2],
+        discFolderPrefix: 'Часть ',
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(partsStatus.inventory_mutation_revision);
       await expect(async () => {
         await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(DISC_FOLDER_TARGET.album)}`);
         await galleryActions.waitForGalleryReady();
@@ -218,6 +229,39 @@ test('FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox 
       await expect(held).toHaveAttribute('title', 'Deselect cover in the second artbox first');
       await held.click({ force: true });
       await expect(held).not.toHaveClass(/\bis-active\b/);
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
+      await coverLookupActions.closeModal();
+    });
+
+    // Owner (11-09): with part folders named "Часть N" the save failed as outside the album folder, and the open
+    // Album Details never showed the cover the gallery had already taken.
+    await stepLogger.step('Named part folders: the cover above them saves and the open Album Details shows it', async () => {
+      await page.keyboard.press('Escape');
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(DISC_FOLDER_TARGET.partsAlbum)}`);
+        await galleryActions.waitForGalleryReady();
+        await galleryActions.selectAlbumDetailsByIdentityAndReadPayload({
+          artist: DISC_FOLDER_TARGET.artist, album: DISC_FOLDER_TARGET.partsAlbum, year: String(DISC_FOLDER_TARGET.year),
+        }, 60000);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+      await openMainLookup();
+      await localCard('booklet-page.jpg').click();
+      await saveLookup('/utilities/cover-lookup/local-select');
+      await expect(page.getByText(/outside the album folder/i)).toHaveCount(0);
+      const detailsCover = mainShell.locator('img').first();
+      await expect(detailsCover).toBeVisible();
+      // booklet-page.jpg is solid red and front-scan.jpg solid navy: the decoded Album Details art must be the red one.
+      // parity-check: allow-read-only-measurement-evaluate -- sample the decoded Album Details artwork's color
+      await expect.poll(() => detailsCover.evaluate((image) => {
+        if (!image.complete || !image.naturalWidth) return 'loading';
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 4;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0, 4, 4);
+        const [red, green, blue] = context.getImageData(1, 1, 1, 1).data;
+        return red > 180 && green < 80 && blue < 80 ? 'booklet' : `other:${red},${green},${blue}`;
+      }), { timeout: 15000 }).toBe('booklet');
+      await openMainLookup();
       await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
       await coverLookupActions.closeModal();
     });

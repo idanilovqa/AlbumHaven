@@ -269,6 +269,8 @@ async function buildWatchedAlbumFixture({
     discNumbers: albumDiscNumbers = discNumbers,
     // Per-track album tags: a disc folder can belong to another album (an album holding only some discs).
     trackAlbums: albumTrackAlbums = null,
+    // Disc folders are "CD1", "CD2"... unless an album names them otherwise ("Часть 1", "Part 2").
+    discFolderPrefix = 'CD',
     isCompilation: albumCompilation = false,
   }) => {
     const directory = assertOwnedPath(
@@ -296,7 +298,7 @@ async function buildWatchedAlbumFixture({
             const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
             const relativePath = discTotal > 1
-              ? path.join(`CD${discNumber}`, filename)
+              ? path.join(`${discFolderPrefix}${discNumber}`, filename)
               : filename;
             const destination = assertOwnedPath(
               mediaRoot,

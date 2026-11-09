@@ -5731,6 +5731,42 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert headers["cache-control"] == "no-store"
 
 
+def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    raw_payload = {"library_non_album_tracks": [{"path": r"C:\Music\private.flac"}]}
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(
+            config={},
+            library_state={"inventory_mutation_revision": 9},
+        )),
+        query_params={},
+    )
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_library_loose_tracks_payload(self, *, query_params):
+            assert query_params == {}
+            return raw_payload
+
+    monkeypatch.setattr(routes, "is_library_browse_postgres_available", lambda _config: True)
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", FakeRepository)
+    monkeypatch.setattr(
+        routes,
+        "_project_non_album_tracks_for_request",
+        lambda projected_request, payload: {
+            "projected": projected_request is request,
+            "revision": payload["inventory_mutation_revision"],
+        },
+    )
+
+    response = routes.library_loose_tracks(request)
+
+    assert json.loads(response.body) == {"projected": True, "revision": 9}
+
+
 def test_non_owner_non_album_projection_omits_raw_paths_and_reuses_playback_references(
     monkeypatch,
 ):

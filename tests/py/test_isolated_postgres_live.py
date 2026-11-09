@@ -692,6 +692,24 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
         assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
+def test_live_library_loose_tracks_come_without_the_gallery(watcher_repair_inventory):
+    # Owner PERF-1: library-wide Loose Tracks took minutes because it shipped the whole gallery.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    album_track = fixture.entry("Owner/Album/01.flac", album="Album")
+    loose = {**fixture.entry("Loose/01.flac", album=""), "artist": "", "album_artist": "", "title": "Loose One"}
+    fixture.seed(album_track, loose)
+
+    payload = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload()
+
+    assert "artist_groups" not in payload
+    assert [track.get("path") for track in payload["library_non_album_tracks"]] == [loose["path"]]
+    assert payload["non_album_tracks_deferred"] is False
+
+
 def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
 

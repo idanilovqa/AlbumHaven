@@ -12661,9 +12661,14 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     browse.invalidate_postgres_utility_projection_cache()
 
 
-@pytest.mark.parametrize("query", ["Mornng", "Canonical Artist", "2001", "Non-album rarity"])
+@pytest.mark.parametrize(("query", "matches"), [
+    ("Canonical Artist", True), ("raw artist", True), ("Morning", True), ("audio", True),
+    # Gallery search has no typo tolerance and never matches years, exception
+    # types or word fragments, so neither do loose tracks.
+    ("Mornng", False), ("2001", False), ("Non-album rarity", False), ("Rawland", False),
+])
 @pytest.mark.parametrize("library_wide", [False, True])
-def test_non_album_search_preserves_fuzzy_alias_and_persisted_matches(monkeypatch, query, library_wide):
+def test_non_album_search_uses_the_gallery_search_rule(monkeypatch, query, matches, library_wide):
     from music_app.services import library_browse_postgres as browse
 
     repository = browse.PostgresLibraryBrowseRepository(
@@ -12681,8 +12686,8 @@ def test_non_album_search_preserves_fuzzy_alias_and_persisted_matches(monkeypatc
     )
     if library_wide:
         entries = entries[1]
-    assert [entry["path"] for entry in entries] == ["/owned/audio.flac"]
-    assert "query_terms" not in calls[0], "Exact SQL LIKE cannot prefilter fuzzy/alias matches"
+    assert [entry["path"] for entry in entries] == (["/owned/audio.flac"] if matches else [])
+    assert "query_terms" not in calls[0], "Exact SQL LIKE cannot prefilter canonical-alias matches"
     assert calls[0]["limit"] == browse.MAX_NON_ALBUM_CANDIDATE_LIMIT
     assert calls[0].get("artist_names") == (None if library_wide else ["Raw Artist"])
 

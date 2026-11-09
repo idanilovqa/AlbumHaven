@@ -4036,12 +4036,7 @@ def _non_album_entries_from_inventory_candidates(
     visible_artist_names: Iterable[object] = (),
     query: object = "",
 ) -> list[dict[str, object]]:
-    from music_app.services.relation_projection_builder import root_relative_parts
-    from music_app.services.view_search import (
-        normalize_search_text,
-        search_terms_match_fields,
-        split_search_terms,
-    )
+    from music_app.services.view_search import fold_search_accents, normalize_search_text
 
     visible_artists = {
         str(artist or "").strip()
@@ -4058,13 +4053,10 @@ def _non_album_entries_from_inventory_candidates(
         )
         if normalize_search_text(alias)
     }
-    # Match each word on its own: whole-phrase fuzzy matching accepts any field word
-    # contained in the phrase, so "Scan Owner" would match every "Owner" track.
-    query_words = sorted({
-        word
-        for term in split_search_terms(str(query or ""))
-        for word in term.split()
-    })
+    # Loose tracks follow the Gallery search rule (_search_preview_sql): the whole
+    # query inside an artist (accents folded), album, title, file name or CD name.
+    query_text = str(query or "")
+    folded_query = fold_search_accents(query_text)
     normalized_alias_to_canonical = {
         local_inventory_identity_key(alias): canonical
         for alias, canonical in alias_to_canonical.items()
@@ -4106,24 +4098,20 @@ def _non_album_entries_from_inventory_candidates(
             and not visible_path_parts.intersection(path_parts)
         ):
             continue
-        if query_words:
-            # The library-relative path only: the absolute path's machine folders would match queries.
-            root_relative = root_relative_parts({**payload, "library_root_id": payload.get("root_id")})
-            search_fields = [
-                normalize_search_text(str(value or ""))
+        if folded_query:
+            file_name = Path(str(entry.get("path") or "")).name
+            artist_match = any(
+                folded_query in fold_search_accents(str(value or ""))
+                for value in (entry_artist, canonical_artist, entry.get("artist"))
+            )
+            text_match = any(
+                query_text.lower() in str(value or "").strip().lower()
                 for value in (
-                    entry_artist,
-                    canonical_artist,
-                    entry.get("artist"),
-                    entry.get("album"),
-                    entry.get("title"),
-                    entry.get("year"),
-                    entry.get("exception_type"),
-                    " ".join(root_relative[1]) if root_relative else "",
+                    entry.get("album"), entry.get("title"), file_name,
+                    Path(file_name).stem, entry.get("disc_subtitle"),
                 )
-                if str(value or "").strip()
-            ]
-            if not search_terms_match_fields(query_words, search_fields):
+            )
+            if not (artist_match or text_match):
                 continue
         entries.append(entry)
     return entries

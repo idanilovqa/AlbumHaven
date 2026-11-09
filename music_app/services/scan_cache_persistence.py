@@ -402,6 +402,31 @@ class PostgresScanCacheAdapter:
                 published[path] = {**entry, "path": path}
         return published, removed
 
+    def load_removed_unpublished_paths(self, paths: Iterable[str]) -> set[str]:
+        """Scanned files no longer in the library and no longer on disk.
+
+        Another writer removed them after the scan read them, such as the automatic removal
+        of an untouched album whose files were deleted. Republishing them would bring the
+        album back.
+        """
+        candidates = sorted({str(path) for path in paths})
+        if not candidates:
+            return set()
+        with self._connect_to_database() as connection:
+            known = {
+                str(_row_mapping(row)["private_path"])
+                for row in connection.execute(
+                    """
+                    select files.private_path
+                    from library.local_track_files files
+                    join unnest(%(paths)s::text[]) as scanned(private_path)
+                      on scanned.private_path = files.private_path
+                    """,
+                    {"paths": candidates},
+                ).fetchall()
+            }
+        return {path for path in candidates if path not in known and not os.path.exists(path)}
+
     def load_file_entries(self, paths, *, include_siblings=False):
         """Read only selected files, optionally including their album containers."""
         with self._connect_to_database() as connection:

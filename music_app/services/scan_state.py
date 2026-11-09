@@ -222,6 +222,9 @@ def _merge_newer_published_inventory(
     # Read the revision first: a change after it supersedes the retry again.
     revision = int(load_revision())
     published, removed = load_published(since)
+    load_removed = getattr(adapter, "load_removed_unpublished_paths", None)
+    if callable(load_removed):
+        removed = set(removed) | load_removed(publication_state.get("file_cache") or {})
     file_cache = {
         path: entry
         for path, entry in dict(publication_state.get("file_cache") or {}).items()

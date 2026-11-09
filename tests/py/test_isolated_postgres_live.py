@@ -672,6 +672,8 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
     changed = fixture.entry("Owner/Copy One/one.flac", artist="Owner feat. Old Guest")
     untouched = fixture.entry("Owner/Copy Two/two.flac", root=int(other_root), artist="Owner feat. Retained Guest")
     fixture.seed(changed, untouched)
+    # Rated, so deleting both copies keeps the album as Missing instead of removing it as untouched.
+    _rate_live_album(fixture, "owner::repair album")
     changed = {**changed, "artist": "Owner feat. New Guest"}
     if operation == "delete":
         Path(changed["path"]).unlink()
@@ -702,6 +704,20 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
             """).fetchall()
             assert connection.execute("select bool_and(scan_cache_stale) as all_stale from library.local_track_files").fetchone()["all_stale"]
         assert {row["name"] for row in retained} == {"Retained Guest"}
+
+
+def _rate_live_album(fixture, album_key, rating=5):
+    """A user rating: the album is the user's, so deleting its files keeps it as Missing."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """insert into app.album_ratings (account_id, library_id, album_key, rating, provenance)
+               select owners.account_id, albums.library_id, albums.album_key, %s, 'user'
+               from library.local_albums albums
+               join library.libraries libraries on libraries.id = albums.library_id
+               join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+               where albums.album_key = %s""",
+            (rating, album_key),
+        )
 
 
 def _live_album_rows(fixture):
@@ -958,6 +974,8 @@ def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_r
     edited = fixture.entry("Owner/Edited/01.flac", album="Edited")
     deleted = fixture.entry("Owner/Deleted/01.flac", album="Deleted")
     fixture.seed(untouched, edited, deleted)
+    # Rated, so its deleted file stays as a missing row instead of being removed as untouched.
+    _rate_live_album(fixture, "owner::deleted")
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         scan_started = connection.execute("select extract(epoch from clock_timestamp()) as now").fetchone()["now"]
     time.sleep(0.05)
@@ -995,6 +1013,28 @@ def test_live_library_loose_tracks_come_without_the_gallery(watcher_repair_inven
     assert "artist_groups" not in payload
     assert [track.get("path") for track in payload["library_non_album_tracks"]] == [loose["path"]]
     assert payload["non_album_tracks_deferred"] is False
+
+
+def test_live_superseded_scan_never_republishes_an_album_removed_after_its_walk(watcher_repair_inventory):
+    # An untouched album whose files were deleted is removed outright (no missing row is
+    # left), so a full scan that read it before the deletion must still drop it.
+    fixture = watcher_repair_inventory
+    kept = fixture.entry("Owner/Kept/01.flac", album="Kept")
+    removed_album = fixture.entry("Owner/Removed/01.flac", album="Removed")
+    fixture.seed(kept, removed_album)
+    new_file = fixture.entry("Owner/New/01.flac", album="New")
+    Path(removed_album["path"]).unlink()
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(removed_album["path"]),), deleted_subtrees=(), moves=(),
+    ))
+    assert "owner::removed" not in _live_album_rows(fixture)[0], "the untouched album was removed"
+
+    scanned = [kept["path"], removed_album["path"], new_file["path"]]
+    assert fixture.adapter.load_removed_unpublished_paths(scanned) == {removed_album["path"]}
 
 
 def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watcher_repair_inventory):

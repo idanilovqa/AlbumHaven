@@ -3351,6 +3351,44 @@ def persist_legacy_ignored_album_contract(setup_database_url: str) -> None:
             )
 
 
+def _rekey_fixture_albums(connection, *, album_filter: str, new_key: str, params: dict, extra_set: str = "") -> int:
+    """Re-key fixture albums and move their app ratings with them, in one statement:
+    publication seeds tag ratings, and album_ratings has no ON UPDATE CASCADE.
+    Returns the number of albums re-keyed."""
+    extra = f",\n              {extra_set}" if extra_set else ""
+    return connection.execute(
+        f"""
+        with album as (
+          select id, library_id, album_key from library.local_albums where {album_filter}
+        ), ratings as (
+          delete from app.album_ratings
+          using album
+          where app.album_ratings.library_id = album.library_id
+            and app.album_ratings.album_key = album.album_key
+          returning app.album_ratings.*
+        ), renamed as (
+          update library.local_albums
+          set album_key = {new_key}{extra}
+          from album
+          where library.local_albums.id = album.id
+          returning library.local_albums.id, library.local_albums.album_key
+        ), moved as (
+          insert into app.album_ratings (
+            account_id, library_id, album_key, rating, provenance, created_at, updated_at, metadata
+          )
+          select ratings.account_id, ratings.library_id, renamed.album_key, ratings.rating,
+                 ratings.provenance, ratings.created_at, ratings.updated_at, ratings.metadata
+          from ratings
+          join album on album.library_id = ratings.library_id and album.album_key = ratings.album_key
+          join renamed on renamed.id = album.id
+          returning 1
+        )
+        select count(*) from renamed;
+        """,
+        params,
+    ).fetchone()[0]
+
+
 def persist_ddt_studio_records_album_year_contract(
     setup_database_url: str,
 ) -> None:
@@ -3362,49 +3400,20 @@ def persist_ddt_studio_records_album_year_contract(
         ) from exc
 
     with psycopg.connect(setup_database_url) as connection:
-        # Publication seeds the album's tag rating, which has no ON UPDATE CASCADE:
-        # the rating moves to the new key in the same statement as the album.
-        renamed = connection.execute(
-            """
-            with album as (
-              select library_id, album_key from library.local_albums where title = %(title)s
-            ), ratings as (
-              delete from app.album_ratings
-              using album
-              where app.album_ratings.library_id = album.library_id
-                and app.album_ratings.album_key = album.album_key
-              returning app.album_ratings.*
-            ), renamed as (
-              update library.local_albums
-              set
-                album_key = lower(%(artist)s::text) || '::' || lower(%(title)s::text),
-                release_year = %(year)s,
-                metadata = jsonb_set(
-                  library.local_albums.metadata,
-                  '{release_date}',
-                  to_jsonb(%(release_date)s::text),
-                  true
-                )
-              where library.local_albums.title = %(title)s
-              returning library_id, album_key
-            ), moved as (
-              insert into app.album_ratings (
-                account_id, library_id, album_key, rating, provenance, created_at, updated_at, metadata
-              )
-              select ratings.account_id, renamed.library_id, renamed.album_key, ratings.rating,
-                     ratings.provenance, ratings.created_at, ratings.updated_at, ratings.metadata
-              from ratings cross join renamed
-              returning 1
-            )
-            select (select count(*) from renamed) as renamed, (select count(*) from moved) as moved;
-            """,
-            {
+        renamed = _rekey_fixture_albums(
+            connection,
+            album_filter="library.local_albums.title = %(title)s",
+            new_key="lower(%(artist)s::text) || '::' || lower(%(title)s::text)",
+            extra_set="""release_year = %(year)s,
+              metadata = jsonb_set(library.local_albums.metadata, '{release_date}',
+                                   to_jsonb(%(release_date)s::text), true)""",
+            params={
                 "artist": DDT_STUDIO_RECORDS_PERSISTED_ALBUM_ARTIST,
                 "title": DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
                 "year": DDT_STUDIO_RECORDS_FIXTURE_YEAR,
                 "release_date": f"{DDT_STUDIO_RECORDS_FIXTURE_YEAR}-01-01",
             },
-        ).fetchone()[0]
+        )
         if renamed != 1:
             raise RuntimeError(
                 "The DDT Studio Records fixture must update exactly one persisted "
@@ -3456,24 +3465,16 @@ def persist_tag_split_legacy_album_key_contract(setup_database_url: str) -> None
         ) from exc
 
     with psycopg.connect(setup_database_url) as connection:
-        result = connection.execute(
-            """
-            update library.local_albums
-            set album_key = lower(%s::text) || '::' || lower(%s::text)
-            where library.local_albums.title = %s
-              and library.local_albums.release_year = %s;
-            """,
-            (
-                TAG_RENAME_FIXTURE_ARTIST,
-                TAG_SPLIT_FIXTURE_ALBUM,
-                TAG_SPLIT_FIXTURE_ALBUM,
-                TAG_RENAME_FIXTURE_YEAR,
-            ),
+        renamed = _rekey_fixture_albums(
+            connection,
+            album_filter="library.local_albums.title = %(title)s and library.local_albums.release_year = %(year)s",
+            new_key="lower(%(artist)s::text) || '::' || lower(%(title)s::text)",
+            params={"artist": TAG_RENAME_FIXTURE_ARTIST, "title": TAG_SPLIT_FIXTURE_ALBUM, "year": TAG_RENAME_FIXTURE_YEAR},
         )
-        if result.rowcount != 1:
+        if renamed != 1:
             raise RuntimeError(
                 "The selected-track split fixture must seed exactly one legacy "
-                f"album key, updated {result.rowcount}."
+                f"album key, updated {renamed}."
             )
 
 

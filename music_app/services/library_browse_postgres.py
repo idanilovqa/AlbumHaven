@@ -524,6 +524,35 @@ class PostgresLibraryBrowseRepository:
                     ensure_gallery_summary=ensure_gallery_summary,
                 )
 
+    def build_library_loose_tracks_payload(
+        self,
+        *,
+        query_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Library-wide Loose Tracks alone: no gallery is built or sent (owner PERF-1)."""
+        view_state = _root_sidebar_view_state(query_params)
+        relation_alias_maps = self._load_relation_alias_maps()
+        with self._connect_to_database() as connection:
+            loaded = self._load_non_album_entries(
+                view_state=view_state,
+                alias_to_canonical=relation_alias_maps["alias_to_canonical"],
+                canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+                connection=connection,
+                include_library_wide=True,
+            )
+            entries = loaded[1] if isinstance(loaded, tuple) else loaded
+            configured_root_paths = (
+                configured_library_root_paths_snapshot(self._config, connection=connection)
+                if entries else ()
+            )
+        return {
+            "library_non_album_tracks": build_non_album_track_list(
+                entries, config=self._config, configured_root_paths=configured_root_paths,
+            ),
+            "non_album_tracks_deferred": False,
+            "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
+        }
+
     def _load_non_album_entries(
         self,
         *,

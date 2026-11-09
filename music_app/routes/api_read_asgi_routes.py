@@ -46,6 +46,7 @@ from music_app.services.album_identity_lineage_postgres import (
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
+    is_library_browse_postgres_available,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.private_track_search import build_private_track_search_contract
@@ -572,6 +573,18 @@ def _transient_scan_view_response(
     )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
     _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload)
+
+
+@router.get("/library/loose-tracks")
+def library_loose_tracks(request: Request) -> JSONResponse:
+    """Library-wide Loose Tracks without the gallery the full view-data response carries."""
+    if not is_library_browse_postgres_available(_app_config(request)):
+        return JSONResponse({"ok": False, "error": "Loose Tracks needs the Postgres library."}, status_code=409)
+    payload = PostgresLibraryBrowseRepository(_app_config(request)).build_library_loose_tracks_payload(
+        query_params=request.query_params,
+    )
+    payload["inventory_mutation_revision"] = int(_library_state(request).get("inventory_mutation_revision") or 0)
     return JSONResponse(payload)
 
 

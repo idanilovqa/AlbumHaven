@@ -409,7 +409,7 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   context.fetch = async (url) => {
     requested.push(String(url));
     const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+      .pathname === '/library/loose-tracks';
     return {
       ok: true,
       status: 200,
@@ -448,7 +448,9 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   await context.hydrateDeferredNonAlbumTracks();
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
   assert.equal(requested.length, 3, 'another artist reuses the same library-wide Loose Tracks');
-  assert.equal(new URL(requested[1], 'http://localhost').searchParams.get('artist'), '');
+  // Library-wide Loose Tracks is its own request, never scoped to the selected artist.
+  assert.equal(new URL(requested[1], 'http://localhost').pathname, '/library/loose-tracks');
+  assert.equal(new URL(requested[1], 'http://localhost').searchParams.get('artist'), null);
 });
 
 test('current artist hydration reaches terminal state while library-wide hydration is pending', async () => {
@@ -460,7 +462,7 @@ test('current artist hydration reaches terminal state while library-wide hydrati
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
     const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+      .pathname === '/library/loose-tracks';
     const respond = () => resolve({
       ok: true,
       status: 200,
@@ -508,7 +510,7 @@ test('late artist hydration preserves completed library-wide non-album tracks', 
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
     const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+      .pathname === '/library/loose-tracks';
     const respond = () => resolve({
       ok: true,
       status: 200,
@@ -775,8 +777,9 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
   // Opening Loose Tracks resolves the whole library without repeating the probe.
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
   // The query-scoped request never depends on the auto-selected artist.
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null, '']);
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', '']);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null, null]);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', null]);
+  assert.equal(new URL(requested[1], 'http://localhost').pathname, '/library/loose-tracks');
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
 });

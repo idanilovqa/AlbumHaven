@@ -302,17 +302,11 @@ function fetchLibraryNonAlbumPayload(url) {
 function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
   const searching = withQuery && Boolean(String(view.query || '').trim());
   if (searching) return buildLibraryNonAlbumSearchUrl(buildApiUrl(view, { omitSidebar: true }));
-  const url = new URL(buildApiUrl({
-    ...view,
-    query: '',
-    selected_artist: '',
-    all_artists_active: true,
-    related_filter_artists: [],
-    primary_filter_active: false,
-    search_context: null,
-  }, { omitSidebar: true }), 'http://localhost');
-  url.searchParams.set('include_non_album', '1');
-  url.searchParams.set('include_library_wide_non_album', '1');
+  // Loose Tracks alone: the all-artists view-data response also carried the whole gallery
+  // (67 MB, minutes cold, on a full library) for a few hundred tracks.
+  const url = new URL('/library/loose-tracks', 'http://localhost');
+  (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
+  if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
   return url;
 }
 

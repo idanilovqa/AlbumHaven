@@ -943,6 +943,24 @@ def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_r
     assert removed == {deleted["path"]}
 
 
+def test_live_library_loose_tracks_come_without_the_gallery(watcher_repair_inventory):
+    # Owner PERF-1: library-wide Loose Tracks took minutes because it shipped the whole gallery.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    album_track = fixture.entry("Owner/Album/01.flac", album="Album")
+    loose = {**fixture.entry("Loose/01.flac", album=""), "artist": "", "album_artist": "", "title": "Loose One"}
+    fixture.seed(album_track, loose)
+
+    payload = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload()
+
+    assert "artist_groups" not in payload
+    assert [track.get("path") for track in payload["library_non_album_tracks"]] == [loose["path"]]
+    assert payload["non_album_tracks_deferred"] is False
+
+
 def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     main_a = fixture.entry("Owner/Counted/01.flac", album="Counted")

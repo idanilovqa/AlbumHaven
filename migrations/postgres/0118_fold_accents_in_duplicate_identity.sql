@@ -15,3 +15,15 @@ as $$
 $$;
 
 reindex index library.local_track_files_active_duplicate_identity_idx;
+
+-- 0112's stored album identity was computed with the old function; replacing the
+-- function does not recompute stored generated values, so rewrite the column with
+-- the same expression.
+alter table library.local_track_files
+  alter column scan_file_album_identity set expression as (
+    case when jsonb_typeof(metadata #> '{scan_cache,file_entry}') = 'object'
+      then library.duplicate_identity_text(
+        nullif(lower(btrim(metadata #>> '{scan_cache,file_entry,album}')), '')
+      )
+    end
+  );

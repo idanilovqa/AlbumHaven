@@ -7018,6 +7018,55 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
         lease.release()
 
 
+def test_live_accent_folding_migration_recomputes_stored_album_identity(monkeypatch):
+    """0118 replaces duplicate_identity_text; rows stored before it must not keep
+    0112's old album identity, or Problematic Files would compare stale values."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "migrations" / "postgres" / "0118_fold_accents_in_duplicate_identity.sql"
+    ).read_text(encoding="utf-8")
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id = connection.execute(
+            """select library.libraries.id from app.bootstrap_owners
+               join library.libraries on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1"""
+        ).fetchone()["id"]
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name) values (%s, 'a', 'A') returning id",
+            (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title) values (%s, %s, 'a::b', 'B') returning id",
+            (library_id, artist_id),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title) values (%s, %s, %s, 't', 'T') returning id",
+            (library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        # The pre-0118 identity kept accents; store a row under it.
+        connection.execute("""
+            create or replace function library.duplicate_identity_text(value text)
+            returns text language sql immutable parallel safe strict
+            set search_path = pg_catalog, pg_temp
+            as $$ select btrim(regexp_replace(normalize(casefold(value collate "und-x-icu"), NFC), '[[:space:]]+', ' ', 'g')) $$
+        """)
+        connection.execute(
+            """insert into library.local_track_files (track_id, private_path, metadata)
+               values (%s, 'C:/Music/A/B/01.flac', %s::jsonb)""",
+            (track_id, '{"scan_cache": {"file_entry": {"album": "Nè Al Cielo"}}}'),
+        )
+        stored = connection.execute("select scan_file_album_identity from library.local_track_files").fetchone()
+        assert stored["scan_file_album_identity"] == "nè al cielo"
+
+        connection.execute(migration)
+
+        stored = connection.execute("select scan_file_album_identity from library.local_track_files").fetchone()
+        assert stored["scan_file_album_identity"] == "ne al cielo"
+
+
 def test_live_duplicate_identity_folds_latin_accents_like_python(monkeypatch):
     from music_app.services.library import _duplicate_album_identity_values
 

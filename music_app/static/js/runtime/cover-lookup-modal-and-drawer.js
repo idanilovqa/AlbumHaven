@@ -2743,7 +2743,7 @@ function renderCoverLookupModal() {
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
-  if (typeof markSecondArtboxDuplicatePictures === 'function') markSecondArtboxDuplicatePictures(els.body);
+  if (typeof markOtherArtboxDuplicatePictures === 'function') markOtherArtboxDuplicatePictures(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
@@ -3620,6 +3620,13 @@ async function openCoverLookupModal(album, options = {}) {
     || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);
   state.coverLookup.modal.saving = false;
   if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery);
+  // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
+  // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
+  const awaitIdentity = Boolean(requestedTaskId) && album.identity_resolution !== 'album_split_choice';
+  els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
+  const revealSession = coverLookupModalSession;
+  const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
+  if (awaitIdentity && typeof setTimeout === 'function') setTimeout(reveal, 1200);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
@@ -3629,6 +3636,7 @@ async function openCoverLookupModal(album, options = {}) {
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await refreshCoverLookupGallery(false);
+  reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
     ensureCoverLookupPolling();

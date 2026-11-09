@@ -848,3 +848,6 @@
 /* Second-artbox mode: the first artbox's art is shown but cannot be chosen again. */
 .cover-lookup-art-card.is-disabled { opacity: .38; filter: grayscale(1); cursor: not-allowed; }
 .cover-lookup-art-card.is-disabled .cover-lookup-art-delete { display: none; }
+
+/* UI-5 (owner): a notification-opened lookup stays invisible until its album identity is known (no flash before the split chooser). */
+#cover-lookup-modal[data-awaiting-identity] { visibility: hidden; }

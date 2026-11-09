@@ -251,9 +251,9 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
   return false;
 }
 
-// UI-14 (owner): the second artbox cannot take the same picture as the album cover, even from another source
-// or size. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
-// well under a millisecond) and compared with the album cover's; a near-identical picture is dimmed and
+// UI-14 (owner): neither artbox can take the other's picture, even from another source or size: choosing the
+// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale,
+// well under a millisecond) and compared with the other artbox's; a near-identical picture is dimmed and
 // cannot be chosen. Previews are same-origin (local covers and the remote-image proxy), so they are readable.
 // The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
 // alike; their average colors must also be close for the pictures to count as the same.
@@ -317,11 +317,20 @@ function hashLoadedPreview(image) {
     : new Promise((resolve) => image.addEventListener('load', () => resolve(hashLoadedPreview(image)), { once: true }));
 }
 
-function markSecondArtboxDuplicatePictures(body) {
+function getOtherArtboxPicture(modal) {
+  if (modal.artboxSlot) return { url: buildAlbumDisplayCoverUrl(modal.album), label: 'Same picture as the album cover' };
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  return artwork
+    ? { url: buildAlbumDisplayCoverUrl(buildAdditionalArtworkCoverSource(modal.album, artwork)), label: 'Same picture as the second artbox' }
+    : null;
+}
+
+function markOtherArtboxDuplicatePictures(body) {
   const modal = state.coverLookup?.modal;
-  if (!body?.querySelectorAll || !modal?.artboxSlot || !modal.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
-  const coverUrl = buildAlbumDisplayCoverUrl(modal.album);
-  void hashArtboxPicture(coverUrl).then((coverHash) => {
+  if (!body?.querySelectorAll || !modal?.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
+  const other = getOtherArtboxPicture(modal);
+  if (!other?.url) return;
+  void hashArtboxPicture(other.url).then((coverHash) => {
     if (!coverHash) return;
     body.querySelectorAll('.cover-lookup-art-card:not(.is-disabled) .cover-lookup-art-preview img').forEach((image) => {
       void hashLoadedPreview(image).then((hash) => {
@@ -334,7 +343,7 @@ function markSecondArtboxDuplicatePictures(body) {
         card.removeAttribute('tabindex');
         ['data-select-local-cover', 'data-select-remote-cover', 'data-select-pasted-cover'].forEach((name) => card.removeAttribute(name));
         const label = card.querySelector('.cover-lookup-art-action-label');
-        if (label) label.textContent = 'Same picture as the album cover';
+        if (label) label.textContent = other.label;
       });
     });
   });

@@ -307,6 +307,23 @@ class MusicBrainzClient:
             return {"classification": "invalid_response", "artist": None, "transport": transport}
         return {"classification": "matched", "artist": artist, "transport": transport}
 
+    def band_memberships(self, mbid: object) -> JsonDict:
+        """The groups an artist is a member of ("member of band"), by MBID."""
+        normalized = _valid_mbid(mbid)
+        if not normalized:
+            return {"classification": "invalid_request", "groups": []}
+        query = urllib.parse.urlencode({"fmt": "json", "inc": "artist-rels"})
+        payload, transport = self.get_json(f"{self.base_url}/artist/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "groups": [], "transport": transport}
+        groups = sorted({
+            _valid_mbid((relation.get("artist") or {}).get("id"))
+            for relation in payload.get("relations") or []
+            if isinstance(relation, dict) and relation.get("type") == "member of band"
+            and relation.get("direction") == "forward" and isinstance(relation.get("artist"), dict)
+        } - {None})
+        return {"classification": "complete", "groups": groups}
+
     def browse_release_group_titles(
         self,
         mbid: object,

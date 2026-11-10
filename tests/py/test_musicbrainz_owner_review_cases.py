@@ -56,8 +56,11 @@ CREDITED = {"3 Crows": "3 Crows", "Alan Parsons Project": "Alan Parsons Project"
             "Eric Mongrain": "Eric Mongrain", "Birgir": "Birgir"}
 UNCONFIRMED: dict[str, str] = {}
 # Owner decision 2026-11-08: each album takes the artist it certainly matches, with no
-# margin. Alice Cooper's albums are the singer's and the 1969-74 band's.
-PER_ALBUM = {"Alice Cooper": {"ee58c59f-8e7f-4430-b8ca-236c4d3745ae", "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"}}
+# margin. Owner 2026-11-09: Alice Cooper is a person, and the 1969-74 group he is a member
+# of is not a separate artist: one match, the singer, while each album keeps its MBID.
+PER_ALBUM: dict[str, set[str]] = {}
+MATCHED["Alice Cooper"] = "ee58c59f-8e7f-4430-b8ca-236c4d3745ae"
+ALICE_COOPER_ALBUM_ARTISTS = {"ee58c59f-8e7f-4430-b8ca-236c4d3745ae", "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"}
 
 
 def _client():
@@ -95,11 +98,14 @@ def test_every_named_case_is_covered():
     assert {case["case"] for case in FIXTURE["cases"]} == set(MATCHED) | set(UNCONFIRMED) | set(PER_ALBUM)
 
 
-def test_a_split_artist_compares_its_undecided_albums_by_their_tracks():
+def test_a_person_s_albums_and_their_band_s_keep_their_own_mbids_under_one_artist():
     """Owner review 4: Alice Cooper's solo albums were left undecided on their year alone
-    when the split spent the lookups; each undecided album now has its tracks compared."""
+    when the split spent the lookups; each now has its tracks compared, and the person and
+    the band he is a member of are one artist."""
     case = next(case for case in FIXTURE["cases"] if case["case"] == "Alice Cooper")
     outcome = resolve_artist(case["context"], client=_client())
 
+    assert outcome["artist"]["mbid"] == MATCHED["Alice Cooper"]
+    assert {item["artist_mbid"] for item in outcome["album_identities"]} == ALICE_COOPER_ALBUM_ARTISTS
     decided = {item["local_title"] for item in outcome["album_identities"]}
     assert [album["title"] for album in case["context"]["albums"] if album["title"] not in decided] == ["Killer"]

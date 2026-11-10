@@ -852,3 +852,38 @@ def test_albums_of_several_artists_store_their_identities_and_leave_problematic_
                     {"artist_mbid": TRANCE, "canonical_name": "Amarok", "candidate_score": 1, "evidence_summary": "1 of 2"}])
     with isolatedPostgres._connect(setup_url) as connection:
         assert _identities(connection, library_id) == {}
+
+
+def test_a_person_matched_with_their_band_s_albums_stores_the_band_for_those_identities(
+        monkeypatch: pytest.MonkeyPatch):
+    """Owner 2026-11-09: Alice Cooper is one artist, the singer; the albums credited to the
+    group he is a member of keep the group's MBID, which must exist for the identity."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "alice")
+    with isolatedPostgres._connect(setup_url) as connection:
+        band_album = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
+            " values (%s, %s, 'alice-killer', 'Killer', '{}'::jsonb) returning id", (library_id, artist_id),
+        ).fetchone()["id"]
+        solo_album = connection.execute("select id from library.local_albums where album_key = 'alice-album'").fetchone()["id"]
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz album evidence agreed.",
+        artist={"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"},
+        identity_artists=[{"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"},
+                          {"mbid": TRANCE, "canonical_name": "Alice Cooper", "artist_type": "Group",
+                           "disambiguation": "the band"}],
+        album_identities=[{"local_album_id": solo_album, "artist_mbid": GERMAN},
+                          {"local_album_id": band_album, "artist_mbid": TRANCE}])
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        match = connection.execute(
+            "select state, artist_mbid from library.local_artist_musicbrainz_matches where local_artist_id = %s",
+            (artist_id,)).fetchone()
+        assert (match["state"], str(match["artist_mbid"])) == ("matched", GERMAN)
+        assert _identities(connection, library_id) == {
+            "alice-album": (GERMAN, "automatic", False), "alice-killer": (TRANCE, "automatic", False)}
+        assert _active(connection, artist_id) == []

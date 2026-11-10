@@ -581,8 +581,8 @@ class MusicBrainzEnrichmentPostgresRepository:
         album_identities: list[dict[str, object]] | None = None,
         identity_artists: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
-        """``album_identities`` are the albums a MusicBrainz artist certainly holds; a
-        ``per_album`` outcome names those artists in ``identity_artists``."""
+        """``album_identities`` are the albums a MusicBrainz artist certainly holds;
+        ``identity_artists`` names those artists (a split's, or a person's band)."""
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
         tags = projection["tags"] if projection else []

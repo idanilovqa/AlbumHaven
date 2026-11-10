@@ -443,3 +443,26 @@ def test_a_certain_album_under_another_name_matches_and_is_marked_for_tag_correc
         "local_album_id": 5, "local_title": "The Grey Album", "artist_mbid": OTHER,
         "release_group_mbid": group_id(OTHER, "The Grey Album"), "release_mbid": outcome["album_identities"][0]["release_mbid"],
         "disc_position": None, "signals": ["durations", "track_count", "track_list", "year"], "tag_differs": True}]
+
+
+def test_a_person_and_the_same_named_band_they_belong_to_are_one_artist():
+    """Owner 2026-11-09: Alice Cooper is a person; the 1969-74 albums credited to the group
+    he is a member of are still his. One artist-level identity, the person; each album keeps
+    its certain MBID, and the group is stored so those identities resolve."""
+    person = {"id": GERMAN, "name": "Axxis", "type": "Person", "disambiguation": "the singer",
+              "relations": [{"type": "member of band", "direction": "forward",
+                             "artist": {"id": TRANCE, "name": "Axxis"}}]}
+    artists = {GERMAN: person, TRANCE: {"id": TRANCE, "name": "Axxis", "type": "Group", "disambiguation": "the band"}}
+    client, calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Dancefloor Mix"]}, artists=artists)
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II", "Dancefloor Mix"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+    assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
+        1: GERMAN, 2: GERMAN, 3: TRANCE}
+    assert {artist["mbid"] for artist in outcome["artists"]} == {GERMAN, TRANCE}
+    assert any("inc=artist-rels" in url for url in calls)

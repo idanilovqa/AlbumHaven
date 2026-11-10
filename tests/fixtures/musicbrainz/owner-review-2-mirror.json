@@ -3098,9 +3098,9 @@
 },
 "owner_mbid": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
 "recorded": {
-"classification": "per_album",
+"classification": "found",
 "credit_name": null,
-"mbid": null
+"mbid": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae"
 }
 },
 {
@@ -12092,6 +12092,94 @@
 "name": "shock rock"
 }
 ],
+"type": "Person"
+},
+"/artist/ee58c59f-8e7f-4430-b8ca-236c4d3745ae?fmt=json&inc=artist-rels": {
+"aliases": [],
+"country": "US",
+"disambiguation": "the singer, active as a solo artist 1975–present",
+"id": "ee58c59f-8e7f-4430-b8ca-236c4d3745ae",
+"name": "Alice Cooper",
+"relations": [
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "d30a1d2b-e88d-4470-89cb-69d8c335ce3d"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "d30a1d2b-e88d-4470-89cb-69d8c335ce3d"
+},
+"direction": "forward",
+"type": "member of band"
+},
+{
+"artist": {
+"id": "d30a1d2b-e88d-4470-89cb-69d8c335ce3d"
+},
+"direction": "forward",
+"type": "member of band"
+}
+],
+"sort-name": "Cooper, Alice",
 "type": "Person"
 },
 "/artist/f37c537b-3557-4031-bfd6-ab63ced32854?fmt=json&inc=aliases%2Bgenres%2Btags%2Burl-rels": {

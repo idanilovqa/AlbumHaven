@@ -1900,6 +1900,130 @@ def test_asgi_cover_routes_reject_lookup_task_from_another_album(
     assert snapshot_calls == []
 
 
+def test_asgi_cover_lookup_gallery_offers_split_choice_before_the_split_is_recorded(
+    app,
+    monkeypatch,
+):
+    """UI-5 (owner, 11-10): opened from its notification right after the split, the old album still read as current
+    with all the task's tracks; the release chooser must still open first."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    first_track = (app.config["MUSIC_DIR"] / "Artist" / "Old Album" / "one.mp3").resolve()
+    second_track = (app.config["MUSIC_DIR"] / "Artist" / "Old Album" / "two.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    old_album = {
+        **_album_payload(first_track),
+        "album_id": 40,
+        "name": "Old Album",
+        "tracks": [{"path": str(first_track)}, {"path": str(second_track)}],
+    }
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
+        old_album,
+        {str(first_track), str(second_track)},
+    )
+    current_releases = [
+        {
+            "key": "artist::first release",
+            "album_artist": "Artist",
+            "name": "First Release",
+            "year": 2001,
+            "edition": "Expanded",
+            "tracks": [{"path": str(first_track)}],
+        },
+        {
+            "key": "artist::second release",
+            "album_artist": "Artist",
+            "name": "Second Release",
+            "year": 2002,
+            "tracks": [{"path": str(second_track)}],
+        },
+    ]
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            if track_paths == {str(first_track), str(second_track)}:
+                return 40
+            if track_paths == {str(first_track)}:
+                return 41
+            if track_paths == {str(second_track)}:
+                return 42
+            raise AssertionError(track_paths)
+
+    class BrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {str(first_track), str(second_track)}
+            return current_releases
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert album_id == 40
+            assert track_paths == {str(first_track), str(second_track)}
+            return {"status": "current", "album": {"album_id": 40, "album_key": "artist::old album"}, "choices": []}
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        SnapshotRepository,
+    )
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+
+    async def serialize_gallery(*_args, **_kwargs):
+        return {"ok": True, "local_covers": [], "other_art": []}
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", serialize_gallery)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": old_album, "task_id": task_id},
+    )
+
+    assert status == 409
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "This album was split—choose the current release",
+        "resolution_kind": "album_split",
+        "current_releases": [
+            {
+                "album_id": 41,
+                "identity_resolution": "album_split_choice",
+                "key": "artist::first release",
+                "album_artist": "Artist",
+                "name": "First Release",
+                "year": 2001,
+                "edition": "Expanded",
+                "track_count": 1,
+            },
+            {
+                "album_id": 42,
+                "identity_resolution": "album_split_choice",
+                "key": "artist::second release",
+                "album_artist": "Artist",
+                "name": "Second Release",
+                "year": 2002,
+                "edition": "",
+                "track_count": 1,
+            },
+        ],
+    }
+    assert [release["album_id"] for release in _decode_json(body)["current_releases"]] == [41, 42]
+
+
 def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_split_album(
     app,
     monkeypatch,

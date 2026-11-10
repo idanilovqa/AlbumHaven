@@ -922,7 +922,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_key=str(album.get("key") or album.get("album_ref") or ""),
     )
     split_response = None
-    if task_payload and task_track_paths and not task_track_paths <= album_context.track_paths:
+    # UI-5 (owner, 11-10): opened from its notification right after a split, the request still carries the
+    # whole pre-split album (the task's own tracks), so a split is checked even when no track looks missing.
+    if task_payload and task_track_paths:
         split_response = await _cover_lookup_album_split_response(
             config,
             task_track_paths,

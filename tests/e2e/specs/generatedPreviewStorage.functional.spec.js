@@ -314,40 +314,63 @@ test(
         );
         expect({ mode: unfinished.mode, failed: unfinished.failed_count }).toEqual({ mode: 'album_folders', failed: 1 });
         const adminServer = new AdminServerPage(page);
+        // Owner (11-10): "that needs to also come as notification in notification panel ... Clicking in the
+        // notification will lead the user to that server setting page", and a pop-up alert so the owner notices.
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
+        await expect(page.locator('#toast-layer .toast').filter({ hasText: 'Move album previews failed. Your attention is needed.' }))
+          .toBeVisible({ timeout: 10_000 });
+        await coverLookupActions.openDrawer();
+        const attention = page.locator('#preview-move-attention [data-preview-move-attention]');
+        await expect(attention).toBeVisible();
+        await expect(attention).toContainText('Move album previews failed');
+        await expect(attention).toContainText('Your attention is needed');
+        await expect(attention).toContainText('1 file failed');
+        await attention.click();
+        await expect(page).toHaveURL(/\/admin\/server$/);
+        await expect(adminServer.heading).toBeVisible();
+        // Owner (11-10): the option the owner chose stays chosen after a reload, marked not finished.
         await page.goto('/admin/server');
-        // The previews still live in the album folders: that is the choice shown, with the reason the switch waits.
-        await expect(adminServer.mode('album_folders')).toBeChecked();
-        await expect(adminServer.mode('custom')).not.toBeChecked();
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(page.locator('label.ui-radio-option').filter({ has: adminServer.mode('custom') }))
+          .toContainText('Special path (not finished)');
+        // The note asks for Retry, as wide as its message.
         await expect(adminServer.status).toContainText(
           `Moving to ${customRoot}: 1 file failed. The switch happens after they're retried.`,
         );
+        const [noteBox, formBox] = await Promise.all([adminServer.status.boundingBox(), adminServer.form.boundingBox()]);
+        expect(noteBox.width).toBeLessThan(formBox.width - 40);
         // Owner (11-10): the selected radio shows a filled dot in its ring.
         // parity-check: allow-read-only-measurement-evaluate -- read the rendered radio dot
-        expect(await adminServer.mode('album_folders').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(1);
-        expect(await adminServer.mode('custom').evaluate((input) => getComputedStyle(input, '::before').transform)).not.toBe('none');
-        expect(await adminServer.mode('custom').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(0);
+        expect(await adminServer.mode('custom').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(1);
+        expect(await adminServer.mode('album_folders').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(0);
         fs.rmSync(conflictTarget);
-        // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once, the move
-        // reports progress, and it ends with a readable result.
-        // parity-check: allow-read-only-measurement-evaluate -- record the Retry button and status on every frame
+        // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The button shows it is working at
+        // once, the note goes once Retry is clicked, and the summary line carries the progress and result.
+        // parity-check: allow-read-only-measurement-evaluate -- record the Retry button, note and summary on every frame
         await page.evaluate(() => {
           const frames = [];
           window.__retryFrames = frames;
           const read = () => {
             const button = document.querySelector('[data-preview-retry]');
             const status = document.querySelector('[data-preview-status]');
-            const entry = `${button?.getAttribute('aria-busy') === 'true' ? 'busy' : 'idle'}|${status && !status.hidden ? status.textContent.trim() : ''}`;
+            const counts = document.querySelector('[data-preview-counts]')?.textContent || '';
+            const entry = `${button?.getAttribute('aria-busy') === 'true' ? 'busy' : 'idle'}|${status && !status.hidden ? 'note' : 'no-note'}|${counts}`;
             if (frames.at(-1) !== entry) frames.push(entry);
-            if (frames.length < 400 && !/Done: switched/.test(entry)) requestAnimationFrame(read);
+            if (frames.length < 400 && !/cleaned up/.test(counts)) requestAnimationFrame(read);
           };
           requestAnimationFrame(read);
         });
         await adminServer.retry.click();
-        await expect(adminServer.status).toContainText(`Done: switched to ${customRoot}.`, { timeout: 60_000 });
+        await expect(adminServer.counts).toContainText('cleaned up 1 cache folders', { timeout: 60_000 });
+        await expect(adminServer.status).toBeHidden();
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(page.locator('label.ui-radio-option').filter({ has: adminServer.mode('custom') })).toHaveText('Special path');
         const retryFrames = await page.evaluate(() => window.__retryFrames);
-        expect(retryFrames, JSON.stringify(retryFrames)).toContain('busy|Retrying 1 file…');
-        expect(retryFrames.some((frame) => frame.includes(`Moving to ${customRoot}: `) && frame.includes(' files done…')),
-          JSON.stringify(retryFrames)).toBe(true);
+        const clickedAt = retryFrames.findIndex((frame) => frame.startsWith('busy|'));
+        expect(clickedAt, JSON.stringify(retryFrames)).toBeGreaterThan(-1);
+        expect(retryFrames[clickedAt], 'the note goes as the button turns busy').toMatch(/^busy\|no-note\|/);
+        expect(retryFrames.slice(clickedAt).some((frame) => frame.includes('|note|')), JSON.stringify(retryFrames)).toBe(false);
         const completed = await waitForStorageState(
           page,
           (state) => state.mode === 'custom' && state.operation_state === 'completed' && !state.requested_mode,

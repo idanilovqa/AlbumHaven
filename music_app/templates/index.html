@@ -333,6 +333,8 @@
         {% call action_button('Close cover art lookups', class_name='cover-lookup-drawer-close', attributes={'data-close-cover-lookup-drawer': '1'}, presentation='bare') %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
     </div>
+    {# Owner (11-10): a preview move that needs the server owner shows here first. #}
+    {% if account_menu_allowed_actions.allows('system.preview_storage.read') %}<div class="cover-lookup-drawer-attention" id="preview-move-attention" hidden></div>{% endif %}
     <div class="cover-lookup-drawer-body" id="cover-lookup-drawer-body"></div>
   </aside>
 

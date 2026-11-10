@@ -66,15 +66,22 @@
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
-    let wasActive = false;
+    let retryClicked = false;
     let pollTimer = null;
     let disposed = false;
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
-    // Owner (11-10): the choice shows where previews live now; a requested folder becomes the choice only once the
-    // move has switched to it.
-    const savedMode = () => String(state?.mode || 'album_folders');
-    const savedPath = () => String(state?.active_root || '');
+    // Owner (11-10): "if specific folder or vice versa fails don't reselect the other option after reload". The
+    // requested option stays chosen, marked not finished until the move switches to it.
+    const savedMode = () => String(state?.requested_mode || state?.mode || 'album_folders');
+    const savedPath = () => String(state?.requested_root || state?.active_root || '');
+    const markUnfinished = (requestedMode) => modes.forEach((control) => {
+      const label = control.parentElement?.querySelector?.('span');
+      if (!label) return;
+      if (!label.dataset.label) label.dataset.label = label.textContent;
+      label.textContent = control.getAttribute('data-preview-mode') === requestedMode
+        ? `${label.dataset.label} (not finished)` : label.dataset.label;
+    });
     // Save is available only for a valid, unsaved choice: a special path always needs a folder.
     const syncControls = () => {
       const locked = !state || configurationLocked(state.operation_state);
@@ -138,22 +145,18 @@
       // Owner (11-10): an unfinished move says so plainly instead of looking like the new folder is in use.
       const destination = next.requested_mode === 'custom' ? String(next.requested_root || 'the special path') : 'album folders';
       const failedCount = Number(next.failed_count || 0);
-      // Owner (11-10): a move or retry shows live progress and ends with a readable result.
-      const operationState = String(next.operation_state || 'idle');
-      const done = Number(next.completed_count || 0) + failedCount;
-      if (active) {
-        showAlert(status, `Moving to ${destination}: ${done} of ${totalCount} files done…`);
-      } else if (next.requested_mode) {
-        showAlert(status, canceled
+      // Owner (11-10): "I don't think I need a separate info message. We already print into there in the line. Maybe
+      // show it when it tells user to click retry - but after retry is clicked remove it." The summary line carries
+      // progress and results; the note shows only while the move waits for Retry or Resume.
+      markUnfinished(next.requested_mode || null);
+      showAlert(status, next.requested_mode && !active && !retryClicked
+        ? (canceled
           ? `Moving to ${destination} was canceled. Previews stay where they are until the move is resumed.`
-          : `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`);
-      } else if (wasActive && operationState === 'completed') {
-        const where = next.mode === 'custom' ? String(next.active_root || 'the special path') : 'album folders';
-        showAlert(status, [`Done: switched to ${where}.`,
-          regenerateLater ? ` ${regenerateLater} set to be rebuilt.` : '',
-          rechecked ? ` ${rechecked} re-checked.` : ''].join(''));
-      }
-      wasActive = active;
+          : failedCount
+            ? `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`
+            : '')
+        : '');
+      if (!active) retryClicked = false;
       window.ButtonComponent.setBusy(retry, false);
       window.ButtonComponent.setBusy(cancel, false);
       counts.hidden = false;
@@ -239,17 +242,14 @@
     retry.addEventListener('click', async () => {
       if (retry.disabled) return;
       // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once.
-      const failedCount = Number(state?.failed_count || 0);
       window.ButtonComponent.setBusy(retry, true);
-      showAlert(status, failedCount
-        ? `Retrying ${failedCount} ${failedCount === 1 ? 'file' : 'files'}…`
-        : 'Resuming the move…');
+      retryClicked = true;
+      showAlert(status);
       try {
-        wasActive = true;
         await mutate('/admin/server/preview-storage/retry', {});
       } catch (failure) {
         window.ButtonComponent.setBusy(retry, false);
-        showAlert(status);
+        retryClicked = false;
         showAlert(error, failure.message);
       }
     });

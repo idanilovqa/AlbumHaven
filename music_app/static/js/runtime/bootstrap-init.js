@@ -9,6 +9,7 @@ document.querySelectorAll('[data-account-menu-component]').forEach((component) =
 }));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof startPreviewMoveAttention === 'function') startPreviewMoveAttention();
 if (typeof loadCoverLookupNotificationCounts === 'function') {
   void loadCoverLookupNotificationCounts({ toast: false });
 }

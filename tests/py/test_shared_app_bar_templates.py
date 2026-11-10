@@ -445,3 +445,14 @@ def test_page_header_hamburger_buttons_have_no_outline(render):
     for button_id in ("mobile-settings-button", "mobile-library-button"):
         classes = document.one(id=button_id).attrs["class"].split()
         assert "action-button--bare" in classes, button_id
+
+
+def test_notification_panel_has_a_preview_move_slot_only_for_preview_storage_readers(render):
+    """Owner (11-10): a preview move that needs the server owner shows in the notification panel."""
+    owner = render("index.html", extra_actions=("system.preview_storage.read",))
+    drawer = owner.one("aside", id="cover-lookup-drawer")
+    slot = drawer.one("div", id="preview-move-attention")
+    assert "hidden" in slot.attrs
+    assert drawer.children.index(slot) < drawer.children.index(drawer.one("div", id="cover-lookup-drawer-body"))
+    listener = render("index.html")
+    assert not listener.find_all(id="preview-move-attention")

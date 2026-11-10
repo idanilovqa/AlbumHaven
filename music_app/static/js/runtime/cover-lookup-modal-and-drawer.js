@@ -1912,11 +1912,14 @@ function renderCoverLookupDrawer({
   const terminalCount = hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
     : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+  // A preview move that needs the server owner counts as one more notification (owner, 11-10).
+  const attentionCount = typeof getPreviewMoveAttentionCount === 'function' ? getPreviewMoveAttentionCount() : 0;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + attentionCount;
   if (summary) {
     summary.textContent = [
+      attentionCount ? 'Needs your attention' : '',
       activeCount ? `${activeCount} active` : '',
       terminalCount ? `${terminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';

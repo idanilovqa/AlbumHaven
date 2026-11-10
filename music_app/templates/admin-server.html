@@ -50,7 +50,7 @@
             <p class="server-preview-failure" data-preview-failure hidden></p>
 
             {# Feedback sits beside the buttons that cause it (owner, 11-10). #}
-            {{ on_page_alert(role='status', hidden=true, attributes={'data-preview-status': '', 'aria-live': 'polite'}) }}
+            {{ on_page_alert(role='status', hidden=true, class_name='on-page-alert--compact', attributes={'data-preview-status': '', 'aria-live': 'polite'}) }}
             {{ on_page_alert(severity='error', hidden=true, attributes={'data-preview-error': '', 'aria-live': 'assertive'}) }}
 
             <div class="server-setting-actions">

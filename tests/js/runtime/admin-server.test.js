@@ -316,9 +316,10 @@ test('an unfinished move shows where previews live now and why the switch has no
   });
   await mount(ui);
 
-  assert.equal(ui.albumFolders.checked, true, 'the album folders are still in use');
-  assert.equal(ui.custom.checked, false);
-  assert.equal(ui.pathInput.value, '');
+  // Owner (11-10): the requested option stays chosen after a reload; the note says it is not finished.
+  assert.equal(ui.custom.checked, true);
+  assert.equal(ui.albumFolders.checked, false);
+  assert.equal(ui.pathInput.value, 'C:\Users\Owner\Documents\Album Haven\Generated Previews');
   assert.equal(ui.status.hidden, false);
   assert.equal(ui.status.textContent,
     "Moving to C:\Users\Owner\Documents\Album Haven\Generated Previews: 148 files failed. The switch happens after they're retried.");
@@ -336,28 +337,30 @@ const unfinishedMove = (overrides = {}) => ({
   suggested_path: 'C:\Previews', ...overrides,
 });
 
-test('Retry failed files reacts at once, shows progress and ends with a readable result', async () => {
-  // Owner (11-10): "I clicked Retry failed files - but saw no reaction to that click on UI - change that."
+test('Retry failed files reacts at once and the note waits only for the click', async () => {
+  // Owner (11-10): "I clicked Retry failed files - but saw no reaction"; then "I don't think I need a separate info
+  // message ... after retry is clicked remove it". The button shows it is working, the summary line carries the
+  // progress, and the note is gone once Retry is clicked.
   const ui = runtime(unfinishedMove());
   let answerRetry;
   const answers = [];
-  const request = async (url, options = {}) => {
-    if (url.endsWith('/retry')) {
-      return new Promise((resolve) => { answerRetry = resolve; });
-    }
+  const request = async (url) => {
+    if (url.endsWith('/retry')) return new Promise((resolve) => { answerRetry = resolve; });
     const payload = answers.shift() || unfinishedMove();
     return { ok: true, status: 200, json: async () => payload };
   };
   await mount(ui, { request });
+  assert.equal(ui.status.hidden, false, 'the note asks for Retry');
 
   const clicked = ui.retry.listeners.get('click')();
   assert.equal(ui.retry.disabled, true);
   assert.equal(ui.retry['aria-busy'], 'true', 'the shared Button shows it is working');
-  assert.equal(ui.status.textContent, 'Retrying 148 files…');
+  assert.equal(ui.status.hidden, true, 'the note goes once Retry is clicked');
 
   answerRetry({ ok: true, status: 202, json: async () => unfinishedMove({ operation_state: 'running', completed_count: 14200, failed_count: 0 }) });
   await clicked;
-  assert.equal(ui.status.textContent, 'Moving to C:\Previews: 14200 of 14310 files done…');
+  assert.equal(ui.status.hidden, true);
+  assert.match(ui.form.querySelector('[data-preview-counts]').textContent, /14200 of 14310 moved/);
 
   answers.push(unfinishedMove({
     mode: 'custom', active_root: 'C:\Previews', requested_mode: null, requested_root: null,
@@ -365,7 +368,8 @@ test('Retry failed files reacts at once, shows progress and ends with a readable
   }));
   await ui.polls.at(-1).callback();
   await settleController();
-  assert.equal(ui.status.textContent, 'Done: switched to C:\Previews. 148 set to be rebuilt.');
+  assert.equal(ui.status.hidden, true, 'no separate success note');
+  assert.match(ui.form.querySelector('[data-preview-counts]').textContent, /14162 of 14310 moved · 148 to be regenerated · 0 failed/);
   assert.equal(ui.custom.checked, true);
   assert.equal(ui.retry.hidden, true);
 });
@@ -383,4 +387,27 @@ test('a refused retry says why and frees the button', async () => {
   assert.equal(ui.error.textContent, 'Your session changed. Reload the page and try again.');
   assert.equal(ui.retry.disabled, false);
   assert.equal(ui.retry['aria-busy'], undefined);
+});
+
+test('the requested option is marked not finished until the move switches to it', async () => {
+  // Owner (11-10): "User still needs to know that the option he selected is not fully done."
+  const ui = runtime(unfinishedMove());
+  const labels = {};
+  for (const [control, text] of [[ui.albumFolders, 'Album folders'], [ui.custom, 'Special path']]) {
+    labels[text] = { textContent: text, dataset: {} };
+    control.parentElement = { querySelector: () => labels[text] };
+    control.getAttribute = (name) => (name === 'data-preview-mode' ? control.value : null);
+  }
+  const answers = [];
+  const request = async () => ({ ok: true, status: 200, json: async () => answers.shift() || unfinishedMove() });
+  await mount(ui, { request });
+  assert.equal(labels['Special path'].textContent, 'Special path (not finished)');
+  assert.equal(labels['Album folders'].textContent, 'Album folders');
+
+  answers.push(unfinishedMove({ mode: 'custom', active_root: 'C:\Previews', requested_mode: null, requested_root: null,
+    operation_state: 'completed', failed_count: 0 }));
+  // A reload after the switch: the option is finished.
+  ui.context.window.AlbumHavenMountAdminServer(ui.context.document, { request });
+  await settleController();
+  assert.equal(labels['Special path'].textContent, 'Special path');
 });

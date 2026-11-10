@@ -424,3 +424,9 @@ def test_a_one_word_bracket_or_slash_part_is_never_a_title_of_its_own():
     assert title_agreement("Abbey Road (Remastered 2009)", "Remastered") is None
     assert title_agreement("Mysterious Realms / Heidebilder", "Heidebilder") is None
     assert title_agreement("22 strings", "22 Strings/Cordes") == "exact"
+
+
+def test_titles_sharing_only_generic_words_never_agree_partially():
+    """Jay-Z: "The Grey Album" (a mash-up of The Black Album's songs) is not that album."""
+    assert title_agreement("The Grey Album", "The Black Album (Pete Rock Remix)") is None
+    assert title_agreement("Keys to the Paradise", "Keys to the Palace") == "partial"

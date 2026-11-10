@@ -235,6 +235,11 @@ def _within_typo_distance(a: str, b: str) -> bool:
     return previous[-1] <= limit
 
 
+# Words many titles share: never the distinctive word of a partial title ("The Grey
+# Album" is not "The Black Album").
+_GENERIC_TITLE_WORDS = frozenset(
+    "album albums live best songs song music collection edition volume part hits greatest anthology "
+    "sessions session demos demo remix remixes mixes version versions original soundtrack tracks".split())
 _DENSE_SCRIPT = re.compile(r"[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u9fff\uac00-\ud7af]")
 
 
@@ -247,7 +252,8 @@ def _contained(a: str, b: str) -> bool:
     if small < large and (len(small) >= 2 or dense_word):
         return True
     shared = small & large
-    return len(shared) >= 2 and len(shared) / len(small | large) >= 0.5 and any(len(word) >= 4 for word in shared)
+    return len(shared) >= 2 and len(shared) / len(small | large) >= 0.5 and any(
+        len(word) >= 4 and word not in _GENERIC_TITLE_WORDS for word in shared)
 
 
 def _key_agreement(local: set[str], remote: set[str]) -> str | None:

@@ -23,6 +23,19 @@ const GALLERY_COVER_SHA256_K = new Uint32Array([
 
 // SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs; the app-copy worker computes
 // the same digest with crypto.subtle.
+// Resolves in a new task (not a microtask), so work after it does not join the current task.
+function galleryCoverYield() {
+  if (typeof globalThis.MessageChannel !== 'function') return new Promise(resolve => globalThis.setTimeout(resolve, 0));
+  return new Promise((resolve) => {
+    const channel = new globalThis.MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
 // Reused across calls: no allocation per cover beyond growing the byte buffer for a longer URL.
 const GALLERY_COVER_SHA256_W = new Int32Array(64);
 const GALLERY_COVER_SHA256_ENCODER = new TextEncoder();
@@ -92,8 +105,9 @@ class GalleryCoverPreviewCache {
     this.liveFetches = new Map();
     this.keyGenerations = new Map();
     this.latestRequestedProductionUrls = new Map();
-    // Each production URL's stored key and version, worked out once.
+    // Each production URL's stored key and version, and each cover's key whatever its version.
     this.coverKeys = new Map();
+    this.unversionedCoverKeys = new Map();
     this.openPromise = null;
     this.generation = 0;
     this.requestSequence = 0;
@@ -242,22 +256,38 @@ class GalleryCoverPreviewCache {
 
   // [productionUrl]'s stored key, the same key as app-copy-worker.js coverKey (the SHA-256 of the
   // URL without its version; one per cover and size), and the version it answers, the URL's `v`
-  // (a revision, never a file). Computed synchronously once per URL, so a cover load does no more
-  // asynchronous work than it did with path keys.
+  // (a revision, never a file). Each cover is hashed once: a new version of a cover (a save, a
+  // revision bump across the gallery) reuses its key without hashing again.
   coverKeysFor(productionUrl) {
     let keys = this.coverKeys.get(productionUrl);
     if (!keys) {
       const url = new URL(productionUrl);
       const version = url.searchParams.get('v') || '';
       url.searchParams.delete('v');
-      keys = {
-        key: `${url.origin}${GALLERY_COVER_KEY_PREFIX}${galleryCoverSha256Hex(`${url.pathname}${url.search}`)}`,
-        version,
-      };
+      const unversioned = `${url.origin}${url.pathname}${url.search}`;
+      let key = this.unversionedCoverKeys.get(unversioned);
+      if (!key) {
+        key = `${url.origin}${GALLERY_COVER_KEY_PREFIX}${galleryCoverSha256Hex(`${url.pathname}${url.search}`)}`;
+        if (this.unversionedCoverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.unversionedCoverKeys.clear();
+        this.unversionedCoverKeys.set(unversioned, key);
+      }
+      keys = { key, version };
       if (this.coverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.coverKeys.clear();
       this.coverKeys.set(productionUrl, keys);
     }
     return keys;
+  }
+
+  // As coverKeysFor, for a cover load: a cover not hashed yet first yields one task, so a burst of
+  // new covers (a gallery page, a save that re-renders many cards) hashes across many short tasks
+  // instead of one long one.
+  async coverKeysForLoad(productionUrl) {
+    if (!this.coverKeys.has(productionUrl)) {
+      const url = new URL(productionUrl);
+      url.searchParams.delete('v');
+      if (!this.unversionedCoverKeys.has(`${url.origin}${url.pathname}${url.search}`)) await galleryCoverYield();
+    }
+    return this.coverKeysFor(productionUrl);
   }
 
   storedCoverKey(productionUrl) {
@@ -437,7 +467,8 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const { key: cacheKey, version: versionTag } = this.coverKeysFor(productionUrl);
+    const { key: cacheKey, version: versionTag } = await this.coverKeysForLoad(productionUrl);
+    this.throwIfAborted(signal);
     const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
     if (cachedResponse?.headers?.get?.(GALLERY_COVER_VERSION_HEADER) === versionTag) {

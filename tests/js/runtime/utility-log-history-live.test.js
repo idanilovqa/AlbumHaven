@@ -13,7 +13,7 @@ function setup() {
     renderUtilityLogHistory: () => changes.push('render'), renderUtilityModalContent() {}, getUtilityModalElements: () => ({ overlay: { hidden: false } }),
   });
   vm.runInContext(fs.readFileSync(path.resolve(dir, '../button-component.js'), 'utf8'), context);
-  for (const name of ['alert-components', 'date-range-picker', 'utility-log-history-query', 'utility-log-history-ui', 'utility-loaders-and-cover-lookup', 'utility-list-builders']) {
+  for (const name of ['android-bridge-client', 'alert-components', 'date-range-picker', 'utility-log-history-query', 'utility-log-history-ui', 'utility-loaders-and-cover-lookup', 'utility-list-builders']) {
     const file = path.join(dir, `${name}.js`); if (fs.existsSync(file)) vm.runInContext(fs.readFileSync(file, 'utf8'), context);
   }
   context.renderUtilityLogHistory = () => changes.push('render');

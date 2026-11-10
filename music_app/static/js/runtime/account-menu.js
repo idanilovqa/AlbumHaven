@@ -49,6 +49,8 @@ function attachAccountMenu(component, options = {}) {
       reject(event);
       return;
     }
+    // A row that reports its own progress keeps the menu open so its result can be read.
+    if (item.getAttribute('data-account-menu-keep-open') !== null) return;
     // Restore the opener before Settings captures focus for its modal.
     close(true);
   }, true);

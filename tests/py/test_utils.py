@@ -19,6 +19,35 @@ def test_repair_display_text_repairs_utf16_byte_swapped_ascii_text():
     assert "Insound Tour Support No. 12" in collect_text_repairs(raw_album)
 
 
+def test_repair_display_text_preserves_valid_accented_latin_text():
+    values = (
+        "Moyen-Âge",
+        "Les Voyages De L'Âme",
+        "Ñanguita (Edit)",
+        "Trúbrot",
+        "Róróró",
+        "Án Þín",
+        "Väärä käärme",
+        "Belle Âme",
+        "J.S. Bach: Matthäus Passion",
+    )
+
+    for value in values:
+        assert repair_display_text(value) == value
+        assert collect_text_repairs(value) == []
+
+
+def test_repair_display_text_rejects_control_bearing_partial_utf16_repairs():
+    values = (
+        "匀愀椀氀漀爠ᤀ猀 䰀愀洀攀渀琀",
+        "䤀琠ᤀ猀 䨀甀猀琀 愀 吀栀漀甀最栀琀",
+    )
+
+    for value in values:
+        assert repair_display_text(value) == value
+        assert collect_text_repairs(value) == []
+
+
 def test_strong_mojibake_ascii_fast_path_preserves_representative_legacy_results(monkeypatch):
     from music_app.services import utils
 

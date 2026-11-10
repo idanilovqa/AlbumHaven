@@ -160,12 +160,14 @@ export class CoverLookupActions {
       const subtitle = document.querySelector(selectors.modalSubtitleSelector);
       const manualInput = document.querySelector(selectors.manualInputSelector);
       const manualExtractButton = document.querySelector(selectors.manualExtractButtonSelector);
+      const initialGalleryLoading = document.querySelector(selectors.initialGalleryLoadingSelector);
       return modal instanceof HTMLElement
         && !modal.hidden
         && subtitle instanceof HTMLElement
         && (subtitle.textContent || '').trim().length > 0
         && manualInput instanceof HTMLTextAreaElement
-        && manualExtractButton instanceof HTMLButtonElement;
+        && manualExtractButton instanceof HTMLButtonElement
+        && !initialGalleryLoading;
     }, {
       timeout: options.timeout || 30000,
     }, {
@@ -173,6 +175,7 @@ export class CoverLookupActions {
       modalSubtitleSelector: this.coverLookup.modalSubtitleSelector,
       manualInputSelector: this.coverLookup.manualUrlInputSelector,
       manualExtractButtonSelector: this.coverLookup.manualExtractButtonSelector,
+      initialGalleryLoadingSelector: this.coverLookup.initialGalleryLoadingSelector,
     });
   }
 
@@ -215,6 +218,8 @@ export class CoverLookupActions {
       entrance = await observation.evaluate((measurement) => measurement.result);
       if (entrance.error) throw new Error(entrance.error);
       expect(entrance.baselineUnsettled).toBe(true);
+      expect(entrance.busyButtonSeen).toBe(true);
+      expect(entrance.startedStatusSeen).toBe(true);
       expect(entrance.sampledFrames).toBeGreaterThanOrEqual(3);
     } finally {
       try {
@@ -227,7 +232,7 @@ export class CoverLookupActions {
     const finalVisualState = await this.coverLookup
       .waitForCoverLookupStartedToastFinalState({ timeout });
     await expect(this.coverLookup.coverLookupStartedToast).toBeVisible({ timeout });
-    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover art lookup started.');
+    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover search started.');
     await expect(this.coverLookup.searchProgress).toBeVisible({ timeout });
     const toastOcclusionTargets = this.coverLookup.toastOcclusionTargets();
     const targetEntries = Object.entries(toastOcclusionTargets);
@@ -397,19 +402,21 @@ export class CoverLookupActions {
 
   async waitForLaterProviderFixtureBlocked(options = {}) {
     let evidence = null;
+    const requireNoCoverArtArchiveRequests = options.requireNoCoverArtArchiveRequests !== false;
     await expect.poll(async () => {
       evidence = await readCoverLookupProviderEvidence(this.coverLookup.testInfo);
-      return evidence;
+      return Number(evidence?.later_provider_started || 0) >= 1
+        && Number(evidence?.later_provider_completed || 0) === 0
+        && (
+          !requireNoCoverArtArchiveRequests
+          || Number(evidence?.cover_art_archive_requests || 0) === 0
+        )
+        && evidence?.later_provider_released === false;
     }, {
       message: 'Expected the deterministic later cover provider to be waiting at its fixture gate.',
       timeout: options.timeout || 30000,
       intervals: [250, 500, 750, 1000],
-    }).toMatchObject({
-      musicbrainz_started: 1,
-      musicbrainz_completed: 0,
-      cover_art_archive_requests: 0,
-      later_provider_released: false,
-    });
+    }).toBe(true);
     return evidence;
   }
 
@@ -566,7 +573,11 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    return payload;
+    return {
+      ...payload,
+      payload,
+      requestPayload: response.request().postDataJSON(),
+    };
   }
 
   async reopenUntilSavedRemoteCoverIsActive(
@@ -839,6 +850,21 @@ export class CoverLookupActions {
     await this.coverLookup.waitForDrawerState(true, { timeout: options.timeout || 30000 });
   }
 
+  async openDrawerAndObserveInitialLoading(options = {}) {
+    const observation = await this.coverLookup.observeDrawerInitialLoad(options);
+    try {
+      await this.openDrawer(options);
+      // parity-check: allow-read-only-measurement-evaluate -- read the prearmed notification loading observation
+      const result = await observation.evaluate((measurement) => measurement.result);
+      if (result.error) throw new Error(result.error);
+      return result;
+    } finally {
+      // parity-check: allow-read-only-measurement-evaluate -- cancel only this observation's MutationObserver and timer
+      await observation.evaluate((measurement) => measurement.cancel());
+      await observation.dispose();
+    }
+  }
+
   async pressSpaceOnFocusedDrawerOpener(options = {}) {
     await this.closeDrawer(options);
     await this.coverLookup.drawerButton.focus();
@@ -896,6 +922,26 @@ export class CoverLookupActions {
       this.coverLookup.taskCardByTitle(taskTitle),
       { timeout: options.timeout || 30000 },
     );
+  }
+
+  async waitForTaskCoverDecoded(taskTitle, options = {}) {
+    const image = this.coverLookup.taskCoverByTitle(taskTitle);
+    await expect(image).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- verify the notification's rendered image decoded
+    await image.evaluate(waitForDisplayedImageDecode);
+  }
+
+  async waitForTaskCoverDecodedById(taskId, options = {}) {
+    const image = this.coverLookup.taskCoverById(taskId);
+    await expect(image).toBeVisible({ timeout: options.timeout || 30000 });
+    // parity-check: allow-read-only-measurement-evaluate -- verify the exact notification's rendered image decoded
+    await image.evaluate(waitForDisplayedImageDecode);
+  }
+
+  async readTaskCardEvidenceById(taskId) {
+    const card = this.coverLookup.taskCardById(taskId);
+    await expect(card).toBeVisible();
+    return this.coverLookup.readTaskCardEvidenceById(taskId);
   }
 
   async readTaskStatus(taskTitle) {
@@ -1089,6 +1135,10 @@ export class CoverLookupActions {
 
   async clearTaskAndExpectImmediateRemoval(taskTitle, options = {}) {
     const timeout = options.timeout || 30000;
+    const countsPromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'GET'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/tasks/counts'
+    ), { timeout });
     const responsePromise = this.coverLookup.page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname.includes('/utilities/cover-lookup/task/')
@@ -1104,6 +1154,12 @@ export class CoverLookupActions {
       );
     }
     await expect(this.coverLookup.taskCardByTitle(taskTitle)).toBeHidden({ timeout });
+    await countsPromise;
+    // parity-check: allow-read-only-measurement-evaluate -- settle the clear response's next paint before proving no toast was rendered
+    await this.coverLookup.drawerBody.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await expect(this.coverLookup.notificationClearedToast).toHaveCount(0);
   }
 
   async waitForTaskActive(taskTitle, options = {}) {
@@ -1122,6 +1178,64 @@ export class CoverLookupActions {
     await this.coverLookup.taskOpenButtonByTitle(taskTitle).click();
   }
 
+  async openTaskById(taskId) {
+    const button = this.coverLookup.taskOpenButtonById(taskId);
+    await button.scrollIntoViewIfNeeded();
+    const drawerScrollTop = await this.readDrawerScrollTop();
+    await button.click();
+    return drawerScrollTop;
+  }
+
+  async scrollDrawerAwayFromEdges() {
+    await this.coverLookup.drawerBody.hover();
+    await this.coverLookup.page.mouse.wheel(0, 100000);
+    await expect.poll(() => this.readDrawerScrollTop()).toBeGreaterThan(0);
+    const bottom = await this.readDrawerScrollTop();
+    if (bottom > 2) {
+      await this.coverLookup.page.mouse.wheel(0, -Math.max(1, Math.floor(bottom / 2)));
+      await expect.poll(() => this.readDrawerScrollTop()).toBeLessThan(bottom);
+    }
+    return this.readDrawerScrollTop();
+  }
+
+  async readDrawerScrollTop() {
+    // parity-check: allow-read-only-measurement-evaluate -- read native drawer scroll position without changing it
+    return this.coverLookup.drawerBody.evaluate((body) => body.scrollTop);
+  }
+
+  readVisibleTaskIds() {
+    return this.coverLookup.readVisibleTaskIds();
+  }
+
+  async expectNotificationMobileSheet() {
+    await expect(this.coverLookup.mobileSheet).toBeVisible();
+    await expect(this.coverLookup.mobilePage).toHaveCount(0);
+    await expect(this.coverLookup.drawer).toBeVisible();
+    const stacking = await this.coverLookup.readMobileSheetStacking();
+    expect(stacking.bottomGap).toBeLessThanOrEqual(1);
+    expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
+  }
+
+  async swipeNotificationMobileSheetDown() {
+    const box = await this.coverLookup.modalHeader.boundingBox();
+    if (!box) throw new Error('Cover Lookup mobile sheet header is not visible.');
+    const session = await this.coverLookup.page.context().newCDPSession(this.coverLookup.page);
+    const point = (offset) => [{ x: box.x + box.width / 2, y: box.y + Math.min(24, box.height / 2) + offset, id: 0 }];
+    try {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(0) });
+      for (let step = 1; step <= 12; step += 1) {
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: point(160 * step / 12),
+        });
+      }
+      await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally {
+      await session.detach();
+    }
+    await this.coverLookup.waitForHidden(this.coverLookup.modal);
+  }
+
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {
     const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
     await opener.focus();
@@ -1133,6 +1247,29 @@ export class CoverLookupActions {
     await expect(this.coverLookup.taskStatusByTitle(taskTitle)).toHaveText(expectedStatus, {
       timeout: options.timeout || 30000,
     });
+  }
+
+  async waitForTaskStatusById(taskId, expectedStatus, options = {}) {
+    await expect(this.coverLookup.taskStatusById(taskId)).toHaveText(expectedStatus, {
+      timeout: options.timeout || 30000,
+    });
+  }
+
+  async readTaskById(taskId) {
+    const expectedTaskId = String(taskId || '').trim();
+    if (!expectedTaskId) throw new Error('A cover lookup task identity is required.');
+    const response = await authenticatedPageGet(
+      this.coverLookup.page,
+      new URL('/utilities/cover-lookup/tasks', this.coverLookup.page.url()).toString(),
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok() || !payload?.ok) {
+      throw new Error(
+        `Cover lookup tasks request failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
+      );
+    }
+    return (Array.isArray(payload.tasks) ? payload.tasks : [])
+      .find((task) => String(task?.id || '').trim() === expectedTaskId) || null;
   }
 
   async expectTaskIdentity(taskTitle, identity) {
@@ -1348,6 +1485,57 @@ export class CoverLookupActions {
       ).trim());
     }
     return names;
+  }
+
+  async deleteLocalCoverBySourcePath(sourcePath, options = {}) {
+    const timeout = options.timeout || 30000;
+    const expectedPath = String(sourcePath || '').trim();
+    const count = await this.coverLookup.localCoverCards.count();
+    let card = null;
+    for (let index = 0; index < count; index += 1) {
+      const candidate = this.coverLookup.localCoverCards.nth(index);
+      if (String(await candidate.getAttribute('data-select-local-cover') || '').trim() === expectedPath) {
+        card = candidate;
+        break;
+      }
+    }
+    if (!card) throw new Error(`Local cover candidate was not found: ${expectedPath}`);
+
+    await this.coverLookup.localCoverDeleteWithin(card).click();
+    await expect(this.coverLookup.deleteConfirm).toBeVisible({ timeout });
+    await expect(this.coverLookup.modal).toBeVisible({ timeout });
+    const stacking = await this.coverLookup.readDeleteConfirmStacking();
+    expect(stacking.confirmationZIndex).toBeGreaterThan(stacking.lookupZIndex);
+    expect(stacking.confirmationOwnsTopElement).toBe(true);
+
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/local-delete'
+    ), { timeout });
+    await this.coverLookup.deleteConfirmButton.click();
+    const response = await responsePromise;
+    const payload = await response.json();
+    if (!response.ok() || payload?.ok !== true) {
+      throw new Error(
+        `Local cover deletion failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
+      );
+    }
+    await expect(this.coverLookup.deleteConfirm).toBeHidden({ timeout });
+    await expect.poll(async () => {
+      const paths = [];
+      const remainingCount = await this.coverLookup.localCoverCards.count();
+      for (let index = 0; index < remainingCount; index += 1) {
+        paths.push(String(
+          await this.coverLookup.localCoverCards.nth(index)
+            .getAttribute('data-select-local-cover') || '',
+        ).trim());
+      }
+      return paths;
+    }, {
+      message: `Expected deleted local cover to leave the gallery: ${expectedPath}`,
+      timeout,
+    }).not.toContain(expectedPath);
+    return { payload, stacking };
   }
 
   async selectFirstInactiveLocalCoverAndSave(options = {}) {

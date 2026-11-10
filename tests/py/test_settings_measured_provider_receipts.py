@@ -12,7 +12,10 @@ from music_app.services.lastfm import LastfmSession
 
 
 def payload(store, **changes):
-    entry = measured(store['own'], finalized=True, **changes)
+    entry = measured(store['own'], **{
+        'finalized': True, 'measured_listened_seconds': 60,
+        'max_measured_contiguous_seconds': 60, **changes,
+    })
     entry['library_track_id'] = str(store['own']['track_id'])
     return entry
 
@@ -72,8 +75,9 @@ def test_immediate_scrobble_then_final_completion_preserves_server_receipt(ledge
     from music_app.routes import api_wave_b_asgi_routes as wave
     from music_app.services import current_actor_asgi
     owner = ledger['own']; entry = payload(ledger); entry['finalized'] = False
-    actor = SimpleNamespace(account_id=owner['account_id'], is_authenticated=True, current_library_id=owner['library_id'],
-                            library_relationships=(SimpleNamespace(library_id=owner['library_id']),))
+    from tests.py.test_settings_measured_completion_scope import authorized_playback
+    actor, config, claim = authorized_playback(ledger)
+    entry.update(claim)
     async def resolve(_request): return actor
     async def body(): return entry
     calls=[]
@@ -86,7 +90,7 @@ def test_immediate_scrobble_then_final_completion_preserves_server_receipt(ledge
     monkeypatch.setattr(wave, 'get_lastfm_user_timezone', lambda *args,**kwargs:'UTC')
     monkeypatch.setattr(wave, 'scrobble_track', provider)
     monkeypatch.setattr(wave, '_log_lastfm_scrobble_event', lambda *args,**kwargs:None)
-    request=SimpleNamespace(json=body,state=SimpleNamespace(current_actor=actor),app=SimpleNamespace(state=SimpleNamespace(config=ledger['config'])))
+    request=SimpleNamespace(json=body,state=SimpleNamespace(current_actor=actor),app=SimpleNamespace(state=SimpleNamespace(config=config,auth_policy_config={})))
     response=asyncio.run(wave.playback_session_scrobble(request))
     assert response.status_code == 200
     before=rows(ledger);assert len(before)==1 and before[0]['finalized'] is False
@@ -111,6 +115,39 @@ def test_sent_unconfirmed_receipt_survives_next_sequence_without_resubmission(le
     assert code==200 and body['scrobbled'] is False
     assert calls==[1]
     assert rows(ledger)[0]['metadata']['source_payload']['scrobble_submission_state'] in ('sent','uncertain')
+
+
+def test_retry_receipt_survives_higher_sequence_resume_after_pause(ledger):
+    owner = ledger['own']
+    paused = payload(ledger, finalized=False)
+    stored = history.append_listen_history_entry(
+        ledger['config'], paused,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+    receipt = {
+        'scrobble_retry_count': 3,
+        'scrobble_retry_exhausted': True,
+        'scrobble_reauthentication_required': True,
+    }
+    history.update_listen_history_entry(
+        ledger['config'], stored['id'], receipt,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+
+    resumed = {
+        **paused,
+        'sequence': 2,
+        'measured_listened_seconds': 75,
+        'max_measured_contiguous_seconds': 70,
+        'finalized': True,
+    }
+    history.append_listen_history_entry(
+        ledger['config'], resumed,
+        account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+
+    source_payload = rows(ledger)[0]['metadata']['source_payload']
+    assert {key: source_payload[key] for key in receipt} == receipt
 
 
 @pytest.mark.parametrize('code', [11, 16, 29, 9])

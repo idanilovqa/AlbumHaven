@@ -192,6 +192,10 @@ def _probe_match_candidates(
         return []
     if source == "apple":
         positive_matches = cover_provider_apple.dedupe_apple_matches(positive_matches)
+    positive_matches = cover_provider_matching.prefer_exact_album_title_matches(
+        positive_matches,
+        target_album=album,
+    )
     year_preferred_matches = cover_provider_matching.prefer_release_year_matches(
         positive_matches,
         target_year=year,
@@ -974,8 +978,7 @@ def ensure_best_cover_for_folder(
         cover_selection_origin or "automatic"
     ).strip().casefold()
     selected_user_cover = reject_if_user_controlled and normalized_cover_selection_origin == "user"
-    user_controls_cover = selected_user_cover and cover_selection_provenance == "explicit"
-    legacy_user_cover = selected_user_cover and not user_controls_cover
+    user_controls_cover = selected_user_cover
     minimum_edge = _MIN_AUTHORITATIVE_COVER_EDGE if user_controls_cover else automatic_cover_repair_minimum_edge()
     fetch_started_at = time.perf_counter()
     local_cover = (
@@ -1023,7 +1026,30 @@ def ensure_best_cover_for_folder(
     ):
         detail["reason"] = "satisfactory_selected_remote_cover_present"
         return None, False, detail
-    if local_cover and (selected_user_cover or not force_search) and not local_cover_requires_upgrade_check(local_cover, minimum_edge=minimum_edge):
+    release_local_cover_stem = cover_stem(local_cover)
+    viable_release_local_cover = bool(
+        local_cover
+        and (
+            is_authoritative_cover_name(local_cover)
+            or release_local_cover_stem == "front"
+            or release_local_cover_stem.startswith(("front-", "front_", "front "))
+        )
+        and not local_cover_requires_upgrade_check(
+            local_cover,
+            minimum_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+        )
+    )
+    if (
+        local_cover
+        and (selected_user_cover or not force_search)
+        and (
+            viable_release_local_cover
+            or not local_cover_requires_upgrade_check(
+                local_cover,
+                minimum_edge=minimum_edge,
+            )
+        )
+    ):
         detail["reason"] = "satisfactory_local_cover_present"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         return local_cover, False, detail
@@ -1318,8 +1344,6 @@ def ensure_best_cover_for_folder(
         write_action.provisional_cover_revision = hashlib.sha256(prepared_write_bytes).hexdigest()  # type: ignore[attr-defined]
         write_action.preserve_user_ownership = preserve_user_ownership  # type: ignore[attr-defined]
         write_action.expected_cover_revision = expected_cover_revision  # type: ignore[attr-defined]
-        write_action.replace_legacy_user_selection = legacy_user_cover  # type: ignore[attr-defined]
-        write_action.legacy_selected_cover_revision = selected_cover_revision  # type: ignore[attr-defined]
         write_action.prepared_cover_bytes = prepared_write_bytes  # type: ignore[attr-defined]
         write_action.local_cover_width = width  # type: ignore[attr-defined]
         write_action.local_cover_height = height  # type: ignore[attr-defined]
@@ -1340,8 +1364,6 @@ def ensure_best_cover_for_folder(
         else:
             written = write_action()
         if written:
-            if legacy_user_cover:
-                detail["legacy_user_selection_replaced"] = True
             cache.set(cache_key, {
                 "updated_at": now,
                 "missing": False,

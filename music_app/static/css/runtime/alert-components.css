@@ -42,6 +42,9 @@
 .small-alert--info,
 .alert-label--info,
 .on-page-alert--info { --alert-edge: var(--appearance-player-accent, #55c7ff); }
+.small-alert--success,
+.alert-label--success,
+.on-page-alert--success { --alert-edge: var(--appearance-success, var(--success, #2eba70)); }
 
 /* Content alerts follow the light surface; dark alert families keep their palette. */
 :root[data-appearance-mode='light'] .on-page-alert {
@@ -116,6 +119,26 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   outline-offset: -3px;
 }
 
+/* StatusBadge owns its shape, type and variant colors; it has no hover, focus or selected state.
+   Neutral follows the surface's palette; info and warning use the shared signal colors. */
+.ui-status-badge {
+  --status-badge-ink: var(--muted);
+  --status-badge-line: var(--border);
+  display: inline-block;
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid var(--status-badge-line);
+  border-radius: 10px;
+  color: var(--status-badge-ink);
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: normal;
+}
+.ui-status-badge--info { --status-badge-ink: var(--appearance-player-accent, #55c7ff); --status-badge-line: var(--status-badge-ink); }
+.ui-status-badge--warning { --status-badge-ink: var(--appearance-warning, #e0aa50); --status-badge-line: var(--status-badge-ink); }
+/* The shared amber reads 2:1 on a light card; light themes darken it to at least 4.9:1 on each light palette's card. */
+:root[data-appearance-mode='light'] .ui-status-badge--warning { --status-badge-ink: #946200; }
+
 .small-alert__icon,
 .on-page-alert__icon {
   display: grid;
@@ -175,6 +198,8 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
   white-space: nowrap;
 }
 .on-page-alert__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.on-page-alert__progress { display: grid; gap: 8px; margin-top: 16px; color: var(--muted, var(--appearance-muted, #b8c7d6)); }
+.on-page-alert__progress progress { width: 100%; height: 8px; accent-color: var(--text, #f9fafb); }
 .on-page-alert__actions .ui-button {
   min-height: 44px;
   padding: 0 16px;

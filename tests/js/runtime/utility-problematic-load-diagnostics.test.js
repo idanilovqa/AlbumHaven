@@ -2537,3 +2537,34 @@ test('full-summary initial detail supersedes an older in-flight preview detail',
   assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta').name,
     'Canonical initial detail');
 });
+
+test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {
+  const fullResponse = createDeferred();
+  const renderedLengths = [];
+  const item = (key) => ({ key, name: key, detail_loaded: false });
+  const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
+  const { context } = loadHelper({
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ complete: false, items: [item('first')] });
+      }
+      return fullResponse.promise;
+    },
+    renderUtilityModalContent() {
+      renderedLengths.push(context.state.utility.problematicFiles.length);
+    },
+  });
+  Object.assign(context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: true,
+    problematicFiles: [item('first'), item('second'), item('third')],
+  });
+
+  const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  fullResponse.resolve(response({ items: [item('first'), item('third')] }));
+  await refresh;
+
+  assert.deepEqual(renderedLengths, [3, 2], 'only the replaced and the complete list paint');
+});

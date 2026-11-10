@@ -36,6 +36,7 @@ test('desktop Settings content uses the Gallery surface header origin and horizo
   );
   assert.match(
     chromeCss,
-    /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*6px/s,
+    /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*var\(--app-page-header-top\)/s,
   );
+  assert.match(chromeCss, /--app-page-header-top:\s*6px/);
 });

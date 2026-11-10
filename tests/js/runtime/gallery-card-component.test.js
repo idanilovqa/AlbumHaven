@@ -68,6 +68,25 @@ test('GalleryCardInfo keeps artist and year together with ten-point rating, trac
   assert.equal((infoHtml.match(/<span class="star(?: filled)?">/g) || []).length, 10);
 });
 
+test('GalleryCard keeps a complete accessible name while clamping long card titles', () => {
+  const context = loadGalleryCard();
+  const title = 'And the Glass Handed Kites: A Very Long Album Title';
+  const html = context.buildGalleryCardInfoHtml({
+    title,
+    openAttributes: 'data-open-tracklist="1" data-album-key="mew"',
+  });
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/non-album-and-player.css'),
+    'utf8',
+  );
+
+  assert.match(html, new RegExp(`aria-label="${title}"`));
+  assert.match(
+    css,
+    /\.album-card\[data-gallery-display="cards"\] \.album-title-button\s*\{[^}]*-webkit-line-clamp:\s*2;/s,
+  );
+});
+
 test('GalleryCardInfo omits the separator when either metadata value is missing', () => {
   const context = loadGalleryCard();
   for (const config of [{ artist: 'Transatlantic' }, { year: '2000' }, {}]) {

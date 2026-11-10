@@ -612,8 +612,9 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
         "cover_generation": 7,
     }
 
-    cover_refresh_runtime.refresh_cover_artwork_request(
-        get_state=lambda: library_state,
+    get_state = lambda: library_state
+    result = cover_refresh_runtime.refresh_cover_artwork_request(
+        get_state=get_state,
         cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
@@ -650,6 +651,8 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
     assert executed[0]["logger"] is logger
     assert executed[0]["negative_cache_ttl_seconds"] == 321.0
     assert executed[0]["job_workers"] == 4
+    assert executed[0]["get_state"] is get_state
+    assert result["processed"] == 1
     assert library_state["covers_in_progress"] is False
     assert len(logged) == 1
     assert logged[0]["mode"] == "background"

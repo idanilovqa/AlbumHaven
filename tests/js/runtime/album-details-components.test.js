@@ -387,3 +387,33 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
   assert.match(person, /Alice Cooper \(the band, active 1964–1974\/5\) · 7 albums.*href="https:\/\/musicbrainz\.org\/artist\/4d7928cd/s);
   assert.doesNotMatch(person, /Your albums belong to/);
 });
+
+test('Editorial Album Details wraps long titles without covering header actions', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/album-details-components.css'),
+    'utf8',
+  );
+
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__primary\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__actions\s*\{[^}]*grid-column:\s*2;/s,
+  );
+});
+
+test('Album Details callers use presentation-only title and year values', () => {
+  const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
+  const tagEditorSource = fs.readFileSync(
+    path.join(runtimeRoot, 'tag-editor-and-optimistic-updates.js'),
+    'utf8',
+  );
+  const mobileSource = fs.readFileSync(path.join(runtimeRoot, 'album-details-components.js'), 'utf8');
+
+  assert.match(tagEditorSource, /album:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
+  assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
+});

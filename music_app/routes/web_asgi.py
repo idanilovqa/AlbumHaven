@@ -51,6 +51,7 @@ from music_app.services.playlist_read_seams import build_view_surface_payload, r
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
+from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -740,6 +741,8 @@ def _build_bootstrap_payload(
     request_started_epoch_ms: int,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
+    # Read before the view so a mutation committed while it builds is still seen as newer.
+    inventory_mutation_revision = int(library_state.get("inventory_mutation_revision") or 0)
     library_browse_uses_postgres = library_browse_postgres_is_effective(config)
     requested_root_albums_surface = _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
     requested_home_root_surface = _request_targets_home_root_surface(query_args, query_raw, selected_artist)
@@ -871,6 +874,7 @@ def _build_bootstrap_payload(
             },
             "coversInProgress": is_cover_refresh_busy(library_state),
             "coversCancelable": bool(library_state.get("covers_in_progress")),
+            "inventoryMutationRevision": inventory_mutation_revision,
             "partialView": initial_view_partial,
             "startupPreview": {
                 "mode": preview_mode,
@@ -1055,6 +1059,7 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
+    copy_account = app_copy_account(request.state.current_actor) if app_copy_requested(request) else ""
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
@@ -1076,10 +1081,14 @@ async def index(request: Request) -> Response:
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "bootstrap_payload": bootstrap_payload,
             "startup_preview": startup_preview,
+            "app_copy_account": copy_account,
         },
     )
     template_elapsed_ms = round((time.perf_counter() - template_started_at) * 1000, 2)
-    response.headers["Cache-Control"] = "no-store, max-age=0"
+    if copy_account:
+        mark_app_copy(response, copy_account, request.app.state.runtime_asset_version)
+    else:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
         try:
@@ -1207,6 +1216,28 @@ async def bootstrap_data(request: Request) -> JSONResponse:
     return JSONResponse(bootstrap_payload)
 
 
+@router.get("/app-copy/account")
+async def app_copy_account_route(request: Request) -> JSONResponse:
+    """The account the Android app's copy must belong to; answered only while signed in."""
+    return JSONResponse(
+        {"account": app_copy_account(request.state.current_actor)},
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+_APP_COPY_WORKER = Path(__file__).resolve().parent.parent / "static" / "js" / "app-copy-worker.js"
+
+
+@router.get("/app-copy-worker.js")
+async def app_copy_worker() -> Response:
+    # Served from the origin root, so its scope covers the app page; always revalidated.
+    return FileResponse(
+        _APP_COPY_WORKER,
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @router.post("/refresh-api")
 async def refresh_api(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
@@ -1317,12 +1348,11 @@ def _cached_cover_variant_response(
     *,
     max_size: int,
     max_age: int,
-    storage_policy,
     revision: str = "",
 ) -> Response | None:
     for _attempt in range(2):
         retry = False
-        for index, cache_root in enumerate(cache_roots):
+        for cache_root in cache_roots:
             cached_variant = find_existing_cover_display_variant(
                 source_path,
                 cache_root=cache_root,
@@ -1331,12 +1361,6 @@ def _cached_cover_variant_response(
             )
             if cached_variant is None:
                 continue
-            relocating_fallback = bool(
-                index
-                and getattr(getattr(storage_policy, "snapshot", None), "requested_mode", None)
-            )
-            if not relocating_fallback:
-                return _conditional_file_response(request, cached_variant, max_age=max_age)
             try:
                 with cached_variant.open("rb") as handle:
                     stat_result = os.fstat(handle.fileno())
@@ -1395,7 +1419,6 @@ def _cover_response(
             cache_roots,
             max_size=requested_size,
             max_age=31536000,
-            storage_policy=storage_policy,
             revision=normalized_revision,
         )
         if cached_response is not None:
@@ -1410,10 +1433,15 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if not cache_roots:
-            cache_roots = display_cover_variant_cache_roots(
+            # Unrevisioned lookup candidates stay app-local; configured storage is a read fallback.
+            app_cache_roots = display_cover_variant_cache_roots(
                 resolved,
-                storage_policy=storage_policy,
+                data_dir=config.get("DATA_DIR"),
             )
+            cache_roots = tuple(dict.fromkeys((
+                *app_cache_roots,
+                *display_cover_variant_cache_roots(resolved, storage_policy=storage_policy),
+            )))
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
@@ -1427,12 +1455,12 @@ def _cover_response(
                 cache_roots,
                 max_size=requested_size,
                 max_age=31536000 if normalized_revision else 300,
-                storage_policy=storage_policy,
                 revision=normalized_revision,
             )
             if cached_response is not None:
                 return cached_response
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
+                source_path = resolved
                 generation_options = {}
                 if inventory_recorder is not None:
                     generation_options["on_published"] = inventory_recorder
@@ -1444,6 +1472,21 @@ def _cover_response(
                     **revision_options,
                     **generation_options,
                 )
+                if resolved != source_path:
+                    try:
+                        with resolved.open("rb") as handle:
+                            stat_result = os.fstat(handle.fileno())
+                            content = handle.read()
+                    except FileNotFoundError:
+                        resolved = source_path
+                    else:
+                        return _conditional_file_response(
+                            request,
+                            resolved,
+                            max_age=31536000 if normalized_revision else 300,
+                            stat_result=stat_result,
+                            content=content,
+                        )
         except Exception:
             _app_logger(request).exception(
                 "cover: failed to prepare display variant for %s", resolved

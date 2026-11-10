@@ -19,9 +19,7 @@
     <form class="login-form" method="post" action="/login" aria-label="Album Haven sign in">
       <img class="login-mark" src="/static/images/album-haven-cloud-vinyl.png" alt="Album Haven">
 
-      {% if failed %}
-      {{ on_page_alert('Sign-in failed. Check your credentials and try again.', severity='error', class_name='login-alert') }}
-      {% endif %}
+      {{ on_page_alert('Sign-in failed. Check your credentials and try again.', severity='error', class_name='login-alert', hidden=not failed) }}
 
       <div class="login-field">
         <label for="login-username">Username</label>

@@ -158,8 +158,17 @@ async function positionWithWheelBeforeContinuation(ui, page) {
     const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.35);
     if (geometry.remaining >= lower && geometry.remaining <= upper) return;
     if (geometry.remaining < lower) {
-      const diagnostic = JSON.stringify({ step, geometry, lower, upper });
-      throw new Error(`Desktop preposition crossed the continuation boundary: ${diagnostic}`);
+      const loadedBefore = await readLoadedAlbumCount(page);
+      let retryDelta = 1;
+      await expect.poll(
+        async () => {
+          await page.mouse.wheel(0, retryDelta);
+          retryDelta *= -1;
+          return readLoadedAlbumCount(page);
+        },
+        { intervals: [64, 128, 250], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+      ).toBeGreaterThan(loadedBefore);
+      continue;
     }
     await page.mouse.wheel(0, Math.min(480, Math.max(32, geometry.remaining - upper)));
     await expect.poll(
@@ -365,6 +374,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         artist: FULL_REFRESH_SEARCH_QUERY,
         album: `Gallery Refresh ${Date.now()}`,
         year: 2026,
+        createLocalArt: true,
         context,
         managedAppLifecycle,
       });

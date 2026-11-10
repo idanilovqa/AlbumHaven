@@ -16,6 +16,18 @@ const helperPath = path.join(
   'utility-list-builders.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const albumIdentityHelperPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'virtual-artist-grid.js',
+);
+const albumIdentityHelperSource = fs.readFileSync(albumIdentityHelperPath, 'utf8');
 const statusUiHelperPath = path.join(
   __dirname,
   '..',
@@ -147,6 +159,7 @@ function loadHelpers() {
       return nextIndex;
     },
     renderView() {},
+    rememberCurrentRuntimeAlbumCoverAuthority() {},
     getViewportScrollPosition() {
       return { x: 0, y: 0 };
     },
@@ -228,6 +241,156 @@ function loadPlayerAlbumResolutionHelpers() {
   ].flatMap((group) => group.albums || []);
   return context;
 }
+
+function loadPlayerAlbumOpener(fetchResult) {
+  const context = loadPlayerAlbumResolutionHelpers();
+  context.opened = [];
+  context.toasts = [];
+  context.requests = [];
+  context.openTrackModal = (album, options) => context.opened.push({ album, options });
+  context.showToast = (message, variant) => context.toasts.push({ message, variant });
+  context.fetch = async (url) => {
+    context.requests.push(url);
+    if (fetchResult instanceof Error) throw fetchResult;
+    return { ok: fetchResult.status === 200, json: async () => fetchResult.body };
+  };
+  return context;
+}
+
+const unloadedTrack = { path: 'C:\\Music\\Elsewhere\\Album\\01 Song.flac', album: 'Album', artist: 'Elsewhere' };
+
+test('the player opens an album this page already holds without a request', async () => {
+  const context = loadPlayerAlbumOpener(new Error('no request expected'));
+  const album = { key: 'elsewhere::album', name: 'Album', album_artist: 'Elsewhere', tracks: [{ path: unloadedTrack.path }] };
+  context.state.view.artist_groups = [{ artist: 'Elsewhere', albums: [album] }];
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack, { foreground: true }), true);
+  assert.strictEqual(context.opened[0].album, album);
+  assert.equal(context.opened[0].options.foreground, true);
+  assert.deepEqual(context.requests, []);
+});
+
+test('the player opens an album the page no longer holds from the server by the playing file', async () => {
+  const album = { key: 'elsewhere::album', name: 'Album', tracks: [] };
+  const context = loadPlayerAlbumOpener({ status: 200, body: { ok: true, album } });
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), true);
+  assert.deepEqual(context.requests, [`/album-details?track_path=${encodeURIComponent(unloadedTrack.path)}`]);
+  assert.equal(context.opened[0].album, album);
+  assert.deepEqual(context.toasts, []);
+});
+
+test('a player album the server cannot find says why instead of doing nothing', async () => {
+  const context = loadPlayerAlbumOpener({ status: 404, body: { ok: false, error: "The playing track's album isn't in the library." } });
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.deepEqual(context.opened, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.toasts)), [{ message: "The playing track's album isn't in the library.", variant: 'error' }]);
+});
+
+test('a failed player album request shows a retry message', async () => {
+  const context = loadPlayerAlbumOpener(new Error('offline'));
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.equal(context.toasts[0].message, "The playing album couldn't be opened. Try again.");
+});
+
+test('the player opens nothing when the track changed while its album loaded', async () => {
+  const context = loadPlayerAlbumOpener({ status: 200, body: { ok: true, album: { key: 'elsewhere::album' } } });
+  context.state.player.current = { path: 'C:\\Music\\Next\\01 Other.flac' };
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.deepEqual(context.opened, []);
+});
+
+test('player queue retains the canonical album ref for a hydrated path-bearing snapshot', () => {
+  const context = loadPlayerAlbumResolutionHelpers();
+  const identityHelperStart = albumIdentityHelperSource.indexOf('function getAlbumRequestKey(album)');
+  const identityHelperEnd = albumIdentityHelperSource.indexOf('function rebuildAlbumIndex(groupsList)');
+  vm.runInContext(
+    albumIdentityHelperSource.slice(identityHelperStart, identityHelperEnd),
+    context,
+    { filename: albumIdentityHelperPath },
+  );
+
+  const canonicalAlbumRef = 'various-artists::featured-signal-collection';
+  const playingTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: canonicalAlbumRef,
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: playingTrackPath }],
+  };
+  const playingTrack = {
+    path: playingTrackPath,
+    artist: 'Solo Voice',
+    albumArtist: 'Various Artists',
+    album: 'Featured Signal Collection',
+  };
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: 'C:\\Music\\Other Root\\Featured Signal Collection\\01 Other.flac' }],
+  };
+  context.state.view.artist_groups = [{ artist: 'Various Artists', albums: [sameNameFallback] }];
+  context.state.player.playbackQueue = {
+    albumRef: canonicalAlbumRef,
+    albumSnapshot: queueSnapshot,
+    currentIndex: 0,
+    tracks: [{ ...playingTrack }],
+  };
+
+  assert.equal(context.getAlbumRequestKey(queueSnapshot), canonicalAlbumRef);
+  assert.strictEqual(context.resolveAlbumForPlayerTrack(playingTrack), queueSnapshot);
+});
+
+test('player queue accepts a legacy path-signature album ref before same-name fallback', () => {
+  const context = loadPlayerAlbumResolutionHelpers();
+  const identityHelperStart = albumIdentityHelperSource.indexOf('function getAlbumRequestKey(album)');
+  const identityHelperEnd = albumIdentityHelperSource.indexOf('function rebuildAlbumIndex(groupsList)');
+  vm.runInContext(
+    albumIdentityHelperSource.slice(identityHelperStart, identityHelperEnd),
+    context,
+    { filename: albumIdentityHelperPath },
+  );
+
+  const playingTrackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const queueSnapshot = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: playingTrackPath }],
+  };
+  const playingTrack = {
+    path: playingTrackPath,
+    artist: 'Solo Voice',
+    albumArtist: 'Various Artists',
+    album: 'Featured Signal Collection',
+  };
+  const sameNameFallback = {
+    key: 'wrong-same-name-release',
+    album_ref: 'wrong-same-name-release',
+    name: queueSnapshot.name,
+    album_artist: queueSnapshot.album_artist,
+    tracks: [{ path: 'C:\\Music\\Other Root\\Featured Signal Collection\\01 Other.flac' }],
+  };
+  context.state.view.artist_groups = [{ artist: 'Various Artists', albums: [sameNameFallback] }];
+  context.state.player.playbackQueue = {
+    albumRef: context.getAlbumIdentity(queueSnapshot),
+    albumSnapshot: queueSnapshot,
+    currentIndex: 0,
+    tracks: [{ ...playingTrack }],
+  };
+
+  assert.strictEqual(context.resolveAlbumForPlayerTrack(playingTrack), queueSnapshot);
+});
 
 test('player album resolution uses the active queue album after the visible search context changes', () => {
   const context = loadPlayerAlbumResolutionHelpers();
@@ -1153,6 +1316,29 @@ test('findVisibleAlbumByTrackPaths prefers a duplicate projection with album pre
   );
 });
 
+test('findVisibleAlbumByTrackPaths fills missing cover authority from duplicate projections', () => {
+  const context = loadHelpers();
+  const sharedPath = 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\01 Source Track.mp3';
+  context.flattenVisibleAlbums = () => [{
+    key: 'preferred',
+    track_paths: [sharedPath],
+    album_preference: { rating: 8 },
+    cover_path: null,
+  }, {
+    key: 'covered',
+    track_paths: [sharedPath],
+    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+  }];
+
+  const album = context.findVisibleAlbumByTrackPaths(new Set([sharedPath]));
+
+  assert.equal(album.key, 'preferred');
+  assert.equal(
+    album.cover_path,
+    'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+  );
+});
+
 test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stable visible destination', () => {
   const context = loadHelpers();
   const firstMovedTrack = {
@@ -1239,6 +1425,104 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
     ...visibleDestination,
     tracks: [firstMovedTrack, secondMovedTrack],
   });
+});
+
+test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split payloads omit them', () => {
+  const context = loadHelpers();
+  const sourcePath = 'D:\\Music\\Artist\\Album\\02 Source.mp3';
+  const destinationPath = 'D:\\Music\\Artist\\Album\\01 Destination.mp3';
+  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const remoteCoverUrl = 'https://covers.example/album.jpg';
+  const visibleSource = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    year: 2000,
+    cover_path: coverPath,
+    remote_cover_url: remoteCoverUrl,
+    tracks: [{ path: sourcePath }],
+  };
+  const visibleDestination = {
+    key: 'artist::album renamed::2000',
+    name: 'Album Renamed',
+    album_artist: 'Artist',
+    year: 2000,
+    cover_path: coverPath,
+    remote_cover_url: remoteCoverUrl,
+    tracks: [{ path: destinationPath }],
+  };
+  const finalized = [visibleSource, visibleDestination].map((album) => ({
+    ...album,
+    cover_path: null,
+    remote_cover_url: null,
+  }));
+  context.state.view.selected_artist = '';
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = [{
+    artist: 'Artist',
+    albums: [visibleSource, visibleDestination],
+  }];
+  context.getAlbumRequestKey = (album) => String(album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(finalized, {
+    originalAlbum: visibleSource,
+    skipRender: true,
+  });
+
+  for (const album of context.lastMergedPayload.artist_groups[0].albums) {
+    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.remote_cover_url, remoteCoverUrl);
+  }
+});
+
+test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-artist splits', () => {
+  const context = loadHelpers();
+  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverPreviewUrl = '/cover?path=opaque&size=480&v=revision';
+  const remoteCoverUrl = 'https://covers.example/album.jpg';
+  const albums = [
+    ['artist::source::2000', 'Source', '03 Source.mp3'],
+    ['artist::split-a::2000', 'Split A', '01 Split A.mp3'],
+    ['artist::split-b::2000', 'Split B', '02 Split B.mp3'],
+  ].map(([key, name, fileName]) => ({
+    key,
+    album_ref: key,
+    name,
+    album_artist: 'Artist',
+    year: 2000,
+    tracks: [{ path: `D:\\Music\\Artist\\Album\\${fileName}` }],
+  }));
+  const coveredAlbums = albums.map((album) => ({
+    ...album,
+    cover_path: coverPath,
+    cover_preview_url: coverPreviewUrl,
+    remote_cover_url: remoteCoverUrl,
+  }));
+  const finalizedAlbums = albums.map((album) => ({
+    ...album,
+    cover_path: null,
+    cover_preview_url: null,
+    remote_cover_url: null,
+  }));
+  context.state.view.selected_artist = 'Artist';
+  context.state.view.primary_artist_groups = [{ artist: 'Artist', albums }];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: coveredAlbums }];
+  context.getAlbumRequestKey = (album) => String(album?.album_ref || album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(finalizedAlbums, {
+    originalAlbum: albums[0],
+    skipRender: true,
+  });
+
+  for (const album of context.lastMergedPayload.primary_artist_groups[0].albums) {
+    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_preview_url, coverPreviewUrl);
+    assert.equal(album.remote_cover_url, remoteCoverUrl);
+  }
 });
 
 test('applyUpdatedAlbumsToCurrentView merges disjoint tracks for the same visible runtime album identity', () => {
@@ -5040,6 +5324,7 @@ test('watchSaveTask patches finalized albums into visible state when canonical r
         preserveScroll: true,
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+        preserveMissingAlbumCoverAuthority: true,
         restartIfSameUrl: true,
       },
     ]],
@@ -5638,6 +5923,7 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
       preserveAbsoluteScroll: true,
       preserveGalleryOptionsMenu: true,
       preserveMountedGalleryChildren: true,
+    preserveMissingAlbumCoverAuthority: true,
       retainMountedGalleryIfEquivalent: true,
       restartIfSameUrl: true,
     },
@@ -6185,6 +6471,7 @@ test('watchSaveTask drops origin absolute scroll after navigation before a requi
         preserveScroll: true,
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+          preserveMissingAlbumCoverAuthority: true,
         retainMountedGalleryIfEquivalent: true,
         restartIfSameUrl: true,
       },
@@ -6239,6 +6526,7 @@ test('watchSaveTask retains origin absolute scroll after an overlay-only revisio
         },
         preserveGalleryOptionsMenu: true,
         preserveMountedGalleryChildren: true,
+        preserveMissingAlbumCoverAuthority: true,
         retainMountedGalleryIfEquivalent: true,
         restartIfSameUrl: true,
       },
@@ -7273,6 +7561,7 @@ test('Problematic Files excludes library-wide warnings from album rows and count
         selectedProblematicKey: '',
         selectedProblemFilters: [],
         searchQuery: '',
+      loaded: true,
         loading: false,
       },
     },
@@ -7290,6 +7579,46 @@ test('Problematic Files excludes library-wide warnings from album rows and count
   assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
   assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
+});
+
+test('Problematic Files renders load failure instead of a successful empty state', () => {
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', scrollTop: 0 },
+    detail: { innerHTML: '', removeAttribute() {} },
+    count: { textContent: '' },
+    sidebarLabel: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+  };
+  const context = {
+    console,
+    escapeHtml(value) { return String(value ?? ''); },
+    state: { utility: {
+      problematicFiles: [],
+      libraryWatchHealthProblems: [],
+      selectedProblematicKey: '',
+      selectedProblemFilters: [],
+      searchQuery: '',
+      loaded: false,
+      loading: false,
+      problematicLoadError: 'Access denied.',
+    } },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return []; },
+    renderProblemFilterControls() {},
+    buildOnPageAlertHtml({ title, message }) {
+      return `<div role="alert">${title}: ${message}</div>`;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+
+  context.renderProblematicFiles();
+
+  assert.match(elements.list.innerHTML, /Unable to load problematic albums/);
+  assert.match(elements.detail.innerHTML, /Problematic Files unavailable/);
+  assert.doesNotMatch(`${elements.list.innerHTML}${elements.detail.innerHTML}`, /No matching/);
 });
 
 test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {

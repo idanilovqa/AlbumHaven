@@ -94,6 +94,7 @@
       this.loopEndFrame = 0;
       this.shortLoopRendering = false;
       this.pendingSeek = null;
+      this.pendingBufferedSeek = null;
       this.expectContinuity = false;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
     }
@@ -120,6 +121,7 @@
       this.loopEndFrame = 0;
       this.shortLoopRendering = false;
       this.pendingSeek = null;
+      this.pendingBufferedSeek = null;
       this.expectContinuity = false;
     }
 
@@ -137,11 +139,18 @@
       if (message.type === 'enqueue') this.enqueue(message);
       else if (message.type === 'eos') this.markEos(message);
       else if (message.type === 'play') this.playing = true;
-      else if (message.type === 'pause') this.playing = false;
+      else if (message.type === 'pause') {
+        this.playing = false;
+        if (this.pendingBufferedSeek) {
+          this.rejectBufferedSeek(this.pendingBufferedSeek, 'paused');
+          this.pendingBufferedSeek = null;
+        }
+      }
       else if (message.type === 'set-loop') this.setLoop(message);
       else if (message.type === 'drop-continuity') this.dropContinuity(message);
       else if (message.type === 'reserve-seek') this.reserveSeek(message);
       else if (message.type === 'prepare-seek') this.prepareSeek(message);
+      else if (message.type === 'reserve-buffered-seek') this.reserveBufferedSeek(message);
       else if (message.type === 'expect-continuity') {
         this.expectContinuity = message.active === true;
       }
@@ -310,6 +319,10 @@
           || !isIntegerBetween(message.timelineStartFrame, 0, Number.MAX_SAFE_INTEGER)
           || (this.continuity.streamId !== null
             && this.continuity.streamId !== message.streamId)) return;
+      if (this.pendingBufferedSeek) {
+        this.rejectBufferedSeek(this.pendingBufferedSeek, 'superseded');
+        this.pendingBufferedSeek = null;
+      }
       this.pendingSeek = {
         streamId: message.streamId,
         timelineStartFrame: message.timelineStartFrame,
@@ -318,9 +331,57 @@
       };
     }
 
+    rejectBufferedSeek(message, reason) {
+      this.port.postMessage({
+        type: 'buffered-seek-rejected',
+        generation: this.generation,
+        requestId: message.requestId,
+        streamId: message.streamId,
+        timelineFrame: message.timelineFrame,
+        reason,
+      });
+    }
+
+    reserveBufferedSeek(message) {
+      const deltaFrames = message.timelineFrame - this.timelineFrame;
+      if (!isIntegerBetween(message.requestId, 1)
+          || !isIntegerBetween(message.streamId, 1)
+          || !isIntegerBetween(message.timelineFrame, 0, Number.MAX_SAFE_INTEGER)
+          || message.streamId !== this.current.streamId
+          || !this.playing
+          || this.loopActive
+          || this.pendingSeek
+          || deltaFrames < 0
+          || deltaFrames >= this.current.capacityFrames
+          || deltaFrames >= this.current.bufferedFrames) {
+        this.rejectBufferedSeek(message, 'unavailable');
+        return;
+      }
+      if (this.pendingBufferedSeek) {
+        this.rejectBufferedSeek(this.pendingBufferedSeek, 'superseded');
+      }
+      this.pendingBufferedSeek = {
+        requestId: message.requestId,
+        streamId: message.streamId,
+        timelineFrame: message.timelineFrame,
+        outgoingCapture: this.snapshotOutgoingCapture(),
+      };
+      this.port.postMessage({
+        type: 'buffered-seek-reserved',
+        generation: this.generation,
+        requestId: message.requestId,
+        streamId: message.streamId,
+        timelineFrame: message.timelineFrame,
+      });
+    }
+
     setLoop(message) {
       if (typeof message.active !== 'boolean') return;
       if (!message.active) {
+        if (this.pendingBufferedSeek) {
+          this.rejectBufferedSeek(this.pendingBufferedSeek, 'loop-changed');
+          this.pendingBufferedSeek = null;
+        }
         const resumeTimelineFrame = this.shortLoopRendering
           ? this.loopEndFrame
           : this.timelineFrame;
@@ -354,6 +415,10 @@
           && this.continuity.streamId !== message.retainedStreamId)
           || this.current.streamId === message.retainedStreamId) return;
       if (shortLoop && loopFrames > this.retainedLoopSamples.length / CHANNELS) return;
+      if (this.pendingBufferedSeek) {
+        this.rejectBufferedSeek(this.pendingBufferedSeek, 'loop-changed');
+        this.pendingBufferedSeek = null;
+      }
       if (this.continuity.streamId === null) {
         this.continuity.streamId = message.retainedStreamId;
       }
@@ -401,6 +466,7 @@
       this.loopEndFrame = 0;
       this.shortLoopRendering = false;
       this.expectContinuity = false;
+      this.pendingBufferedSeek = null;
       this.port.postMessage({
         type: 'stopped',
         generation: this.generation,
@@ -487,6 +553,62 @@
       return true;
     }
 
+    commitBufferedSeek(renderQuantumFrames) {
+      const pending = this.pendingBufferedSeek;
+      if (!pending) return false;
+      if (this.current.streamId !== pending.streamId) {
+        this.pendingBufferedSeek = null;
+        this.rejectBufferedSeek(pending, 'stream-changed');
+        return false;
+      }
+      const deltaFrames = pending.timelineFrame - this.timelineFrame;
+      if (deltaFrames < 0) {
+        this.pendingBufferedSeek = null;
+        this.rejectBufferedSeek(pending, 'target-passed');
+        return false;
+      }
+      const currentFramesFromTarget = this.current.bufferedFrames - deltaFrames;
+      const continuityFramesNeeded = renderQuantumFrames - currentFramesFromTarget;
+      if (continuityFramesNeeded > 0
+          && (!this.current.eos
+            || this.continuity.bufferedFrames < continuityFramesNeeded)) {
+        this.pendingBufferedSeek = null;
+        this.rejectBufferedSeek(pending, 'target-unavailable');
+        return false;
+      }
+      this.current.readFrame = (this.current.readFrame + deltaFrames)
+        % this.current.capacityFrames;
+      this.current.bufferedFrames -= deltaFrames;
+      this.timelineFrame = pending.timelineFrame;
+      const incomingSource = this.current.readFrame * CHANNELS;
+      this.boundaryIncomingLeft.fill(0);
+      this.boundaryIncomingRight.fill(0);
+      this.boundaryIncomingLeft[0] = this.current.samples[incomingSource];
+      this.boundaryIncomingRight[0] = this.current.samples[incomingSource + 1];
+      this.pendingBufferedSeek = null;
+      const outgoing = pending.outgoingCapture || this.snapshotOutgoingCapture();
+      this.port.postMessage({
+        type: 'buffered-seek-boundary',
+        generation: this.generation,
+        requestId: pending.requestId,
+        streamId: pending.streamId,
+        renderedFrame: this.renderedFrames,
+        timelineFrame: this.timelineFrame,
+        skippedFrames: deltaFrames,
+        bufferedFrames: this.current.bufferedFrames,
+        silentFrames: 0,
+        capture: {
+          outgoing,
+          incoming: {
+            frames: 1,
+            left: this.boundaryIncomingLeft,
+            right: this.boundaryIncomingRight,
+          },
+        },
+      });
+      return true;
+    }
+
     emitShortLoopBoundary(outgoingStreamId, renderedFrame) {
       const outgoingFrames = this.copyOutgoingCapture();
       this.boundaryIncomingLeft.fill(0);
@@ -525,6 +647,7 @@
       left.fill(0);
       right.fill(0);
       this.commitPreparedSeek();
+      this.commitBufferedSeek(left.length);
       if (!this.playing || !this.configured) return true;
       if (!this.current.firstFrameReported && !this.current.eos
           && this.current.bufferedFrames < this.startupBufferFrames) return true;

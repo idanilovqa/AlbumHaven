@@ -105,5 +105,9 @@
     }
   }, true);
   window.addEventListener('error', () => window.AlbumHavenStartupProgress.fail());
-  if (root.dataset.startupProgress === '50') show(50);
+  // Signed-in pages continue from the 25% sign-in stage instead of restarting at 0.
+  if (root.dataset.startupProgress === '50') {
+    render(25);
+    show(50);
+  }
 })();

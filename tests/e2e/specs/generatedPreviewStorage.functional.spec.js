@@ -92,9 +92,20 @@ async function waitForStorageState(page, predicate, message) {
   return state;
 }
 
+// The controls stay disabled while a follow-up reconciliation of late previews runs.
+async function openIdleStorageSettings(page) {
+  await page.goto('/admin/server');
+  await waitForStorageState(
+    page,
+    (state) => !['queued', 'running', 'cancel_requested'].includes(state.operation_state),
+    'preview storage should be idle before its controls are used',
+  );
+  await page.goto('/admin/server');
+}
+
 async function selectStorage(page, { mode, root = '' }) {
   const adminServer = new AdminServerPage(page);
-  await page.goto('/admin/server');
+  await openIdleStorageSettings(page);
   await expect(adminServer.heading).toBeVisible();
   const current = await readStorageState(page);
   await expect(adminServer.mode(current.mode)).toBeChecked({ timeout: 10_000 });
@@ -287,7 +298,11 @@ test(
         );
         expect(completed.failed_count).toBe(0);
         expect(hashAlbumFolderCaches(fixture.mediaRoot)).toMatchObject(initialHashes);
-        expect(hashTree(path.join(customRoot, 'v1'))).toEqual({});
+        // The worker clears the old cache just after it publishes the completed state.
+        await expect.poll(() => hashTree(path.join(customRoot, 'v1')), {
+          timeout: 30000,
+          intervals: [250, 500, 1000],
+        }).toEqual({});
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
@@ -312,7 +327,7 @@ test(
         const adminServer = new AdminServerPage(page);
         for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
           await page.setViewportSize(viewport);
-          await page.goto('/admin/server');
+          await openIdleStorageSettings(page);
           await expect(adminServer.form).toBeVisible();
           const bounds = await adminServer.form.boundingBox();
           expect(bounds).not.toBeNull();

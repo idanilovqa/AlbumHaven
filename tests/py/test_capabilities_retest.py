@@ -163,6 +163,33 @@ def test_pool_reuses_transport_but_returns_a_separate_checkout_for_each_request(
     assert all(pool.closed for pool in pools)
 
 
+def test_pool_forwards_an_explicit_bounded_checkout_timeout(monkeypatch):
+    connection_calls = []
+
+    class FakePool:
+        def __init__(self, **_kwargs):
+            pass
+
+        def connection(self, **kwargs):
+            connection_calls.append(kwargs)
+            return object()
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, 'ConnectionPool', FakePool)
+
+    postgres_connections.pooled_connection(
+        'postgresql://background',
+        workload='background',
+        checkout_timeout_seconds=1.0,
+    )
+
+    assert connection_calls == [{"timeout": 1.0}]
+    postgres_connections.close_pools()
+
+
 def test_pool_lease_observer_reports_acquired_and_released(monkeypatch):
     events = []
     now = 0.0

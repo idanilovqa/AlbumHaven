@@ -24,6 +24,9 @@ NONTRANSACTIONAL_INDEX = 'library.local_albums_normalized_raw_artists_trgm_idx'
 NONTRANSACTIONAL_INDEX_VERIFIER = Path(
     'scripts/postgres/verify_0083_album_raw_artist_index.sql'
 )
+NONTRANSACTIONAL_PREREQUISITE = Path(
+    'scripts/postgres/prepare_0083_pg_trgm_schema.sql'
+)
 ACCOUNTS = (
     ('demo.admin', ('admin',), (), True),
     ('demo.owner', ('owner',), (), True),
@@ -43,6 +46,14 @@ def _nontransactional_index_verifier_sql() -> str:
     path = (root / NONTRANSACTIONAL_INDEX_VERIFIER).resolve()
     if not path.is_relative_to(root) or not path.is_file():
         raise RuntimeError('The 0083 index-definition verifier is missing or unsafe.')
+    return path.read_text(encoding='utf-8')
+
+
+def _nontransactional_prerequisite_sql() -> str:
+    root = ROOT.resolve()
+    path = (root / NONTRANSACTIONAL_PREREQUISITE).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise RuntimeError('The 0083 pg_trgm prerequisite is missing or unsafe.')
     return path.read_text(encoding='utf-8')
 
 
@@ -148,6 +159,7 @@ def migrate(connection) -> None:
         print('Capabilities demo migration: ' + path.name, flush=True)
         migration_sql = path.read_text(encoding='utf-8')
         if path.name == NONTRANSACTIONAL_MIGRATION:
+            connection.execute(_nontransactional_prerequisite_sql())
             _drop_mismatched_nontransactional_index(connection)
             try:
                 connection.execute(migration_sql)

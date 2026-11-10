@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0 - 2026-11-09
+
+- Added the Android app's native playback: compressed streaming decoded on the phone, gapless queues, loops, a media card with the album year, Bluetooth and lock-screen controls, playback resumption after reboot, and recently played songs kept on the device.
+- Playback starts and resumes at once, seeks inside already downloaded audio without the server, keeps playing through a Wi-Fi to mobile-data switch with no gap, and keeps a paused card so Android does not freeze the app.
+- Added one-press in-app updates for the Android app: download, verify and install from the cogwheel menu, which stays open to show progress, then reopen on the same page ("Appear on top") or offer a notification.
+- The Android app opens instantly from a copy of the last library view after Android ends it in the background, then refreshes in place; the copy and every cover cache store no file paths and are cleared on sign-out, account or sandbox switch.
+- The web player gained the same shared behavior: seeking inside received audio, socket keepalive, instant start and resume, and a browser song cache.
+- Songs started part-way down an album start faster: the server prepares the started song first and reads each MP3 once.
+- Added an Android suite to the pull-request pipeline that runs only when the Android app changes: build, lint, unit tests, decoder conformance on Linux, and on-device tests for network changes, the paused card, in-app updates, the media card and leaving for Settings.
+
 ## 0.10.0 - 2026-10-25
 
 - Added multi-root library support with source provenance, source-aware Gallery and Artist Tree filtering, duplicate-album ownership, and reconciliation across Hoard, New Arrivals, and other configured roots.

@@ -18,11 +18,15 @@ def test_custom_collection_loose_payload_retains_name_and_library_scope():
         "path": "C:/Music/Random/song.mp3", "album": "Unknown Album",
         "artist": "Guest", "title": "Song", "exception_type": "Custom Collection",
         "custom_collection_name": "Road trip", "library_root_category": "hoard",
+        "disc_number": 2, "disc_number_raw": "2/2", "total_discs": 2,
+        "disc_subtitle": "Bonus",
     }])
     assert len(tracks) == 1
     assert tracks[0]["custom_collection_name"] == "Road trip"
     assert tracks[0]["library_category"] == "hoard"
     assert tracks[0]["is_problematic"] is True
+    assert tracks[0]["total_discs"] == 2
+    assert tracks[0]["disc_subtitle"] == "Bonus"
 
 
 def test_blank_album_membership_requires_numbered_sibling_consensus_adjacent_number_and_folder():
@@ -68,6 +72,8 @@ def test_build_non_album_album_groups_collects_loose_and_exception_entries():
             "track_number": 1,
             "disc_number": 1,
             "disc_number_raw": "1",
+            "total_discs": 2,
+            "disc_subtitle": "Main album",
             "year": 2001,
             "edition": "",
             "album_rating": 0,
@@ -138,6 +144,8 @@ def test_build_non_album_album_groups_collects_loose_and_exception_entries():
         "Singles",
     ]
     assert groups[0]["albums"][0]["tracks"][0]["title"] == "Com(?)"
+    assert groups[0]["albums"][0]["tracks"][0]["total_discs"] == 2
+    assert groups[0]["albums"][0]["tracks"][0]["disc_subtitle"] == "Main album"
     assert groups[0]["albums"][1]["tracks"][0]["title"] == "Halo"
     assert groups[0]["albums"][1]["total_duration_display"] == "4:05"
 
@@ -252,6 +260,9 @@ def test_build_non_album_track_list_preserves_editable_tag_values():
             "year": 1999,
             "track_number": 3,
             "disc_number": 2,
+            "disc_number_raw": None,
+            "total_discs": None,
+            "disc_subtitle": None,
             "exception_type": "Non-album rarity",
             "edition": "Bonus",
             "album_rating": 8,
@@ -270,6 +281,9 @@ def test_build_non_album_track_list_preserves_editable_tag_values():
         "year_label": "1999",
         "track_number": 3,
         "disc_number": 2,
+        "disc_number_raw": None,
+        "total_discs": None,
+        "disc_subtitle": None,
         "exception_type": "Non-album rarity",
         "edition": "Bonus",
         "album_rating": 8,
@@ -448,6 +462,8 @@ def test_build_album_detail_payload_adds_shared_track_rows_for_non_album_groups(
             "track_number": 1,
             "disc_number": 1,
             "disc_number_raw": "1",
+            "total_discs": None,
+            "disc_subtitle": None,
             "title": "Com(?)",
             "secondary_artist": "Guest Singer",
             "title_display": {

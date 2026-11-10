@@ -85,6 +85,8 @@ test('Cover Look Up for the second artbox blocks the first artbox art', () => {
   assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), false);
   assert.equal(context.isCoverLookupItemInFirstArtbox({ url: 'https://img.example/front.jpg' }, 'remote'), true);
   assert.equal(context.isCoverLookupItemInFirstArtbox({}, 'saved-remote'), true);
+  // UI-14 (owner, 11-09): the library spells one file as both n:\ and N:\; the album cover is still recognized.
+  assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'd:\\music\\testimony\\COVER.jpg' }, 'local'), true);
   context.state.coverLookup.modal.artboxSlot = 0;
   assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'D:/Music/Testimony/cover.jpg' }, 'local'), false, 'the album cover lookup is unchanged');
 });

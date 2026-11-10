@@ -4721,6 +4721,12 @@ async function removeAlbumAdditionalArtbox() {
   });
 }
 
+// Windows paths compare without case: the library holds both n: and N: spellings of one file.
+function sameLocalPath(left, right) {
+  const normalize = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
+  return Boolean(normalize(left)) && normalize(left) === normalize(right);
+}
+
 // Cover Look Up opened for the second artbox: the first artbox's art cannot be chosen again.
 function isCoverLookupItemInFirstArtbox(item, kind) {
   const modal = state.coverLookup?.modal;
@@ -4728,8 +4734,7 @@ function isCoverLookupItemInFirstArtbox(item, kind) {
   const album = modal.album || {};
   if (kind === 'saved-remote') return true;
   if (kind === 'local') {
-    const coverPath = String(album.cover_path || '').trim();
-    return Boolean(coverPath) && String(item?.path || '').trim() === coverPath;
+    return sameLocalPath(album.cover_path, item?.path);
   }
   if (kind === 'remote') {
     const urls = [album.remote_cover_url, album.remote_cover_thumbnail_url]
@@ -4793,8 +4798,7 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
   const artwork = getAlbumAdditionalArtwork(modal.album);
   if (!artwork) return false;
   if (kind === 'local') {
-    const path = String(artwork.cover_path || '').trim();
-    return Boolean(path) && String(item?.path || '').trim() === path;
+    return sameLocalPath(artwork.cover_path, item?.path);
   }
   if (kind === 'remote') {
     const url = String(artwork.remote_url || artwork.remote_cover_url || '').trim();
@@ -31900,6 +31904,12 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
 }
 
 function getCoverLookupActiveLocalPath() {
+  // UI-14 (owner, 11-09): the second artbox's lookup starts with only its own saved art selected, never the
+  // album cover.
+  if (state.coverLookup.modal.artboxSlot) {
+    const artwork = typeof getAlbumAdditionalArtwork === 'function' ? getAlbumAdditionalArtwork(state.coverLookup.modal.album) : null;
+    return state.coverLookup.modal.artboxCleared ? '' : String(artwork?.cover_path || '');
+  }
   const retainedPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
   if (retainedPath) return retainedPath;
   if (state.coverLookup.modal.remoteCover && typeof state.coverLookup.modal.remoteCover === 'object') {

@@ -5319,6 +5319,25 @@ for (const status of ['pending', 'running']) {
 }
 
 {
+  // UI-14 (owner, 11-09): the second artbox's Cover Look Up opened with the album cover selected. Only the second
+  // artbox's own saved art starts selected.
+  const second = { slot: 1, cover_path: 'C:/music/Artist/Album/Covers/Back.jpg' };
+  const context = loadHelper({
+    getAlbumAdditionalArtwork: (album) => (album?.additional_artworks || []).find((artwork) => artwork.slot === 1) || null,
+  });
+  context.state.coverLookup.modal = {
+    artboxSlot: 1,
+    album: { key: 'a', cover_path: 'C:/music/Artist/Album/cover.jpg', additional_artworks: [] },
+    localCovers: [{ path: 'C:/music/Artist/Album/cover.jpg', is_active: true }],
+  };
+  assert.equal(context.getCoverLookupActiveLocalPath(), '', 'nothing selected in a new second artbox');
+  context.state.coverLookup.modal.album.additional_artworks = [second];
+  assert.equal(context.getCoverLookupActiveLocalPath(), second.cover_path);
+  context.state.coverLookup.modal.artboxCleared = true;
+  assert.equal(context.getCoverLookupActiveLocalPath(), '');
+}
+
+{
   const context = loadHelper({
     getCoverLookupStatusTone: () => 'neutral',
     logCoverLookupTaskDebug: () => {},

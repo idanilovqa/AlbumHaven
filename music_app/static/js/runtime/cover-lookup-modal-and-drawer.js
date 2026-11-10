@@ -834,6 +834,12 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
 }
 
 function getCoverLookupActiveLocalPath() {
+  // UI-14 (owner, 11-09): the second artbox's lookup starts with only its own saved art selected, never the
+  // album cover.
+  if (state.coverLookup.modal.artboxSlot) {
+    const artwork = typeof getAlbumAdditionalArtwork === 'function' ? getAlbumAdditionalArtwork(state.coverLookup.modal.album) : null;
+    return state.coverLookup.modal.artboxCleared ? '' : String(artwork?.cover_path || '');
+  }
   const retainedPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
   if (retainedPath) return retainedPath;
   if (state.coverLookup.modal.remoteCover && typeof state.coverLookup.modal.remoteCover === 'object') {

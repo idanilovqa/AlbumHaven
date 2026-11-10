@@ -6,9 +6,9 @@ const vm = require('node:vm');
 const nodeCrypto = require('node:crypto');
 
 // Stored covers carry no file path (instant-return option D): the key is the app-copy worker's
-// opaque cover key and the version is the SHA-256 of the exact production URL.
+// opaque cover key and the version is the URL's `v`, which names a revision, never a file.
 const sha256Hex = text => nodeCrypto.createHash('sha256').update(text).digest('hex');
-const versionTag = productionUrl => sha256Hex(productionUrl);
+const versionTag = productionUrl => new URL(productionUrl).searchParams.get('v') || '';
 function storeKey(productionUrl) {
   const url = new URL(productionUrl);
   url.searchParams.delete('v');
@@ -1690,4 +1690,17 @@ test('the gallery cache and the app-copy worker key a cover identically', async 
   const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: origin });
 
   assert.equal(new URL(await previewCache.storedCoverKey(`${origin}${coverUrl}`)).pathname, workerKey);
+});
+
+test('a cover key is computed synchronously, so a cover load waits on nothing new', () => {
+  const { context } = createContext();
+  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
+  const productionUrl = `http://127.0.0.1:4173/cover?path=${encodeURIComponent('C:/Music/БИ-2/cover.jpg')}&size=480&v=epoch-9`;
+
+  const key = previewCache.storedCoverKey(productionUrl);
+
+  assert.equal(typeof key, 'string');
+  assert.equal(key, storeKey(productionUrl));
+  assert.equal(previewCache.storedCoverKey(productionUrl.replace('epoch-9', 'epoch-10')), key);
+  assert.equal(previewCache.coverVersionTag(productionUrl), 'epoch-9');
 });

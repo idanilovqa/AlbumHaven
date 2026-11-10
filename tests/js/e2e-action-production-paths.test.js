@@ -94,9 +94,7 @@ test('cover cache diagnostics inspect the opaque production key and exact stored
                     headers: {
                       get(header) {
                         if (String(header).toLowerCase() === 'content-type') return 'image/jpeg';
-                        if (header === 'X-Album-Haven-Cover-Version') {
-                          return require('node:crypto').createHash('sha256').update(storedProductionUrl).digest('hex');
-                        }
+                        if (header === 'X-Album-Haven-Cover-Version') return new URL(storedProductionUrl).searchParams.get('v');
                         return '';
                       },
                     },

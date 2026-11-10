@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import shutil
 
 from isolatedLibraryApp import generate_playback_start_fixture_audio
 
@@ -23,6 +24,59 @@ LONG_ALBUM = "Sixteen Horizons"
 LONG_TRACKS = ("First Horizon", "Daybreak", "Coastline", "Driftwood", "Open Sky", "Tidal Light",
                "Crossing", "Distant Voices", "Paper Moon", "Afterglow", "Quiet Motion", "Northbound",
                "Blue Hour", "Last Ferry", "Constellations", "Homeward")
+VIRTUALIZED_ARTIST_COUNT = 205
+LAST_VIRTUALIZED_ARTIST = (
+    "ZZ Drawer Fixture Artist 205 With An Intentionally Long Name That Must Stay Contained"
+)
+
+
+def virtualized_artist_name(index: int) -> str:
+    if index == VIRTUALIZED_ARTIST_COUNT:
+        return LAST_VIRTUALIZED_ARTIST
+    return f"ZZ Drawer Fixture Artist {index:03d}"
+
+
+def add_virtualized_artist_tree_media(
+    root: Path,
+    inventory: dict[str, dict[str, object]],
+    *,
+    metadata_schema_version: int,
+) -> None:
+    source_track: Path | None = None
+    for index in range(1, VIRTUALIZED_ARTIST_COUNT + 1):
+        artist = virtualized_artist_name(index)
+        album = f"Drawer Fixture Album {index:03d}"
+        path = (root / artist / album / "01 - Drawer Fixture Signal.mp3").resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if source_track is None:
+            source_track = generate_playback_start_fixture_audio(
+                root,
+                path,
+                duration_seconds=1,
+                frequency_hz=330,
+            ).resolve()
+        else:
+            shutil.copy2(source_track, path)
+        stat = path.stat()
+        inventory[str(path)] = {
+            "path": str(path),
+            "mtime": stat.st_mtime,
+            "size": stat.st_size,
+            "artist": artist,
+            "album_artist": artist,
+            "album": album,
+            "title": "Drawer Fixture Signal",
+            "year": 2000 + index % 25,
+            "track_number": 1,
+            "disc_number": 1,
+            "disc_number_raw": "1",
+            "duration_seconds": 1,
+            "duration_display": "0:01",
+            "cover_path": None,
+            "library_root_id": "isolated-e2e-root",
+            "library_root_category": "main_library",
+            "metadata_schema_version": metadata_schema_version,
+        }
 
 
 def mobile_layout_albums(extended: bool = False):
@@ -82,6 +136,11 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
                 item['track_number'] = None
             elif item['artist'] == 'Orion Field' and item['album'] == 'Collected Skies 03':
                 item['year'] = None
+        add_virtualized_artist_tree_media(
+            root,
+            inventory,
+            metadata_schema_version=FILE_METADATA_SCHEMA_VERSION,
+        )
     return inventory
 
 

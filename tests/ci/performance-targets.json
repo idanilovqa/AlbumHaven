@@ -542,6 +542,18 @@
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
           "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › real continuation response during wheel sequence keeps gallery coordinates stable"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/mobileGalleryPinch.spec.js",
+          "case": "mobile continuous gallery pinch on the production-calibration library › cards: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/mobileGalleryPinch.spec.js",
+          "case": "mobile continuous gallery pinch on the production-calibration library › covers: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete"
         }
       ]
     },

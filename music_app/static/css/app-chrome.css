@@ -242,7 +242,9 @@
   .shell-navigation-rail {
     position: fixed;
     inset: var(--app-bar-height) auto var(--player-height) 0;
-    width: min(var(--app-sidebar-width), calc(100vw - 56px));
+    width: max-content;
+    min-width: min(var(--app-sidebar-width), calc(100vw - 56px));
+    max-width: calc(100vw - 56px);
     height: auto;
     box-shadow: 18px 0 36px #0005;
     transform: translateX(-100%);

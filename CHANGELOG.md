@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 - 2026-11-10
+
+- The song cache keeps a song once it is heard, not when it was only fetched ahead and then skipped (web and Android).
+- Fixed an intermittent Cover Lookup candidate image failure after a cover save.
+- Migrations may be numbered and applied out of order but never share a number; a CI check enforces it, and only code merged to main migrates shared or production databases.
+
 ## 0.11.0 - 2026-11-09
 
 - Added the Android app's native playback: compressed streaming decoded on the phone, gapless queues, loops, a media card with the album year, Bluetooth and lock-screen controls, playback resumption after reboot, and recently played songs kept on the device.

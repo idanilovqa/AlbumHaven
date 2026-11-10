@@ -831,7 +831,8 @@ def test_live_guest_artist_track_stays_in_its_soundtrack_album(watcher_repair_in
     assert {members[entry["path"]] for entry in (*score, guest)} == {members[guest["path"]]}, "one soundtrack album after a scan"
 
     # A watcher batch that sees only the guest's file keeps it in the soundtrack.
-    result = _live_reconcile(fixture, {guest["path"]: guest}, Path(guest["path"]).parent)
+    entries = {entry["path"]: entry for entry in (*score, guest)}
+    result = _live_reconcile(fixture, entries, Path(guest["path"]).parent)
     assert result.revision > 0
     albums, members = _live_album_rows(fixture)
     soundtrack = members[score[0]["path"]]

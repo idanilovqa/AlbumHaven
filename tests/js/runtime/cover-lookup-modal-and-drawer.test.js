@@ -5669,13 +5669,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   );
   assert.equal(
     (bodyElement.innerHTML.match(/class="cover-lookup-art-preview-image"[^>]*loading="lazy"/g) || []).length,
-    4,
+    3,
     'provider candidate previews must not eagerly decode every full-resolution result',
   );
-  assert.doesNotMatch(
-    bodyElement.innerHTML,
-    /class="cover-lookup-art-preview-image"[^>]*loading="eager"/,
-  );
+  const eagerPreviews = bodyElement.innerHTML.match(
+    /class="cover-lookup-art-preview-image"[^>]*loading="eager"/g,
+  ) || [];
+  assert.equal(eagerPreviews.length, 1, 'only the leading provider preview loads eagerly');
+  assert.match(eagerPreviews[0], /discogs-front\.jpg/);
   assert.doesNotMatch(bodyElement.innerHTML, />OTHER COVER ART</);
 }
 
@@ -7120,6 +7121,61 @@ require('node:test')('only the first service cover preview receives eager browse
 
   assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
+});
+
+require('node:test')('the leading remote card loads its preview first when another provider renders before services', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const markup = context.buildCoverLookupPossibleMatchesMarkup([
+    {
+      id: 'caa-front',
+      source: 'cover_art_archive',
+      lookup_group: 'cover_art_archive',
+      thumbnail_url: 'https://images.example/caa-front.jpg',
+    },
+    {
+      id: 'apple-cover',
+      source: 'apple',
+      thumbnail_url: 'https://images.example/apple-cover.jpg',
+    },
+  ]);
+  const images = markup.match(/<img class="cover-lookup-art-preview-image"[^>]*>/g) || [];
+
+  assert.equal(images.length, 2);
+  assert.match(images[0], /\ssrc="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages\.example%2Fcaa-front\.jpg/);
+  assert.match(images[0], /loading="eager" fetchpriority="high"/);
+  assert.doesNotMatch(images[0], /data-cover-lookup-deferred-src/);
+  assert.match(images[1], /data-cover-lookup-deferred-src=/);
+  assert.doesNotMatch(images[1], /\ssrc=/);
+});
+
+require('node:test')('a re-render does not keep a still-deferred preview in place of a loading one', () => {
+  const imageWith = (attributes) => ({
+    hasAttribute: name => Object.hasOwn(attributes, name),
+    getAttribute: name => attributes[name] ?? null,
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedImage = imageWith({ 'data-cover-lookup-deferred-src': 'leading.jpg' });
+  const incomingImage = imageWith({ src: 'leading.jpg' });
+  const card = (image) => ({
+    attributes: [],
+    childNodes: [image],
+    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
+    querySelector: () => image,
+    replaceChildren(...children) { this.children = children; },
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedCard = card(retainedImage);
+  const incomingCard = card(incomingImage);
+  let rendered = false;
+  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
+  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
+
+  assert.equal(incomingImage.replacedWith, undefined);
+  assert.deepEqual(retainedCard.children, [incomingImage]);
+  assert.strictEqual(incomingCard.replacedWith, retainedCard);
 });
 
 require('node:test')('progressive provider rendering appends without moving existing cards', () => {

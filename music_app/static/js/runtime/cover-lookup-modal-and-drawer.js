@@ -2318,14 +2318,15 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
     }
     runs.push({ group, items: [item] });
   });
-  let prioritizedServicePreview = false;
+  // The leading card loads first, whichever provider group renders it.
+  let prioritizedLeadingPreview = false;
   return runs.map(({ group, items }) => {
     const providerAttr = group.provider
       ? ` data-cover-lookup-provider-group="${group.provider}"`
       : '';
     const cards = items.map((item) => {
-      const prioritize = group.key === 'services' && !prioritizedServicePreview;
-      if (prioritize) prioritizedServicePreview = true;
+      const prioritize = !prioritizedLeadingPreview;
+      prioritizedLeadingPreview = true;
       return buildCoverLookupCard(item, 'remote', prioritize);
     }).join('');
     return `<div class="cover-lookup-subsection-title">${group.title}</div><div class="cover-lookup-gallery"${providerAttr}>${cards}</div>`;
@@ -2395,9 +2396,11 @@ function replaceCoverLookupModalMarkup(body, markup) {
       || image?.getAttribute?.('src')
       || '',
     );
+    // A still-deferred image has loaded nothing worth keeping.
     if (
       retainedImage
       && incomingImage
+      && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {

@@ -394,13 +394,14 @@ def test_equal_track_counts_compare_lengths_track_by_track():
     assert "durations" not in album_signals(local, remote)
 
 
-def test_differing_titles_and_lengths_are_never_strong():
-    # Dramatic View: the year and the count agree, the fetched titles and lengths do not.
+def test_a_release_whose_tracks_differ_is_no_evidence_whatever_its_title():
+    # Dramatic View and an unrelated "1973": the year and the count agree, the fetched
+    # titles and lengths do not. Matching is led by the tracks (owner, 2026-11-10).
     local = {"year": 2015, "tracks": [{"title": "A", "duration_seconds": 100}, {"title": "B", "duration_seconds": 200}]}
     remote = {"first_release_date": "2015", "tracks": [{"title": "C", "length": 300000}, {"title": "D", "length": 50000}]}
     signals = album_signals(local, remote)
     assert signals == {"year", "track_count", "tracks_differ"}
-    assert album_level("exact", signals) == "agree"
+    assert album_level("exact", signals) is None
 
 
 def test_missing_musicbrainz_lengths_are_unknown_not_a_mismatch():

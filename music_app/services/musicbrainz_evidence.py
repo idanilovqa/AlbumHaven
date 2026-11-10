@@ -382,8 +382,10 @@ def album_level(title: str | None, signals: set[str]) -> str | None:
 
     A typo, a partial title or a release matched by its tracks alone counts only with
     a matching tracklist, and an album whose fetched tracks differ in titles and
-    lengths is never strong."""
-    if not title:
+    lengths is no evidence at all."""
+    if not title or "tracks_differ" in signals:
+        # Matching is led by the tracks (owner, 2026-11-10): a release whose fetched tracks
+        # differ in titles and lengths is not this album, whatever its title, year or count.
         return None
     evidence = signals & _EVIDENCE_SIGNALS
     if title in {"typo", "partial", "tracks"} and "track_list" not in evidence:
@@ -391,7 +393,7 @@ def album_level(title: str | None, signals: set[str]) -> str | None:
     if title == "tracks" and ("track_count" not in evidence or not signals & {"durations", "lengths_unknown"}):
         # Tracks alone, with no title to agree, need their count and lengths too.
         return None
-    if len(evidence) >= 2 and "tracks_differ" not in signals:
+    if len(evidence) >= 2:
         return "strong"
     if evidence:
         return "agree"

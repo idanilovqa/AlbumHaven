@@ -450,6 +450,9 @@ test('FTC-PLAYER-013 immediate Album Details replacement stays audible', async (
       path: firstTrack.path,
     });
 
+    // The prepared successor may have arrived whole and been kept; the replacement contract below is
+    // the server stream, so the kept copy is forgotten before the click.
+    await forgetKeptStreamingTracks(page);
     const beforeReplacement = await readGaplessPlaybackDiagnostics(page);
     const eventMark = playbackEvidence.eventMark();
     const lifecycle = await createPlaybackLifecycleObserver(page);

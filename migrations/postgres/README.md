@@ -431,6 +431,13 @@ from scan metadata without rewriting `library.local_track_files`. Preserve this
 filename and exact SQL bytes; do not renumber, rewrite, replay, or edit its
 ledger row.
 
+Migration `0121_create_non_album_track_snapshots.sql` is the reserved historical
+identity for the derived Loose Tracks snapshot, with SHA-256
+`62033a60b750a82aeab66728e7ec4045a7a49129aa45fe10dcf4d75979de7ac8`.
+It creates an empty library-scoped cache table and infers no user action or
+owned value. Preserve this filename and exact SQL bytes; do not renumber,
+rewrite, replay, or edit a retained ledger row.
+
 `0179_add_ordered_cover_metadata_constraint.sql` adds a structural CHECK for
 optional ordered cover references in `library.local_albums.metadata`. Existing
 nonobject metadata and objects without `selected_covers` remain legacy values,

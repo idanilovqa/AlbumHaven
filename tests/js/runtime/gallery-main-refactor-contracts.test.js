@@ -587,6 +587,104 @@ function createStateForContract() {
   };
 }
 
+test('artist non-album tracks stay disabled until the family count is known', () => {
+  const requested = [];
+  const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: selector => selector === '[data-open-non-album-tracks]' ? [button] : [],
+      querySelector: () => null,
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+    hydrateArtistNonAlbumAvailability: () => { requested.push('availability'); return new Promise(() => {}); },
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
+    hasHydratedArtistNonAlbumAvailability: () => Boolean(context.state.view.non_album_track_count_scope),
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.updateGalleryMainControls();
+  assert.deepEqual(requested, ['availability']);
+  assert.equal(button.disabled, true);
+  assert.equal(button['aria-disabled'], 'true');
+  context.state.view.non_album_track_count = 1;
+  context.state.view.non_album_track_count_scope = 'artist-family:agalloch';
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-disabled'], 'false');
+  context.state.view.non_album_track_count = 0;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty artist collection is disabled');
+  context.state.view = {
+    query: 'Release',
+    selected_artist: 'Agalloch',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-scoped search retains its deferred menu fetch');
+  button.dataset.libraryWide = '1';
+  context.hasHydratedLibraryNonAlbumTracks = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty library collection is disabled');
+  button.dataset.libraryWide = '';
+  context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(requested.at(-1).libraryWide, true, 'search checks library-wide loose tracks without opening the menu');
+  assert.equal(button.dataset.searchMatch, 'false');
+  context.hasNonAlbumSearchMatches = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.dataset.searchMatch, 'true');
+  assert.equal(button['aria-description'], 'Contains tracks matching your search');
+});
+
+test('the phone Loose Tracks tab shows the search dot like the desktop button', () => {
+  const tab = { dataset: {}, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { query: 'Dragonland', selected_artist: '' } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: selector => (selector === '.mobile-artists-mode-button[data-navigation-mode="collections"]' ? tab : null),
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.hasNonAlbumSearchMatches = options => options.libraryWide === true;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'true');
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'false');
+});
+
+test('a search with an artist selected loads that artist\'s loose tracks only once its menu is open', () => {
+  const requested = [];
+  const menu = { hidden: true };
+  const context = loadRuntime({
+    state: { view: { query: 'Release', selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => (id === 'gallery-album-types-menu' ? menu : null),
+    },
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options.libraryWide); return new Promise(() => {}); },
+  });
+  const hydrate = requireContract(context, 'hydrateDeferredNonAlbumTracksForAlbumTypes');
+  hydrate();
+  assert.deepEqual(requested, [true], 'a closed menu keeps the search to its library-wide probe');
+  menu.hidden = false;
+  hydrate();
+  assert.deepEqual(requested, [true, true, false], 'the open menu also resolves the artist\'s own button');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,
@@ -606,7 +704,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(button\.dataset\.libraryWide === '1' && state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /const artistFamily = !libraryWide && selectedArtist[\s\S]*?const familyCountReady = artistFamily[\s\S]*?hasHydratedArtistNonAlbumAvailability\(\);[\s\S]*?Number\(state\.view\.non_album_track_count\) > 0/,
   );
   assert.match(
     galleryMainInteractionsSource,

@@ -948,6 +948,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     from music_app.services import state
 
     invalidated: list[str] = []
+    postgres_invalidations: list[dict[str, object]] = []
     monkeypatch.setattr(
         state,
         "schedule_gallery_projection_refresh",
@@ -969,7 +970,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     monkeypatch.setattr(
         state,
         "invalidate_postgres_utility_projection_cache",
-        lambda **kwargs: invalidated.append("postgres"),
+        lambda **kwargs: (invalidated.append("postgres"), postgres_invalidations.append(kwargs)),
         raising=False,
     )
     library_state = {
@@ -988,6 +989,10 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
     assert invalidated == ["gallery", "problems", "rules", "postgres"]
+    assert postgres_invalidations == [{
+        "database_url": "postgresql://example",
+        "kinds": ("problematic-files", "rules", "loose-tracks"),
+    }]
 
 
 def test_targeted_projection_invalidation_queues_the_settings_prewarm(monkeypatch):

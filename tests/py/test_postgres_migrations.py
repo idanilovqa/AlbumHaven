@@ -467,11 +467,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Numbers stay contiguous, except migrations reserved past numbers that
     # unmerged branches and the production ledger already use.
-    reserved = {112, 116, 171, 172, 173, 174, 175, 176, 177, 179, 180, 181}
+    reserved = {112, 116, 121, 171, 172, 173, 174, 175, 176, 177, 179, 180, 181}
     contiguous = [number for number in migration_numbers if number not in reserved]
     assert contiguous == list(range(1, len(contiguous) + 1))
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-79:] == [
+    assert migration_names[-80:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -541,6 +541,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0107_add_android_device_key_signer.sql",
         "0112_add_problematic_file_path_projection.sql",
         "0116_add_problematic_text_corrections.sql",
+        "0121_create_non_album_track_snapshots.sql",
         "0171_create_musicbrainz_artist_enrichment.sql",
         "0172_add_musicbrainz_artist_discogs_link.sql",
         "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
@@ -3358,6 +3359,19 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+
+def test_non_album_track_snapshot_migration_is_empty_and_library_scoped():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0121_create_non_album_track_snapshots.sql").read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists library.non_album_track_snapshots" in sql
+    assert "library_id bigint primary key references library.libraries(id) on delete cascade" in sql
+    assert "payload jsonb not null" in sql
+    assert "insert into" not in sql
+    assert "update library." not in sql
+    assert "select, insert, update, delete on library.non_album_track_snapshots" in sql
 
 
 def test_text_corrections_migration_never_rewrites_local_track_files():

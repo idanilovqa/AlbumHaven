@@ -4699,14 +4699,16 @@ async function removeAlbumAdditionalArtbox() {
     rerenderCurrentAlbumDetails();
     return;
   }
-  try {
-    const data = await postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork/remove', {
-      album, slot: ALBUM_ADDITIONAL_ARTBOX_SLOT,
-    });
-    applyAlbumAdditionalArtworks(album.key, data.additional_artworks);
-  } catch (error) {
+  // Owner (11-09): removing the artbox is immediate; the server confirms in the background, and a refusal puts
+  // the art back with its error.
+  const previous = Array.isArray(album.additional_artworks) ? album.additional_artworks : [];
+  applyAlbumAdditionalArtworks(album.key, previous.filter((artwork) => Number(artwork?.slot) !== ALBUM_ADDITIONAL_ARTBOX_SLOT));
+  void postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork/remove', {
+    album, slot: ALBUM_ADDITIONAL_ARTBOX_SLOT,
+  }).then((data) => applyAlbumAdditionalArtworks(album.key, data.additional_artworks)).catch((error) => {
+    applyAlbumAdditionalArtworks(album.key, previous);
     showToast(error.message, 'error', 3200);
-  }
+  });
 }
 
 // Cover Look Up opened for the second artbox: the first artbox's art cannot be chosen again.

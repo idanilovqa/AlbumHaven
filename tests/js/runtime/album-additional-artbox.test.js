@@ -191,3 +191,22 @@ test('UI-14: saving the second artbox with nothing selected empties it', async (
   assert.deepEqual(calls.fetches.map((call) => call.url), ['/utilities/cover-lookup/additional-artwork/remove']);
   assert.equal(calls.closed, 1);
 });
+
+test('Remove artbox empties the second artbox at once and puts it back if the server refuses', async () => {
+  // Owner (11-09): clicking Remove artbox was too slow; it must act immediately.
+  let answer;
+  const pending = new Promise((resolve) => { answer = resolve; });
+  const { context, calls } = load({ context: { fetch: async () => pending } });
+  const back = { slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' };
+  context.state.modalReleases = [{ ...testimony(), additional_artworks: [back] }];
+  const renders = calls.renders;
+
+  await context.removeAlbumAdditionalArtbox();
+  assert.equal(context.state.modalReleases[0].additional_artworks.length, 0, 'gone before the server answers');
+  assert.ok(calls.renders > renders);
+
+  answer({ ok: false, json: async () => ({ ok: false, error: 'Locked by another save.' }) });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.modalReleases[0].additional_artworks)), [back]);
+  assert.deepEqual(calls.toasts, ['Locked by another save.']);
+});

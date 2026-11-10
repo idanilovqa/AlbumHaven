@@ -6299,6 +6299,28 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_cd_name_search_branch_can_use_its_partial_index(monkeypatch):
+    """The CD-name match must not read every file's metadata: its WHERE clause, as
+    _search_preview_sql renders it, has to be servable by 0118's partial index."""
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    sql = _search_preview_sql(use_utf8_prefilter=True)
+    branch = sql.split("-- A CD name match uses its own partial index", 1)[1].split("\n        ),", 1)[0]
+    where = branch.split("from library.local_track_files", 1)[1]
+    with isolatedPostgres._connect(runtime_url) as connection:
+        connection.execute("set enable_seqscan = off")
+        plan = "\n".join(
+            row["QUERY PLAN"] for row in connection.execute(
+                f"explain select library.local_track_files.track_id from library.local_track_files {where}",
+                {"query_like": "%rox%", "query_utf8_prefilter": "rox"},
+            ).fetchall()
+        )
+    assert "local_track_files_disc_subtitle_search_trgm_idx" in plan, plan
+
+
 def test_live_search_finds_an_album_by_its_disc_subtitle(monkeypatch, tmp_path):
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     cleanup_complete = False

@@ -2263,6 +2263,22 @@ test('Mark As A Version lists the album details candidates that share tracks, wi
   assert.equal(picker.enabled(), null, 'nothing changed yet');
 });
 
+test('Mark As A Version shows each album cover, taken from the gallery copy of the album', async () => {
+  // Owner (11-09): the selected 20th Anniversary Edition showed an empty artbox. Release candidates are headers only,
+  // so the gallery's copy of the same album supplies the artwork.
+  const album = { key: 'ayreon::castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const edition = { key: 'ayreon::castle 20th', name: 'Into The Electric Castle (20th Anniversary Edition)', album_artist: 'Ayreon', shares_tracks: true };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, edition], release_candidate_rules: {} },
+    visible: [{ key: edition.key, name: edition.name, cover_path: 'N:/Ayreon/2018/cover.jpg' }],
+    releaseSet: (value) => ({ releases: [value, edition] }),
+  });
+  context.buildUtilityAlbumArtbox = (item) => `<img data-cover="${item.cover_path || ''}">`;
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.match(picker.list.innerHTML, /<img data-cover="N:\/Ayreon\/2018\/cover\.jpg">/);
+  assert.match(picker.list.innerHTML, /20th Anniversary Edition/);
+});
+
 test('Mark As A Version saves the changed selection in the background: link, unlink, or separate', async () => {
   const album = { key: 'a', name: 'Album', album_artist: 'Artist' };
   const candidates = ['linked', 'automatic', 'new'].map((key) => ({ key, name: 'Album', album_artist: 'Artist', shares_tracks: true }));

@@ -182,12 +182,15 @@ async function loadVersionPickerState(album) {
   // The server marks whether a same-name album shares at least half of this album's tracks; without details,
   // the gallery's same-name albums are offered.
   const galleryOffered = releaseCandidates ? null : new Set(getVersionPickerCandidates(album).map((item) => String(item.key)));
+  // Release candidates are headers only (no cover); the gallery's copy of the same album supplies its artwork.
+  const visible = flattenVisibleAlbums();
+  const galleryAlbum = (key) => state.gallery?.albumIndex?.get?.(key) || visible.find((item) => String(item?.key || '') === key);
   const byKey = new Map();
-  [...(releaseCandidates || []), ...releases, ...flattenVisibleAlbums()].forEach((item) => {
+  [...(releaseCandidates || []), ...releases, ...visible].forEach((item) => {
     const key = String(item?.key || '');
     if (!key || key === albumKey || byKey.has(key)) return;
     const offered = releaseCandidates ? item.shares_tracks === true : galleryOffered.has(key);
-    if (offered || current.has(key)) byKey.set(key, item);
+    if (offered || current.has(key)) byKey.set(key, { ...(galleryAlbum(key) || {}), ...item });
   });
   return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };
 }

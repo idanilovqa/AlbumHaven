@@ -330,6 +330,13 @@ replaces an artist's automatic identities; owner choices are kept. Rollback stop
 the readers, drops the table and restores the state check without `per_album`
 (after re-checking those artists).
 
+Migration `0178_add_musicbrainz_associated_artists.sql` adds the nullable
+`associated_artist_mbids` array to `local_artist_musicbrainz_matches`: the
+same-named MusicBrainz groups a matched person is a member of (Alice Cooper and
+his 1969-74 group), shown under the one local artist while each album keeps its
+own MBID. It is additive; running code that does not know the column ignores it.
+Rollback stops the readers and drops the column.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

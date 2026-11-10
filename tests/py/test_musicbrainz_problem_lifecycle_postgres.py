@@ -877,13 +877,26 @@ def test_a_person_matched_with_their_band_s_albums_stores_the_band_for_those_ide
                           {"mbid": TRANCE, "canonical_name": "Alice Cooper", "artist_type": "Group",
                            "disambiguation": "the band"}],
         album_identities=[{"local_album_id": solo_album, "artist_mbid": GERMAN},
-                          {"local_album_id": band_album, "artist_mbid": TRANCE}])
+                          {"local_album_id": band_album, "artist_mbid": TRANCE}],
+        associated_artist_mbids=[TRANCE])
 
     with isolatedPostgres._connect(setup_url) as connection:
         match = connection.execute(
-            "select state, artist_mbid from library.local_artist_musicbrainz_matches where local_artist_id = %s",
-            (artist_id,)).fetchone()
+            "select state, artist_mbid, associated_artist_mbids from library.local_artist_musicbrainz_matches"
+            " where local_artist_id = %s", (artist_id,)).fetchone()
         assert (match["state"], str(match["artist_mbid"])) == ("matched", GERMAN)
+        # One local artist, two MBIDs: the person, and the band the person belongs to.
+        assert [str(mbid) for mbid in match["associated_artist_mbids"]] == [TRANCE]
         assert _identities(connection, library_id) == {
             "alice-album": (GERMAN, "automatic", False), "alice-killer": (TRANCE, "automatic", False)}
         assert _active(connection, artist_id) == []
+
+    # A later match without the band clears it.
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+        evidence_summary="MusicBrainz album evidence agreed.",
+        artist={"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"})
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select associated_artist_mbids from library.local_artist_musicbrainz_matches where local_artist_id = %s",
+            (artist_id,)).fetchone()["associated_artist_mbids"] is None

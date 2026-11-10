@@ -376,4 +376,14 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
   assert.match(html, /Amarok \(Polish progressive rock band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/75d43a2e-ba60-427c-b2c7-bb666053d2f1"/s);
   assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
   assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
+
+  // A person matched with the same-named band they belong to (Alice Cooper) is one artist:
+  // the panel names the band as an associated MusicBrainz artist.
+  const person = context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Alice Cooper', associated: [
+    { artist_mbid: '4d7928cd-7ed2-4282-8c29-c0c9f966f1bd', musicbrainz_url: 'https://musicbrainz.org/artist/4d7928cd-7ed2-4282-8c29-c0c9f966f1bd',
+      canonical_name: 'Alice Cooper', disambiguation: 'the band, active 1964–1974/5', album_count: 7 },
+  ] });
+  assert.match(person, /Also on MusicBrainz as:/);
+  assert.match(person, /Alice Cooper \(the band, active 1964–1974\/5\) · 7 albums.*href="https:\/\/musicbrainz\.org\/artist\/4d7928cd/s);
+  assert.doesNotMatch(person, /Your albums belong to/);
 });

@@ -235,6 +235,7 @@ class MusicBrainzArtistEnrichmentProcessor:
                 album_identities=outcome.get("album_identities"),
                 # A person's albums credited to their band keep the band's MBID.
                 identity_artists=outcome.get("artists"),
+                associated_artist_mbids=outcome.get("associated_artists"),
             )
         elif classification == "per_album":
             # Several MusicBrainz artists share this local name; each album keeps its own.
@@ -603,6 +604,7 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             # album keeps its certain MBID, and the groups are stored so those resolve.
             person["preferred_native_name"] = native_name({**context, "name": local_name}, person)
             return {"classification": "found", "artist": person, "artists": artists, "confidence": 1,
+                    "associated_artists": [artist["mbid"] for artist in artists if artist["mbid"] != person["mbid"]],
                     "album_identities": _album_identities(decision["certain"], albums),
                     "evidence_summary": "MusicBrainz album evidence agreed."}
         return {"classification": "per_album", "artists": artists, "confidence": 1,

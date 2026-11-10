@@ -149,10 +149,12 @@ def title_keys(title: object, artist_names: tuple[str, ...] = ()) -> set[str]:
     bases = {raw, repaired(raw) or raw}
     forms: set[str] = set()
     for base in bases:
-        forms |= {base, _BRACKETS.sub(r" \1 ", base), _BRACKETS.sub(" ", base), *_BRACKETS.findall(base)}
-        forms |= {part for part in re.split(r"\s*/\s*", _BRACKETS.sub(" ", base)) if part.strip()}
-        # One title written in two scripts ("차연 差延"): each script's words stand alone.
-        forms |= {" ".join(words) for words in _words_by_script(base).values() if words}
+        forms |= {base, _BRACKETS.sub(r" \1 ", base), _BRACKETS.sub(" ", base)}
+        # A bracketed title, each side of a slash and each script of a bilingual title
+        # ("차연 差延") also stand alone when they read as a title: "(Live)" never does.
+        parts = [*_BRACKETS.findall(base), *re.split(r"\s*/\s*", _BRACKETS.sub(" ", base)),
+                 *(" ".join(words) for words in _words_by_script(base).values())]
+        forms |= {part for part in parts if _stands_alone(part)}
         for separator in _SUBTITLE_SEPARATORS:
             if separator in base:
                 forms.add(base.split(separator, 1)[0])
@@ -204,6 +206,11 @@ def _words_by_script(text: str) -> dict[str, list[str]]:
         if script:
             groups.setdefault(script, []).append(word)
     return groups if len(groups) > 1 else {}
+
+
+def _stands_alone(part: str) -> bool:
+    words = _EDITION_SUFFIX.sub("", fold(part)).split()
+    return len(words) >= 2 or bool(words and _DENSE_SCRIPT.search(words[0]))
 
 
 def _subtitle_keys(title: object) -> set[str]:

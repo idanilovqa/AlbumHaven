@@ -455,7 +455,8 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             # named like the tag, then the discs of box sets. The deeper comparisons
             # wait until every artist an album pointed to is scored, and keep a reserve.
             if mirror.remaining > _RETRY_RESERVE and not any(
-                    proven(entry) and entry.get("albums") is None for entry in pool.values()):
+                    proven(entry) and entry.get("albums") is None and not entry.get("skipped")
+                    for entry in pool.values()):
                 names = tuple(name for name in (local_name, candidate.get("canonical_name")) if name)
                 _match_release_titles(candidate, albums, names, mirror)
                 _compare_tracks(candidate, albums, mirror)

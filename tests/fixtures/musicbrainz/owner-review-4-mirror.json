@@ -40731,6 +40731,30 @@
 }
 ]
 },
+"/release/0227740c-9b52-4e49-9147-6e552f9ac277?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 787240,
+"title": "Walkin'"
+},
+{
+"length": 801200,
+"title": "Autumn Leaves"
+},
+{
+"length": 652493,
+"title": "So What!"
+},
+{
+"length": 376640,
+"title": "'Round Midnight"
+}
+]
+}
+]
+},
 "/release/02fbd7d8-5e1a-4d77-afcf-0260a9f10856?inc=recordings&fmt=json": {
 "media": [
 {
@@ -41118,6 +41142,42 @@
 {
 "length": 669000,
 "title": "Белый жар"
+}
+]
+}
+]
+},
+"/release/0c266559-4ccd-4713-ba0e-6b8a08d330bc?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 544000,
+"title": "Surrey With the Fringe on Top"
+},
+{
+"length": 367000,
+"title": "Salt Peanuts"
+},
+{
+"length": 373000,
+"title": "Something I Dreamed Last Night"
+}
+]
+},
+{
+"tracks": [
+{
+"length": 469000,
+"title": "Diane"
+},
+{
+"length": 378000,
+"title": "Well You Needn't"
+},
+{
+"length": 264000,
+"title": "When I Fall in Love"
 }
 ]
 }
@@ -41958,6 +42018,38 @@
 {
 "length": 396000,
 "title": "Seven Lives (3D binaural mix)"
+}
+]
+}
+]
+},
+"/release/205a1359-159b-4c88-b6ea-37189d979ce6?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 278600,
+"title": "Orbits"
+},
+{
+"length": 354360,
+"title": "Circle"
+},
+{
+"length": 588560,
+"title": "Footprints"
+},
+{
+"length": 383466,
+"title": "Dolores"
+},
+{
+"length": 432640,
+"title": "Freedom Jazz Dance"
+},
+{
+"length": 468000,
+"title": "Gingerbread Boy"
 }
 ]
 }
@@ -43551,6 +43643,38 @@
 }
 ]
 },
+"/release/3a883a4f-dbab-4062-b016-483d603526f7?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 278600,
+"title": "Orbits"
+},
+{
+"length": 354360,
+"title": "Circle"
+},
+{
+"length": 588560,
+"title": "Footprints"
+},
+{
+"length": 383466,
+"title": "Dolores"
+},
+{
+"length": 432640,
+"title": "Freedom Jazz Dance"
+},
+{
+"length": 468000,
+"title": "Gingerbread Boy"
+}
+]
+}
+]
+},
 "/release/3bc16258-e69c-40ce-887a-0232d8d8f771?inc=recordings&fmt=json": {
 "media": [
 {
@@ -43590,6 +43714,38 @@
 {
 "length": 224000,
 "title": "Wildflower Sky"
+}
+]
+}
+]
+},
+"/release/3bf6ac6f-c4db-4865-b2a0-3e317e249929?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 542000,
+"title": "Surrey With the Fringe on Top"
+},
+{
+"length": 366000,
+"title": "Salt Peanuts"
+},
+{
+"length": 373000,
+"title": "Something I Dreamed Last Night"
+},
+{
+"length": 467493,
+"title": "Diane"
+},
+{
+"length": 378000,
+"title": "Well, You Needn’t"
+},
+{
+"length": 261507,
+"title": "When I Fall in Love"
 }
 ]
 }
@@ -45571,6 +45727,38 @@
 }
 ]
 },
+"/release/7975cfc2-47f0-4926-846b-319290c83f79?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 496373,
+"title": "If I Were a Bell"
+},
+{
+"length": 319200,
+"title": "You're My Everything"
+},
+{
+"length": 309533,
+"title": "I Could Write a Book"
+},
+{
+"length": 378560,
+"title": "Oleo"
+},
+{
+"length": 397773,
+"title": "It Could Happen to You"
+},
+{
+"length": 302067,
+"title": "Woody'n You"
+}
+]
+}
+]
+},
 "/release/79793b32-e606-46f1-b4e6-eea9108ba780?inc=recordings&fmt=json": {
 "media": [
 {
@@ -46326,114 +46514,6 @@
 {
 "length": 158882,
 "title": "Ne Güzel Bak Yaşamak"
-}
-]
-}
-]
-},
-"/release/86f2b4a5-a542-4a62-b37f-8e0f35e51f9e?inc=recordings&fmt=json": {
-"media": [
-{
-"tracks": [
-{
-"length": 360000,
-"title": "My Funny Valentine"
-},
-{
-"length": 596400,
-"title": "Blues by Five"
-},
-{
-"length": 266253,
-"title": "Airegin"
-},
-{
-"length": 789733,
-"title": "Tune Up / When Lights Are Low"
-},
-{
-"length": 495440,
-"title": "If I Were a Bell"
-},
-{
-"length": 317920,
-"title": "You're My Everything"
-},
-{
-"length": 309000,
-"title": "I Could Write a Book"
-},
-{
-"length": 352666,
-"title": "Oleo"
-},
-{
-"length": 398053,
-"title": "It Could Happen to You"
-},
-{
-"length": 300213,
-"title": "Woody'n You"
-}
-]
-},
-{
-"tracks": [
-{
-"length": 324000,
-"title": "It Never Entered My Mind"
-},
-{
-"length": 433000,
-"title": "Four"
-},
-{
-"length": 347000,
-"title": "In Your Own Sweet Way"
-},
-{
-"length": 120000,
-"title": "The Theme Take #1"
-},
-{
-"length": 514000,
-"title": "Trane's Blues"
-},
-{
-"length": 444000,
-"title": "Ahmed's Blues"
-},
-{
-"length": 286000,
-"title": "Half Nelson"
-},
-{
-"length": 64000,
-"title": "The Theme Take #2"
-},
-{
-"length": 547000,
-"title": "Surrey With the Fringe on Top"
-},
-{
-"length": 371000,
-"title": "Salt Peanuts"
-},
-{
-"length": 377000,
-"title": "Something I Dreamed Last Night"
-},
-{
-"length": 474000,
-"title": "Diane"
-},
-{
-"length": 384000,
-"title": "Well, You Needn't"
-},
-{
-"length": 267000,
-"title": "When I Fall in Love"
 }
 ]
 }
@@ -59819,6 +59899,38 @@
 }
 ]
 },
+"/release/dc1a9a99-eeec-3380-a654-ca4be67c4cde?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 278600,
+"title": "Orbits"
+},
+{
+"length": 354360,
+"title": "Circle"
+},
+{
+"length": 588560,
+"title": "Footprints"
+},
+{
+"length": 383466,
+"title": "Dolores"
+},
+{
+"length": 432640,
+"title": "Freedom Jazz Dance"
+},
+{
+"length": 468000,
+"title": "Gingerbread Boy"
+}
+]
+}
+]
+},
 "/release/ddc3d367-309a-4d4c-9872-5907714f8517?inc=recordings&fmt=json": {
 "media": [
 {
@@ -59826,6 +59938,46 @@
 {
 "length": 151000,
 "title": "LOW LIGHT"
+}
+]
+}
+]
+},
+"/release/e0000954-ecfa-3410-9eb5-e666f5fc7012?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 326626,
+"title": "It Never Entered My Mind"
+},
+{
+"length": 436546,
+"title": "Four"
+},
+{
+"length": 346666,
+"title": "In Your Own Sweet Way"
+},
+{
+"length": 120706,
+"title": "The Theme (take 1)"
+},
+{
+"length": 516160,
+"title": "Trane's Blues"
+},
+{
+"length": 447680,
+"title": "Ahmad's Blues"
+},
+{
+"length": 287813,
+"title": "Half Nelson"
+},
+{
+"length": 61800,
+"title": "The Theme (take 2)"
 }
 ]
 }
@@ -60174,6 +60326,38 @@
 {
 "length": 271093,
 "title": "Mono no Aware"
+}
+]
+}
+]
+},
+"/release/eddcd7e2-32a9-4405-b6b6-ff557411ad4a?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 542000,
+"title": "Surrey With the Fringe on Top"
+},
+{
+"length": 366000,
+"title": "Salt Peanuts"
+},
+{
+"length": 373000,
+"title": "Something I Dreamed Last Night"
+},
+{
+"length": 467493,
+"title": "Diane"
+},
+{
+"length": 378000,
+"title": "Well, You Needn't"
+},
+{
+"length": 261507,
+"title": "When I Fall in Love"
 }
 ]
 }
@@ -112510,6 +112694,3618 @@
 }
 ]
 },
+"/release?artist=fe7245e7-d734-4ca1-8e26-691883f58201&inc=media+release-groups&fmt=json&limit=100&offset=0": {
+"release-count": 241,
+"releases": [
+{
+"date": "1996",
+"id": "0227740c-9b52-4e49-9147-6e552f9ac277",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "c94b867b-98e3-4697-b38e-b33dce317232"
+},
+"title": "The Miles Davis Quintet (The Wonderful Music Of...)"
+},
+{
+"date": "1989-09-11",
+"id": "05149aa8-8d77-31fb-a5aa-468adb348b29",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "1992-02-25",
+"id": "0ac286c6-de59-3f05-98b4-d0c97e7eec0a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1961",
+"id": "0c266559-4ccd-4713-ba0e-6b8a08d330bc",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 3
+},
+{
+"format": "12\" Vinyl",
+"position": 2,
+"title": "",
+"track-count": 3
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "1992",
+"id": "0d7af0bc-123c-4677-ab40-34f230b95d20",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "3209723f-630e-4f2b-9f71-511152d80d27"
+},
+"title": "Live in Sindelfingen, 1964"
+},
+{
+"date": "1954-06-29",
+"id": "0e369bf0-0a1c-4283-9102-b80eea334792",
+"media": [
+{
+"format": "10\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 3
+}
+],
+"release-group": {
+"id": "ff166668-4de0-3545-aa8a-33b719479aa8"
+},
+"title": "Miles Davis Quintet"
+},
+{
+"date": "1959",
+"id": "1012ba87-0043-4393-a23d-293cefd9827e",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 3
+}
+],
+"release-group": {
+"id": "b4de52a5-823a-4747-af64-51c8cab573f0"
+},
+"title": "Jazz Gallery"
+},
+{
+"date": "1981-06-21",
+"id": "1176bbd0-42c4-469d-abdf-efdb2b8a1fae",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1992",
+"id": "1f031be9-bc24-45e6-bf82-79abe18ce14b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1989-09-11",
+"id": "1fd2a314-5f22-3a46-8c83-efc6eb0f34b4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "1998",
+"id": "20106bf8-d701-49e6-8c80-84ade7eadd2d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 8
+},
+{
+"format": "CD",
+"position": 5,
+"title": "",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 6,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "1bcecc61-e5bb-3de4-af0f-2ce5ca03497a"
+},
+"title": "Miles Davis Quintet 1965-'68"
+},
+{
+"date": "1969",
+"id": "205a1359-159b-4c88-b6ea-37189d979ce6",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1953-01",
+"id": "227c0e04-26a5-42c8-b3f2-66b0ecbc361f",
+"media": [
+{
+"format": "10\" Shellac",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "fd5ae2fd-0eab-4a2d-a935-d64428c1b2e0"
+},
+"title": "Superman / My Old Flame"
+},
+{
+"date": "1988",
+"id": "244a5a07-8e97-4430-9f81-0966dcd458fe",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1987",
+"id": "2a4ef184-766e-4541-b9e6-e3a4d39c586f",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1958",
+"id": "2b5881f7-d084-458c-88fc-61c2a01c27a3",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "95dd7d65-dd40-472e-aa54-a5b00d395192"
+},
+"title": "Relaxin' With the Miles Davis Quintet Vol. 1"
+},
+{
+"date": "1996-05-29",
+"id": "308481fa-c8af-3835-ac45-522c894be30d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1987",
+"id": "331e8747-0973-4f2a-98d6-49112dda068a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "1994-01-21",
+"id": "359564c5-49e4-4972-9ffa-1c3483b67e1c",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "1991-12-12",
+"id": "360d3a54-1d42-38e2-b95e-f7113417a3ae",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1964",
+"id": "38e182f5-ec56-48ca-b5e1-c273c25df0c3",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "c7461e46-c4c4-4c64-bc60-d51f37c5d41d"
+},
+"title": "Ciné-Jazz Best Hits"
+},
+{
+"date": "1967",
+"id": "3a883a4f-dbab-4062-b016-483d603526f7",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1989-07-12",
+"id": "3bf6ac6f-c4db-4865-b2a0-3e317e249929",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "1956-04",
+"id": "40f3ef96-454c-4141-bcf2-927a801f7e21",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "1951",
+"id": "484451a9-fe64-436a-9be1-d1c0b71a9810",
+"media": [
+{
+"format": "10\" Shellac",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "8c1f7055-0d83-4a92-9b43-ed2a44acb6e0"
+},
+"title": "Superman / Trumpet at Tempo"
+},
+{
+"date": "1996-09-21",
+"id": "485437c6-8f1f-33b8-ac35-bbbe1881c215",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1993",
+"id": "4a5ca190-fcc2-4d7a-8fc3-72d6cef0cd46",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles: The New Miles Davis Quintet"
+},
+{
+"date": "1989",
+"id": "4ab7bf01-04c1-4ceb-959c-64329533d7e1",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "c5cd8a03-957f-3650-92ca-4fef26841978"
+},
+"title": "Live in Europe"
+},
+{
+"date": "1996-05-29",
+"id": "4cfaf835-4b0c-3b38-8b0b-4a6548b23bcd",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "1993",
+"id": "5427fc4c-a2a2-4eec-a3e4-66f8cb97f745",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1985-09-21",
+"id": "548e02a3-1d9c-3453-88f6-997d4f6a19f1",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "1980-03-25",
+"id": "5568a4f9-d6c6-4f28-93af-914dfeebe550",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "170ba254-08dc-4c25-a731-80ee76f32cef"
+},
+"title": "Ascenseur pour l'echafaud"
+},
+{
+"date": "1961",
+"id": "5694c273-901f-4865-8839-c3fa97819ebb",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "6c7b8170-7494-454b-aaca-e59c5261d84e"
+},
+"title": "Miles' Theme / There Is No Greater Love"
+},
+{
+"date": "1987",
+"id": "5d5b1d74-cc40-499f-9f10-691507f7c7cd",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "1994-10-25",
+"id": "5de0053c-a7b3-48b5-94c2-377e73aefc0b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "1992",
+"id": "5eb0dfce-139b-45fe-8dca-163b6d522b73",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 7
+}
+],
+"release-group": {
+"id": "8ef68e40-a31e-31ed-8058-f1c785ebcc0a"
+},
+"title": "Paraphernalia"
+},
+{
+"date": "1989",
+"id": "61c3d954-1045-475a-b424-9daa65a455b4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "ac1328c1-8943-3a66-b0fd-e4b3d5713e2e"
+},
+"title": "Live in Europe"
+},
+{
+"date": "1992",
+"id": "6206b229-1315-4266-a04b-9fc8bf530fe8",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "33497d58-6f1c-40f2-9d9f-faab565ea8a0"
+},
+"title": "LXXIII: Bitches Brew Live"
+},
+{
+"date": "1960",
+"id": "63bec6e9-ab3f-4d9b-87e0-2217a284899d",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "69609a4b-3ae8-4fc1-b082-e0b28df59ea0"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "1993",
+"id": "653c482e-352d-4317-ad55-26a97bba4769",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1961",
+"id": "6ab2976c-0336-473b-9a59-0daf278723ca",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "7a5786d6-1145-4db2-a71a-fb7b7fcc9402"
+},
+"title": "Jazz de Choc"
+},
+{
+"date": "1991",
+"id": "6f7cbf8c-a0c0-4091-8e51-e32565e20ad7",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "7d44054e-4dc3-4e91-81f0-462a8979b81c"
+},
+"title": "Côte Blues"
+},
+{
+"date": "1998-01-21",
+"id": "786c5994-c3f1-4149-8473-b38b89cb50be",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1998-10-13",
+"id": "78de0d4b-193a-33ac-bc44-dd927f938c86",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1958",
+"id": "7975cfc2-47f0-4926-846b-319290c83f79",
+"media": [
+{
+"format": "Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1997-12-08",
+"id": "7a43a2db-e19f-459b-bfb9-1e8083e0c295",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "1990",
+"id": "7de6e448-9629-45a7-b8d2-9f59fcb1eeae",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "9c38d997-3479-4fc0-932d-c855a257625a"
+},
+"title": "No Blues"
+},
+{
+"date": "1958",
+"id": "7ee226c5-15cb-4322-9b90-065f841f3fda",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "1ec7481d-f92c-49dd-a8d3-e66e809e4be8"
+},
+"title": "Cookin' With Miles Davis Quintet"
+},
+{
+"date": "1996-03-27",
+"id": "820fc7ea-f4d8-46c8-acee-53f6a495cd46",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "1989",
+"id": "82e2f9e3-128d-4f7c-9cf2-d07c37d88d7d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "5cea0cbf-c50c-3e05-9a94-271404d97b22"
+},
+"title": "Miles Davis Quintet"
+},
+{
+"date": "1991",
+"id": "8442f70b-3f05-4d69-957f-aab615a04dd5",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "4b8a51ab-76c5-36cd-9f5b-4b3f753cf8dc"
+},
+"title": "Davisiana"
+},
+{
+"date": "1990",
+"id": "867f28ee-6451-4c12-a06d-365f805ae864",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "c9dabcdc-c0e8-3694-a6ba-a8f60e0f2d88"
+},
+"title": "Paris, France"
+},
+{
+"date": "1956",
+"id": "8823c1c6-4abb-439b-b125-4a7d761b1b09",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "3575655c-0df5-43eb-aefa-cdf5ccaddc3b"
+},
+"title": "The Mastery of Miles"
+},
+{
+"date": "1987",
+"id": "8e738775-a40a-4c03-80e3-1660f5004fa8",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1954",
+"id": "92a4992a-3891-43b7-a2f4-94ae4db963da",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "cfd71c87-67ac-4409-9ca2-db6d68bd1887"
+},
+"title": "Solar / You Don't Know What Love Is"
+},
+{
+"date": "1956",
+"id": "96f557b4-d2d8-4721-bb75-aefaf4ba7b3f",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "aa15593a-0246-486a-aa1e-f1bafcdb6f5e"
+},
+"title": "Half-Nelson / Little Willie Leaps"
+},
+{
+"date": "1997",
+"id": "97d4f465-80e5-4263-bb49-b52453ad1db7",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 13
+}
+],
+"release-group": {
+"id": "09d6e4fb-f5ae-3d1e-be71-f0f0722e2be9"
+},
+"title": "At Peacock Alley"
+},
+{
+"date": "1989-04",
+"id": "98166956-0086-3220-84d8-a6fe0d239a0e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "1998-01-21",
+"id": "98e2580f-ed21-4321-9012-3e781cc5c9bb",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1996-07-03",
+"id": "9b236efb-820d-3f89-b202-fcdd1c7790ff",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "1998",
+"id": "a04148de-c72e-4503-a19c-13bed878f61e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1998-10-26",
+"id": "a1ebabea-9b4c-31de-9a97-609fed6dce56",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1990",
+"id": "a2eea48a-d162-3e3c-8358-c28c503928f4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "1992",
+"id": "a3393951-3ea6-4841-86dc-b49a974c8567",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1998",
+"id": "a34c0977-0c5a-479c-8778-d1f17756a05f",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1993-12-15",
+"id": "a4450039-f65e-44d1-b4f4-5035c2b3d4cb",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "40af6b96-6343-3bc7-abc6-f100e31e90c5"
+},
+"title": "Live in Zurich 1960"
+},
+{
+"date": "1992",
+"id": "b00eb613-c5e5-4891-af17-d999e334ef78",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "3c838d2b-925a-4fda-bd4a-e7a99045f37f"
+},
+"title": "Mostly Miles"
+},
+{
+"date": "1998",
+"id": "b06fd4cc-a197-47ad-9be6-eba42e505170",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1991-07-01",
+"id": "b4f6a2f6-2e34-3d61-8dd9-dd1d2646fa24",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1993-10-01",
+"id": "b4fe63e3-6358-40ce-8d67-96a7885a9c8b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1989",
+"id": "ba596114-0bca-4d1c-ab56-993da215033a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "a1ccca7e-7bde-3ad6-905c-ba2b6d71a3dc"
+},
+"title": "Round Midnight"
+},
+{
+"date": "1998-01-21",
+"id": "bb071c17-d982-4609-9824-243e1f29353b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "1996-05-29",
+"id": "bbed31a0-fbb8-3c8e-910f-cf611e8afe79",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "1970",
+"id": "bd79f4e9-decc-4bd9-91e2-764fc641c0cb",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "88e6a81b-81e7-428e-beeb-4e04d5a567b4"
+},
+"title": "'round Midnight / Solea"
+},
+{
+"date": "1991",
+"id": "be5df865-795d-457a-9354-cceb008924bd",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "41ab2201-ec92-3328-9be2-d34a8b88d594"
+},
+"title": "Cookin' With the Miles Davis Quintet / Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1985-06-21",
+"id": "c1b02e62-04c7-3de7-a898-31dd8e3a6d10",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "1991",
+"id": "c47c2f36-5aa6-3d07-b116-1e38cde00151",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "1992",
+"id": "c50d8f5b-64a4-473b-b70d-9dcb4d70eb5d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "e7c68fdc-9ac2-45da-a138-7a8027c41d16"
+},
+"title": "Green Dolphin Street (Live In Holland, 1960)"
+},
+{
+"date": "1987",
+"id": "c6b03dd1-fc87-378f-963b-7fa85d6703f3",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "1956",
+"id": "c6c6d379-8fb0-4767-a350-c669307a0008",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "e0e53522-07e3-4896-a80e-50a2e59558ec"
+},
+"title": "How Am I to Know / Stable Mates"
+},
+{
+"date": "1956",
+"id": "c8ee1835-578e-4a27-9d01-a6ef3037750c",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "4e2876ba-6046-40e1-a805-1f755fba46d2"
+},
+"title": "Miles Vol. 3"
+},
+{
+"date": "1956",
+"id": "d2378c78-7308-4d8a-b957-3a99f926ea09",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "950ded06-3b0b-41eb-964b-d7c81d062c3f"
+},
+"title": "Miles Vol. 1"
+},
+{
+"date": "1957-07-20",
+"id": "d29cdb86-5c12-4107-8408-6efab3749b26",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1987",
+"id": "d2c8b490-9070-399e-a685-7135f1fb2d6f",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1987-12-08",
+"id": "d36fe13d-1eb3-416a-8df2-6e984162fa33",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "a1ccca7e-7bde-3ad6-905c-ba2b6d71a3dc"
+},
+"title": "The Complete Amsterdam Concert"
+},
+{
+"date": "1989",
+"id": "d50a8f37-67a6-46d8-8483-ac59d061bd5d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "f6295d53-f43f-4a9c-a9b1-f7bcfae2ecd8"
+},
+"title": "Double Image"
+},
+{
+"date": "1964-07",
+"id": "d64739f1-f01b-4a81-aed3-9fedf7480929",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "9c1a2dd6-6acc-4c72-9252-cf9802c8786f"
+},
+"title": "'round About Midnight / Dear Old Stockholm"
+},
+{
+"date": "1983",
+"id": "db2d07c4-fcb1-49ac-9bbb-79d41befec8e",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "1967-01",
+"id": "dc1a9a99-eeec-3380-a654-ca4be67c4cde",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1987",
+"id": "dc20fed4-0722-4c4b-bd1a-8dd2bd09e062",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "1959",
+"id": "e0000954-ecfa-3410-9eb5-e666f5fc7012",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1987",
+"id": "e2bcdbcc-3666-490c-abb4-b6cb76b11e3b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "1957",
+"id": "e5b6997e-002b-4baf-a496-c7ee12e2235b",
+"media": [
+{
+"format": "7\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 2
+}
+],
+"release-group": {
+"id": "560bb477-86b1-40e6-bbd5-cabca7d22f61"
+},
+"title": "My Funny Valentine / Love Me or Leave Me"
+},
+{
+"date": "1989",
+"id": "eddcd7e2-32a9-4405-b6b6-ff557411ad4a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "1991",
+"id": "f2060d62-81ce-420f-bb3a-b1e867967dae",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 7
+}
+],
+"release-group": {
+"id": "816a3ee8-cafb-4884-9983-febbc455f792"
+},
+"title": "The Paris Concert"
+},
+{
+"date": "1993",
+"id": "f3471594-1cc4-402a-b8f5-2ce38e2c0265",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1994-07-18",
+"id": "f6d9f7c7-b401-4ead-bc6b-091dbe290092",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "1991",
+"id": "f86b99e9-f80e-479a-807d-8e09749c9ad0",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "8315da8b-99e6-39a4-a983-e9da52c3339a"
+},
+"title": "A Rare Home Town Appearance"
+},
+{
+"date": "1971",
+"id": "fa669468-8cfe-4940-8f11-4e5dfc14bccd",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "1998",
+"id": "fd542438-acbb-439b-a15d-a718ce33fd8d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+}
+]
+},
+"/release?artist=fe7245e7-d734-4ca1-8e26-691883f58201&inc=media+release-groups&fmt=json&limit=100&offset=100": {
+"release-count": 241,
+"releases": [
+{
+"date": "2003",
+"id": "02ad03e8-d97a-4a75-812f-43987081f312",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "2009-06-23",
+"id": "02b2c23f-3910-3a4e-9882-aa69dbfb86b5",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "2004",
+"id": "03f9b4a8-4ff4-4bf6-80a6-531ee3ba56a5",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 8
+},
+{
+"format": "CD",
+"position": 5,
+"title": "",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 6,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "1bcecc61-e5bb-3de4-af0f-2ce5ca03497a"
+},
+"title": "The Complete Columbia Studio Recordings 1965-1968"
+},
+{
+"date": "2008-02-12",
+"id": "0872b7b1-7605-4bdd-8ae3-c9d266d9e854",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"release-group": {
+"id": "a5a3d1ed-35bf-3982-b2cc-e0ae4f5a2ccd"
+},
+"title": "Winter in Europe 1967"
+},
+{
+"date": "1999",
+"id": "091b6a46-59a1-4f29-b76e-80f7df616106",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "e26d6dca-8733-3325-b982-950558a44305"
+},
+"title": "The Best of 1965-'68"
+},
+{
+"date": "2013-10-16",
+"id": "091f5e99-228b-4c2a-b0fe-499f1ebc0734",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With The Miles Davis Quintet"
+},
+{
+"date": "2010",
+"id": "0a1fb5a6-5797-4dcd-9fcb-091bb778a1e8",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "07970b66-56eb-4f18-975f-61fc4f491a7e"
+},
+"title": "The 1960 German Concerts"
+},
+{
+"date": "2013",
+"id": "0b14c8a9-3dcd-44a2-b9bd-e9d6b5a19ad5",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "95c8c70b-e00a-4bb8-aa5e-c18a0117ca64"
+},
+"title": "Newport 1967"
+},
+{
+"date": "2011-01-26",
+"id": "0cb5b0ca-98a1-4a11-a8e8-c69f1e07ac40",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With The Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "0e01dd30-61a0-4cec-9d3e-11b4dfdecb57",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "2014-08-29",
+"id": "1038c85c-fa0e-4a20-a8e9-fe7846812110",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "2011-09-21",
+"id": "12416753-510c-4958-a789-9af244908f92",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "Recorded 1967-10-28 at Konigin Elizabethzaal, Antwerp, Belgium",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Recorded 1967-11-02 at Tivolis Koncertsal, Copenhagen, Denmark and 1967-11-06 at the Paris Jazz Festival, Salle Pleyel, Paris, France",
+"track-count": 7
+},
+{
+"format": "CD",
+"position": 3,
+"title": "Recorded 1967-11-06 at the Paris Jazz Festival, Salle Pleyel, Paris France",
+"track-count": 8
+},
+{
+"format": "DVD-Video",
+"position": 4,
+"title": "Recorded 1967-11-07 at Stadthalle, Karlsruhe, Germany and 1967-10-31 at Konserthuset, Stockholm, Sweden",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "b1989eb6-343e-416d-840b-0f79f6d6f3f8"
+},
+"title": "Live in Europe 1967: The Bootleg Series, Volume 1"
+},
+{
+"date": "2005-10-10",
+"id": "12a8b316-8531-41e2-82d6-7b981d4b3fb0",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 7
+}
+],
+"release-group": {
+"id": "7fad7e25-aa4c-4fd3-96d4-7d41c89fd6f2"
+},
+"title": "Manchester Concert Complete 1960 Live at the Free Trade Hall"
+},
+{
+"date": "2012-04-20",
+"id": "13cb0b58-60bd-4dd8-8684-d927eb373877",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 3
+}
+],
+"release-group": {
+"id": "619a4332-fdd9-4f62-9960-cac11772ca42"
+},
+"title": "In Copenhagen 1960"
+},
+{
+"date": "2010",
+"id": "1e6de7b8-2e6b-4037-b0f2-4f7c7f3a9f8e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1999-10-19",
+"id": "213f3c2e-0b62-434c-b864-1281cb802963",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "2011",
+"id": "22fb1cba-fae1-462e-8741-b79a2eac6110",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"release-group": {
+"id": "d6818516-e82e-4c19-aba8-de596c906956"
+},
+"title": "Steamin' + the New Miles Davis Quintet"
+},
+{
+"date": "2015",
+"id": "23472b15-c1c5-4c3a-937f-39cc767f6857",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "12c0c264-5389-4b95-8e40-6c994ec17169"
+},
+"title": "April 11, 1970 Fillmore West"
+},
+{
+"date": "2006",
+"id": "30a23074-77f0-4d7d-b46e-6d90785d3c6b",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "32acd8b1-b234-4988-9e53-465dbc408259",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1999",
+"id": "37379c99-b870-45cc-bdfc-066ad9a6a178",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "40af6b96-6343-3bc7-abc6-f100e31e90c5"
+},
+"title": "Live in Zurich"
+},
+{
+"date": "2006-03-21",
+"id": "3fb119cb-5595-33cf-b192-743c17c7f584",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "2010",
+"id": "47296332-216a-4a47-8c04-4003f31232d2",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "1999-08-17",
+"id": "48a94b91-7722-4d4b-a409-707125309841",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "5cea0cbf-c50c-3e05-9a94-271404d97b22"
+},
+"title": "New York City Philharmonic Hall at Lincoln Center, February 12, 1964"
+},
+{
+"date": "2013-02-18",
+"id": "4df57c0d-72cb-4e21-8159-f2f582ce9491",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 16
+}
+],
+"release-group": {
+"id": "3cf7b6e8-6cdb-493c-bc88-34d3fd346af6"
+},
+"title": "The Unissued Café Bohemia Broadcasts"
+},
+{
+"date": "2014",
+"id": "51f83634-c241-4b16-94ec-02989f7e8045",
+"media": [
+{
+"format": "Hybrid SACD (CD layer)",
+"position": 1,
+"title": "",
+"track-count": 5
+},
+{
+"format": "Hybrid SACD (SACD layer)",
+"position": 2,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "2014",
+"id": "536623df-c1ef-420e-8e23-fdb584a8714e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 13
+}
+],
+"release-group": {
+"id": "09d6e4fb-f5ae-3d1e-be71-f0f0722e2be9"
+},
+"title": "Live in Saint Louis, February 16 & 23, 1957"
+},
+{
+"date": "2014",
+"id": "55fd50c7-5af6-4ad8-9920-2ca43fa0651f",
+"media": [
+{
+"format": "Hybrid SACD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With The Miles Davis Quintet"
+},
+{
+"date": "2006-02-22",
+"id": "57a86c90-78d1-433b-b07d-ef809c7baf23",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 13
+}
+],
+"release-group": {
+"id": "09d6e4fb-f5ae-3d1e-be71-f0f0722e2be9"
+},
+"title": "Live in Saint Louis 1956"
+},
+{
+"date": "1999-06-08",
+"id": "583d187e-30df-46fe-9f14-6f27910875b6",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "e26d6dca-8733-3325-b982-950558a44305"
+},
+"title": "The Best of Miles Davis Quintet, 1965–’68"
+},
+{
+"date": "2001",
+"id": "5bd3fef1-2539-4b79-9b28-0f3ee7822cb4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "2008",
+"id": "5f442cdc-1933-4312-8f4d-bfc0137c9ea5",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "Workin'",
+"track-count": 8
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Relaxin'",
+"track-count": 6
+},
+{
+"format": "CD",
+"position": 3,
+"title": "Steamin'",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "5f7e3796-db59-46c0-8ee1-2dbb362a91ea"
+},
+"title": "Workin', Relaxin', Steamin'"
+},
+{
+"date": "2004-01-20",
+"id": "60663792-40df-432f-b8af-bb1e07d24e89",
+"media": [
+{
+"format": "Hybrid SACD (CD layer)",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "Hybrid SACD (SACD layer, 2 channels)",
+"position": 2,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "2006-08-23",
+"id": "617ad53d-24af-3d5d-8449-afc28dbf2617",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "2012",
+"id": "6225206f-100a-4cb9-a41b-d55024bead00",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "2b111335-3ce8-4ff8-b09d-1eb8c6003cc8"
+},
+"title": "The Very Best of the Miles Davis Quintet"
+},
+{
+"date": "2005-12-20",
+"id": "6262ec0f-7549-4b63-85d6-35c758b2aa65",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "e23f8891-b175-4159-919a-0f1f30efca96"
+},
+"title": "In Copenhagen 1960"
+},
+{
+"date": "2009",
+"id": "65995524-d436-4615-ad27-9d4703285a81",
+"media": [
+{
+"format": "DVD-Video",
+"position": 1,
+"title": "",
+"track-count": 13
+}
+],
+"release-group": {
+"id": "c7ca201d-8d0a-4c64-99a6-3b42a2c1001d"
+},
+"title": "Live In Europe '67"
+},
+{
+"date": "2001",
+"id": "66a31a30-51fd-4ab0-a056-fadadcfa7f42",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "2006-10-18",
+"id": "69ce6935-5191-39de-b21f-eea436e02f0f",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2004-05-11",
+"id": "6a4a4d84-eaeb-3274-bc8b-a551a21d06cb",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 8
+},
+{
+"format": "CD",
+"position": 5,
+"title": "",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 6,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "1bcecc61-e5bb-3de4-af0f-2ce5ca03497a"
+},
+"title": "Miles Davis Quintet 1965-'68"
+},
+{
+"date": "2014-12-02",
+"id": "6aa20848-170d-4b87-a510-fb0c973b3f1b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 5
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 7
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "853f238e-cb4b-4321-8648-72e69e42c608"
+},
+"title": "All of You: The Last Tour, 1960"
+},
+{
+"date": "2010",
+"id": "6e528d6f-b760-4175-a988-10a452144a56",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"release-group": {
+"id": "6477da93-2286-4919-a898-031caa34c307"
+},
+"title": "’round About Midnight"
+},
+{
+"date": "2006",
+"id": "70cb28a3-2f4f-4915-86f6-db1f5cf247a6",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 12
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 10
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "f4cf61be-2ffa-3a29-8427-f3811fd7408e"
+},
+"title": "Legendary Prestige Quintet Sessions"
+},
+{
+"date": "2015",
+"id": "70dbedee-5951-44bf-abbc-b620a82a8b8d",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "5dec1dc7-38e0-4f5b-acdd-d71ff4fea033"
+},
+"title": "Harmon Gymnasium, University of California, Berkeley Ca, April 7th 1967"
+},
+{
+"date": "2005",
+"id": "74039119-b431-4720-89d9-8fdcae4cd733",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "4719b43f-8b38-4d70-84fd-3e7a6d6f83bc"
+},
+"title": "Live in Den Haag"
+},
+{
+"date": "2003-01-13",
+"id": "76f563ec-8aa2-4b75-946e-a111f52b345a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "e26d6dca-8733-3325-b982-950558a44305"
+},
+"title": "1965-1968"
+},
+{
+"date": "2009-06-02",
+"id": "78caa5d8-2689-4335-851c-6594ea7b00c9",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles: The New Miles Davis Quintet"
+},
+{
+"date": "2006-07-26",
+"id": "7d90dcd9-a42a-424c-9460-5c0c5b24d55d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "2008-11-03",
+"id": "7da25531-1731-45d6-b203-b9fbd11ca034",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2005-09-21",
+"id": "7dab07d2-ea6a-34d4-9af4-5810d7ea0f9a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2009",
+"id": "8053923e-e8a0-4495-840b-c0d16653f13e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "2007",
+"id": "8662e861-d925-45e6-8d3b-14da26ca132c",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "0849b0d6-84b6-442a-add9-3ce85347c0eb"
+},
+"title": "Must Have Miles: The First Quintet"
+},
+{
+"date": "2000-05-24",
+"id": "89be9320-2fa5-3d64-adc8-9e30f8876e23",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2005-02-01",
+"id": "8ace8067-2941-45da-8d00-4da8b93828be",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "a1ccca7e-7bde-3ad6-905c-ba2b6d71a3dc"
+},
+"title": "Amsterdam Concert"
+},
+{
+"date": "2010",
+"id": "8ce25be2-988a-4e99-8520-56650b04c781",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 16
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "1998",
+"id": "9315cf23-a362-4cf3-96ea-9e49735a7242",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 7
+},
+{
+"format": "12\" Vinyl",
+"position": 2,
+"title": "",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 3,
+"title": "",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 4,
+"title": "",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 5,
+"title": "",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 6,
+"title": "",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 7,
+"title": "",
+"track-count": 8
+},
+{
+"format": "12\" Vinyl",
+"position": 8,
+"title": "",
+"track-count": 4
+},
+{
+"format": "12\" Vinyl",
+"position": 9,
+"title": "",
+"track-count": 3
+},
+{
+"format": "12\" Vinyl",
+"position": 10,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "0ebb9f7c-7074-4ecb-bb99-6bc8d2c9db80"
+},
+"title": "The Complete Studio Recordings Of The Miles Davis Quintet 1965-June 1968"
+},
+{
+"date": "2000",
+"id": "9d660963-df84-409b-91d5-f7d458bf1ad4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "2014",
+"id": "a1a41b58-182a-4e1c-ba26-e4e77dee7eaa",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2003",
+"id": "a2423498-d4b5-44b1-a92c-09927e245dff",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "2010",
+"id": "a274cdbd-e7bf-410c-a4bf-281d75d36d77",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "b52d7bd4-3bf7-466c-89b9-61011fcd80f3"
+},
+"title": "Live at Newport 1966 & 1967"
+},
+{
+"date": "2007",
+"id": "a2e20efa-398d-44a7-afc3-541673270ee9",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "4ddeb6e4-4a91-4263-b904-4c6999f1b8f1"
+},
+"title": "Live in Milan 1964"
+},
+{
+"date": "2014",
+"id": "a545889d-ccc6-4e1b-b8c4-060cd866be02",
+"media": [
+{
+"format": "Hybrid SACD (CD layer)",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "Hybrid SACD (SACD layer)",
+"position": 2,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "2011",
+"id": "a637e3c8-6d8d-4a46-ab18-8db9a7d9ca76",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 7
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 8
+},
+{
+"format": "DVD-Video",
+"position": 4,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "b1989eb6-343e-416d-840b-0f79f6d6f3f8"
+},
+"title": "Live in Europe 1967: The Bootleg Series, Vol. 1"
+},
+{
+"date": "2007",
+"id": "a77226f0-5110-4e15-8243-635a8cf63110",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 12
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 12
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 11
+},
+{
+"format": "CD",
+"position": 4,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "4f6ce9c6-f765-346e-9281-b8fbae8da211"
+},
+"title": "Complete Studio Recordings: The Master Takes"
+},
+{
+"date": "2004",
+"id": "a7ffd901-dcde-41ca-b9de-a61e423143a4",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 3
+},
+{
+"format": "12\" Vinyl",
+"position": 2,
+"title": "",
+"track-count": 3
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin' With the Miles Davis Quintet"
+},
+{
+"date": "2006-07-26",
+"id": "aa87843a-f62e-49a6-9671-7452c0f5f087",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "2010",
+"id": "ab812ed2-f980-4cbf-b514-26a6177f06b4",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "16a9ea85-bf5d-47f9-986a-1f14c62f26b7"
+},
+"title": "Live In Berlin 1969"
+},
+{
+"date": "2006-07-26",
+"id": "abf3b5a0-39c5-3851-9aa4-744b2d45d4f9",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin' With the Miles Davis Quintet"
+},
+{
+"date": "2011",
+"id": "ac008bb6-6706-4ca0-8f56-d777eff1b2f2",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"release-group": {
+"id": "1862e16e-ca3e-44c3-a371-e811cfd8c0ff"
+},
+"title": "Live in Europe 1967"
+},
+{
+"date": "2006-07-26",
+"id": "ae22eb7b-cf85-3481-bea8-3cfc5812665d",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "2014-10-06",
+"id": "b2c0d090-a81c-4376-b25c-409f6e3fa66b",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 7
+},
+{
+"format": "Digital Media",
+"position": 2,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "31f51086-c8cc-44dd-90ee-5c7fa6afc853"
+},
+"title": "All of You: The Last Tour 1960, Vol. 2"
+},
+{
+"date": "2006-11-17",
+"id": "b41f5f60-3f07-43cd-99e5-2f8a9cae4f95",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles"
+},
+{
+"date": "2009-06-08",
+"id": "b4a8c379-84bf-49b7-8b78-855dd9e4f35b",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 14
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "2014-11-26",
+"id": "c3dce171-2b1d-4b51-861a-03f356a05c3c",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin' With the Miles Davis Quintet"
+},
+{
+"date": "2016-02-18",
+"id": "c4a2b1d3-7392-4c5d-a477-64ae700457b8",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "2008-10-13",
+"id": "c7edcacb-b380-48bb-9319-1be389ec9bb5",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "'Round About Midnight / Relaxin' With the Miles Davis Quintet",
+"track-count": 12
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Miles Ahead / Cookin' With the Miles Davis Quintet",
+"track-count": 14
+},
+{
+"format": "CD",
+"position": 3,
+"title": "Ascenseur pour l'échafaud / Steamin' With the Miles Davis Quintet",
+"track-count": 16
+}
+],
+"release-group": {
+"id": "a3e5389b-c731-4940-9b3d-a58326e1c071"
+},
+"title": "Miles Away"
+},
+{
+"date": "2014",
+"id": "cdb4c866-520e-4dc6-89a2-afa0ebfb3a41",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With The Miles Davis Quintet"
+},
+{
+"date": "2008",
+"id": "cf1e844d-9af8-4326-90f8-4accb5fc9c86",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "Miles",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 2,
+"title": "Cookin'",
+"track-count": 4
+},
+{
+"format": "12\" Vinyl",
+"position": 3,
+"title": "Relaxin'",
+"track-count": 6
+},
+{
+"format": "12\" Vinyl",
+"position": 4,
+"title": "Workin'",
+"track-count": 8
+},
+{
+"format": "12\" Vinyl",
+"position": 5,
+"title": "Steamin'",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "693c913a-35ed-4c58-a628-c083579bf9fc"
+},
+"title": "The Great Prestige Recordings"
+},
+{
+"date": "2010",
+"id": "d1f5a440-84b4-4635-a16b-658bc946094a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "First Set",
+"track-count": 4
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Second Set",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "24a376a2-13f8-45e2-9797-ee899fb8f023"
+},
+"title": "Complete Live at the Blue Coronet 1969"
+},
+{
+"date": "2011-02-21",
+"id": "d3eaa599-6c1a-4574-9c0d-fe705ac7735e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "1964-07-12: Tokyo, Japan",
+"track-count": 4
+},
+{
+"format": "CD",
+"position": 2,
+"title": "1964-07-15: Kyoto, Japan",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "d90d668c-2ce7-4973-b83c-af217a3493ac"
+},
+"title": "The Unissued Japanese Concerts"
+},
+{
+"date": "2012",
+"id": "d7654f59-4145-4813-a63f-7af0f4bfa386",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "40af6b96-6343-3bc7-abc6-f100e31e90c5"
+},
+"title": "Swiss Radio Days Jazz Series, Volume 31"
+},
+{
+"date": "2013-01-25",
+"id": "d7df0bc1-6864-4cdf-8f02-287ec4dc9619",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "Recorded 1969-07-25 at Festival Mondial du Jazz d'Antibes, La Pinède, Juans-les-Pins, France",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Recorded 1969-07-26 at Festival Mondial du Jazz d'Antibes, La Pinède, Juans-les-Pins, France",
+"track-count": 10
+},
+{
+"format": "CD",
+"position": 3,
+"title": "Recorded 1969-05-11 at Folkets Hus, Stockholm, Sweden",
+"track-count": 6
+},
+{
+"format": "DVD-Video",
+"position": 4,
+"title": "Recorded 1969-07-11 at Berliner Jazztage in the Berlin Philarmonie, Berlin, Germany",
+"track-count": 7
+}
+],
+"release-group": {
+"id": "d80e35e9-5354-4691-b57d-0b922b76a97c"
+},
+"title": "Live in Europe 1969: The Bootleg Series, Volume 2"
+},
+{
+"date": "2013-03-19",
+"id": "dd320421-1459-4015-973b-11c0c60455fc",
+"media": [
+{
+"format": "12\" Vinyl",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "de478894-68d7-435a-b235-5e2edf82a9d1",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin’ With the Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "e0875530-43ea-4b46-85e5-631d981d92af",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "2014-10-06",
+"id": "e0c42199-5313-420c-b313-4a108a87ac20",
+"media": [
+{
+"format": "Digital Media",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "Digital Media",
+"position": 2,
+"title": "",
+"track-count": 5
+}
+],
+"release-group": {
+"id": "fee352df-6acf-4a3c-b021-6fdc29bda332"
+},
+"title": "All of You: The Last Tour 1960, Vol. 1"
+},
+{
+"date": "2000-05-03",
+"id": "e2e48e1f-5f49-3444-9f43-21c89045a66a",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2011-04-18",
+"id": "e3beef67-2b52-333b-8911-03258bee647a",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2014",
+"id": "e7e29f50-ad6e-466c-9369-f5dae68b9b21",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+},
+{
+"format": "CD",
+"position": 2,
+"title": "",
+"track-count": 10
+},
+{
+"format": "CD",
+"position": 3,
+"title": "",
+"track-count": 9
+}
+],
+"release-group": {
+"id": "861cd6ca-7a96-4bd4-9dfa-f599a3534afd"
+},
+"title": "The Complete 1960 Holland Concerts"
+},
+{
+"date": "2013-01-29",
+"id": "e96dee17-3e2e-4e7b-a35a-14ec55821ff0",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "Recorded 1969-07-25 at Festival Mondial du Jazz d'Antibes, La Pinède, Juans-les-Pins, France",
+"track-count": 9
+},
+{
+"format": "CD",
+"position": 2,
+"title": "Recorded 1969-07-26 at Festival Mondial du Jazz d'Antibes, La Pinède, Juans-les-Pins, France",
+"track-count": 10
+},
+{
+"format": "CD",
+"position": 3,
+"title": "Recorded 1969-05-11 at Folkets Hus, Stockholm, Sweden",
+"track-count": 6
+},
+{
+"format": "DVD-Video",
+"position": 4,
+"title": "Recorded 1969-07-11 at Berliner Jazztage in the Berlin Philarmonie, Berlin, Germany",
+"track-count": 7
+}
+],
+"release-group": {
+"id": "d80e35e9-5354-4691-b57d-0b922b76a97c"
+},
+"title": "Live in Europe 1969: The Bootleg Series, Volume 2"
+},
+{
+"date": "2007-08-21",
+"id": "eb0a9262-e842-48b5-9147-5a5d4c4ce886",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "b043276e-0402-455f-b949-271a5f3e9a71"
+},
+"title": "Live at the 1963 Monterey Jazz Festival"
+},
+{
+"date": "2009",
+"id": "f1003eaa-cce8-438a-950b-f6423d1cfa94",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "0c0ccda7-eacf-35cd-acab-464df24bc5f8"
+},
+"title": "Miles: The New Miles Davis Quintet"
+},
+{
+"date": "1999",
+"id": "f1fdc15d-f1fa-3914-8b30-fa24d38cbded",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 4
+}
+],
+"release-group": {
+"id": "6482fdfd-5db6-3fd4-9db3-f0efbf169ced"
+},
+"title": "Cookin' With the Miles Davis Quintet"
+},
+{
+"date": "2000-04-04",
+"id": "f26c8603-01dd-45cb-9c3e-84054e13bd28",
+"media": [
+{
+"format": "SACD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "60fa4ab0-bf92-3184-80ca-6dcadbb5c748"
+},
+"title": "Miles Smiles"
+},
+{
+"date": "2006",
+"id": "f3e11e81-fac0-4526-858c-a3d82451c932",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"release-group": {
+"id": "4279baa0-5203-384a-8702-b3838bf6ec78"
+},
+"title": "Workin’ With the Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "f435feba-19a9-4dc4-94b4-6028542af85e",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"release-group": {
+"id": "219dedd1-b210-4c8e-a1dc-973e27468691"
+},
+"title": "Radio Broadcasts 1958-1959"
+},
+{
+"date": "2003",
+"id": "f603c97d-3b7e-46af-a108-b2d32b3fc0a0",
+"media": [
+{
+"format": "Hybrid SACD (CD layer)",
+"position": 1,
+"title": "",
+"track-count": 6
+},
+{
+"format": "Hybrid SACD (SACD layer, 2 channels)",
+"position": 2,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "f0b72e4b-e2af-32e5-aa4a-5005deb2db17"
+},
+"title": "Steamin’ With the Miles Davis Quintet"
+},
+{
+"date": "2010",
+"id": "f682bcae-7c2c-448e-a15c-a422d8f30211",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 15
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+},
+{
+"date": "2007",
+"id": "fa877554-f3a3-477c-a347-5482449f0437",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "b043276e-0402-455f-b949-271a5f3e9a71"
+},
+"title": "Live at the 1963 Monterey jazz festival"
+},
+{
+"date": "2006",
+"id": "fc0f5b7f-39ef-4298-8b6d-032782d33d56",
+"media": [
+{
+"format": "CD",
+"position": 1,
+"title": "",
+"track-count": 6
+}
+],
+"release-group": {
+"id": "afb1433e-c8b6-3924-8798-c494a3040346"
+},
+"title": "Relaxin’ With the Miles Davis Quintet"
+}
+]
+},
 "/release?artist=fe920df0-e56d-4556-84c4-11f530ec4abc&inc=media+release-groups&fmt=json&limit=100&offset=0": {
 "release-count": 16,
 "releases": [
@@ -113837,6 +117633,238 @@
 }
 ]
 },
+"/release?release-group=4279baa0-5203-384a-8702-b3838bf6ec78&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "2003",
+"id": "02ad03e8-d97a-4a75-812f-43987081f312",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1988",
+"id": "244a5a07-8e97-4430-9f81-0966dcd458fe",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2006",
+"id": "30a23074-77f0-4d7d-b46e-6d90785d3c6b",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1987",
+"id": "331e8747-0973-4f2a-98d6-49112dda068a",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1993",
+"id": "5427fc4c-a2a2-4eec-a3e4-66f8cb97f745",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1985-09-21",
+"id": "548e02a3-1d9c-3453-88f6-997d4f6a19f1",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "",
+"id": "62659370-4204-4b7e-b3d7-dafed2444e50",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2016-03-04",
+"id": "736f450d-dc22-4c9f-a695-e070284fe7ad",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1998-01-21",
+"id": "786c5994-c3f1-4149-8473-b38b89cb50be",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1990",
+"id": "a2eea48a-d162-3e3c-8358-c28c503928f4",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2007-03-08",
+"id": "a80b6a2b-f789-4b6c-857c-592d21f9b196",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2006-07-26",
+"id": "aa87843a-f62e-49a6-9671-7452c0f5f087",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": null,
+"id": "b2ccd9a7-6cce-46ca-b3a1-d8bc5dc4bb4b",
+"media": [
+{
+"track-count": 3
+}
+]
+},
+{
+"date": "2009-06-08",
+"id": "b4a8c379-84bf-49b7-8b78-855dd9e4f35b",
+"media": [
+{
+"track-count": 14
+}
+]
+},
+{
+"date": "1996-05-29",
+"id": "bbed31a0-fbb8-3c8e-910f-cf611e8afe79",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2014-11-26",
+"id": "c3dce171-2b1d-4b51-861a-03f356a05c3c",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "",
+"id": "d123c8eb-0134-414a-b47d-d66779be7e17",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1987",
+"id": "d2c8b490-9070-399e-a685-7135f1fb2d6f",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "1959",
+"id": "e0000954-ecfa-3410-9eb5-e666f5fc7012",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "",
+"id": "e4ca574c-ff93-4f69-ac82-b1f587d929b9",
+"media": [
+{
+"track-count": 4
+},
+{
+"track-count": 4
+}
+]
+},
+{
+"date": "2023-05-12",
+"id": "eaaf3adb-5d6c-416a-9834-30a49e9c6a54",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "",
+"id": "ee068c2f-4776-4a16-8e4b-25ca33257d71",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2006",
+"id": "f3e11e81-fac0-4526-858c-a3d82451c932",
+"media": [
+{
+"track-count": 8
+}
+]
+},
+{
+"date": "2016",
+"id": "f58c5b51-11d4-4a66-bef8-a55bf96e5ce5",
+"media": [
+{
+"track-count": 14
+}
+]
+},
+{
+"date": "1994-07-18",
+"id": "f6d9f7c7-b401-4ead-bc6b-091dbe290092",
+"media": [
+{
+"track-count": 8
+}
+]
+}
+]
+},
 "/release?release-group=42b8bda2-f56c-330e-b446-ad12ac03c8f1&inc=media&fmt=json&limit=25": {
 "releases": [
 {
@@ -114108,22 +118136,6 @@
 }
 ]
 },
-"/release?release-group=5e10e88e-672d-490f-ac15-64cb35fd7d08&inc=media&fmt=json&limit=25": {
-"releases": [
-{
-"date": "2020-08-14",
-"id": "86f2b4a5-a542-4a62-b37f-8e0f35e51f9e",
-"media": [
-{
-"track-count": 10
-},
-{
-"track-count": 14
-}
-]
-}
-]
-},
 "/release?release-group=5f441800-db38-44ff-a78c-81db1b65d83c&inc=media&fmt=json&limit=25": {
 "releases": [
 {
@@ -114154,6 +118166,211 @@
 "media": [
 {
 "track-count": 14
+}
+]
+}
+]
+},
+"/release?release-group=60fa4ab0-bf92-3184-80ca-6dcadbb5c748&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "1992-02-25",
+"id": "0ac286c6-de59-3f05-98b4-d0c97e7eec0a",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1981-06-21",
+"id": "1176bbd0-42c4-469d-abdf-efdb2b8a1fae",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1969",
+"id": "205a1359-159b-4c88-b6ea-37189d979ce6",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1987",
+"id": "2a4ef184-766e-4541-b9e6-e3a4d39c586f",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1991-12-12",
+"id": "360d3a54-1d42-38e2-b95e-f7113417a3ae",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1967",
+"id": "3a883a4f-dbab-4062-b016-483d603526f7",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1996-09-21",
+"id": "485437c6-8f1f-33b8-ac35-bbbe1881c215",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2006-10-18",
+"id": "69ce6935-5191-39de-b21f-eea436e02f0f",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998-10-13",
+"id": "78de0d4b-193a-33ac-bc44-dd927f938c86",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2008-11-03",
+"id": "7da25531-1731-45d6-b203-b9fbd11ca034",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2005-09-21",
+"id": "7dab07d2-ea6a-34d4-9af4-5810d7ea0f9a",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2000-05-24",
+"id": "89be9320-2fa5-3d64-adc8-9e30f8876e23",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2014",
+"id": "a1a41b58-182a-4e1c-ba26-e4e77dee7eaa",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998-10-26",
+"id": "a1ebabea-9b4c-31de-9a97-609fed6dce56",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998",
+"id": "a34c0977-0c5a-479c-8778-d1f17756a05f",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998",
+"id": "b06fd4cc-a197-47ad-9be6-eba42e505170",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1967-01",
+"id": "dc1a9a99-eeec-3380-a654-ca4be67c4cde",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2000-05-03",
+"id": "e2e48e1f-5f49-3444-9f43-21c89045a66a",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2011-04-18",
+"id": "e3beef67-2b52-333b-8911-03258bee647a",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2000-04-04",
+"id": "f26c8603-01dd-45cb-9c3e-84054e13bd28",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1971",
+"id": "fa669468-8cfe-4940-8f11-4e5dfc14bccd",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2018-12-13",
+"id": "fde2ae02-f0c3-4700-b6db-b243e28e986f",
+"media": [
+{
+"track-count": 6
+},
+{
+"track-count": 6
 }
 ]
 }
@@ -114959,6 +119176,223 @@
 }
 ]
 },
+"/release?release-group=afb1433e-c8b6-3924-8798-c494a3040346&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "2013-10-16",
+"id": "091f5e99-228b-4c2a-b0fe-499f1ebc0734",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1993",
+"id": "0f3580d9-3f11-4b1e-b366-e91d9d7f72a2",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1992",
+"id": "1f031be9-bc24-45e6-bf82-79abe18ce14b",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1996-05-29",
+"id": "308481fa-c8af-3835-ac45-522c894be30d",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1994-01-21",
+"id": "359564c5-49e4-4972-9ffa-1c3483b67e1c",
+"media": [
+{
+"track-count": 9
+}
+]
+},
+{
+"date": "2006-03-21",
+"id": "3fb119cb-5595-33cf-b192-743c17c7f584",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2001",
+"id": "5bd3fef1-2539-4b79-9b28-0f3ee7822cb4",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1987",
+"id": "5d5b1d74-cc40-499f-9f10-691507f7c7cd",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2004-01-20",
+"id": "60663792-40df-432f-b8af-bb1e07d24e89",
+"media": [
+{
+"track-count": 6
+},
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2001",
+"id": "66a31a30-51fd-4ab0-a056-fadadcfa7f42",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "",
+"id": "710a0cb6-4742-481d-9d67-b57ef881885e",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1958",
+"id": "7975cfc2-47f0-4926-846b-319290c83f79",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1993",
+"id": "9909bf5b-1a26-4d54-808a-b7e7c0426556",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1992",
+"id": "a3393951-3ea6-4841-86dc-b49a974c8567",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2014",
+"id": "a545889d-ccc6-4e1b-b8c4-060cd866be02",
+"media": [
+{
+"track-count": 6
+},
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2006-07-26",
+"id": "abf3b5a0-39c5-3851-9aa4-744b2d45d4f9",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1991-07-01",
+"id": "b4f6a2f6-2e34-3d61-8dd9-dd1d2646fa24",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998-01-21",
+"id": "bb071c17-d982-4609-9824-243e1f29353b",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1985-06-21",
+"id": "c1b02e62-04c7-3de7-a898-31dd8e3a6d10",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1987",
+"id": "dc20fed4-0722-4c4b-bd1a-8dd2bd09e062",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2016-02-26",
+"id": "edeb2113-6ab3-4989-ae32-9f2d4e67d4a5",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2010",
+"id": "f682bcae-7c2c-448e-a15c-a422d8f30211",
+"media": [
+{
+"track-count": 15
+}
+]
+},
+{
+"date": "2006",
+"id": "fc0f5b7f-39ef-4298-8b6d-032782d33d56",
+"media": [
+{
+"track-count": 6
+}
+]
+}
+]
+},
 "/release?release-group=b0701a74-cce4-46f2-a392-72eadad32ef4&inc=media&fmt=json&limit=25": {
 "releases": [
 {
@@ -115365,6 +119799,19 @@
 "media": [
 {
 "track-count": 14
+}
+]
+}
+]
+},
+"/release?release-group=c94b867b-98e3-4697-b38e-b33dce317232&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "1996",
+"id": "0227740c-9b52-4e49-9147-6e552f9ac277",
+"media": [
+{
+"track-count": 4
 }
 ]
 }
@@ -116000,6 +120447,181 @@
 "media": [
 {
 "track-count": 8
+}
+]
+}
+]
+},
+"/release?release-group=f0b72e4b-e2af-32e5-aa4a-5005deb2db17&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "1989-09-11",
+"id": "05149aa8-8d77-31fb-a5aa-468adb348b29",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1961",
+"id": "0c266559-4ccd-4713-ba0e-6b8a08d330bc",
+"media": [
+{
+"track-count": 3
+},
+{
+"track-count": 3
+}
+]
+},
+{
+"date": "",
+"id": "0d3175be-b163-4b89-8c07-3bee3ef81f39",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2007",
+"id": "0e01dd30-61a0-4cec-9d3e-11b4dfdecb57",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2014-08-29",
+"id": "1038c85c-fa0e-4a20-a8e9-fe7846812110",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1989-09-11",
+"id": "1fd2a314-5f22-3a46-8c83-efc6eb0f34b4",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2016-02-26",
+"id": "386b887b-e78b-4773-b395-0122051b9123",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1989-07-12",
+"id": "3bf6ac6f-c4db-4865-b2a0-3e317e249929",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "",
+"id": "43359586-56b6-4f0f-96d4-9d924f48e6e9",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1996-05-29",
+"id": "4cfaf835-4b0c-3b38-8b0b-4a6548b23bcd",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1994-10-25",
+"id": "5de0053c-a7b3-48b5-94c2-377e73aefc0b",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2006-07-26",
+"id": "7d90dcd9-a42a-424c-9460-5c0c5b24d55d",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2004",
+"id": "a7ffd901-dcde-41ca-b9de-a61e423143a4",
+"media": [
+{
+"track-count": 3
+},
+{
+"track-count": 3
+}
+]
+},
+{
+"date": "",
+"id": "b3d5b154-f2c4-4177-8513-49ceb225378f",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2007",
+"id": "e0875530-43ea-4b46-85e5-631d981d92af",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1989",
+"id": "eddcd7e2-32a9-4405-b6b6-ff557411ad4a",
+"media": [
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "2003",
+"id": "f603c97d-3b7e-46af-a108-b2d32b3fc0a0",
+"media": [
+{
+"track-count": 6
+},
+{
+"track-count": 6
+}
+]
+},
+{
+"date": "1998",
+"id": "fd542438-acbb-439b-a15d-a718ce33fd8d",
+"media": [
+{
+"track-count": 6
 }
 ]
 }

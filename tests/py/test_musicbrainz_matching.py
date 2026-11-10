@@ -417,3 +417,10 @@ def test_a_shorter_musicbrainz_tracklist_inside_the_local_one_agrees():
     remote = {"tracks": [{"title": t, "length": s * 1000} for t, s in
                          (("Intruder d’or", 237), ("Tigers in the Rain", 468), ("Small Fish", 291), ("Nine Cats", 873))]}
     assert {"track_list", "durations"} <= album_signals(local, remote)
+
+
+def test_a_one_word_bracket_or_slash_part_is_never_a_title_of_its_own():
+    assert title_agreement("Foo (Live)", "Live") is None
+    assert title_agreement("Abbey Road (Remastered 2009)", "Remastered") is None
+    assert title_agreement("Mysterious Realms / Heidebilder", "Heidebilder") is None
+    assert title_agreement("22 strings", "22 Strings/Cordes") == "exact"

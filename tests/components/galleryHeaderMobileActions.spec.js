@@ -11,7 +11,7 @@ const fitSource = source.slice(start, source.indexOf('\n}', start) + 2);
 
 const header = (name) => `<main class="shell-main-surface" style="display:block">
   <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" data-gallery-bar-layout="mobile-primary">
-    <div class="gallery-bar__context"><div class="gallery-bar__title"><button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button></div><span class="gallery-bar__summary" data-gallery-context-summary>9 albums</span></div>
+    <div class="gallery-bar__context"><div class="gallery-bar__title"><button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button><span class="gallery-bar__artist-divider gallery-divider__line" hidden></span><span class="gallery-bar__artist-total" hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>9 albums</span></div>
     <div class="gallery-bar__actions"><button class="gallery-action-button" aria-label="Artist family">F</button><button class="gallery-action-button" aria-label="View">V</button><button class="gallery-action-button" aria-label="Album types">T</button></div>
   </header></main>`;
 
@@ -25,6 +25,9 @@ async function mount(page, name) {
   return page.evaluate(() => {
     const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
     const name = bar.querySelector('[data-gallery-context-name]');
+    const title = bar.querySelector('.gallery-bar__title');
+    const info = bar.querySelector('.gallery-info-button');
+    const summary = bar.querySelector('.gallery-bar__summary');
     syncGalleryBarNameFit(bar, name);
     const box = (node) => node.getBoundingClientRect();
     return {
@@ -34,6 +37,13 @@ async function mount(page, name) {
       actionsBottom: box(bar.querySelector('.gallery-bar__actions')).bottom,
       nameRight: box(name).right, actionsLeft: box(bar.querySelector('.gallery-bar__actions')).left,
       nameFull: name.scrollWidth <= name.clientWidth + 1,
+      titleGridRow: getComputedStyle(title).gridRowStart,
+      titleAlignment: getComputedStyle(title).alignItems,
+      nameCenter: (box(name).top + box(name).bottom) / 2,
+      infoCenter: (box(info).top + box(info).bottom) / 2,
+      summaryTop: box(summary).top,
+      summaryLeft: box(summary).left,
+      nameLeft: box(name).left,
     };
   });
 }
@@ -44,6 +54,15 @@ test('a short gallery name shares its row with the gallery buttons on mobile', a
   expect(layout.actionsTop).toBeLessThan(layout.nameBottom);
   expect(layout.actionsLeft).toBeGreaterThanOrEqual(layout.nameRight);
   expect(layout.nameFull).toBe(true);
+});
+
+test('an artist takeover keeps the album count below the aligned artist and info button', async ({ page }) => {
+  const layout = await mount(page, 'Neal Morse');
+  expect(layout.titleGridRow).toBe('1');
+  expect(layout.titleAlignment).toBe('center');
+  expect(Math.abs(layout.infoCenter - layout.nameCenter)).toBeLessThanOrEqual(1);
+  expect(layout.summaryTop).toBeGreaterThanOrEqual(layout.nameBottom);
+  expect(Math.abs(layout.summaryLeft - layout.nameLeft)).toBeLessThanOrEqual(1);
 });
 
 test('a long gallery name is printed in full above the gallery buttons on mobile', async ({ page }) => {

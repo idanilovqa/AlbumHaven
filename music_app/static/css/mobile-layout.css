@@ -655,6 +655,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   }
   /* Owner (11-08): the Gallery's buttons share the name row when the whole name fits (syncGalleryBarNameFit);
      a longer name is printed in full on its own row and the buttons stay under it. */
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-row: 1; align-items: center; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
   /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the
      title as closely as on web. */

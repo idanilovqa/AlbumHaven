@@ -1375,12 +1375,16 @@ def start_background_refresh_for_state(
 def run_authoritative_cover_commit_for_state(
     library_state: dict[str, object],
     commit_action: Callable[[], object],
+    *,
+    should_supersede_scan: Callable[[object], bool] | None = None,
 ) -> object:
-    """Commit a cover mutation and supersede prepared in-process scans."""
+    """Commit under the runtime lock, superseding scans only for mutations."""
     with _CACHE_LOCK:
         interrupted_scan = bool(library_state.get("scan_in_progress"))
         interrupted_mode = str(library_state.get("scan_mode") or "background")
         result = commit_action()
+        if should_supersede_scan is not None and not should_supersede_scan(result):
+            return result
         library_state["scan_generation"] = int(
             library_state.get("scan_generation") or 0
         ) + 1

@@ -1,4 +1,5 @@
 const problematicNavigationRowContent = new WeakMap();
+const problematicDuplicateReviewContent = new WeakMap();
 
 let problematicFilesVirtualList = null;
 
@@ -179,7 +180,31 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
+  // Layout rerenders keep native disclosure state only for the mounted, unchanged review.
+  const priorReview = problematicDuplicateReviewContent.get(els.detail);
+  const retainReview = priorReview
+    && priorReview.albumKey === selectedAlbum.key
+    && priorReview.payload === selectedAlbum.duplicate_copy_review
+    && priorReview.element === els.detail.querySelector?.('.duplicate-copy-review');
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedReviewElement = retainReview && priorReview.element.contains(activeElement)
+    ? activeElement : null;
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
+  let reviewElement = els.detail.querySelector?.('.duplicate-copy-review');
+  if (retainReview && reviewElement) {
+    reviewElement.replaceWith(priorReview.element);
+    reviewElement = priorReview.element;
+    focusedReviewElement?.focus({ preventScroll: true });
+  }
+  if (reviewElement) {
+    problematicDuplicateReviewContent.set(els.detail, {
+      albumKey: selectedAlbum.key,
+      payload: selectedAlbum.duplicate_copy_review,
+      element: reviewElement,
+    });
+  } else {
+    problematicDuplicateReviewContent.delete(els.detail);
+  }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);
     const scrollFocusedRowsIntoView = () => {

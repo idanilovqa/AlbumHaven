@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.py.cover_unit_safety import cover_unit_transports
 
 import hashlib
 import io
@@ -455,6 +456,8 @@ def test_search_primary_remote_cover_uses_extracted_apple_trace(monkeypatch):
     monkeypatch.setattr(cover_provider_apple, "begin_apple_request_trace", fake_begin)
     monkeypatch.setattr(cover_provider_apple, "search_apple", fake_apple)
     monkeypatch.setattr(cover_refresh_provider, "_search_deezer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cover_refresh_provider, "_search_youtube_music", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cover_refresh_provider, "_search_bandcamp", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: None)
 
     selected, trace = cover_refresh_provider.search_primary_remote_cover(

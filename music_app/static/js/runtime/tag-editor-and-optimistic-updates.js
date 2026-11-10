@@ -2136,7 +2136,7 @@ function renderTrackModalRelease(album) {
             type="button"
             data-track-duplicate-source-index="${index}"
             title="${sourceTitle}">
-            Files ${index + 1}
+            Copy ${index + 1}
           </button>
         `;
       }).join('');
@@ -2148,7 +2148,10 @@ function renderTrackModalRelease(album) {
     }
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  const duplicateReview = !albumMissing && duplicateSources.length < 2 && album.duplicate_copy_review?.length > 1
+    ? buildDuplicateCopyReviewHtml(album, 'album-duplicate-review')
+    : '';
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
   if (els.footer) {
     els.footer.textContent = '';

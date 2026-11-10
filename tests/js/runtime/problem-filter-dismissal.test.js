@@ -75,3 +75,32 @@ test('an actual modal backdrop closes the filter owner and its state without clo
   assert.equal(els.problemFilterMenu.hidden, false);
   assert.equal(els.problemFilterButton.attributes['aria-expanded'], 'true');
 });
+
+test('refreshed one-copy summaries remove only the now-empty duplicate problem filter', () => {
+  // Read-state convergence only: no deletion, stale-row retirement or refresh
+  // delivery is simulated. The current filter label is "Duplicate files".
+  const state = { utility: { problematicFiles: [], selectedProblemFilters: [], problemDropdownOpen: true } };
+  const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
+  const runtime = path.resolve(__dirname, '../../../music_app/static/js/runtime');
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'utility-list-builders.js'), 'utf8'), context);
+  const els = { problemFilterButton: element(), problemFilterMenu: element() };
+  const secondDuplicate = { key: 'second-release', problem_reasons: ['Duplicate files'] };
+  for (const copyCount of [3, 2, 1]) {
+    const refreshed = {
+      key: 'refreshed-release',
+      problem_reasons: copyCount > 1 ? ['Duplicate files', 'Missing cover art'] : ['Missing cover art'],
+    };
+    for (const otherAlbums of [[], [secondDuplicate]]) {
+      state.utility.problematicFiles = [refreshed, ...otherAlbums];
+      context.renderProblemFilterControls(els);
+      const hasDuplicates = copyCount > 1 || otherAlbums.length > 0;
+      assert.equal(context.getProblemReasonTypes().includes('Duplicate files'), hasDuplicates);
+      assert.equal(els.problemFilterMenu.innerHTML.includes('data-problem-filter-value="Duplicate files"'), hasDuplicates);
+      assert.match(els.problemFilterMenu.innerHTML, /data-problem-filter-value="Missing cover art"/);
+      assert.equal(context.albumMatchesProblemFilters(refreshed, ['Duplicate files']), copyCount > 1);
+      assert.equal(context.albumMatchesProblemFilters(refreshed, ['Missing cover art']), true);
+      assert.equal(els.problemFilterButton.disabled, false);
+      if (otherAlbums.length) assert.equal(context.albumMatchesProblemFilters(secondDuplicate, ['Duplicate files']), true);
+    }
+  }
+});

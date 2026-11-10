@@ -11,8 +11,10 @@ import tempfile
 from threading import Lock
 from typing import Callable
 
+from music_app.services.cover_mutation import CoverMutationEffect
+from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
-from music_app.services.covers import Image, reserve_existing_cover_variant
+from music_app.services.covers import Image, reserve_existing_cover_variant, UNPLANNED_COVER_RESERVE
 from music_app.services.generated_preview_storage import (
     is_generated_cover_artifact,
     is_managed_preview_path,
@@ -54,6 +56,20 @@ class LocalCoverPromotion:
     prior_cover_mtime_ns: int | None = None
     prior_reserve_artifacts: frozenset[Path] = frozenset()
     reserve_artifacts: frozenset[Path] = frozenset()
+
+
+def cover_promotion_effect(promotion: LocalCoverPromotion, **selection) -> CoverMutationEffect:
+    """Carry exact written bytes and compensation into the adapter boundary."""
+    return CoverMutationEffect(
+        selection={
+            **selection,
+            "selected_cover_path": promotion.cover_path,
+            "cover_revision": promotion.promoted_cover_revision,
+        },
+        value=promotion.cover_path,
+        rollback=lambda: rollback_local_image_promotion(promotion),
+        complete=lambda: complete_local_image_promotion(promotion),
+    )
 
 
 def normalize_music_file_path(config: dict[str, object], raw_path: str) -> Path | None:
@@ -278,12 +294,14 @@ def validate_local_cover_source(
     source_path: str,
     *,
     track_paths: set[str] | None = None,
+    configured_root_paths: tuple[Path, ...] | None = None,
 ) -> Path:
     resolved_album_root = restrict_album_root_to_represented_disc(
         album_root,
         track_paths or set(),
     )
-    if not any(_is_path_within(resolved_album_root, root) for root in iter_library_root_paths(config)):
+    roots = configured_root_paths if configured_root_paths is not None else iter_library_root_paths(config)
+    if not any(_is_path_within(resolved_album_root, root) for root in roots):
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
@@ -298,7 +316,7 @@ def validate_local_cover_source(
     return resolved
 
 
-def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) -> Path:
+def prepare_pasted_cover_bytes(data_url: str) -> bytes:
     match = re.match(
         r"^data:(image/[a-z0-9.+-]+);base64,(.+)$",
         str(data_url or "").strip(),
@@ -315,14 +333,20 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
     if Image is None:
         if mime_type != "image/jpeg":
             raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-        target = album_root / "cover.jpg"
-        reserve_existing_cover_variant(album_root, raw_bytes)
-        _atomic_replace_file_bytes(target, raw_bytes)
-        return target
-    saved = write_remote_cover_bytes_as_authoritative_cover(album_root, raw_bytes)
-    if saved is None:
+        return raw_bytes
+    prepared = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes)
+    if prepared is None:
         raise ValueError("Clipboard image could not be processed.")
-    return saved
+    return prepared
+
+
+def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) -> Path:
+    prepared = prepare_pasted_cover_bytes(data_url)
+    promotion = begin_prepared_remote_cover_promotion(album_root, prepared)
+    if promotion is None:
+        raise ValueError("Clipboard image could not be processed.")
+    complete_local_image_promotion(promotion)
+    return promotion.cover_path
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:
@@ -459,6 +483,7 @@ def begin_local_image_promotion(
     album_root: Path,
     *,
     serialize_selection: bool = False,
+    reserved_cover_variant_path=UNPLANNED_COVER_RESERVE,
 ) -> LocalCoverPromotion:
     lock_key, selection_lock = (
         _acquire_local_cover_selection_lock(album_root)
@@ -512,7 +537,9 @@ def begin_local_image_promotion(
                 else None
             ),
         )
-        promotion.reserve_artifact = reserve_existing_cover_variant(album_root, raw_bytes)
+        promotion.reserve_artifact = reserve_existing_cover_variant(
+            album_root, raw_bytes, reserved_path=reserved_cover_variant_path,
+        )
         _atomic_replace_file_bytes(target, raw_bytes)
     except Exception:
         if "promotion" in locals():
@@ -546,15 +573,12 @@ def begin_prepared_remote_cover_promotion(
     prepared_bytes: bytes,
     *,
     serialize_selection: bool = False,
+    reserved_cover_variant_path=UNPLANNED_COVER_RESERVE,
 ) -> LocalCoverPromotion | None:
-    decoded = decode_image_bytes(prepared_bytes)
-    if decoded is None:
+    # Bytes must be produced by prepare_remote_cover_bytes_for_authoritative_write
+    # (or the existing JPEG-only no-Pillow paste path) before DB locks are held.
+    if not prepared_bytes:
         return None
-    prepared_image, _width, _height = decoded
-    try:
-        prepared_image.close()
-    except Exception:
-        pass
 
     lock_key, selection_lock = (
         _acquire_local_cover_selection_lock(album_root)
@@ -588,7 +612,7 @@ def begin_prepared_remote_cover_promotion(
         )
         promotion.reserve_artifact = reserve_existing_cover_variant(
             album_root,
-            prepared_bytes,
+            prepared_bytes, reserved_path=reserved_cover_variant_path,
         )
         _atomic_replace_file_bytes(target, prepared_bytes)
     except Exception:
@@ -762,14 +786,23 @@ def cover_revision_for_path(cover_path: Path) -> str:
     return hashlib.sha256(cover_path.read_bytes()).hexdigest()
 
 
-def choose_best_remaining_local_cover(
+def prepare_local_cover_image(path: Path, image_dimensions) -> tuple[tuple, str]:
+    """Decode before locking and bind its metadata to the exact prepared bytes."""
+    revision = cover_revision_for_path(path)
+    dimensions = image_dimensions(path)
+    if cover_revision_for_path(path) != revision:
+        raise OrderedCoverSelectionConflict("The image changed while it was being prepared. Retry the selection.")
+    return dimensions, revision
+
+
+def ranked_local_cover_candidates(
     album_root: Path,
     *,
     image_extensions: set[str],
     image_dimensions,
     is_squareish_cover,
     score_image,
-) -> Path | None:
+) -> list[Path]:
     candidates = [
         path
         for path in album_root.rglob("*")
@@ -777,15 +810,56 @@ def choose_best_remaining_local_cover(
         and path.suffix.lower() in image_extensions
         and not is_generated_cover_artifact(path, album_root)
     ]
-    if not candidates:
-        return None
-    return min(
+    return sorted(
         candidates,
         key=lambda path: (
             not is_squareish_cover(*image_dimensions(path)),
             *score_image(path),
         ),
     )
+
+
+def choose_best_remaining_local_cover(album_root: Path, **options) -> Path | None:
+    candidates = ranked_local_cover_candidates(album_root, **options)
+    return candidates[0] if candidates else None
+
+
+def delete_local_cover_effect(*, source_path: Path, active_cover_path: Path | None,
+                              prepared_candidates: list[Path],
+                              prepared_dimensions: dict[Path, tuple] | None = None,
+                              prepared_revisions: dict[Path, str] | None = None) -> CoverMutationEffect:
+    """Delete only under the adapter's source/folder protection, with compensation."""
+    prior_stat = source_path.stat()
+    prior_bytes = source_path.read_bytes()
+
+    def restore():
+        _atomic_replace_file_bytes(source_path, prior_bytes,
+                                   atime_ns=prior_stat.st_atime_ns, mtime_ns=prior_stat.st_mtime_ns)
+
+    changing_primary = active_cover_path is not None and source_path.resolve() == active_cover_path.resolve()
+    next_cover = next((path for path in prepared_candidates
+                       if path.resolve() != source_path.resolve() and path.is_file()), None) if changing_primary else None
+    revision = cover_revision_for_path(next_cover) if next_cover else None
+    if next_cover and prepared_revisions is not None and revision != prepared_revisions.get(next_cover):
+        raise OrderedCoverSelectionConflict("The replacement image changed while deletion was prepared. Retry the deletion.")
+    width, height = (prepared_dimensions or {}).get(next_cover, (None, None))
+    try:
+        with suppress_library_watch_events((source_path,)):
+            source_path.unlink()
+        if not changing_primary:
+            return CoverMutationEffect(value=active_cover_path, rollback=restore)
+        selection = {
+            **({"local_cover_width": width, "local_cover_height": height} if width and height else {}),
+            "selected_cover_path": next_cover,
+            "cover_revision": revision,
+            "cover_selection_origin": "user" if next_cover else None,
+            "explicit_selection": next_cover is not None,
+            "clear_selection": next_cover is None,
+        }
+        return CoverMutationEffect(selection=selection, value=next_cover, rollback=restore)
+    except BaseException:
+        restore()
+        raise
 
 
 def delete_local_cover_and_choose_next(

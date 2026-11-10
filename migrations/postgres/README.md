@@ -272,3 +272,48 @@ This ordinary transactional index build allows reads but temporarily blocks writ
 Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
 
 Migration `0101_create_local_album_identity_transitions.sql` adds append-only album identity lineage for scan, watcher, and structural-edit moves. Migration `0102_narrow_synthetic_unknown_album_identity_guard.sql` keeps valid VA and known-artist loose-track successors while excluding the synthetic `Unknown Artist / Unknown Album` catch-all. Migration `0103_repair_synthetic_unknown_cover_task_identities.sql` repairs only legacy cover tasks with complete active paths and one exact artist/title/year target; ambiguous rows remain unchanged.
+
+`0104_add_ordered_cover_metadata_constraint.sql` adds a structural CHECK for
+optional ordered cover references in `library.local_albums.metadata`. Existing
+nonobject metadata and objects without `selected_covers` remain legacy values,
+including orphan revision/request fields. No rows, image files or provenance
+are rewritten. A malformed present list fails migration validation and must be
+investigated, not silently cleared or repaired.
+
+The guard bounds each list to one through three source-reference objects and
+checks supported fields/types, plain text, nonempty required text, exact ID and
+source-string uniqueness, nonnegative integer revisions/dimensions and receipt
+shape/hash. Python remains the authority for UUID interpretation, URL/path
+validation, normalized-source uniqueness and source authorization. SQL must not
+substitute locale-dependent lowercasing or stricter UUID parsing for that
+contract. JSONB may erase numeric syntax such as `1e0`; the guard validates the
+stored number representation, not the original request token.
+
+Apply the migration transactionally during a controlled window before starting
+matching writers. CHECK validation scans album metadata and the ALTER TABLE
+locks can block concurrent operations. Audit unexpected explicit lists before
+rollout. The function is immutable, security-invoker and has a fixed catalog
+search path; only existing application/migration roles receive execution, with
+no new table permissions. For rollback, stop incompatible writers first, drop
+`local_albums_selected_cover_metadata_shape`, then drop
+`library.valid_selected_cover_metadata(jsonb)` in a subsequent migration. Keep
+saved metadata and migration ledger history; removing the guard is not proof
+that older servers preserve ordered selections.
+
+
+`0105_add_confirmed_copy_retirement.sql` adds the internal exact-generation
+physical-row retirement function. It follows the existing bounded
+security-definer mutation pattern: the application can execute this function,
+but receives no direct DELETE permission on `local_track_files`. PUBLIC cannot
+execute it. The fixed search path and bootstrap-library, active-root, generation,
+nonoverlap and surviving-release checks restrict its database scope. The caller
+must separately authorize and confirm the selected copy, verify completed
+filesystem deletion, and hold media reservations through inventory publication.
+The database function does not delete media or establish audio equivalence.
+
+Apply it transactionally before deploying the matching internal publisher. It
+changes no existing rows. Retirement preserves semantic album/track and user
+relationships; existing waveform-cache cascades and gallery-invalidation
+triggers remain in effect. Roll back the caller before revoking execution and
+dropping the function in a subsequent migration. Previously retired physical
+rows are not restored by rollback. No standalone HTTP deletion action is added.

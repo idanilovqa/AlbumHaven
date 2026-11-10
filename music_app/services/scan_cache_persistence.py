@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import logging
@@ -11,6 +11,10 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
+)
+from music_app.services.cover_mutation import (
+    CoverMutationEffect, CoverMutationFinalizationError, CoverMutationCommitUncertainError,
+    cover_source_keys, assert_ordered_sources_untouched, PreparedCoverTarget,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.artist_credits import track_artist_credit_members
@@ -26,16 +30,25 @@ from music_app.services.cache import (
 )
 from music_app.services.library import (
     _is_various_artist,
+    _album_bucket_metadata,
     album_separate_release_key,
     build_albums_from_file_cache,
     safe_int,
     split_album_artist_members,
+)
+from music_app.services.duplicate_copy_retirement import (
+    ConfirmedDuplicateCopyRemoval, prepare_confirmed_duplicate_retirement,
+    retire_confirmed_duplicate_rows,
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
 from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.music_identity_matching import same_artist_credit_spelling
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
+from music_app.services.ordered_cover_references import (
+    OrderedCoverSelectionConflict,
+    project_selected_cover_metadata,
+)
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
@@ -83,6 +96,9 @@ _ALBUM_COVER_AUTHORITY_FIELDS = (
     "remote_cover_source_label", "remote_cover_album_url",
     "remote_cover_width", "remote_cover_height",
 )
+_ORDERED_COVER_METADATA_FIELDS = (
+    "selected_covers", "selected_covers_revision", "selected_covers_last_request",
+)
 _ALBUM_COVER_METADATA_FIELDS = (
     "cover_revision", "cover_selection_repair_previous", *_ALBUM_COVER_AUTHORITY_FIELDS,
 )
@@ -99,6 +115,9 @@ _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"exception_type", "custom_collection_name"}),
     frozenset({"year"}),
 }
+_ORDERED_COVER_IDENTITY_EDIT_FIELDS = frozenset(
+    {"album", "artist", "album_artist", "year", "edition", "exception_type"}
+)
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
     {"title", "genre", "track_number", "disc_number", "total_discs", "disc_subtitle"}
 )
@@ -152,6 +171,20 @@ class ScanCacheAdapter(Protocol):
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        confirmed_duplicate_removal: ConfirmedDuplicateCopyRemoval | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def assert_legacy_cover_mutation_allowed(
+        self, *, track_paths: set[str], deleting_source_path: Path | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def run_cover_mutation(
+        self, *, track_paths, album_root, source_paths, mutate,
+        affected_paths=(), selection_options=None, allow_ordered_selection=False,
+        expected_inventory_mutation_revision=None, expected_album_id=None, commit_guard=None,
+        reserve_variant_bytes=None,
     ) -> dict[str, object]:
         ...
 
@@ -203,6 +236,7 @@ class ScanCacheAdapter(Protocol):
         previous_file_entries: dict[str, dict[str, object]],
         updated_file_entries: dict[str, dict[str, object]],
         changed_field_names: set[str],
+        allow_targeted_identity: bool = True,
     ) -> None:
         ...
 
@@ -250,6 +284,7 @@ class PostgresScanCacheAdapter:
             }).fetchall()
         return {
             int(payload["album_id"]): {
+                **project_selected_cover_metadata(payload.get("selected_cover_metadata", {})),
                 "selected_cover_path": str(payload.get("cover_path") or "").strip() or None,
                 "cover_selection_origin": str(payload.get("cover_selection_origin") or "").strip() or None,
                 **({"cover_selection_provenance": "explicit"} if payload.get("cover_selection_provenance") == "explicit" else {}),
@@ -259,6 +294,46 @@ class PostgresScanCacheAdapter:
             for row in rows
             if (payload := _row_mapping(row))
         }
+
+    def assert_legacy_cover_mutation_allowed(
+        self, *, track_paths: set[str], deleting_source_path: Path | None = None,
+    ) -> dict[str, object]:
+        """Reject incompatible media work against the current persisted selection.
+
+        This read is a preflight, not a lock across subsequent filesystem work.
+        The singular writer must still enforce its transactional metadata guard.
+        """
+        paths = sorted({str(path or "").strip() for path in track_paths if str(path or "").strip()})
+        if not paths:
+            raise ValueError("Cover selection requires at least one track path.")
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(
+                _load_legacy_cover_mutation_scope_sql(), {"track_paths": paths},
+            ))
+        if row is None:
+            raise ValueError("Album cover selection could not be resolved.")
+        payload = _row_mapping(row)
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, Mapping) or "selected_covers" not in metadata:
+            return payload
+        conflict = "Reload this album and use the full cover selection to change its artwork."
+        if deleting_source_path is None:
+            raise OrderedCoverSelectionConflict(conflict)
+        try:
+            selection = project_selected_cover_metadata(metadata)
+            source = Path(deleting_source_path).resolve()
+            protected = [
+                item["path"] for item in selection["selected_covers"]
+                if item["kind"] == "local"
+            ]
+            if payload.get("cover_path"):
+                protected.append(payload["cover_path"])
+            selected_source = any(Path(path).resolve() == source for path in protected)
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise OrderedCoverSelectionConflict(conflict) from exc
+        if selected_source:
+            raise OrderedCoverSelectionConflict(conflict)
+        return payload
 
     def load_inventory_mutation_revision(self) -> int:
         with self._connect_to_database() as connection:
@@ -292,10 +367,15 @@ class PostgresScanCacheAdapter:
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        confirmed_duplicate_removal: ConfirmedDuplicateCopyRemoval | None = None,
     ) -> dict[str, object]:
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
             raise ValueError("Targeted inventory mutation requires a root id.")
+        if confirmed_duplicate_removal is not None and (
+            active_file_entries or deleted_paths or deleted_subtrees or moves
+        ):
+            raise ValueError("Confirmed copy retirement cannot be combined with another inventory mutation.")
         file_cache = {
             str(path): dict(entry)
             for path, entry in active_file_entries.items()
@@ -335,10 +415,21 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            retirement = None
+            if confirmed_duplicate_removal is not None:
+                retirement = prepare_confirmed_duplicate_retirement(
+                    connection, confirmed_duplicate_removal, normalized_root_id,
+                )
+                if not retirement.selected_rows:
+                    return {"inventory_mutation_revision": 0, "affected_album_keys": [],
+                            "new_track_paths": [], "retired_file_count": 0}
+                stale_by_root[normalized_root_id]["paths"].update(retirement.paths)
             if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
                 from music_app.services.library_watch_health import guard_destructive_library_publication
 
                 affected_roots = set(stale_by_root) | set(active_paths_by_root)
+                if retirement is not None:
+                    affected_roots.update(row["configured_root_id"] for row in retirement.survivor_rows)
                 affected_roots.update(
                     str(move.get("destination_root_id") or normalized_root_id)
                     for move in moves
@@ -503,31 +594,48 @@ class PostgresScanCacheAdapter:
                 ),
                 excluded_paths=stale_context_paths,
             )
-            _execute_semantic_local_album_key_adoptions(connection, album_rows)
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
                 for row in (*album_rows, *existing_memberships)
                 if str(row.get("album_key") or "").strip()
             }
-            _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
-            _execute_pipeline_batches(
-                connection,
-                _upsert_local_album_sql(preserve_existing_cover_authority=True),
-                album_rows,
+            if retirement is not None:
+                affected_album_keys.update(
+                    row["album_key"] for row in (*retirement.selected_rows, *retirement.survivor_rows)
+                )
+            if retirement is None:
+                # Confirmed retirement has no incoming files. Re-ingesting its
+                # surviving context could change physical generations or move
+                # semantic identities that the confirmed manifest must retain.
+                _execute_semantic_local_album_key_adoptions(connection, album_rows)
+                _assert_ordered_cover_album_membership_preserved(connection, track_rows, track_file_rows)
+                _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
+                _execute_pipeline_batches(
+                    connection,
+                    _upsert_local_album_sql(preserve_existing_cover_authority=True),
+                    album_rows,
+                )
+                _execute_pipeline_batches(
+                    connection,
+                    _upsert_local_album_featured_artist_sql(),
+                    featured_artist_rows,
+                )
+                _execute_set_based_batches(connection, _upsert_local_track_sql(), track_rows)
+                _execute_set_based_batches(
+                    connection,
+                    _upsert_local_track_file_sql(),
+                    track_file_rows,
+                )
+            retired_file_count = (
+                retire_confirmed_duplicate_rows(connection, retirement)
+                if retirement is not None else 0
             )
-            _execute_pipeline_batches(
-                connection,
-                _upsert_local_album_featured_artist_sql(),
-                featured_artist_rows,
-            )
-            _execute_set_based_batches(connection, _upsert_local_track_sql(), track_rows)
-            _execute_set_based_batches(
-                connection,
-                _upsert_local_track_file_sql(),
-                track_file_rows,
-            )
-            inventory_changed = bool(file_cache)
+            inventory_changed = bool(file_cache) or bool(retired_file_count)
             for stale_root_id, stale_targets in sorted(stale_by_root.items()):
+                if retirement is not None:
+                    # Confirmed physical generations are retired, not classified
+                    # as an external disappearance or a Missing Album.
+                    continue
                 paths = sorted(stale_targets["paths"])
                 subtrees = sorted(stale_targets["subtrees"])
                 if not paths and not subtrees:
@@ -628,6 +736,10 @@ class PostgresScanCacheAdapter:
                             featured_row["artist_key"] = owner_keys[album_key]
                     featured_artist_rows.extend(complete_featured)
                 _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
+                connection.execute(
+                    _synchronize_album_cover_file_entries_sql(ordered_only=True),
+                    {"album_keys": sorted(affected_album_keys)},
+                )
                 _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
@@ -657,11 +769,14 @@ class PostgresScanCacheAdapter:
                 self._config,
                 reason="targeted_reconciliation",
             )
+            if retirement is not None:
+                retirement.revalidate_files()
             connection.commit()
         return {
             "inventory_mutation_revision": revision,
             "affected_album_keys": sorted(affected_album_keys),
             "new_track_paths": new_track_paths,
+            **({"retired_file_count": retired_file_count} if retirement is not None else {}),
         }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
@@ -707,6 +822,7 @@ class PostgresScanCacheAdapter:
             hydrated_entry["cover_selection_provenance"] = (
                 "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
             )
+            _hydrate_ordered_album_cover(hydrated_entry, row_payload)
             hydrated_entry["album_id"] = row_payload.get("album_id")
             file_cache[path] = hydrated_entry
 
@@ -719,8 +835,264 @@ class PostgresScanCacheAdapter:
             None,
         )
 
-    def persist_cover_selection(
-        self,
+    def persist_ordered_cover_selection(
+        self, *, track_paths, album_root, expected_album_id, expected_revision,
+        mutation_id, references, commit_guard=None,
+    ):
+        from music_app.services.ordered_cover_selection import validate_save_request, prepare_selection
+
+        request = validate_save_request(
+            expected_album_id=expected_album_id, expected_revision=expected_revision,
+            mutation_id=mutation_id, references=references,
+        )
+        prior_selections = self.load_cover_selections({expected_album_id})
+        if expected_album_id not in prior_selections:
+            raise OrderedCoverSelectionConflict("The concrete album is no longer available. Reload and retry.")
+        prior = prior_selections[expected_album_id]
+        sources = [Path(item["path"]) for item in prior.get("selected_covers", []) if item["kind"] == "local"]
+        sources.extend(Path(item["path"]) for item in references if item.get("kind") == "local")
+        if any(item.get("retain_current") is True for item in references) and prior.get("selected_cover_path"):
+            sources.append(Path(prior["selected_cover_path"]))
+
+        def select(scope):
+            patch, value = prepare_selection(
+                metadata=scope.get("metadata"), expected_revision=expected_revision,
+                request=request, references=references, config=self._config,
+                album_root=Path(album_root) if album_root is not None else None, track_paths=set(track_paths),
+                snapshot=scope.get("cover_candidate_snapshot"),
+                configured_root_paths=scope.get("configured_cover_root_paths"),
+                cover_path=scope.get("cover_path"), album_id=scope["album_id"],
+                library_id=scope.get("library_id"),
+            )
+            value["inventory_mutation_revision"] = scope["inventory_mutation_revision"]
+            if value["replayed"]:
+                from music_app.services.ordered_cover_selection import primary_projection
+                cover_path, projection = primary_projection(value["selected_covers"])
+                canonical = scope.get("metadata") or {}
+                # A replay of an unchanged Save must preserve legacy primary
+                # provenance just as its original transaction did. Only recover
+                # a primary that the database actually published explicitly.
+                value["replay_publication_required"] = (
+                    scope.get("cover_path") == cover_path
+                    and all(canonical.get(key) == field for key, field in projection.items())
+                )
+            return CoverMutationEffect(ordered_selection=patch, value=value)
+
+        def guard(commit, effect):
+            def commit_result():
+                commit()
+                return effect.value
+            return commit_guard(commit_result)
+
+        result = self.run_cover_mutation(
+            track_paths=track_paths, album_root=album_root, source_paths=sources,
+            mutate=select, allow_ordered_selection=True, expected_album_id=expected_album_id,
+            include_cover_candidates=any(item.get("kind") == "remote" for item in references),
+            ordered_reference_save=True,
+            validate_cover_roots=any(item.get("kind") == "local" for item in references),
+            commit_guard=guard if commit_guard else None,
+        )
+        return result["value"]
+
+    def persist_cover_selection(self, *, track_paths, selected_cover_path, commit_guard=None, **options):
+        """Persist a prepared singular selection through the shared boundary."""
+        paths = (Path(selected_cover_path),) if selected_cover_path is not None else ()
+        inventory_revision = options.pop("expected_inventory_mutation_revision", None)
+        result = self.run_cover_mutation(
+            track_paths=track_paths, source_paths=paths, album_root=None,
+            selection_options=options,
+            mutate=lambda _scope: CoverMutationEffect(selection={"selected_cover_path": selected_cover_path}),
+            expected_inventory_mutation_revision=inventory_revision,
+            commit_guard=(lambda commit, _effect: commit_guard(commit)) if commit_guard else None,
+        )
+        return {key: value for key, value in result.items() if key not in {"value", "selection"}}
+
+    def run_cover_mutation(
+        self, *, track_paths, album_root, source_paths, mutate,
+        affected_paths=(), selection_options=None, allow_ordered_selection=False,
+        expected_inventory_mutation_revision=None, expected_album_id=None,
+        commit_guard=None, reserve_variant_bytes=None, include_cover_candidates=False,
+        ordered_reference_save=False, validate_cover_roots=False,
+    ) -> dict[str, object]:
+        """Own one connection from source locks through compensation or commit.
+
+        `source_paths` declares all read/selected local sources; `affected_paths`
+        declares files replaced or removed. Ordered metadata is rejected unless
+        explicitly allowed for a non-primary effect such as unrelated deletion.
+        No callback may acquire another DB transaction or folder lock. A runtime
+        guard receives only commit + the completed effect, never media work.
+        """
+        from music_app.services.cover_workflow import run_serialized_cover_selection
+        from music_app.services.covers import plan_existing_cover_variant
+
+        paths = sorted({str(path).strip() for path in track_paths if str(path).strip()})
+        if not paths:
+            raise ValueError("Cover selection requires at least one track path.")
+        options = dict(selection_options or {})
+        _validate_cover_mutation_options(options)
+        affected = tuple(Path(path) for path in affected_paths)
+        reserved_path = None
+        prepared_target = None
+        if reserve_variant_bytes is not None:
+            if album_root is None or not isinstance(reserve_variant_bytes, bytes):
+                raise ValueError("Cover backup planning requires a folder and prepared bytes.")
+            prepared_target = PreparedCoverTarget.capture(Path(album_root) / "cover.jpg")
+            reserved_path = plan_existing_cover_variant(Path(album_root), reserve_variant_bytes)
+            if reserved_path is not None:
+                affected = (*affected, reserved_path)
+        declared = tuple(dict.fromkeys(Path(path) for path in (*source_paths, *affected)))
+        identities = {path: cover_source_keys(path) for path in declared}
+        keys = sorted(set().union(*identities.values())) if identities else []
+        with self._connect_to_database() as connection:
+            connection.execute(_inventory_publication_advisory_lock_sql(shared=True))
+            _ensure_bootstrap_context(connection)
+            for key in keys:
+                connection.execute(
+                    "select pg_advisory_xact_lock(hashtextextended(%(source_key)s, 0));",
+                    {"source_key": "album-haven:cover-source:" + key},
+                )
+            if any(cover_source_keys(path) != identity for path, identity in identities.items()):
+                raise OrderedCoverSelectionConflict("An image source changed while waiting. Reload and retry.")
+            row = _first_row(connection.execute(
+                _load_legacy_cover_mutation_scope_sql(lock=True), {"track_paths": paths},
+            ))
+            if row is None:
+                raise OrderedCoverSelectionConflict("Album cover selection could not be resolved. Reload and retry.")
+            scope = _row_mapping(row)
+            if reserve_variant_bytes is not None:
+                scope["reserved_cover_variant_path"] = reserved_path
+            if expected_album_id is not None and scope.get("album_id") != expected_album_id:
+                raise OrderedCoverSelectionConflict("Album identity changed while artwork was prepared. Reload and retry.")
+            if expected_inventory_mutation_revision is not None and _load_inventory_mutation_revision(connection) != int(expected_inventory_mutation_revision):
+                raise ScanCachePublicationSuperseded("Inventory changed while cover selection was prepared.")
+            metadata = scope.get("metadata")
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            if "selected_covers" in metadata:
+                try:
+                    project_selected_cover_metadata(metadata)
+                except ValueError as exc:
+                    raise OrderedCoverSelectionConflict("The saved cover selection is invalid. Reload this album.") from exc
+                if not allow_ordered_selection:
+                    raise OrderedCoverSelectionConflict("Reload this album and use the full cover selection to change its artwork.")
+            blocked = _cover_mutation_blocked(metadata, options)
+            if blocked:
+                return {"album_rows_updated": 0, "track_file_rows_updated": 0, blocked: True}
+
+            if validate_cover_roots:
+                from music_app.services.library_roots import load_library_root_settings, _root_paths_from_settings
+                scope["configured_cover_root_paths"] = _root_paths_from_settings(
+                    load_library_root_settings(self._config, connection=connection)
+                )
+            if ordered_reference_save:
+                scope["inventory_mutation_revision"] = _load_inventory_mutation_revision(connection)
+            if include_cover_candidates:
+                scope["cover_candidate_snapshot"] = _row_mapping(_first_row(connection.execute(
+                    _load_ordered_cover_candidates_sql(), {"album_id": scope["album_id"]},
+                )))
+
+            def perform():
+                effect = None
+                committed = False
+                commit_uncertain = False
+                media_started = False
+                result = {}
+                try:
+                    # Revalidate aliases after any process-local folder wait too.
+                    if any(cover_source_keys(path) != identity for path, identity in identities.items()):
+                        raise OrderedCoverSelectionConflict("An image source changed while waiting. Reload and retry.")
+                    if reserve_variant_bytes is not None and plan_existing_cover_variant(Path(album_root), reserve_variant_bytes) != reserved_path:
+                        raise OrderedCoverSelectionConflict("The image backup destination changed while waiting. Retry the selection.")
+                    if affected:
+                        owners = [_row_mapping(row) for row in connection.execute(_load_ordered_cover_source_owners_sql()).fetchall()]
+                        assert_ordered_sources_untouched(owners, affected)
+                    if prepared_target is not None:
+                        prepared_target.revalidate()
+                    media_started = True
+                    effect = mutate(scope)
+                    if not isinstance(effect, CoverMutationEffect):
+                        raise TypeError("Cover mutation must return a structured effect.")
+                    if effect.ordered_selection is not None:
+                        if effect.selection is not None or affected or not allow_ordered_selection:
+                            raise ValueError("Reference Save cannot include a physical media mutation.")
+                        for item in effect.ordered_selection["selected_covers"]:
+                            if item["kind"] == "local" and not any(
+                                cover_source_keys(Path(item["path"])) & cover_source_keys(path) for path in declared
+                            ):
+                                raise OrderedCoverSelectionConflict("The saved source set changed. Reload and retry.")
+                        from music_app.services.ordered_cover_selection import primary_projection
+                        cover_path, projection = primary_projection(effect.ordered_selection["selected_covers"])
+                        if not effect.value["changed"]:
+                            cover_path, projection = scope.get("cover_path"), {}
+                        updated = _first_row(connection.execute(_persist_ordered_cover_selection_sql(), {
+                            "album_id": scope["album_id"],
+                            "expected_revision": metadata.get("selected_covers_revision", 0),
+                            "cover_path": cover_path,
+                            "metadata": _jsonb({**projection, **effect.ordered_selection}),
+                        }))
+                        if updated is None:
+                            raise OrderedCoverSelectionConflict("The cover selection changed. Reload and retry.")
+                        if effect.value["changed"]:
+                            connection.execute(_synchronize_album_cover_file_entries_sql(by_album_ids=True), {
+                                "album_ids": [scope["album_id"]], "active_paths": [],
+                                "cover_inherited_from_structural_edit": False,
+                            })
+                    if effect.selection is not None:
+                        if "selected_covers" in metadata:
+                            raise OrderedCoverSelectionConflict("A physical deletion cannot change an ordered selection.")
+                        selection = {**options, **effect.selection}
+                        selected = selection.get("selected_cover_path")
+                        if selected is not None:
+                            selected_keys = cover_source_keys(Path(selected))
+                            if not any(selected_keys & cover_source_keys(path) for path in declared):
+                                raise ValueError("The selected cover was not declared before source locking.")
+                        result = self._persist_cover_selection_in_connection(
+                            connection, track_paths=set(paths), **selection,
+                        )
+                        if result.get("blocked_by_user_selection") or result.get("blocked_by_expected_cover_state"):
+                            raise OrderedCoverSelectionConflict("Cover selection changed before persistence.")
+                    if effect.selection is not None or affected or (effect.ordered_selection is not None and effect.value["changed"]):
+                        connection.execute(_increment_cover_mutation_revision_sql())
+
+                    def commit():
+                        nonlocal committed, commit_uncertain
+                        if committed:
+                            raise RuntimeError("Cover mutation commit was invoked more than once.")
+                        try:
+                            connection.commit()
+                        except BaseException as exc:
+                            status = getattr(getattr(connection, "info", None), "transaction_status", None)
+                            # psycopg TransactionStatus INTRANS=2 / INERROR=3:
+                            # the transaction is still open, so it did not commit.
+                            if status not in (2, 3):
+                                commit_uncertain = True
+                                raise CoverMutationCommitUncertainError(effect) from exc
+                            raise
+                        committed = True
+
+                    if commit_guard is not None:
+                        commit_guard(commit, effect)
+                        if not committed:
+                            raise RuntimeError("Cover mutation guard did not commit.")
+                    else:
+                        commit()
+                    if effect.complete is not None:
+                        effect.complete()
+                    return {**result, "value": effect.value, "selection": effect.selection}
+                except BaseException as exc:
+                    if commit_uncertain:
+                        raise
+                    if committed:
+                        raise CoverMutationFinalizationError(effect) from exc
+                    if effect is not None and effect.rollback is not None:
+                        effect.rollback()
+                    if media_started and prepared_target is not None:
+                        prepared_target.restore_compensated_timestamps()
+                    raise
+
+            return run_serialized_cover_selection(Path(album_root), perform) if album_root is not None else perform()
+
+    def _persist_cover_selection_in_connection(
+        self, connection,
         *,
         track_paths: set[str],
         selected_cover_path: Path | None,
@@ -742,8 +1114,6 @@ class PostgresScanCacheAdapter:
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
-        expected_inventory_mutation_revision: int | None = None,
-        commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
             {str(path or "").strip() for path in track_paths if str(path or "").strip()}
@@ -818,105 +1188,90 @@ class PostgresScanCacheAdapter:
             if linked_remote
             else {}
         )
-        with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
-            if (
-                expected_inventory_mutation_revision is not None
-                and _load_inventory_mutation_revision(connection)
-                != int(expected_inventory_mutation_revision)
-            ):
-                raise ScanCachePublicationSuperseded(
-                    "Inventory changed while cover selection was prepared."
-                )
-            expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
-            if not reject_if_user_controlled and not expected_cover_state_guard:
-                connection.execute(_increment_cover_mutation_revision_sql())
-            result_row = _first_row(
-                connection.execute(
-                    _persist_local_cover_selection_sql(
-                        include_origin=normalized_origin is not None,
-                        include_linked_remote=linked_remote,
-                        include_expected_cover_state=expected_cover_state_guard,
-                        include_clear_selection=clear_selection,
-                        include_explicit_selection=explicit_selection,
-                        include_reject_explicit_selection=reject_if_explicit_selection,
-                        include_local_dimensions=has_local_dimensions,
+        expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
+        result_row = _first_row(
+            connection.execute(
+                _persist_local_cover_selection_sql(
+                    include_origin=normalized_origin is not None,
+                    include_linked_remote=linked_remote,
+                    include_expected_cover_state=expected_cover_state_guard,
+                    include_clear_selection=clear_selection,
+                    include_explicit_selection=explicit_selection,
+                    include_reject_explicit_selection=reject_if_explicit_selection,
+                    include_local_dimensions=has_local_dimensions,
+                ),
+                {
+                    "track_paths": normalized_track_paths,
+                    "selected_cover_path": str(resolved_cover_path) if resolved_cover_path else None,
+                    "cover_revision": str(cover_revision) if cover_revision else None,
+                    **({"local_cover_width": local_cover_width, "local_cover_height": local_cover_height} if has_local_dimensions else {}),
+                    **remote_params,
+                    **(
+                        {
+                            "expected_cover_selection_origin": normalized_expected_origin,
+                            "expected_cover_revision": normalized_expected_revision,
+                        }
+                        if expected_cover_state_guard
+                        else {}
                     ),
-                    {
-                        "track_paths": normalized_track_paths,
-                        "selected_cover_path": str(resolved_cover_path) if resolved_cover_path else None,
-                        "cover_revision": str(cover_revision) if cover_revision else None,
-                        **({"local_cover_width": local_cover_width, "local_cover_height": local_cover_height} if has_local_dimensions else {}),
-                        **remote_params,
-                        **(
-                            {
-                                "expected_cover_selection_origin": normalized_expected_origin,
-                                "expected_cover_revision": normalized_expected_revision,
-                            }
-                            if expected_cover_state_guard
-                            else {}
-                        ),
-                        **(
-                            {
-                                "cover_selection_origin": normalized_origin,
-                                "reject_if_user_controlled": bool(reject_if_user_controlled),
-                            }
-                            if normalized_origin is not None
-                            else {}
-                        ),
-                    },
-                )
+                    **(
+                        {
+                            "cover_selection_origin": normalized_origin,
+                            "reject_if_user_controlled": bool(reject_if_user_controlled),
+                        }
+                        if normalized_origin is not None
+                        else {}
+                    ),
+                },
             )
-            result = _row_mapping(result_row)
-            input_path_count = int(result.get("input_path_count") or 0)
-            resolved_path_count = int(result.get("resolved_path_count") or 0)
-            selected_album_count = int(result.get("selected_album_count") or 0)
-            album_track_file_count = int(result.get("album_track_file_count") or 0)
-            album_rows_updated = int(result.get("album_rows_updated") or 0)
-            track_file_rows_updated = int(result.get("track_file_rows_updated") or 0)
-            blocked_by_user_selection = bool(result.get("blocked_by_user_selection"))
-            blocked_by_expected_cover_state = bool(
-                result.get("blocked_by_expected_cover_state")
+        )
+        result = _row_mapping(result_row)
+        if result.get("blocked_by_ordered_selection"):
+            raise OrderedCoverSelectionConflict(
+                "This album has an ordered cover selection and cannot be changed by a single-cover writer."
             )
-            if blocked_by_user_selection:
-                # A guarded automatic cover write must never run when the
-                # persisted user-selection check rejected this transaction.
-                connection.commit()
-                return {
-                    "album_rows_updated": 0,
-                    "track_file_rows_updated": 0,
-                    "blocked_by_user_selection": True,
-                }
-            if blocked_by_expected_cover_state:
-                connection.commit()
-                return {
-                    "album_rows_updated": 0,
-                    "track_file_rows_updated": 0,
-                    "blocked_by_expected_cover_state": True,
-                }
-            if reject_if_user_controlled or expected_cover_state_guard:
-                connection.execute(_increment_cover_mutation_revision_sql())
-            if (
-                input_path_count != len(normalized_track_paths)
-                or resolved_path_count != input_path_count
-                or selected_album_count != 1
-                or album_rows_updated != 1
-                or album_track_file_count < resolved_path_count
-                or track_file_rows_updated != album_track_file_count
-            ):
-                raise RuntimeError(
-                    "Targeted cover persistence did not update the complete selected album inventory."
-                    f" expected_path_count={len(normalized_track_paths)}"
-                    f" input_path_count={input_path_count}"
-                    f" resolved_path_count={resolved_path_count}"
-                    f" selected_album_count={selected_album_count}"
-                    f" album_track_file_count={album_track_file_count}"
-                    f" album_rows_updated={album_rows_updated}"
-                    f" track_file_rows_updated={track_file_rows_updated}"
-                )
-            if commit_guard is not None:
-                commit_guard(connection.commit)
+        input_path_count = int(result.get("input_path_count") or 0)
+        resolved_path_count = int(result.get("resolved_path_count") or 0)
+        selected_album_count = int(result.get("selected_album_count") or 0)
+        album_track_file_count = int(result.get("album_track_file_count") or 0)
+        album_rows_updated = int(result.get("album_rows_updated") or 0)
+        track_file_rows_updated = int(result.get("track_file_rows_updated") or 0)
+        blocked_by_user_selection = bool(result.get("blocked_by_user_selection"))
+        blocked_by_expected_cover_state = bool(
+            result.get("blocked_by_expected_cover_state")
+        )
+        if blocked_by_user_selection:
+            # A guarded automatic cover write must never run when the
+            # persisted user-selection check rejected this transaction.
+            return {
+                "album_rows_updated": 0,
+                "track_file_rows_updated": 0,
+                "blocked_by_user_selection": True,
+            }
+        if blocked_by_expected_cover_state:
+            return {
+                "album_rows_updated": 0,
+                "track_file_rows_updated": 0,
+                "blocked_by_expected_cover_state": True,
+            }
+        if (
+            input_path_count != len(normalized_track_paths)
+            or resolved_path_count != input_path_count
+            or selected_album_count != 1
+            or album_rows_updated != 1
+            or album_track_file_count < resolved_path_count
+            or track_file_rows_updated != album_track_file_count
+        ):
+            raise RuntimeError(
+                "Targeted cover persistence did not update the complete selected album inventory."
+                f" expected_path_count={len(normalized_track_paths)}"
+                f" input_path_count={input_path_count}"
+                f" resolved_path_count={resolved_path_count}"
+                f" selected_album_count={selected_album_count}"
+                f" album_track_file_count={album_track_file_count}"
+                f" album_rows_updated={album_rows_updated}"
+                f" track_file_rows_updated={track_file_rows_updated}"
+            )
         return {
             "album_rows_updated": album_rows_updated,
             "track_file_rows_updated": track_file_rows_updated,
@@ -932,17 +1287,8 @@ class PostgresScanCacheAdapter:
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
     ) -> dict[str, object]:
-        source_album_name = str(next(iter(previous_entries.values())).get("album") or "").strip()
-        retained_memberships = {
-            path: infer_blank_album_membership(
-                updated_file_entries[path],
-                updated_file_entries.values(),
-            )
-            for path in normalized_paths
-        }
-        retain_album_membership = bool(source_album_name) and all(
-            str(inferred or "").casefold() == source_album_name.casefold()
-            for inferred in retained_memberships.values()
+        retain_album_membership = _retains_blank_album_membership(
+            normalized_paths, previous_entries, updated_file_entries,
         )
         input_rows = [
             {
@@ -967,6 +1313,10 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            _assert_ordered_cover_structural_identity_preserved(
+                connection, changed_paths=normalized_paths,
+                retain_album_membership=retain_album_membership,
+            )
             result = _row_mapping(_first_row(connection.execute(
                 _persist_blank_album_tag_edit_sql(),
                 {
@@ -1030,6 +1380,15 @@ class PostgresScanCacheAdapter:
             persistence_result.update(committed_relation_state)
         return persistence_result
 
+    def _detached_album_restore_projection(
+        self,
+        updated_entries: dict[str, dict[str, object]],
+    ) -> object:
+        # Restoration resolves the selected owner without persisted release splits.
+        return _structural_destination_album_projection(
+            self._build_albums, updated_entries, frozenset({"album"}),
+        )
+
     def _persist_detached_album_restore(
         self,
         *,
@@ -1040,11 +1399,7 @@ class PostgresScanCacheAdapter:
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
     ) -> dict[str, object]:
-        destination_album = _structural_destination_album_projection(
-            self._build_albums,
-            updated_entries,
-            frozenset({"album"}),
-        )
+        destination_album = self._detached_album_restore_projection(updated_entries)
         destination_album_key = str(
             getattr(destination_album, "key", "") or ""
         ).strip()
@@ -1082,6 +1437,10 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            _assert_ordered_cover_structural_identity_preserved(
+                connection, changed_paths=normalized_paths,
+                destination_album=destination_album,
+            )
             for row in artist_rows:
                 connection.execute(_upsert_local_artist_sql(), row)
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
@@ -1398,6 +1757,12 @@ class PostgresScanCacheAdapter:
                 )
             )
             destination_metadata = _jsonb_compatible(destination_albums[0]["metadata"])
+            _assert_ordered_cover_structural_identity_preserved(
+                connection, changed_paths=normalized_paths,
+                destination_album=destination_album,
+                updates_release_year=updates_release_year,
+                destination_is_explicit_separate=destination_is_explicit_separate,
+            )
             result_row = _first_row(
                 connection.execute(
                     _persist_structural_album_tag_edit_sql(
@@ -1584,6 +1949,7 @@ class PostgresScanCacheAdapter:
         previous_file_entries: dict[str, dict[str, object]],
         updated_file_entries: dict[str, dict[str, object]],
         changed_field_names: set[str],
+        allow_targeted_identity: bool = True,
     ) -> None:
         normalized_paths = sorted(
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
@@ -1592,12 +1958,15 @@ class PostgresScanCacheAdapter:
         targeted_inventory_edit = bool(normalized_changed_fields) and (
             normalized_changed_fields <= _TARGETED_INVENTORY_EDIT_FIELDS
         )
-        if (
-            not normalized_paths
-            or (
-                normalized_changed_fields not in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS
-                and not targeted_inventory_edit
-            )
+        extended_identity_edit = bool(
+            normalized_changed_fields & _ORDERED_COVER_IDENTITY_EDIT_FIELDS
+        ) and normalized_changed_fields not in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS
+        if not normalized_paths or not (
+            normalized_changed_fields in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS
+            or targeted_inventory_edit or extended_identity_edit
+            or (bool(normalized_changed_fields) and normalized_changed_fields <= (
+                _TARGETED_INVENTORY_EDIT_FIELDS | {"album_rating", "album_type", "custom_collection_name"}
+            ))
         ):
             raise ValueError(
                 "Targeted tag prevalidation requires a supported album/artist identity "
@@ -1620,7 +1989,22 @@ class PostgresScanCacheAdapter:
             raise RuntimeError(
                 "Structural tag persistence must resolve every changed path in memory."
             )
-        if targeted_inventory_edit:
+        if not normalized_changed_fields & _ORDERED_COVER_IDENTITY_EDIT_FIELDS:
+            return
+        if not allow_targeted_identity or extended_identity_edit:
+            # These edits use general inventory publication, not the targeted
+            # single-owner writer. Do not infer its same-ID rekey guarantees.
+            updates = {
+                path: {
+                    field: updated_entries[path].get(field)
+                    for field in normalized_changed_fields & _ORDERED_COVER_IDENTITY_EDIT_FIELDS
+                }
+                for path in normalized_paths
+            }
+            with self._connect_to_database() as connection:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                _ensure_bootstrap_context(connection)
+                assert_ordered_cover_edit_updates_allowed(connection, updates)
             return
         destination_album_names = {
             str(entry.get("album") or "").strip()
@@ -1638,13 +2022,18 @@ class PostgresScanCacheAdapter:
             bool(normalize_exception_value(entry.get("exception_type")))
             for entry in updated_entries.values()
         }
-        if exception_only_edit and len(updated_exception_states) != 1:
-            raise RuntimeError(
-                "Targeted exception persistence requires one membership state."
-            )
-        applies_non_album_exception = exception_only_edit and bool(
-            next(iter(updated_exception_states), False)
-        )
+        if exception_only_edit and True in updated_exception_states:
+            # The scoped finalizer completes these overrides per path, including
+            # mixed clear/set batches. Only all-clear batches use the targeted
+            # restoration writer and its single-destination contract below.
+            with self._connect_to_database() as connection:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                _ensure_bootstrap_context(connection)
+                assert_ordered_cover_edit_updates_allowed(connection, {
+                    path: {"exception_type": updated_entries[path].get("exception_type", "")}
+                    for path in normalized_paths
+                })
+            return
         clears_non_album_exception = exception_only_edit and not bool(
             next(iter(updated_exception_states), False)
         )
@@ -1667,7 +2056,6 @@ class PostgresScanCacheAdapter:
             )
             or restores_blank_album
             or keeps_exception_detached_album
-            or applies_non_album_exception
             or (
                 clears_non_album_exception
                 and destination_album_names == {""}
@@ -1677,6 +2065,18 @@ class PostgresScanCacheAdapter:
             with self._connect_to_database() as connection:
                 connection.execute(_inventory_publication_advisory_lock_sql())
                 _ensure_bootstrap_context(connection)
+                _assert_ordered_cover_structural_identity_preserved(
+                    connection, changed_paths=normalized_paths,
+                    destination_album=(
+                        self._detached_album_restore_projection(updated_entries)
+                        if restores_blank_album else None
+                    ),
+                    retain_album_membership=(
+                        not restores_blank_album and _retains_blank_album_membership(
+                            normalized_paths, previous_entries, updated_file_entries,
+                        )
+                    ),
+                )
                 result = _row_mapping(_first_row(connection.execute(
                     _validate_blank_album_tag_edit_sql(),
                     {"changed_paths": normalized_paths},
@@ -1696,22 +2096,37 @@ class PostgresScanCacheAdapter:
             ):
                 raise RuntimeError("Structural tag persistence requires one source album.")
             return
-        destination_album = _structural_destination_album_projection(
-            self._build_albums,
-            updated_entries,
-            normalized_changed_fields,
-        )
-        destination_album_key = str(
-            getattr(destination_album, "key", "") or ""
-        ).strip()
-        if not destination_album_key:
-            raise RuntimeError(
-                "Structural tag persistence could not derive the destination album key."
-            )
-
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            active_separate_release_keys = _load_separate_release_keys(connection)
+            destination_album = (
+                self._detached_album_restore_projection(updated_entries)
+                if clears_non_album_exception
+                else _structural_destination_album_projection(
+                    self._build_albums, updated_entries, normalized_changed_fields,
+                    active_separate_release_keys,
+                )
+            )
+            destination_album_key = str(getattr(destination_album, "key", "") or "").strip()
+            if not destination_album_key:
+                raise RuntimeError(
+                    "Structural tag persistence could not derive the destination album key."
+                )
+            updates_release_year = normalized_changed_fields == frozenset({"year"})
+            destination_is_explicit_separate = updates_release_year and (
+                album_separate_release_key(
+                    str(getattr(destination_album, "album_artist", "") or ""),
+                    str(getattr(destination_album, "name", "") or ""),
+                    getattr(destination_album, "edition", None),
+                ) in active_separate_release_keys
+            )
+            _assert_ordered_cover_structural_identity_preserved(
+                connection, changed_paths=normalized_paths,
+                destination_album=destination_album,
+                updates_release_year=updates_release_year,
+                destination_is_explicit_separate=destination_is_explicit_separate,
+            )
             result = _row_mapping(
                 _first_row(
                     connection.execute(
@@ -1871,6 +2286,7 @@ class PostgresScanCacheAdapter:
                 connection,
                 album_rows,
             )
+            _assert_ordered_cover_album_membership_preserved(connection, track_rows, track_file_rows)
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_sql(),
@@ -1920,6 +2336,16 @@ class PostgresScanCacheAdapter:
                     ).fetchall()
                     if (payload := _row_mapping(row)).get("private_path")
                 }
+            ordered_album_keys = sorted({str(row["album_key"]) for row in album_rows})
+            if ordered_album_keys:
+                repaired_cover_entries.update({
+                    str(payload["private_path"]): _row_mapping(payload.get("file_entry"))
+                    for row in connection.execute(
+                        _synchronize_album_cover_file_entries_sql(ordered_only=True),
+                        {"album_keys": ordered_album_keys},
+                    ).fetchall()
+                    if (payload := _row_mapping(row)).get("private_path")
+                })
             connection.execute(
                 _mark_stale_track_files_sql(),
                 {
@@ -2141,6 +2567,95 @@ def _jsonb_compatible(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _assert_ordered_cover_album_membership_preserved(
+    connection: Any,
+    track_rows: list[dict[str, object]],
+    track_file_rows: list[dict[str, object]],
+) -> None:
+    """Reject scan-driven reassignment of a selected album's existing members.
+
+    Called under the existing inventory publication lock, after same-ID key
+    adoption. Source removal may mark a file stale, but cannot transfer a saved
+    selection to another concrete album or silently detach its active members.
+    """
+    if not track_file_rows:
+        if track_rows:
+            raise ValueError("Scan cover preservation requires complete file membership.")
+        return
+    albums_by_track = {}
+    for row in track_rows:
+        key = row.get("track_key")
+        album_key = row.get("album_key")
+        if (
+            not isinstance(key, str) or not key
+            or "album_key" not in row
+            or (album_key is not None and (not isinstance(album_key, str) or not album_key.strip()))
+            or key in albums_by_track
+        ):
+            raise ValueError("Scan cover preservation requires unambiguous track membership.")
+        albums_by_track[key] = album_key
+    incoming = []
+    paths = set()
+    checked_track_keys = set()
+    for row in track_file_rows:
+        path = row.get("private_path")
+        key = row.get("track_key")
+        if not isinstance(path, str) or not path or path in paths or key not in albums_by_track:
+            raise ValueError("Scan cover preservation requires complete file membership.")
+        paths.add(path)
+        checked_track_keys.add(key)
+        incoming.append({"track_key": key, "private_path": path, "album_key": albums_by_track[key]})
+    if checked_track_keys != albums_by_track.keys():
+        raise ValueError("Scan cover preservation requires complete file membership.")
+    result = _row_mapping(_first_row(connection.execute(
+        _ordered_cover_album_membership_conflict_sql(),
+        {"incoming_memberships": _jsonb(incoming)},
+    )))
+    if type(result.get("blocked_by_ordered_selection")) is not bool:
+        raise RuntimeError("Could not verify ordered cover album membership.")
+    if result["blocked_by_ordered_selection"]:
+        raise OrderedCoverSelectionConflict("A scan cannot change the identity of an album with selected covers.")
+
+
+def _ordered_cover_album_membership_conflict_sql() -> str:
+    return f"""
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        incoming as (
+          select * from jsonb_to_recordset(%(incoming_memberships)s::jsonb)
+            as item(private_path text, track_key text, album_key text)
+        ),
+        membership_targets as (
+          select tracks.album_id, tracks.library_id, incoming.album_key
+          from incoming
+          join library.local_track_files files on files.private_path = incoming.private_path
+          join library.local_tracks tracks on tracks.id = files.track_id
+          join bootstrap_context on tracks.library_id = bootstrap_context.library_id
+          union all
+          select tracks.album_id, tracks.library_id, incoming.album_key
+          from incoming
+          join library.local_tracks tracks on tracks.track_key = incoming.track_key
+          join bootstrap_context on tracks.library_id = bootstrap_context.library_id
+        )
+        select exists (
+          select 1 from membership_targets
+          join library.local_albums album
+            on album.id = membership_targets.album_id
+           and album.library_id = membership_targets.library_id
+          where {_has_ordered_cover_selection_sql("album.metadata")}
+            and album.album_key is distinct from membership_targets.album_key
+        ) as blocked_by_ordered_selection
+    """
 
 
 def _execute_semantic_local_album_key_adoptions(
@@ -2425,6 +2940,338 @@ def _semantic_local_album_key_adoption_sql() -> tuple[str, ...]:
     )
 
 
+def _retains_blank_album_membership(
+    changed_paths: list[str],
+    previous_entries: dict[str, dict[str, object]],
+    updated_entries: dict[str, dict[str, object]],
+) -> bool:
+    source_name = str(next(iter(previous_entries.values())).get("album") or "").strip()
+    return bool(source_name) and all(
+        str(infer_blank_album_membership(updated_entries[path], updated_entries.values()) or "").casefold()
+        == source_name.casefold()
+        for path in changed_paths
+    )
+
+
+
+def assert_ordered_cover_exception_overrides_allowed(
+    connection: Any, updates: Mapping[str, object], *, replace: bool = False,
+) -> None:
+    """Guard active exception membership under the caller's inventory barrier.
+
+    Dormant legacy keys have no active membership to change. Replacement also
+    removes omitted overrides, revealing the scanned exception underneath. A
+    non-path binding can reveal another track-level override; until that identity
+    transition is supported, do not guess its ordered-cover ownership.
+    """
+    rows = connection.execute(
+        _ordered_cover_exception_override_paths_sql(),
+        {"override_keys": sorted(updates), "replace": replace},
+    ).fetchall()
+    affected: dict[str, object] = {}
+    for raw_row in rows:
+        row = _row_mapping(raw_row)
+        path = row.get("private_path")
+        if (
+            not isinstance(path, str) or not path.strip() or path in affected
+            or "scanned_exception_type" not in row
+            or type(row.get("ambiguous_override_binding")) is not bool
+            or type(row.get("has_ordered_selection")) is not bool
+            or (row["ambiguous_override_binding"] and row["has_ordered_selection"])
+        ):
+            raise OrderedCoverSelectionConflict(
+                "This edit cannot preserve saved ordered cover ownership. "
+                "Reload the affected tracks before changing their album identity."
+            )
+        affected[path] = updates.get(path, {"exception_type": row.get("scanned_exception_type")})
+    assert_ordered_cover_edit_updates_allowed(connection, affected)
+
+
+def _ordered_cover_exception_override_paths_sql() -> str:
+    return f"""
+        with bootstrap_context as materialized (
+          select lib.id as library_id from library.libraries lib
+          join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
+          where owner.owner_key = 'local-bootstrap-owner'
+            and lib.name = 'Local Library' and lib.library_kind = 'local'
+          limit 1
+        )
+        select files.private_path,
+               files.metadata #>> '{{scan_cache,file_entry,exception_type}}' as scanned_exception_type,
+               (
+                 (tracks.track_key = any(%(override_keys)s::text[])
+                   and tracks.track_key <> files.private_path)
+                 or exists (
+                   select 1 from library.exception_overrides fallback
+                   where fallback.library_id = tracks.library_id
+                     and fallback.track_id = tracks.id
+                     and fallback.track_key is distinct from files.private_path
+                 )
+               ) as ambiguous_override_binding,
+               exists (
+                 select 1 from library.local_albums album
+                 where album.library_id = tracks.library_id
+                   and {_has_ordered_cover_selection_sql("album.metadata")}
+               ) as has_ordered_selection
+        from library.local_track_files files
+        join library.local_tracks tracks on tracks.id = files.track_id
+        join bootstrap_context scope on scope.library_id = tracks.library_id
+        where files.scan_cache_stale is false
+          and (
+            files.private_path = any(%(override_keys)s::text[])
+            or tracks.track_key = any(%(override_keys)s::text[])
+            or exists (
+              select 1 from library.exception_overrides overrides
+              where overrides.library_id = tracks.library_id
+                and (overrides.track_key = files.private_path or overrides.track_id = tracks.id)
+                and (overrides.track_key = any(%(override_keys)s::text[]) or %(replace)s)
+            )
+          )
+        order by files.private_path
+    """
+
+
+def assert_ordered_cover_edit_updates_allowed(
+    connection: Any, updates: Mapping[str, object],
+) -> None:
+    """Conservative per-path guard under the caller's inventory barrier.
+
+    Read current membership and overrides on this connection. Unlike the
+    targeted writer, general publication/override completion cannot promise a
+    same-ID rekey, so reject affected ordered owners rather than transfer lists.
+    """
+    if not updates:
+        return
+    result = _row_mapping(_first_row(connection.execute(
+        _ordered_cover_edit_updates_conflict_sql(),
+        {"changed_paths": sorted(str(path) for path in updates)},
+    )))
+    entries = result.get("resolved_entries")
+    ordered_albums = result.get("ordered_albums")
+    message = (
+        "This edit cannot preserve saved ordered cover ownership. "
+        "Reload the affected tracks before changing their album identity."
+    )
+    if (
+        result.get("blocked_by_ordered_selection") is not False
+        or not isinstance(entries, list) or not isinstance(ordered_albums, list)
+        or len(entries) != len(updates)
+        or any(not isinstance(entry, dict) for entry in entries)
+        or {entry.get("private_path") for entry in entries} != set(updates)
+        or any(not isinstance(album, dict) or not album.get("id") for album in ordered_albums)
+    ):
+        raise OrderedCoverSelectionConflict(message)
+    ordered_ids = {album["id"] for album in ordered_albums}
+    destination_names = {
+        _album_bucket_metadata(album.get("title"), album.get("edition"))
+        for album in ordered_albums
+    }
+    for entry in entries:
+        previous = entry.get("previous_entry")
+        if not isinstance(previous, dict):
+            raise OrderedCoverSelectionConflict(message)
+        requested = updates[entry["private_path"]]
+        requested = dict(requested) if isinstance(requested, Mapping) else {"exception_type": requested}
+        prospective = {**previous, **requested}
+        changes_identity = any(
+            field in requested and previous.get(field) != prospective.get(field)
+            for field in _ORDERED_COVER_IDENTITY_EDIT_FIELDS - {"exception_type"}
+        )
+        previous_exception = bool(normalize_exception_value(previous.get("exception_type")))
+        next_exception = bool(normalize_exception_value(prospective.get("exception_type")))
+        if not changes_identity and previous_exception == next_exception:
+            continue
+        if entry.get("album_id") in ordered_ids:
+            raise OrderedCoverSelectionConflict(message)
+        if not next_exception:
+            destination = _album_bucket_metadata(prospective.get("album"), prospective.get("edition"))
+            # Owner/year depend on complete folder buckets, not one track. Use
+            # native normalized title+edition as a conservative candidate set.
+            # Blank names may inherit contextual membership, which this scoped
+            # snapshot cannot establish. Never guess an ordered destination.
+            if destination in destination_names or (not destination[0] and ordered_ids):
+                raise OrderedCoverSelectionConflict(message)
+
+
+def _ordered_cover_edit_updates_conflict_sql() -> str:
+    return f"""
+        with bootstrap_context as materialized (
+          select lib.id as library_id from library.libraries lib
+          join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
+          where owner.owner_key = 'local-bootstrap-owner'
+            and lib.name = 'Local Library' and lib.library_kind = 'local'
+          limit 1
+        ), resolved as materialized (
+          select files.private_path, tracks.album_id,
+                 coalesce(files.metadata #> '{{scan_cache,file_entry}}', '{{}}'::jsonb)
+                   || coalesce(overrides.override_payload, '{{}}'::jsonb) as previous_entry
+          from library.local_track_files files
+          join library.local_tracks tracks on tracks.id = files.track_id
+          join bootstrap_context scope on scope.library_id = tracks.library_id
+          left join lateral (
+            select candidate.override_payload
+            from library.exception_overrides candidate
+            where candidate.library_id = tracks.library_id
+              and (candidate.track_key = files.private_path or candidate.track_id = tracks.id)
+            order by case when candidate.track_key = files.private_path then 0 else 1 end,
+                     candidate.updated_at desc, candidate.id desc
+            limit 1
+          ) overrides on true
+          where files.private_path = any(%(changed_paths)s::text[])
+            and files.scan_cache_stale is false
+        ), locked_albums as materialized (
+          select album.id, album.title, album.metadata ->> 'edition' as edition
+          from library.local_albums album
+          join bootstrap_context scope on scope.library_id = album.library_id
+          where {_has_ordered_cover_selection_sql("album.metadata")}
+          order by album.id for update of album
+        )
+        select (
+          (select count(*) from resolved) <> cardinality(%(changed_paths)s::text[])
+          or (select count(distinct private_path) from resolved)
+              <> cardinality(%(changed_paths)s::text[])
+        ) as blocked_by_ordered_selection,
+        coalesce((select jsonb_agg(to_jsonb(resolved)) from resolved), '[]'::jsonb) as resolved_entries,
+        coalesce((select jsonb_agg(to_jsonb(locked_albums)) from locked_albums), '[]'::jsonb) as ordered_albums
+    """
+
+
+def _assert_ordered_cover_structural_identity_preserved(
+    connection: Any,
+    *,
+    changed_paths: list[str],
+    destination_album: object | None = None,
+    retain_album_membership: bool = False,
+    updates_release_year: bool = False,
+    destination_is_explicit_separate: bool = False,
+) -> None:
+    """Reject ownership changes, never infer a successor for an ordered set.
+
+    Callers hold the inventory publication barrier. Prevalidation releases that
+    barrier before media work, so persistence must repeat this fresh check.
+    This is not a filesystem/database concurrency boundary for a future Save.
+    """
+    result = _row_mapping(_first_row(connection.execute(
+        _ordered_cover_structural_identity_conflict_sql(),
+        {
+            "changed_paths": changed_paths,
+            "destination_album_key": str(getattr(destination_album, "key", "") or ""),
+            "destination_artist_key": _key(getattr(destination_album, "album_artist", "")),
+            "destination_album_title": str(getattr(destination_album, "name", "") or ""),
+            "destination_edition": str(getattr(destination_album, "edition", "") or ""),
+            "destination_release_year": safe_int(getattr(destination_album, "year", None)),
+            "retain_album_membership": retain_album_membership,
+            "destination_is_explicit_separate": destination_is_explicit_separate,
+            "updates_release_year": updates_release_year,
+        },
+    )))
+    if result.get("blocked_by_ordered_selection") is not False:
+        raise OrderedCoverSelectionConflict(
+            "This edit would change an album's saved ordered cover ownership. "
+            "An explicit cover ownership policy is required before splitting, moving or detaching it."
+        )
+
+
+def _structural_destination_identity_sql(
+    album: str, source_artist_id: str, source_release_year: str,
+) -> str:
+    """The structural writer's existing-key or semantic destination match."""
+    return f"""(
+        {album}.album_key = %(destination_album_key)s
+        or (
+            {album}.artist_id is not distinct from {source_artist_id}
+            and lower(btrim({album}.title)) = lower(btrim(%(destination_album_title)s))
+            and {album}.release_year is not distinct from case
+                when %(updates_release_year)s::boolean then %(destination_release_year)s
+                else {source_release_year} end
+            and lower(btrim(coalesce({album}.metadata ->> 'edition', '')))
+                = lower(btrim(%(destination_edition)s))
+        )
+    )"""
+
+
+def _structural_destination_is_separate_sql(selected_count: str, active_count: str) -> str:
+    return f"""(
+        %(destination_is_explicit_separate)s::boolean
+        and {selected_count} = {active_count}
+    )"""
+
+
+def _ordered_cover_structural_identity_conflict_sql() -> str:
+    return f"""
+        with bootstrap_context as materialized (
+          select lib.id as library_id
+          from library.libraries lib
+          join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
+          where owner.owner_key = 'local-bootstrap-owner'
+            and lib.name = 'Local Library' and lib.library_kind = 'local'
+          limit 1
+        ), selected_files as materialized (
+          select files.id, tracks.album_id
+          from bootstrap_context scope
+          join library.local_tracks tracks on tracks.library_id = scope.library_id
+          join library.local_track_files files on files.track_id = tracks.id
+          where files.private_path = any(%(changed_paths)s::text[])
+            and files.scan_cache_stale is false
+        ), source_albums as materialized (
+          select album.*,
+                 (select count(*) from selected_files where album_id = album.id) as selected_count,
+                 (select count(*) from library.local_tracks tracks
+                    join library.local_track_files files on files.track_id = tracks.id
+                    where tracks.album_id = album.id and tracks.library_id = album.library_id
+                      and files.scan_cache_stale is false) as active_count
+          from library.local_albums album
+          join bootstrap_context scope on scope.library_id = album.library_id
+          where album.id in (select album_id from selected_files)
+        ), destination_albums as materialized (
+          select album.*
+          from library.local_albums album
+          join bootstrap_context scope on scope.library_id = album.library_id
+          left join library.local_artists artist on artist.id = album.artist_id
+          where %(destination_album_key)s <> '' and (
+            exists (
+              select 1 from source_albums source
+              where not {_structural_destination_is_separate_sql("source.selected_count", "source.active_count")}
+                and (
+                  {_structural_destination_identity_sql("album", "source.artist_id", "source.release_year")}
+                  or (
+                    -- Reconciliation may resolve the projected owner after the
+                    -- structural writer has kept the original source owner.
+                    artist.artist_key = %(destination_artist_key)s
+                    and {_structural_destination_identity_sql("album", "artist.id", "source.release_year")}
+                  )
+                )
+            )
+            or (
+              not exists (select 1 from source_albums)
+              and (
+                album.album_key = %(destination_album_key)s
+                or (artist.artist_key = %(destination_artist_key)s
+                    and {_structural_destination_identity_sql("album", "artist.id", "%(destination_release_year)s::integer")})
+              )
+            )
+          )
+        ), locked_albums as materialized (
+          select album.* from library.local_albums album
+          where album.id in (select id from source_albums union select id from destination_albums)
+          order by album.id for update of album
+        )
+        select exists (
+          select 1 from locked_albums album
+          left join source_albums source on source.id = album.id
+          where {_has_ordered_cover_selection_sql("album.metadata")}
+            and not %(retain_album_membership)s::boolean
+            and (
+              source.id is null
+              or %(destination_album_key)s = ''
+              or exists (select 1 from destination_albums destination where destination.id <> source.id)
+              or (source.selected_count <> source.active_count
+                  and (source.album_key <> %(destination_album_key)s or %(updates_release_year)s::boolean))
+            )
+        ) as blocked_by_ordered_selection
+    """
+
+
 def _structural_file_entry_delta(
     previous_entry: dict[str, object],
     updated_entry: dict[str, object],
@@ -2432,7 +3279,11 @@ def _structural_file_entry_delta(
     """Return only request-owned changes; cover state is persisted separately."""
     delta: dict[str, object] = {}
     for key in set(previous_entry) | set(updated_entry):
-        if key in _AUTHORITATIVE_COVER_FIELDS:
+        if (
+            key in _AUTHORITATIVE_COVER_FIELDS
+            or key in _ORDERED_COVER_METADATA_FIELDS
+            or key in _ALBUM_COVER_METADATA_FIELDS
+        ):
             continue
         if previous_entry.get(key, _MISSING_STRUCTURAL_VALUE) == updated_entry.get(
             key,
@@ -3703,6 +4554,19 @@ def _file_entries_by_path(file_cache: dict[str, dict[str, object]]) -> dict[str,
     return entries
 
 
+def _hydrate_ordered_album_cover(file_entry: dict[str, object], row: dict[str, object]) -> bool:
+    """Project only the primary; ordered references stay on the concrete album."""
+    metadata = row.get("album_metadata")
+    if not isinstance(metadata, Mapping) or "selected_covers" not in metadata:
+        return False
+    for field in _ORDERED_COVER_METADATA_FIELDS:
+        file_entry.pop(field, None)
+    file_entry["cover_path"] = row.get("cover_path")
+    for field in ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS):
+        file_entry[field] = metadata.get(field)
+    return True
+
+
 def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
     path = _text_or_none(row.get("private_path"))
     if path is None:
@@ -3765,6 +4629,8 @@ def _targeted_surviving_file_entry(
         # Do not attribute a removed member's cover to every survivor.
         file_entry.pop("cover_path", None)
         file_entry.update(persisted_entry)
+    if _hydrate_ordered_album_cover(file_entry, row):
+        return file_entry
     album_metadata = row.get("album_metadata")
     if not isinstance(album_metadata, dict):
         album_metadata = {}
@@ -4174,6 +5040,16 @@ def _reconcile_semantic_local_albums_sql(
         order by library.local_albums.id
         for update;
 
+        """
+        + f"""
+        select exists (
+          select 1 from pg_temp.semantic_album_candidates candidate
+          join library.local_albums album on album.id = candidate.redundant_album_id
+            and album.library_id = candidate.library_id
+          where {_has_ordered_cover_selection_sql("album.metadata")}
+        ) as blocked_by_ordered_selection;
+        """
+        + """
         with semantic_album_members as (
           select distinct
             semantic_album_candidates.canonical_album_id,
@@ -4297,7 +5173,11 @@ def _reconcile_semantic_local_albums_sql(
         )
         update library.local_albums
         set
-          cover_path = merged_album_projection.cover_path,
+          cover_path = """
+        + f"""case when {_has_ordered_cover_selection_sql("library.local_albums.metadata")}
+              then library.local_albums.cover_path
+              else merged_album_projection.cover_path end"""
+        + """,
           first_seen_at = merged_album_projection.first_seen_at,
           last_seen_at = merged_album_projection.last_seen_at,
           mbid = best_evidence_album.mbid,
@@ -4309,10 +5189,15 @@ def _reconcile_semantic_local_albums_sql(
             best_evidence_album.mbid_assertion_migration_run_id,
           mbid_assertion_scan_run_ref =
             best_evidence_album.mbid_assertion_scan_run_ref,
-          metadata = coalesce(
-            merged_metadata.metadata,
-            library.local_albums.metadata
-          )
+          metadata = """
+        + f"""case when {_has_ordered_cover_selection_sql("library.local_albums.metadata")}
+              then (coalesce(merged_metadata.metadata, '{{}}'::jsonb)
+                    - array[{", ".join(repr(field) for field in (*_ORDERED_COVER_METADATA_FIELDS, *_ALBUM_COVER_METADATA_FIELDS))}]::text[])
+                   || (select coalesce(jsonb_object_agg(key, value), '{{}}'::jsonb)
+                       from jsonb_each(library.local_albums.metadata)
+                       where key = any(array[{", ".join(repr(field) for field in (*_ORDERED_COVER_METADATA_FIELDS, *_ALBUM_COVER_METADATA_FIELDS))}]::text[]))
+              else coalesce(merged_metadata.metadata, library.local_albums.metadata) end"""
+        + """
         from merged_album_projection
         left join merged_metadata
           on merged_metadata.canonical_album_id =
@@ -4627,21 +5512,21 @@ def _execute_semantic_local_album_reconciliation(
     )
     if allow_same_year_separate_release_merge and not scoped_target_ids:
         raise ValueError("Explicit release consolidation requires a targeted album identity.")
-    if not scoped_target_ids:
-        for statement in _reconcile_semantic_local_albums_sql():
-            connection.execute(statement)
-        return
     for statement in _reconcile_semantic_local_albums_sql(
-        target_album_ids=scoped_target_ids,
+        target_album_ids=scoped_target_ids or None,
         allow_same_year_separate_release_merge=allow_same_year_separate_release_merge,
     ):
-        if "%(target_album_ids)s" in statement:
-            connection.execute(
-                statement,
-                {"target_album_ids": list(scoped_target_ids)},
-            )
-        else:
-            connection.execute(statement)
+        result = (
+            connection.execute(statement, {"target_album_ids": list(scoped_target_ids)})
+            if "%(target_album_ids)s" in statement
+            else connection.execute(statement)
+        )
+        if "as blocked_by_ordered_selection" in statement:
+            if _row_mapping(_first_row(result)).get("blocked_by_ordered_selection") is not False:
+                raise OrderedCoverSelectionConflict(
+                    "This merge would delete an album that owns a saved ordered cover selection. "
+                    "An explicit cover ownership policy is required before merging it."
+                )
 
 
 def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
@@ -5341,27 +6226,12 @@ def _persist_structural_album_tag_edit_sql(
             on library.local_albums.library_id = bootstrap_context.library_id
            and (
                  library.local_albums.id = selection_scope.source_album_id
-                 or library.local_albums.album_key = %(destination_album_key)s
-                 or (
-                      library.local_albums.artist_id is not distinct from
-                        source_album_identity.artist_id
-                      and lower(btrim(library.local_albums.title)) =
-                        lower(btrim(%(destination_album_title)s))
-                      and library.local_albums.release_year is not distinct from
-                        case
-                          when %(updates_release_year)s::boolean
-                          then %(destination_release_year)s
-                          else source_album_identity.release_year
-                        end
-                      and lower(
-                            btrim(
-                              coalesce(
-                                library.local_albums.metadata ->> 'edition',
-                                ''
-                              )
-                            )
-                          ) = lower(btrim(%(destination_edition)s))
-                    )
+                 or """
+        + _structural_destination_identity_sql(
+            "library.local_albums", "source_album_identity.artist_id",
+            "source_album_identity.release_year",
+        )
+        + """
                )
           order by library.local_albums.id
           for update of local_albums
@@ -5373,38 +6243,18 @@ def _persist_structural_album_tag_edit_sql(
           from locked_album_scope
           join selection_scope on true
           where locked_album_scope.id <> selection_scope.source_album_id
-            and not (
-                  %(destination_is_explicit_separate)s::boolean
-                  and (select input_path_count from selection_scope) = (
-                        select count(*) from source_album_track_files
-                      )
-                )
-            and (
-                  locked_album_scope.album_key = %(destination_album_key)s
-                  or (
-                       locked_album_scope.artist_id is not distinct from
-                         (select artist_id from source_album_identity)
-                       and lower(btrim(locked_album_scope.title)) =
-                         lower(btrim(%(destination_album_title)s))
-                       and locked_album_scope.release_year is not distinct from
-                         case
-                           when %(updates_release_year)s::boolean
-                           then %(destination_release_year)s
-                           else (
-                             select release_year
-                             from source_album_identity
-                           )
-                         end
-                       and lower(
-                             btrim(
-                               coalesce(
-                                 locked_album_scope.metadata ->> 'edition',
-                                 ''
-                               )
-                             )
-                           ) = lower(btrim(%(destination_edition)s))
-                     )
-                )
+            and not """
+        + _structural_destination_is_separate_sql(
+            "(select input_path_count from selection_scope)",
+            "(select count(*) from source_album_track_files)",
+        )
+        + """
+            and """
+        + _structural_destination_identity_sql(
+            "locked_album_scope", "(select artist_id from source_album_identity)",
+            "(select release_year from source_album_identity)",
+        )
+        + """
           order by
             case
               when locked_album_scope.album_key = %(destination_album_key)s
@@ -6045,6 +6895,116 @@ def _load_scan_snapshot_sql(*, metadata_only: bool = False) -> str:
     """
 
 
+def _validate_cover_mutation_options(options: Mapping[str, object]) -> None:
+    origin = str(options.get("cover_selection_origin") or "").strip().casefold()
+    if origin not in {"", "user", "automatic"}:
+        raise ValueError("Invalid cover selection origin.")
+    if options.get("explicit_selection") and origin != "user":
+        raise ValueError("Explicit cover selection requires user ownership.")
+    if options.get("reject_if_user_controlled") and origin != "automatic":
+        raise ValueError("Only automatic cover persistence may reject user-controlled albums.")
+    expected = options.get("expected_cover_state")
+    old_origin = options.get("expected_cover_selection_origin")
+    old_revision = options.get("expected_cover_revision")
+    if expected is not None:
+        if old_origin is not None or old_revision is not None:
+            raise ValueError("Expected cover state cannot be combined with legacy expected fields.")
+        if not isinstance(expected, tuple) or len(expected) != 2 or any(value is not None and not isinstance(value, str) for value in expected):
+            raise ValueError("Expected cover state requires two nullable strings.")
+        old_origin, old_revision = expected
+    elif (old_origin is None) != (old_revision is None):
+        raise ValueError("Expected cover state requires origin and revision.")
+    if str(old_origin or "").strip().casefold() not in {"", "user", "automatic"}:
+        raise ValueError("Invalid expected cover origin.")
+    if options.get("reject_if_explicit_selection") and expected is None and old_origin is None:
+        raise ValueError("Rejecting explicit selection requires an expected state.")
+
+
+def _cover_mutation_blocked(metadata: Mapping[str, object], options: Mapping[str, object]) -> str | None:
+    if options.get("reject_if_user_controlled") and metadata.get("cover_selection_origin") == "user":
+        return "blocked_by_user_selection"
+    expected = options.get("expected_cover_state")
+    if expected is None and options.get("expected_cover_selection_origin") is not None:
+        expected = (options.get("expected_cover_selection_origin"), options.get("expected_cover_revision"))
+    if expected is not None:
+        origin, revision = expected
+        if (
+            str(metadata.get("cover_selection_origin") or "") != str(origin or "").strip().casefold()
+            or str(metadata.get("cover_revision") or "") != str(revision or "").strip()
+            or (options.get("reject_if_explicit_selection") and metadata.get("cover_selection_provenance") == "explicit")
+        ):
+            return "blocked_by_expected_cover_state"
+    return None
+
+
+def _load_ordered_cover_source_owners_sql() -> str:
+    # Physical files can be represented by more than one library. Do not scope
+    # ownership by the bootstrap library or lock those other album rows: their
+    # source keys, acquired before album locks, coordinate concurrent owners.
+    return """
+        select album.id as album_id, album.cover_path, album.metadata,
+               array(select file.private_path from library.local_tracks track
+                     join library.local_track_files file on file.track_id = track.id
+                     where track.album_id = album.id and track.library_id = album.library_id) as track_paths
+        from library.local_albums album
+        where jsonb_typeof(album.metadata) = 'object'
+          and album.metadata ? 'selected_covers';
+    """
+
+
+def _load_legacy_cover_mutation_scope_sql(*, lock: bool = False) -> str:
+    sql = """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        input_track_paths as materialized (
+          select distinct input_path as private_path
+          from unnest(%(track_paths)s::text[]) as input_path
+        ),
+        selected_track_files as materialized (
+          select
+            library.local_track_files.id as track_file_id,
+            library.local_tracks.album_id
+          from bootstrap_context
+          join library.local_track_files
+            on true
+          join library.local_tracks
+            on library.local_tracks.id = library.local_track_files.track_id
+           and library.local_tracks.library_id = bootstrap_context.library_id
+          join input_track_paths
+            on input_track_paths.private_path = library.local_track_files.private_path
+        ),
+        selection_scope as materialized (
+          select
+            (select count(*) from input_track_paths) as input_path_count,
+            count(*) as resolved_path_count,
+            count(distinct selected_track_files.album_id) as selected_album_count,
+            min(selected_track_files.album_id) as album_id
+          from selected_track_files
+        ),
+        target_album as materialized (
+          select selection_scope.album_id
+          from selection_scope
+          where selection_scope.input_path_count = selection_scope.resolved_path_count
+            and selection_scope.selected_album_count = 1
+        )
+        select albums.id as album_id, albums.library_id, albums.cover_path, albums.metadata
+        from target_album
+        join library.local_albums as albums on albums.id = target_album.album_id
+        join bootstrap_context on albums.library_id = bootstrap_context.library_id
+    """
+    # Cover fields are not referenced keys. NO KEY UPDATE serializes cover
+    # writers without blocking candidate rows' FK KEY SHARE checks.
+    return sql + (" for no key update of albums" if lock else "")
+
+
 def _persist_local_cover_selection_sql(
     *,
     include_origin: bool = False,
@@ -6270,6 +7230,11 @@ def _persist_local_cover_selection_sql(
           from bootstrap_context
           where library.local_albums.library_id = bootstrap_context.library_id
             and library.local_albums.id = (select album_id from target_album)
+            and not coalesce(
+              jsonb_typeof(library.local_albums.metadata) = 'object'
+              and library.local_albums.metadata ? 'selected_covers',
+              false
+            )
             __USER_ORIGIN_GUARD__
             __EXPECTED_COVER_STATE_GUARD__
           returning library.local_albums.id
@@ -6298,6 +7263,16 @@ def _persist_local_cover_selection_sql(
           (select count(*) from album_track_files) as album_track_file_count,
           (select count(*) from updated_albums) as album_rows_updated,
           (select count(*) from updated_track_files) as track_file_rows_updated,
+          exists (
+            select 1
+            from library.local_albums
+            join bootstrap_context
+              on library.local_albums.library_id = bootstrap_context.library_id
+            join target_album
+              on library.local_albums.id = target_album.album_id
+            where jsonb_typeof(library.local_albums.metadata) = 'object'
+              and library.local_albums.metadata ? 'selected_covers'
+          ) as blocked_by_ordered_selection,
           __BLOCKED_SELECTION__ as blocked_by_user_selection,
           __BLOCKED_EXPECTED_COVER_STATE__ as blocked_by_expected_cover_state;
     """
@@ -6400,7 +7375,7 @@ def _load_targeted_album_memberships_sql() -> str:
 
 
 def _synchronize_album_cover_file_entries_sql(
-    *, by_album_ids: bool = False,
+    *, by_album_ids: bool = False, ordered_only: bool = False,
 ) -> str:
     selection_fields = ", ".join(
         f"'{field}', album.metadata -> '{field}'"
@@ -6435,7 +7410,9 @@ def _synchronize_album_cover_file_entries_sql(
           join library.libraries lib on lib.id = album.library_id
           join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
           where owner.owner_key = 'local-bootstrap-owner' and lib.library_kind = 'local'
+            and lib.name = 'Local Library'
             and {album_filter}
+            {"and " + _has_ordered_cover_selection_sql("album.metadata") if ordered_only else ""}
         )
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',
@@ -6457,6 +7434,7 @@ def _synchronize_album_cover_file_entries_sql(
 def _load_cover_selections_sql() -> str:
     return """
         select album.id as album_id, album.cover_path,
+               album.metadata as selected_cover_metadata,
                album.metadata ->> 'cover_selection_origin' as cover_selection_origin,
                album.metadata ->> 'cover_selection_provenance' as cover_selection_provenance,
                album.metadata ->> 'cover_revision' as cover_revision,
@@ -6483,11 +7461,7 @@ def _load_cover_selections_sql() -> str:
 
 def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
     album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
-    album_metadata_selection = (
-        "library.local_albums.metadata as album_metadata,"
-        if targeted_albums
-        else ""
-    )
+    album_metadata_selection = "library.local_albums.metadata as album_metadata,"
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -6600,9 +7574,20 @@ def _upsert_local_artist_sql() -> str:
     """
 
 
+def _has_ordered_cover_selection_sql(metadata: str) -> str:
+    return f"coalesce((jsonb_typeof({metadata}) = 'object' and {metadata} ? 'selected_covers'), false)"
+
+
+def _scan_owned_metadata_sql(metadata: str) -> str:
+    """Scan input cannot manufacture or overwrite an ordered selection receipt."""
+    fields = ', '.join(repr(field) for field in _ORDERED_COVER_METADATA_FIELDS)
+    return f"case when jsonb_typeof({metadata}) = 'object' then {metadata} - array[{fields}]::text[] else {metadata} end"
+
+
 def _inherited_cover_repair_guard_sql(existing_album: str, incoming_metadata: str) -> str:
     return f"""coalesce((
         {incoming_metadata} -> 'cover_selection_repair_previous' is not null
+        and not {_has_ordered_cover_selection_sql(existing_album + ".metadata")}
         and coalesce({existing_album}.metadata ->> 'cover_selection_provenance', '') <> 'explicit'
         and {existing_album}.cover_path = {incoming_metadata} #>> '{{cover_selection_repair_previous,cover_path}}'
         and coalesce({existing_album}.metadata ->> 'cover_revision', '') = coalesce({incoming_metadata} #>> '{{cover_selection_repair_previous,cover_revision}}', '')
@@ -6614,24 +7599,32 @@ def _upsert_local_album_sql(
     *, preserve_existing_cover_authority: bool = True
 ) -> str:
     inherited_repair_guard = _inherited_cover_repair_guard_sql("library.local_albums", "excluded.metadata")
-    cover_path_update = (
-        f"""case
-                when library.local_albums.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard}
+    ordered_guard = _has_ordered_cover_selection_sql("library.local_albums.metadata")
+    legacy_guard = (
+        "library.local_albums.metadata ->> 'cover_selection_origin' = 'user' "
+        f"and not {inherited_repair_guard}"
+        if preserve_existing_cover_authority else "false"
+    )
+    cover_path_update = f"""case
+                when {ordered_guard} or ({legacy_guard})
                 then library.local_albums.cover_path
                 else excluded.cover_path
               end"""
-        if preserve_existing_cover_authority
-        else "excluded.cover_path"
+    protected_fields = ', '.join(repr(field) for field in ("cover_path", *_ALBUM_COVER_METADATA_FIELDS))
+    legacy_metadata_guard = (
+        f"when {legacy_guard} then excluded.metadata - array["
+        + ', '.join(repr(field) for field in _ALBUM_COVER_METADATA_FIELDS)
+        + "]::text[]"
+        if preserve_existing_cover_authority else ""
     )
-    metadata_update = (
-        f"""library.local_albums.metadata || case
-                when library.local_albums.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard}
-                then excluded.metadata - array[{', '.join(repr(field) for field in _ALBUM_COVER_METADATA_FIELDS)}]
+    metadata_update = f"""library.local_albums.metadata || case
+                when {ordered_guard} then case
+                  when jsonb_typeof(excluded.metadata) = 'object'
+                  then excluded.metadata - array[{protected_fields}]::text[]
+                  else '{{}}'::jsonb end
+                {legacy_metadata_guard}
                 else excluded.metadata
               end"""
-        if preserve_existing_cover_authority
-        else "library.local_albums.metadata || excluded.metadata"
-    )
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -6660,7 +7653,7 @@ def _upsert_local_album_sql(
           %(title)s,
           %(release_year)s,
           %(cover_path)s,
-          %(metadata)s::jsonb
+          {_scan_owned_metadata_sql("%(metadata)s::jsonb")}
         from bootstrap_context
         on conflict (library_id, album_key) do update
           set artist_id = excluded.artist_id,
@@ -6678,17 +7671,26 @@ def _upsert_local_album_sql(
 
 def _update_targeted_album_aggregate_sql() -> str:
     inherited_repair_guard = _inherited_cover_repair_guard_sql("album", "(%(cover_metadata)s::jsonb)")
+    ordered_guard = _has_ordered_cover_selection_sql("album.metadata")
+    protected_fields = ', '.join(repr(field) for field in (
+        "cover_path", *_ALBUM_COVER_METADATA_FIELDS, *_ORDERED_COVER_METADATA_FIELDS,
+    ))
     return f"""
         update library.local_albums as album
         set release_year = case
               when nullif(album.metadata ->> 'release_date', '') is not null
               then album.release_year else %(release_year)s end,
             cover_path = case
-              when album.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard}
+              when {ordered_guard} or (album.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard})
               then album.cover_path else %(cover_path)s end,
-            metadata = album.metadata || %(metadata)s || case
-              when album.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard}
-              then '{{}}'::jsonb else %(cover_metadata)s::jsonb end
+            metadata = album.metadata || case
+              when {ordered_guard} then case
+                when jsonb_typeof(%(metadata)s::jsonb) = 'object'
+                then %(metadata)s::jsonb - array[{protected_fields}]::text[]
+                else '{{}}'::jsonb end
+              else {_scan_owned_metadata_sql("%(metadata)s::jsonb")} end || case
+              when {ordered_guard} or (album.metadata ->> 'cover_selection_origin' = 'user' and not {inherited_repair_guard})
+              then '{{}}'::jsonb else {_scan_owned_metadata_sql('%(cover_metadata)s::jsonb')} end
         from library.libraries as owned_library, app.bootstrap_owners as owner
         where album.library_id = owned_library.id
           and owned_library.owner_account_id = owner.account_id
@@ -7131,4 +8133,28 @@ def _mark_targeted_track_files_stale_sql() -> str:
         join library.local_albums
           on library.local_albums.id = library.local_tracks.album_id
         where library.local_albums.album_key is not null;
+    """
+
+
+def _load_ordered_cover_candidates_sql() -> str:
+    return """
+        select search_generation, candidates
+        from library.local_album_cover_candidate_snapshots
+        where album_id = %(album_id)s
+    """
+
+
+def _persist_ordered_cover_selection_sql() -> str:
+    return """
+        update library.local_albums album
+        set cover_path = %(cover_path)s,
+            metadata = (case when jsonb_typeof(album.metadata) = 'object'
+                        then album.metadata else '{}'::jsonb end) || %(metadata)s::jsonb
+        from library.libraries lib
+        join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
+        where album.id = %(album_id)s and album.library_id = lib.id
+          and owner.owner_key = 'local-bootstrap-owner'
+          and lib.name = 'Local Library' and lib.library_kind = 'local'
+          and coalesce((album.metadata ->> 'selected_covers_revision')::bigint, 0) = %(expected_revision)s
+        returning album.id as album_id
     """

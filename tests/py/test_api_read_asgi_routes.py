@@ -2049,7 +2049,7 @@ def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuildin
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_root_sidebar_request", lambda _request: False)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_selected_artist_request", lambda _request: True)
 
-    response = asgi_read_routes.view_data(request)
+    response = asyncio.run(asgi_read_routes.view_data(request))
 
     assert response.status_code == 503
     assert json.loads(response.body) == {

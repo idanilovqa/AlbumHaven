@@ -428,9 +428,9 @@ const PERFORMANCE_TARGETS = {
     coverageClass: 'real-app-library-browse-load',
     coverageDescription: 'Real local large-library Artist Tree jump alignment, restoration, search/Home anchoring, and root continuation coverage.',
     specPath: 'tests/e2e/syntheticLargeLibrary',
-    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
+    grep: '(?:FTC-GALLERY-NAV-03(?:2|3|4|5|7)|mobile continuous gallery pinch)',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
-    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5|7)',
+    casePattern: '(?:FTC-GALLERY-NAV-03(?:2|3|4|5|7)|mobile continuous gallery pinch)',
     casePatterns: [
       'search and Home destinations do not rebound after settling',
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
@@ -455,6 +455,8 @@ const PERFORMANCE_TARGETS = {
       'real continuation response during held touch keeps gallery coordinates stable',
       'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
       'real continuation response during wheel sequence keeps gallery coordinates stable',
+      'cards: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete',
+      'covers: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete',
     ],
     measurementExpected: false,
     env: {

@@ -389,6 +389,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     persist_cache_update: bool = True,
     manual_selection: bool = False,
+    local_cover_dimensions: tuple[int | None, int | None] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     updated_file_cache = dict(library_state.get("file_cache", {}) or {})
     cover_value = str(cover_path) if cover_path else None
@@ -403,7 +404,7 @@ def apply_cover_selection_for_tracks(
         "cover_selection_provenance": "explicit" if cover_value or remote_url_value else None,
     } if manual_selection else {}
     if manual_selection:
-        width, height = image_dimensions(cover_path) if cover_path else (None, None)
+        width, height = local_cover_dimensions if local_cover_dimensions is not None else (image_dimensions(cover_path) if cover_path else (None, None))
         selection_authority.update(local_cover_width=width or None, local_cover_height=height or None)
     changed_paths: set[str] = set()
 
@@ -506,6 +507,7 @@ def apply_authoritative_local_cover_fallback(
     track_paths: set[str],
     cover_path: Path,
     cover_revision: str,
+    local_cover_dimensions: tuple[int | None, int | None] | None = None,
 ) -> None:
     """Apply the minimal in-memory state required after a committed selection."""
     normalized_paths = {
@@ -539,7 +541,7 @@ def apply_authoritative_local_cover_fallback(
 
     cover_value = str(cover_path)
     revision_value = str(cover_revision or "").strip()
-    width, height = image_dimensions(cover_path)
+    width, height = local_cover_dimensions if local_cover_dimensions is not None else image_dimensions(cover_path)
     updated_file_cache = dict(current_file_cache)
     for track_path in normalized_paths:
         entry = dict(updated_file_cache[track_path])

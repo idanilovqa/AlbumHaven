@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "music_app/__init__.py",
+    "music_app/services/library_event_coordinator.py",
+    "music_app/services/library_watch_readonly.py",
+    "music_app/services/targeted_library_reconciliation.py",
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/relation_projection_postgres.py",
@@ -9,6 +13,7 @@
     "music_app/routes/web_asgi.py",
     "music_app/services/library_hydration.py",
     "music_app/services/library_browse_postgres.py",
+    "music_app/services/ordered_cover_presentation.py",
     "music_app/services/non_album_view_payloads.py",
     "music_app/services/selected_artist_membership.py",
     "music_app/services/view_payloads.py",
@@ -62,20 +67,51 @@
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
-    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
+    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "music_app/services/duplicate_copy_review.py",
+    "music_app/static/js/runtime/compact-data-table.js",
+    "music_app/static/css/runtime/compact-data-table.css",
+    "music_app/services/duplicate_copy_retirement.py"
   ],
   "rules": [
     {
-      "paths": ["music_app/services/runtime_asset_versions.py"],
-      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
+      "paths": [
+        "music_app/__init__.py",
+        "music_app/services/library_event_coordinator.py",
+        "music_app/services/library_watch_readonly.py",
+        "music_app/services/targeted_library_reconciliation.py"
+      ],
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/runtime_asset_versions.py"
+      ],
+      "targets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
     },
     {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
         "music_app/services/relation_projection_postgres.py",
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/duplicate_copy_retirement.py"
       ],
-      "targets": ["artist-family", "search-all-artists", "search-browse"]
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse"
+      ]
     },
     {
       "paths": [
@@ -83,6 +119,7 @@
         "music_app/routes/web_asgi.py",
         "music_app/services/library_hydration.py",
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/ordered_cover_presentation.py",
         "music_app/services/non_album_view_payloads.py",
         "music_app/services/selected_artist_membership.py",
         "music_app/services/view_payloads.py",
@@ -185,6 +222,7 @@
     {
       "paths": [
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/ordered_cover_presentation.py",
         "music_app/services/problematic_albums.py",
         "music_app/routes/api_problematic_albums.py",
         "music_app/routes/api_read_asgi_routes.py",
@@ -209,7 +247,12 @@
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
-        "music_app/services/album_local_membership.py"
+        "music_app/services/album_local_membership.py",
+        "music_app/services/duplicate_copy_review.py",
+        "music_app/static/js/runtime/compact-data-table.js",
+        "music_app/static/css/runtime/compact-data-table.css",
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/duplicate_copy_retirement.py"
       ],
       "targets": [
         "utility-problematic-files",

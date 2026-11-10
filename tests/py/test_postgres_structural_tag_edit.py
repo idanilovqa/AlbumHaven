@@ -61,6 +61,8 @@ class StructuralTagEditConnection:
         normalized_sql = _normalized_sql(sql)
         if "bootstrap_context_ready" in normalized_sql:
             return FakeCursor([{"bootstrap_context_ready": 1}])
+        if "as blocked_by_ordered_selection" in normalized_sql:
+            return FakeCursor([{"blocked_by_ordered_selection": False}])
         if "source_album_track_file_count" in normalized_sql:
             return FakeCursor([self.result_row])
         return FakeCursor()
@@ -2476,10 +2478,14 @@ def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candi
     assert candidate_index > 0
 
     executed: list[str] = []
+    forwarded_options = []
     monkeypatch.setattr(
         scan_cache_persistence,
         "_reconcile_semantic_local_albums_sql",
-        lambda: ("select 'lock'", "select 'reconcile'"),
+        lambda *, target_album_ids=None, allow_same_year_separate_release_merge=False: (
+            forwarded_options.append((target_album_ids, allow_same_year_separate_release_merge))
+            or ("select 'lock'", "select 'reconcile'")
+        ),
     )
     scan_cache_persistence._execute_semantic_local_album_reconciliation(
         type(
@@ -2489,11 +2495,14 @@ def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candi
         )()
     )
     assert executed == ["select 'lock'", "select 'reconcile'"]
+    assert forwarded_options == [(None, False)]
     executor_source = inspect.getsource(
         scan_cache_persistence._execute_semantic_local_album_reconciliation
     )
     assert "isinstance" not in executor_source
-    assert "for statement in _reconcile_semantic_local_albums_sql()" in executor_source
+    assert "for statement in _reconcile_semantic_local_albums_sql(" in executor_source
+    assert "target_album_ids=scoped_target_ids or None" in executor_source
+    assert "allow_same_year_separate_release_merge=allow_same_year_separate_release_merge" in executor_source
 
 
 def test_semantic_album_reconciliation_can_scope_candidates_to_target_identity():

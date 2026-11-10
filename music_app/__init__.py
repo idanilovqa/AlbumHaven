@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -401,7 +402,11 @@ def create_asgi_app():
         LibraryWatchService,
         WatchdogLibraryEventSource,
     )
-    from music_app.services.library_roots import get_library_roots
+    from music_app.services.library_roots import (
+        configured_library_root_paths_snapshot,
+        get_library_roots,
+    )
+    from music_app.services.library_watch_readonly import prepare_stable_library_file
     from music_app.services.library_event_coordinator import (
         CoordinatorProblem,
         LibraryEventCoordinator,
@@ -628,6 +633,17 @@ def create_asgi_app():
                 after_commit=after_targeted_reconciliation_commit,
                 reservation_acquirer=acquire_structural_tag_edit_reservation,
                 publication_guard=runtime.library_watch_health_service.publication_guard,
+                prepare_stable_file=(
+                    lambda path, signature, is_cancelled: prepare_stable_library_file(
+                        path,
+                        signature,
+                        roots=configured_library_root_paths_snapshot(runtime.config),
+                        supported_extensions=runtime.config.get("SUPPORTED_EXTENSIONS", ()),
+                        image_extensions=runtime.config.get("IMAGE_EXTENSIONS", ()),
+                        logger=runtime.logger,
+                        is_cancelled=is_cancelled,
+                    )
+                ) if sys.platform == "win32" else None,
             )
         except BaseException:
             await shutdown_resources()

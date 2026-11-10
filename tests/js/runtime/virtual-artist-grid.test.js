@@ -6547,3 +6547,319 @@ test('first touch scroll advances semantic ownership before it starts pagination
   assert.deepEqual(paginationOwnerGenerations, [1, 1]);
   scrollEl.dispatchEvent({ type: 'touchend', touches: [], target: scrollEl });
 });
+
+// Continuous mobile pinch uses the real virtual layout owner and its existing data order.
+for (const mode of ['cards', 'covers']) {
+  test(`mobile ${mode} pinch endpoint layouts center full and partial rows without overflowing`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    scrollEl.clientWidth = 390;
+    const albums = Array.from({ length: 17 }, (_, index) => ({ key: `pinch-${index}`, name: `Album ${index}` }));
+    grid.sections = [{ kind: 'artist', sectionKey: 'pinch-layout', group: { artist: 'Pinch Artist', albums } }];
+    const preview = { mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map() };
+    for (const columns of [1, 2, 3]) {
+      const layout = grid.buildPinchLayout(columns, preview);
+      assert.equal(layout.cards.size, albums.length);
+      const rows = new Map();
+      for (const point of layout.cards.values()) {
+        assert.ok(point.x >= 0);
+        assert.ok(point.x + point.width <= 386);
+        assert.ok(point.width > 0 && point.height >= point.width);
+        if (!rows.has(point.y)) rows.set(point.y, []);
+        rows.get(point.y).push(point);
+      }
+      for (const points of rows.values()) {
+        assert.ok(points.length <= columns);
+        const left = Math.min(...points.map(point => point.x));
+        const right = Math.max(...points.map(point => point.x + point.width));
+        assert.ok(Math.abs((left + right) / 2 - 193) <= .001, 'The occupied full or partial row is centered.');
+      }
+      assert.equal([...rows.keys()][0], grid.sectionHeaderHeight, 'No empty row is introduced before the first album.');
+    }
+  });
+
+  for (const scrollTop of [0, 5400]) {
+    test(`mobile ${mode} continuous draw keeps ${scrollTop ? 'the deep artwork midpoint' : 'the leading row'} anchored`, () => {
+      const { context, scrollEl, containerEl } = createRuntimeContext();
+      const grid = vm.runInContext('virtualGrid', context);
+      scrollEl.clientWidth = 390;
+      scrollEl.clientHeight = 640;
+      scrollEl.scrollTop = scrollTop;
+      const albums = Array.from({ length: 500 }, (_, index) => ({ key: `pinch-${index}`, name: `Album ${index}` }));
+      grid.sections = [{ kind: 'artist', sectionKey: 'pinch-draw', group: { artist: 'Pinch Artist', albums } }];
+      const preview = { mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map(), cards: new Map(), sections: new Map(),
+        anchor: { scrollTop, artworkFraction: .4, artworkInset: 0, artworkTrim: 0, offsetTop: 300 }, density: 3 };
+      const layout = grid.buildPinchLayout(3, preview);
+      const points = [...layout.cards.entries()];
+      preview.anchorKey = points[scrollTop ? 90 : 0][0];
+      for (const [key] of points.slice(scrollTop ? 85 : 0, scrollTop ? 105 : 20)) {
+        const card = { style: {}, getBoundingClientRect() {
+          const width = Number.parseFloat(this.style.width);
+          const body = mode === 'cards' ? (width < 160 ? 108 : 72) + Number(key.match(/(\d+)$/)[1]) % 3 * 12 : 0;
+          return { height: width + body };
+        } };
+        preview.cards.set(key, card);
+      }
+      containerEl.style = {};
+      grid.primeVisibleCoverImages = () => {};
+      grid._pinchPreview = preview;
+      const originalCards = [...preview.cards.values()];
+      let previousWidth = 0;
+      for (const density of [3, 2.8, 2.5, 2.1, 1.8, 1.4, 1]) {
+        preview.density = density;
+        grid.drawPinchPreview(preview);
+        if (density === 3) {
+          grid.buildPinchLayout = () => { throw new Error('A warm preview frame rebuilt the full inventory.'); };
+          grid.getBlocksForSection = () => { throw new Error('A warm preview frame regrouped the full inventory.'); };
+        }
+        const anchor = preview.cards.get(preview.anchorKey);
+        const width = Number.parseFloat(anchor.style.width);
+        assert.ok(width >= previousWidth);
+        previousWidth = width;
+        assert.deepEqual([...preview.cards.values()], originalCards, 'A draw must retain the native touched card nodes.');
+        for (const card of preview.cards.values()) {
+          const [, x, y] = card.style.transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px, 0\)/);
+          assert.ok(Number.isFinite(Number(x)) && Number.isFinite(Number(y)));
+          assert.ok(Number(x) >= 0 && Number(x) + width <= 386 + .001);
+        }
+        const anchorY = Number(anchor.style.transform.match(/, ([-\d.]+)px, 0\)/)[1]);
+        if (scrollTop) assert.ok(Math.abs(anchorY + width * .4 - scrollEl.scrollTop - 300) <= .001);
+        else {
+          assert.equal(scrollEl.scrollTop, 0);
+          assert.equal(anchorY, grid.sectionHeaderHeight);
+        }
+        assert.equal(preview.cards.size, 20, 'A draw must retain the prepared card set. Bounded mounting is covered by preparePinchPreview tests.');
+      }
+    });
+  }
+}
+
+test('mobile pinch animation coalesces a frame and cannot redraw after cancellation', () => {
+  const { context } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  const callbacks = new Map();
+  context.scheduleBrowserAnimationFrame = callback => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; };
+  context.cancelBrowserAnimationFrame = id => callbacks.delete(id);
+  const preview = { density: 3, frame: 0, prepared: true };
+  grid._pinchPreview = preview;
+  const draws = [];
+  grid.drawPinchPreview = item => draws.push(item.density);
+  grid.updatePinchPreview(2.9);
+  grid.updatePinchPreview(2.7);
+  grid.updatePinchPreview(2.6);
+  assert.equal(callbacks.size, 1);
+  const callback = [...callbacks.values()][0];
+  callback();
+  assert.deepEqual(draws, [2.6]);
+  grid.updatePinchPreview(2.4);
+  const lateCallback = [...callbacks.values()].at(-1);
+  grid._pinchPreview = null;
+  lateCallback();
+  assert.deepEqual(draws, [2.6]);
+});
+
+for (const mode of ['cards', 'covers']) {
+  test(`mobile ${mode} prepares a bounded swept union without reparenting touched nodes and restores every temporary style`, () => {
+    const { context } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    const makeNode = (kind, key = '') => {
+      const attributes = new Map();
+      const node = { kind, cacheKey: key, style: {}, children: [], parentNode: null,
+        getAttribute(name) { return attributes.get(name) ?? null; },
+        setAttribute(name, value) { attributes.set(name, String(value)); if (name === 'style') this.style = { retained: String(value) }; },
+        removeAttribute(name) { attributes.delete(name); if (name === 'style') this.style = {}; },
+        appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
+        remove() { this.parentNode.children = this.parentNode.children.filter(child => child !== this); this.parentNode = null; },
+        get firstElementChild() { return this.children[0] || null; },
+        getBoundingClientRect() { return { top: kind === 'rows' ? 42 : 0, width: 119, height: mode === 'covers' ? 119 : 227 }; },
+        querySelector(selector) {
+          if (selector === '.artist-rows') return this.children.find(child => child.kind === 'rows');
+          return null;
+        },
+        querySelectorAll(selector) {
+          const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
+          if (selector === '*') return all;
+          if (selector === '.album-card') return all.filter(child => child.kind === 'card');
+          if (selector === '.artist-rows, .album-row') return all.filter(child => ['rows', 'row'].includes(child.kind));
+          return [];
+        },
+      };
+      Object.defineProperty(node, 'innerHTML', { set(value) {
+        this.appendChild(makeNode('card', `artist:pinch-union\u0000${value}`));
+      } });
+      return node;
+    };
+    const albums = Array.from({ length: 500 }, (_, index) => ({ key: `pinch-${index}`, name: `Album ${index}` }));
+    const section = { kind: 'artist', sectionKey: 'pinch-union', group: { artist: 'Pinch Artist', albums } };
+    grid.sections = [section];
+    const sectionKey = grid.getRenderedSectionKey(section);
+    section.blocksData = grid.getBlocksForSection(section);
+    const container = makeNode('container');
+    const sectionNode = container.appendChild(makeNode('section'));
+    sectionNode.setAttribute('data-virtual-section-key', sectionKey);
+    const rows = sectionNode.appendChild(makeNode('rows'));
+    const originalRow = rows.appendChild(makeNode('row'));
+    const originals = albums.slice(0, 6).map(album => originalRow.appendChild(makeNode('card', `${sectionKey}\u0000${album.key}`)));
+    originals[0].setAttribute('style', '--retained-card-color: red;');
+    const originalParents = originals.map(card => card.parentNode);
+    grid.containerEl = container;
+    grid.scrollEl = Object.assign(makeNode('scroll'), { clientWidth: 390, clientHeight: 640, scrollTop: 0, scrollLeft: 0 });
+    grid.topSpacerEl = makeNode('spacer');
+    grid.bottomSpacerEl = makeNode('spacer');
+    grid.totalHeight = 40000;
+    grid.getAlbumCardNodeCacheKey = card => card.cacheKey;
+    grid.getLayoutConfig = () => ({ renderAlbumHtml: album => album.key });
+    grid.activateGalleryCoverImages = () => {};
+    grid.clearTouchScrollGestureTarget = () => {};
+    grid.scheduleSettledMeasurement = () => {};
+    context.document.createElement = () => makeNode('row');
+    const preview = {
+      mode, columns: 3, anchorKey: originals[0].cacheKey,
+      anchor: { scrollTop: 0, offsetTop: 42, artworkInset: 0, artworkTrim: 0, artworkFraction: .5 },
+      sectionByKey: new Map([[sectionKey, section]]), blocksByColumns: new Map(),
+      styles: new Map(), added: [], cards: new Map(), bodyHeights: new Map(), headerHeights: new Map(),
+      frame: 0, density: 3, prepared: false,
+    };
+    grid._pinchPreview = preview;
+    grid.preparePinchPreview(preview);
+    assert.equal(preview.prepared, true);
+    assert.equal(container.getAttribute('data-mobile-pinch-preview'), 'true');
+    assert.ok(preview.cards.size > originals.length, 'The swept viewport must mount needed endpoint cards.');
+    assert.ok(preview.cards.size < 100, 'A viewport union cannot mount the complete 500-album library.');
+    assert.equal(container.querySelectorAll('.album-card').length, preview.cards.size);
+    assert.deepEqual(originals.map(card => card.parentNode), originalParents, 'The touch target and row ancestors stay mounted.');
+    assert.equal(originalRow.parentNode, rows);
+    assert.equal(rows.parentNode, sectionNode);
+    assert.equal(sectionNode.parentNode, container);
+    assert.ok(preview.added.length > 0);
+    const added = [...preview.added];
+    originals[0].style.transform = 'translate3d(10px, 20px, 0)';
+    grid._touchScrollGestureActive = true;
+    grid._albumCardPointerGestureActive = true;
+    assert.equal(grid.finishPinchPreview(3, { cancelled: true }), null);
+    assert.equal(grid._pinchPreview, null);
+    assert.equal(container.getAttribute('data-mobile-pinch-preview'), null);
+    assert.equal(container.querySelectorAll('.album-card').length, originals.length);
+    assert.ok(added.every(node => node.parentNode === null));
+    assert.equal(originals[0].getAttribute('style'), '--retained-card-color: red;');
+    assert.deepEqual(originals[0].style, { retained: '--retained-card-color: red;' });
+    assert.ok(originals.slice(1).every(card => Object.keys(card.style).length === 0));
+    assert.equal(originalRow.getAttribute('style'), null);
+    assert.equal(grid._touchScrollGestureActive, false);
+    assert.equal(grid._albumCardPointerGestureActive, false);
+    assert.equal(grid.finishPinchPreview(3, { cancelled: true }), null, 'Repeated cleanup is harmless.');
+  });
+}
+
+test('pinch settlement restores the fractional artwork point of the exact repeated occurrence', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  const key = 'same-release';
+  const wrong = context.createAlbumTitleButton(key, { top: -900, bottom: -650, height: 250 }, 'artist:earlier-occurrence', 'Same Release', '2026');
+  const correct = context.createAlbumTitleButton(key, { top: 400, bottom: 650, height: 250 }, 'artist:anchored-occurrence', 'Same Release', '2026');
+  wrong.matches = correct.matches = () => true;
+  context.__albumTitleButtons = [wrong, correct];
+  scrollEl.scrollTop = 5000;
+  grid.restoreScrollAnchor({ scrollTop: 5000, scrollLeft: 0, albumKey: key, albumName: 'Same Release', albumYear: '2026',
+    triggerKind: 'artbox', anchorBox: 'trigger', sectionOccurrenceKey: 'artist:anchored-occurrence', artworkFraction: .4, offsetTop: 300 });
+  assert.equal(scrollEl.scrollTop, 5200, 'Restore the artwork point 400 + .4*250, not the title, card top or earlier duplicate.');
+});
+
+test('queued row measurement retains the pinch midpoint until settled and native scrolling retires it', () => {
+  const { context, containerEl, scrollEl } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  grid._measureRaf = null;
+  const anchor = { scrollTop: 4800, albumKey: 'midpoint-release', artworkFraction: .4, offsetTop: 300 };
+  grid._pinchSettlementAnchor = anchor;
+  grid.captureScrollAnchor = () => { throw new Error('Queued settlement replaced the midpoint with first-visible-card state.'); };
+  const section = { blockHeights: [100], blockMeasureKeys: ['row:midpoint'] };
+  grid.sectionByKey = new Map([['midpoint-section', section]]);
+  containerEl.querySelectorAll = selector => selector === '.album-row[data-section-key][data-block-index]' ? [{
+    getAttribute: name => name === 'data-section-key' ? 'midpoint-section' : '0',
+    getBoundingClientRect: () => ({ height: 180 }),
+  }] : [];
+  grid.recalculate = () => {};
+  grid.render = () => {};
+  const restored = [];
+  grid.stabilizeScrollAfterMeasurement = value => restored.push(value);
+  grid.scheduleMeasureRows(true);
+  frames.shift()();
+  assert.deepEqual(restored, [anchor]);
+  assert.equal(section.blockHeights[0], 180);
+  assert.equal(grid._pinchSettlementAnchor, anchor);
+  grid.measureRenderedRows();
+  assert.equal(grid._pinchSettlementAnchor, null, 'A settled no-change measurement retires the midpoint hold.');
+  grid._pinchSettlementAnchor = anchor;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  assert.equal(grid._pinchSettlementAnchor, null, 'A new native scrolling intent wins over old pinch settlement.');
+});
+
+for (const scenario of [
+  { name: 'bottom', maxScroll: 160, initialScroll: 160, artworkTop: 340, expectedScroll: 160, expectedPhase: '' },
+  { name: 'top', maxScroll: 160, initialScroll: 20, artworkTop: -100, expectedScroll: 0, expectedPhase: '' },
+  { name: 'fractional in-range', maxScroll: 1000, initialScroll: 100, artworkTop: 300.25, expectedScroll: 200, expectedPhase: '0 -0.25px' },
+  { name: 'fractional near-bottom', maxScroll: 160, initialScroll: 100, artworkTop: 259.625, expectedScroll: 160, expectedPhase: '0 0.375px' },
+]) {
+  test(`pinch artwork settlement respects the ${scenario.name} scroll clamp without translating content out of bounds`, () => {
+    const { context, scrollEl, containerEl } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    let actualScroll = scenario.initialScroll;
+    Object.defineProperty(scrollEl, 'scrollTop', {
+      get: () => actualScroll,
+      set: value => { actualScroll = Math.max(0, Math.min(scenario.maxScroll, Math.round(value))); },
+    });
+    scrollEl.scrollHeight = scrollEl.clientHeight + scenario.maxScroll;
+    const trigger = context.createAlbumTitleButton('clamped-pinch', {
+      top: scenario.artworkTop, bottom: scenario.artworkTop + 250, height: 250,
+    }, 'artist:pinch-clamp', 'Clamped Pinch', '2026');
+    trigger.matches = () => true;
+    context.__albumTitleButtons = [trigger];
+    grid.restoreScrollAnchor({ scrollTop: scenario.initialScroll, scrollLeft: 0, albumKey: 'clamped-pinch',
+      albumName: 'Clamped Pinch', albumYear: '2026', triggerKind: 'artbox', anchorBox: 'trigger',
+      sectionOccurrenceKey: 'artist:pinch-clamp', artworkFraction: .4, offsetTop: 300 });
+    assert.equal(scrollEl.scrollTop, scenario.expectedScroll);
+    assert.equal(containerEl.style.translate || '', scenario.expectedPhase,
+      'Unattainable pinch anchors must not compensate scrollMax with a large visual shift; retain genuine subpixel compensation.');
+  });
+}
+
+for (const mode of ['cards', 'covers']) {
+  for (const navigationWins of [false, true]) {
+    test(`mobile ${mode} pinch ${navigationWins ? 'discards an older deferred update when navigation wins' : 'applies the newest deferred gallery update after release'}`, () => {
+      const { context } = createRuntimeContext();
+      const grid = vm.runInContext('virtualGrid', context);
+      grid.primeVisibleCoverImages = () => {};
+      context.state.gallery.mainState = context.createGalleryMainState({ view: mode });
+      const group = artist => ({ artist, albums: [{ key: `${artist}-album`, name: `${artist} Album`, album_artist: artist, tracks: [] }] });
+      grid.setGroups([], [], [group('Before')]);
+      const originalSections = grid.sections;
+      const previewAttributes = new Map([['data-mobile-pinch-preview', 'true']]);
+      grid.containerEl.removeAttribute = name => previewAttributes.delete(name);
+      const timers = new Map();
+      let nextTimer = 1;
+      context.scheduleBrowserTimeout = callback => { const id = nextTimer++; timers.set(id, callback); return id; };
+      context.clearBrowserTimeout = id => timers.delete(id);
+      let cancellations = 0;
+      context.cancelMobileGalleryPinch = () => { cancellations++; grid.finishPinchPreview(3, { cancelled: true }); };
+      grid._pinchPreview = { mode, styles: new Map(), added: [], anchor: { scrollTop: 0 }, frame: 0 };
+      const options = { preserveScroll: true, preserveMountedGalleryChildren: true };
+      grid.setGroups([], [], [group('Older refresh')], options);
+      grid.setGroups([], [], [group('Latest refresh')], options);
+      assert.equal(grid.sections, originalSections, 'Background refresh must not replace the touched gallery.');
+      assert.equal(grid._deferredSetGroups.fallbackGroups[0].artist, 'Latest refresh');
+      assert.equal(cancellations, 0);
+      if (navigationWins) grid.setGroups([], [], [group('New navigation')], { resetScrollForUserArtistSelection: true });
+      else grid.finishPinchPreview(3);
+      assert.equal(grid._pinchPreview, null);
+      assert.equal(previewAttributes.has('data-mobile-pinch-preview'), false);
+      // Deliver the queued settlement callback after release or newer navigation.
+      for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+      assert.equal(grid._deferredSetGroups, null);
+      assert.equal(grid.sections[0].group.artist, navigationWins ? 'New navigation' : 'Latest refresh');
+      assert.equal(cancellations, navigationWins ? 1 : 0);
+      assert.ok(grid.sections[0].blockHeights.length > 0, 'The winning gallery must have usable row geometry.');
+    });
+  }
+}

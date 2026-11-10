@@ -1461,8 +1461,9 @@ def load_relation_source_rows_sql() -> str:
     """
 
 
-def inventory_publication_advisory_lock_sql() -> str:
-    return "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
+def inventory_publication_advisory_lock_sql(*, shared: bool = False) -> str:
+    lock = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
+    return f"select {lock}(hashtext('album-haven:local-inventory-publication'));"
 
 
 def relation_projection_advisory_lock_sql() -> str:

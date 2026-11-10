@@ -484,6 +484,70 @@ function buildDetectedProblemsHtml(album) {
       ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
+function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-review') {
+  const copies = Array.isArray(album?.duplicate_copy_review) ? album.duplicate_copy_review : [];
+  if (copies.length < 2) return '';
+  const lengthLabel = (seconds) => {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return 'Unknown';
+    const total = Math.round(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total / 60) % 60;
+    const remainder = String(total % 60).padStart(2, '0');
+    return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${remainder}` : `${minutes}:${remainder}`;
+  };
+  const meta = (value) => `<span class="duplicate-copy-review__meta">${escapeHtml(value)}</span>`;
+  const columnsConfig = [
+    { key: 'number', label: '#' }, { key: 'track', label: 'Track / file' },
+    { key: 'artist', label: 'Artist' }, { key: 'year', label: 'Year' },
+    { key: 'format', label: 'Format' }, { key: 'quality', label: 'Quality' },
+    { key: 'length', label: 'Length' },
+  ].map(column => ({ ...column, visibility: 'desktop' })).concat([
+    { key: 'mobile-track', label: 'Track / file', visibility: 'mobile' },
+    { key: 'mobile-technical', label: 'Technical / length', visibility: 'mobile' },
+  ]);
+  const content = copies.map((copy, copyIndex) => {
+    const copyLabel = `Copy ${copy.copy_number}`;
+    const id = `${idPrefix}-${copyIndex + 1}`;
+    const tracks = Array.isArray(copy.tracks) ? copy.tracks : [];
+    const table = buildUtilityCompactTable({
+      id: `${id}-tracks`, ariaLabel: `${copyLabel} files`,
+      headers: 'visible', density: 'compact', frame: 'none', overflow: 'none',
+      mobile: 'grouped', mobileColumns: 'minmax(0,1.4fr) minmax(0,1fr)',
+      columns: '32px minmax(0,1.5fr) minmax(0,1fr) 44px 54px minmax(0,1.2fr) 54px',
+      columnsConfig,
+      rows: tracks.map((track, index) => {
+        const number = track.track_number ?? '—';
+        const disc = track.disc_number ? `Disc ${track.disc_number} · ` : '';
+        const title = track.title || track.file_name || 'Unknown track';
+        const file = track.path || track.file_name || 'Unknown file';
+        const artist = track.artist || 'Unknown';
+        const year = track.year ?? 'Unknown';
+        const format = track.format || 'Unknown';
+        const quality = [
+          `Codec: ${track.codec || 'Unknown'}`,
+          `Bitrate: ${track.bitrate == null ? 'Unknown' : `${track.bitrate / 1000} kbps`}`,
+          `Sample rate: ${track.sample_rate == null ? 'Unknown' : `${track.sample_rate / 1000} kHz`}`,
+          `Bit depth: ${track.bit_depth == null ? 'Unknown' : `${track.bit_depth}-bit`}`,
+        ].map(meta).join('');
+        const length = lengthLabel(track.duration_seconds);
+        const trackHtml = `<span>${escapeHtml(title)}</span>${meta(file)}`;
+        return { key: String(index + 1), cells: {
+          number: escapeHtml(`${disc}${number}`), track: trackHtml,
+          artist: escapeHtml(artist), year: escapeHtml(year), format: escapeHtml(format),
+          quality, length: escapeHtml(length),
+          'mobile-track': `<span>${escapeHtml(`${disc}${number}. ${title}`)}</span>${meta(`${artist} · ${year}`)}${meta(file)}`,
+          'mobile-technical': `<span>${escapeHtml(format)}</span>${quality}${meta(`Length: ${length}`)}`,
+        } };
+      }),
+      emptyHtml: 'No track details available.',
+    });
+    // Native disclosure owns keyboard and open state. New payload markup starts
+    // collapsed; CSS-only resize keeps the mounted disclosure intact.
+    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span></summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+  }).join('');
+  return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
+}
+
 function buildProblematicAlbumDetail(album) {
   if (!album) {
     return '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
@@ -542,6 +606,7 @@ function buildProblematicAlbumDetail(album) {
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
+    ${buildDuplicateCopyReviewHtml(album)}
   `;
 }
 

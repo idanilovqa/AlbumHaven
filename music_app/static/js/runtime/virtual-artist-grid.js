@@ -439,6 +439,10 @@ class VirtualArtistGrid {
   }
 
   destroy() {
+    if (this._pinchPreview) {
+      if (typeof cancelMobileGalleryPinch === 'function') cancelMobileGalleryPinch();
+      this.finishPinchPreview(this.columns, { cancelled: true });
+    }
     this._renderGeneration += 1;
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
@@ -585,6 +589,323 @@ class VirtualArtistGrid {
     });
   }
 
+  beginPinchPreview({ clientX, clientY, columns }) {
+    if (window.innerWidth > 900 || !['cards', 'covers'].includes(
+      state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
+    ) || !this.hasMeasurableScrollSurface()) return false;
+    if (this._pinchPreview) this.finishPinchPreview(this.columns, { cancelled: true });
+    const scrollRect = this.scrollEl.getBoundingClientRect();
+    let closest = null, bestDistance = Infinity;
+    this.containerEl.querySelectorAll('.album-card__artbox-trigger[data-album-key]').forEach(trigger => {
+      const rect = trigger.getBoundingClientRect();
+      if (!rect.width || rect.bottom < scrollRect.top || rect.top > scrollRect.bottom) return;
+      const distance = Math.hypot(
+        clientX - Math.max(rect.left, Math.min(rect.right, clientX)),
+        clientY - Math.max(rect.top, Math.min(rect.bottom, clientY)),
+      );
+      if (distance < bestDistance) { closest = trigger; bestDistance = distance; }
+    });
+    if (!closest) return false;
+    const rect = closest.getBoundingClientRect();
+    const cardRect = closest.closest('.album-card').getBoundingClientRect();
+    const anchorKey = this.getAlbumCardNodeCacheKey(closest.closest('.album-card'));
+    const anchorSection = this.sections.find(section => this.getRenderedSectionKey(section)
+      === this.getRenderedSectionOccurrenceKey(closest, this.containerEl));
+    const cardIdentity = closest.closest('.album-card').getAttribute('data-gallery-card-key');
+    if (!anchorSection?.group?.albums?.some(album => getAlbumCardNodeIdentity(album) === cardIdentity)) return false;
+    let album = {};
+    try { album = JSON.parse(closest.getAttribute('data-album') || '{}'); } catch (_error) {}
+    const artworkFraction = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const anchor = {
+      scrollLeft: 0, scrollTop: this.scrollEl.scrollTop,
+      albumKey: closest.getAttribute('data-album-key'), albumName: String(album.name || ''),
+      albumYear: String(album.year ?? ''), triggerKind: 'artbox', anchorBox: 'trigger',
+      sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(closest, this.containerEl),
+      artworkInset: rect.top - cardRect.top, artworkTrim: cardRect.width - rect.height,
+      artworkFraction, offsetTop: rect.top + rect.height * artworkFraction - scrollRect.top,
+    };
+    this.invalidateScrollStabilization({ cancelScrollRestore: true });
+    this._pinchSettlementAnchor = null;
+    this._pinchPreview = {
+      columns, anchor, mode: state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
+      anchorKey, sectionByKey: new Map(this.sections.map(section => [this.getRenderedSectionKey(section), section])),
+      blocksByColumns: new Map(),
+      styles: new Map(), added: [], cards: new Map(), bodyHeights: new Map(),
+      headerHeights: new Map(), frame: 0, density: columns, prepared: false,
+    };
+    return true;
+  }
+
+  // Preview layout uses the same section/subgroup order as settled virtualization.
+  // Only the swept viewport union is mounted; these maps contain geometry, not DOM.
+  buildPinchLayout(columns, preview) {
+    const width = Math.max(1, this.scrollEl.clientWidth - 4);
+    const cardWidth = Math.floor((width - (columns - 1) * this.columnGap) / columns);
+    const cards = new Map(), sections = new Map();
+    if (!preview.blocksByColumns.has(columns)) preview.blocksByColumns.set(columns, new Map(
+      this.sections.filter(section => section.kind === 'artist')
+        .map(section => [section, this.getBlocksForSection(section, columns)]),
+    ));
+    const blocksBySection = preview.blocksByColumns.get(columns);
+    let top = 0;
+    this.sections.forEach(section => {
+      const key = this.getRenderedSectionKey(section);
+      const layout = { top, height: this.labelHeight, labels: [] };
+      sections.set(key, layout);
+      if (section.kind === 'label') { top += this.labelHeight; return; }
+      const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
+      let y = top + headerHeight;
+      const blocks = blocksBySection.get(section);
+      blocks.forEach((block, blockIndex) => {
+        if (block.kind === 'subheading') {
+          layout.labels.push(y);
+          y += this.subsectionLabelHeight;
+        } else {
+          const row = block.albums;
+          const inset = (width - row.length * cardWidth - (row.length - 1) * this.columnGap) / 2;
+          const modeledRow = { top: y, height: cardWidth, keys: [], bodyHeights: [] };
+          row.forEach((album, index) => {
+            const cardKey = `${key}\u0000${getAlbumCardNodeIdentity(album)}`;
+            const bodyHeight = preview.mode === 'covers' ? 0 : preview.bodyHeights.get(cardKey) ?? 108;
+            const height = cardWidth + bodyHeight;
+            modeledRow.height = Math.max(modeledRow.height, height);
+            modeledRow.keys.push(cardKey);
+            modeledRow.bodyHeights.push(bodyHeight);
+            cards.set(cardKey, { x: inset + index * (cardWidth + this.columnGap), y,
+              width: cardWidth, height, sectionKey: key, album, row: modeledRow });
+          });
+          y += modeledRow.height;
+        }
+        if (blockIndex < blocks.length - 1) y += this.rowGap;
+      });
+      layout.height = y - top + this.sectionMarginBottom;
+      top += layout.height;
+    });
+    return { cards, sections, height: top };
+  }
+
+  setPinchStyle(node, values) {
+    const preview = this._pinchPreview;
+    if (!preview.styles.has(node)) preview.styles.set(node, node.getAttribute('style'));
+    Object.assign(node.style, values);
+  }
+
+  preparePinchPreview(preview) {
+    const mountedSections = new Map();
+    Array.from(this.containerEl.children).forEach(node => {
+      const key = node.getAttribute('data-virtual-section-key');
+      if (!key) return;
+      mountedSections.set(key, node);
+      const rows = node.querySelector('.artist-rows');
+      if (rows) preview.headerHeights.set(key, rows.getBoundingClientRect().top - node.getBoundingClientRect().top);
+      node.querySelectorAll('.album-card').forEach(card => {
+        const cardKey = this.getAlbumCardNodeCacheKey(card);
+        preview.cards.set(cardKey, card);
+        const rect = card.getBoundingClientRect();
+        preview.bodyHeights.set(cardKey, Math.max(0, rect.height - rect.width));
+      });
+    });
+    const endpoints = [1, 2, 3].map(columns => this.buildPinchLayout(columns, preview));
+    preview.layouts = new Map(endpoints.map((layout, index) => [index + 1, layout]));
+    const offsets = endpoints.map(layout => {
+      const point = layout.cards.get(preview.anchorKey);
+      return preview.anchor.scrollTop <= 1 ? 0
+        : Math.max(0, point.y + preview.anchor.artworkInset
+          + (point.width - preview.anchor.artworkTrim) * preview.anchor.artworkFraction - preview.anchor.offsetTop);
+    });
+    const minY = -this.overscanPx, maxY = this.scrollEl.clientHeight + this.overscanPx;
+    const required = new Map();
+    endpoints[0].cards.forEach((point, key) => {
+      const positions = endpoints.map((layout, index) => {
+        const candidate = layout.cards.get(key);
+        return { top: candidate.y - offsets[index], bottom: candidate.y + candidate.height - offsets[index] };
+      });
+      if (Math.min(...positions.map(position => position.top)) <= maxY
+        && Math.max(...positions.map(position => position.bottom)) >= minY) required.set(key, point);
+    });
+    const renderAlbumHtml = this.getLayoutConfig().renderAlbumHtml || albumCardHtml;
+    required.forEach((point, key) => {
+      if (preview.cards.has(key)) return;
+      let sectionNode = mountedSections.get(point.sectionKey);
+      if (!sectionNode) {
+        const section = preview.sectionByKey.get(point.sectionKey);
+        sectionNode = this.createRenderedSectionNode({ key: point.sectionKey,
+          html: this.renderSection({ ...section, blocksData: [], blockOffsets: [], blockHeights: [] }, 0, 0) });
+        this.containerEl.appendChild(sectionNode);
+        preview.added.push(sectionNode);
+        mountedSections.set(point.sectionKey, sectionNode);
+      }
+      const row = document.createElement('div');
+      row.className = 'album-row';
+      row.innerHTML = renderAlbumHtml(point.album, { coverPriority: 'near', displayMode: preview.mode });
+      sectionNode.querySelector('.artist-rows').appendChild(row);
+      preview.added.push(row);
+      preview.cards.set(key, row.firstElementChild);
+    });
+    this.sections.filter(section => section.kind === 'label').forEach(section => {
+      const key = this.getRenderedSectionKey(section);
+      if (mountedSections.has(key)) return;
+      const positions = endpoints.map((layout, index) => layout.sections.get(key).top - offsets[index]);
+      if (Math.min(...positions) > maxY || Math.max(...positions) + this.labelHeight < minY) return;
+      const node = this.createRenderedSectionNode({ key, html: this.renderSection(section, 0, 0) });
+      this.containerEl.appendChild(node);
+      preview.added.push(node);
+      mountedSections.set(key, node);
+    });
+    // Preserve every touched card, row and section ancestor. Only their temporary
+    // geometry changes; normal patching/reparenting resumes after the last lift.
+    mountedSections.forEach((node, key) => {
+      const section = preview.sectionByKey.get(key);
+      if (!section || section.kind === 'label') return;
+      const featured = section.blocksData.find(block => block.kind === 'subheading');
+      if (featured && !node.querySelector('.artist-subsection-label')) {
+        const labelSection = { ...section, blocksData: [featured], blockOffsets: [0],
+          blockHeights: [this.subsectionLabelHeight], blocksHeight: this.subsectionLabelHeight };
+        const label = this.createRenderedSectionNode({ key,
+          html: this.renderSection(labelSection, 0, this.totalHeight) }).querySelector('.artist-subsection-label');
+        node.querySelector('.artist-rows').appendChild(label);
+        preview.added.push(label);
+      }
+      this.setPinchStyle(node, { display: 'contents' });
+      node.querySelectorAll('.artist-rows, .album-row').forEach(row => this.setPinchStyle(row, { display: 'contents' }));
+      node.querySelectorAll('.artist-rows-spacer').forEach(spacer => this.setPinchStyle(spacer, { display: 'none' }));
+    });
+    preview.sections = mountedSections;
+    preview.cards.forEach(card => this.setPinchStyle(card, {
+      position: 'absolute', top: '0', left: '0', height: 'auto', minHeight: '0',
+      maxWidth: 'none', margin: '0', transition: 'none', willChange: 'transform, width',
+    }));
+    this.setPinchStyle(this.containerEl, { position: 'relative', height: `${this.totalHeight}px` });
+    this.setPinchStyle(this.topSpacerEl, { height: '0px' });
+    this.setPinchStyle(this.bottomSpacerEl, { height: '0px' });
+    this.setPinchStyle(this.scrollEl, { overflowX: 'hidden' });
+    preview.contentOffset = this.containerEl.getBoundingClientRect().top
+      + this.scrollEl.scrollTop - this.scrollEl.getBoundingClientRect().top;
+    this.containerEl.setAttribute('data-mobile-pinch-preview', 'true');
+    preview.prepared = true;
+    this.activateGalleryCoverImages(this.containerEl);
+  }
+
+  updatePinchPreview(density) {
+    const preview = this._pinchPreview;
+    if (!preview || !Number.isFinite(density)) return;
+    preview.density = Math.max(1, Math.min(3, density));
+    if (preview.frame) return;
+    preview.frame = scheduleBrowserAnimationFrame(() => {
+      preview.frame = 0;
+      if (this._pinchPreview !== preview) return;
+      if (!preview.prepared) this.preparePinchPreview(preview);
+      this.drawPinchPreview(preview);
+    });
+  }
+
+  adjustPinchLayout(layout, preview) {
+    const rows = new Set();
+    preview.cards.forEach((_card, key) => {
+      const point = layout.cards.get(key);
+      if (point) rows.add(point.row);
+    });
+    // Each changed row contributes a prefix delta to later content. Build this
+    // small index from the mounted union, never scan the inventory on a frame.
+    const changes = Array.from(rows, row => ({
+      end: row.top + row.height,
+      delta: Math.max(...row.keys.map((key, index) => (
+        preview.mode === 'covers' ? 0 : preview.bodyHeights.get(key) ?? row.bodyHeights[index]
+      ))) - Math.max(...row.bodyHeights),
+    })).sort((a, b) => a.end - b.end);
+    let totalDelta = 0;
+    changes.forEach(change => { totalDelta += change.delta; change.prefix = totalDelta; });
+    const shift = y => {
+      let lo = 0, hi = changes.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (changes[mid].end <= y) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo ? changes[lo - 1].prefix : 0;
+    };
+    return {
+      height: layout.height + totalDelta,
+      point(key) {
+        const point = layout.cards.get(key);
+        return point ? { ...point, y: point.y + shift(point.y) } : null;
+      },
+      section(key) {
+        const section = layout.sections.get(key);
+        return section ? { ...section, top: section.top + shift(section.top),
+          labels: section.labels.map(y => y + shift(y)) } : null;
+      },
+    };
+  }
+
+  drawPinchPreview(preview) {
+    const low = Math.floor(preview.density), high = Math.ceil(preview.density), progress = preview.density - low;
+    const mix = (a, b) => a + (b - a) * progress;
+    const width = Math.max(1, this.scrollEl.clientWidth - 4);
+    const cardWidth = columns => Math.floor((width - (columns - 1) * this.columnGap) / columns);
+    const currentWidth = mix(cardWidth(low), cardWidth(high));
+    // Batch width writes before reading natural heights: wrapped titles, rating
+    // and metadata rows can change height as a card crosses a container query.
+    preview.cards.forEach(card => { card.style.width = `${currentWidth}px`; });
+    preview.cards.forEach((card, key) => {
+      preview.bodyHeights.set(key, Math.max(0, card.getBoundingClientRect().height - currentWidth));
+    });
+    if (!preview.layouts) preview.layouts = new Map([1, 2, 3]
+      .map(columns => [columns, this.buildPinchLayout(columns, preview)]));
+    const a = this.adjustPinchLayout(preview.layouts.get(low), preview);
+    const b = high === low ? a : this.adjustPinchLayout(preview.layouts.get(high), preview);
+    preview.cards.forEach((card, key) => {
+      const first = a.point(key), second = b.point(key);
+      if (!first || !second) return;
+      card.style.transform = `translate3d(${mix(first.x, second.x)}px, ${mix(first.y, second.y)}px, 0)`;
+    });
+    preview.sections.forEach((node, key) => {
+      const first = a.section(key), second = b.section(key);
+      if (!first || !second) return;
+      const section = preview.sectionByKey.get(key);
+      const header = section.kind === 'label' ? node : node.querySelector(':scope > :not(.artist-rows)');
+      if (header) this.setPinchStyle(header, { position: 'absolute', top: `${mix(first.top, second.top)}px`,
+        left: '0', width: `${width}px`, margin: '0' });
+      node.querySelectorAll('.artist-subsection-label').forEach((label, index) => {
+        this.setPinchStyle(label, { position: 'absolute', top: `${mix(first.labels[index], second.labels[index])}px`,
+          left: '0', width: `${width}px`, margin: '0' });
+      });
+    });
+    this.containerEl.style.height = `${mix(a.height, b.height)}px`;
+    const first = a.point(preview.anchorKey), second = b.point(preview.anchorKey);
+    const anchorPoint = Number(preview.contentOffset || 0) + mix(first.y, second.y) + preview.anchor.artworkInset
+      + (currentWidth - preview.anchor.artworkTrim) * preview.anchor.artworkFraction;
+    this.scrollEl.scrollTop = preview.anchor.scrollTop <= 1 ? 0 : Math.max(0, anchorPoint - preview.anchor.offsetTop);
+    this.scrollEl.scrollLeft = 0;
+    this.primeVisibleCoverImages();
+  }
+
+  finishPinchPreview(_columns, { cancelled = false } = {}) {
+    const preview = this._pinchPreview;
+    if (!preview) return null;
+    if (preview.frame) cancelBrowserAnimationFrame(preview.frame);
+    this._pinchPreview = null;
+    preview.styles.forEach((style, node) => {
+      if (style === null) node.removeAttribute('style');
+      else node.setAttribute('style', style);
+    });
+    preview.added.forEach(node => node.remove());
+    this.containerEl.removeAttribute('data-mobile-pinch-preview');
+    this.scrollEl.scrollTop = preview.anchor.scrollTop;
+    this.scrollEl.scrollLeft = 0;
+    this.clearTouchScrollGestureTarget();
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
+    this._albumCardPointerGestureActive = false;
+    this._activeAlbumCardPointerId = null;
+    if (this._albumCardPointerReleaseRaf) cancelBrowserAnimationFrame(this._albumCardPointerReleaseRaf);
+    this._albumCardPointerReleaseRaf = 0;
+    this._deferredPointerGestureRender = null;
+    this.lastKey = '';
+    this.scheduleSettledMeasurement();
+    return cancelled ? null : preview.anchor;
+  }
+
   suspendSelectedArtistCoverLoadsForUserAction() {
     if (typeof galleryCoverLoadScheduler === 'undefined') return 0;
     this._nextCoverLoadUserActionToken += 1;
@@ -684,7 +1005,14 @@ class VirtualArtistGrid {
     this.containerEl.style.translate = normalizedPhase ? `0 ${normalizedPhase}px` : '';
   }
 
-  applyAnchoredScrollTop(requestedScrollTop) {
+  applyAnchoredScrollTop(requestedScrollTop, { clampToScrollRange = false } = {}) {
+    if (clampToScrollRange && Number.isFinite(this.scrollEl.scrollHeight)
+      && Number.isFinite(this.scrollEl.clientHeight)) {
+      // A pinch can make its focal point unreachable at a scroll boundary.
+      // Clamp that target before compensating for subpixel scroll quantization.
+      const maximumScrollTop = Math.max(0, this.scrollEl.scrollHeight - this.scrollEl.clientHeight);
+      requestedScrollTop = Math.max(0, Math.min(maximumScrollTop, requestedScrollTop));
+    }
     const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
     const requestedScrollDelta = Number(requestedScrollTop || 0) - previousScrollTop;
     this.scrollEl.scrollTop = requestedScrollTop;
@@ -763,8 +1091,10 @@ class VirtualArtistGrid {
             ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
             : resolvedAnchorCardTrigger;
         const anchorRect = anchorElement.getBoundingClientRect();
-        const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
+        const delta = (anchorRect.top + Number(anchor.artworkFraction || 0) * Number(anchorRect.height || 0) - scrollRect.top) - Number(anchor.offsetTop || 0);
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta, {
+          clampToScrollRange: Number.isFinite(anchor.artworkFraction),
+        });
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
@@ -796,7 +1126,9 @@ class VirtualArtistGrid {
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {
             const modeledCardTop = modeledSectionTop + this.sectionHeaderHeight + modeledBlockOffset;
             this.applyAnchoredScrollTop(
-              Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0)),
+              Math.max(0, modeledCardTop + Number(anchor.artworkInset || 0)
+                + Number(anchor.artworkFraction || 0) * (this.cardTrackWidth - Number(anchor.artworkTrim || 0)) - Number(anchor.offsetTop || 0)),
+              { clampToScrollRange: Number.isFinite(anchor.artworkFraction) },
             );
             return;
           }
@@ -939,6 +1271,16 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    if (this._pinchPreview) {
+      if (options.preserveMountedGalleryChildren && options.preserveScroll
+        && !options.resetScrollForUserArtistSelection
+        && this._pinchPreview.mode === (state?.gallery?.mainState?.view || state?.view?.gallery_display_mode)) {
+        this._deferredSetGroups = { primaryGroups, familyGroups, fallbackGroups, options, layoutConfig };
+        return;
+      }
+      if (typeof cancelMobileGalleryPinch === 'function') cancelMobileGalleryPinch();
+      this.finishPinchPreview(this.columns, { cancelled: true });
+    }
     const shouldDeferMountedGroupUpdate = (
       Boolean(options.preserveScroll)
       && options.preserveMountedGalleryChildren === true
@@ -1049,6 +1391,7 @@ class VirtualArtistGrid {
       ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
+    this._pinchSettlementAnchor = Number.isFinite(preservedAnchor?.artworkFraction) ? preservedAnchor : null;
     const sections = [];
     const renderedPrimaryGroups = buildDisplayGroups(primaryGroups);
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
@@ -1219,7 +1562,7 @@ class VirtualArtistGrid {
     }
   }
 
-  getBlocksForSection(section) {
+  getBlocksForSection(section, columns = this.columns) {
         const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
         const uniqueAlbums = [];
         const albumIndexByIdentity = new Map();
@@ -1247,8 +1590,8 @@ class VirtualArtistGrid {
         const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
     const blocks = [];
         const appendRows = (rowAlbums) => {
-            for (let start = 0; start < rowAlbums.length; start += this.columns) {
-                blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
+            for (let start = 0; start < rowAlbums.length; start += columns) {
+                blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + columns) });
             }
         };
         appendRows(ownedAlbums);
@@ -1431,11 +1774,13 @@ class VirtualArtistGrid {
   }
 
   onScroll() {
+    if (this._pinchPreview) return;
     const ownsPendingAbsoluteRestore = Boolean(
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this._pinchSettlementAnchor = null;
       this._userScrollIntentGeneration += 1;
     }
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
@@ -1502,6 +1847,7 @@ class VirtualArtistGrid {
   }
 
   onUserScrollIntent(event) {
+    this._pinchSettlementAnchor = null;
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     if (event?.type !== 'touchstart') this._userScrollIntentGeneration += 1;
     if (event?.type === 'wheel') {
@@ -1639,6 +1985,10 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    if (this._pinchPreview) {
+      if (typeof cancelMobileGalleryPinch === 'function') cancelMobileGalleryPinch();
+      this.finishPinchPreview(this.columns, { cancelled: true });
+    }
     const deferredSetGroups = this._deferredSetGroups;
     if (deferredSetGroups && this.hasMeasurableScrollSurface()) {
       this._deferredSetGroups = null;
@@ -1669,6 +2019,7 @@ class VirtualArtistGrid {
   }
 
   render(force = false, options = {}) {
+    if (this._pinchPreview) return;
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
       const deferredMeasurementAnchor = Object.prototype.hasOwnProperty.call(
         this._deferredPointerGestureRender || {},
@@ -2234,6 +2585,7 @@ class VirtualArtistGrid {
   }
 
   scheduleMeasureRows(force = false) {
+    if (this._pinchPreview) return;
     if (!force && !this.isScrollSettled) {
       this.recordDiagnosticEvent('measure-request-skipped-scrolling', { force: false });
       return;
@@ -2316,13 +2668,14 @@ class VirtualArtistGrid {
   }
 
   measureRenderedRows(reflowAnchor = undefined) {
+    if (this._pinchPreview) return;
     if (!this.hasMeasurableScrollSurface()) return;
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
     const preservedAnchor = absoluteScrollActive
       ? null
-      : reflowAnchor === undefined ? this.captureScrollAnchor() : reflowAnchor;
+      : reflowAnchor === undefined ? this._pinchSettlementAnchor || this.captureScrollAnchor() : reflowAnchor;
     let changed = false;
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
@@ -2372,6 +2725,7 @@ class VirtualArtistGrid {
     this.diagnostics.latestMeasurement = measurement;
     this.recordDiagnosticEvent('measure-completed', measurement);
     if (!changed) {
+      this._pinchSettlementAnchor = null;
       this._resetScrollAfterMeasure = false;
       return;
     }
@@ -2498,8 +2852,11 @@ class VirtualArtistGrid {
         && blockTop <= Number(options.viewportBottom || 0)
         ? 'visible'
         : 'near';
+      const centerMobileCards = window.innerWidth <= 900
+        && ['cards', 'covers'].includes(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+      const rowColumns = centerMobileCards ? Math.min(this.columns, block.albums.length) : this.columns;
       return `
-        <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
+        <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(rowColumns, this.cardTrackWidth)};justify-content:${centerMobileCards ? 'center' : 'start'};">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
             renderAlbumHtml(album, { coverPriority, displayMode: state?.gallery?.mainState?.view })
           )).join('') : ''}

@@ -9,6 +9,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from music_app.services.cover_mutation import guarded_cover_transaction
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -32,6 +34,7 @@ def persist_cover_provider_outcomes(
     album_key: object,
     outcomes: Mapping[str, Mapping[str, object]],
     connect=None,
+    commit_guard=None,
 ) -> None:
     """Upsert current provider outcomes for one album, scoped to bootstrap library."""
     url = str((config or {}).get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
@@ -39,7 +42,7 @@ def persist_cover_provider_outcomes(
         return
     connector = connect or _connect
     with connector(url) as connection:
-        with connection.transaction():
+        with guarded_cover_transaction(connection.transaction(), commit_guard):
             for provider, outcome in outcomes.items():
                 provider_name = str(provider or "unknown").strip().lower() or "unknown"
                 task_key = f"{album_id}:{provider_name}"

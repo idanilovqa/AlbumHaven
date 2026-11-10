@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.py.cover_unit_safety import cover_unit_transports
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import inspect
@@ -57,10 +58,40 @@ def library_state():
 
 
 @pytest.fixture(autouse=True)
-def postgres_runtime_fakes(config, monkeypatch):
+def postgres_runtime_fakes(config, monkeypatch, tmp_path, cover_unit_transports):
     from music_app.services.library_roots import normalize_library_root_settings
 
-    config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused.invalid/cover_runtime_unit"
+    # Existing worker cases model a legacy album. Exercise the real preflight
+    # adapter against a read-only fixture row, never a database connection.
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    class LegacyCoverReadConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, sql, params):
+            paths = params["track_paths"]
+            assert paths
+            assert all(Path(path).resolve().is_relative_to(tmp_path.resolve()) for path in paths)
+            assert all(Path(path).is_file() for path in paths)
+            assert "library.local_albums" in sql
+            assert "selected_album_count = 1" in sql
+            assert not any(word in sql.lower().split() for word in ("insert", "update", "delete"))
+            return self
+
+        def fetchone(self):
+            return {"album_id": 1, "cover_path": None, "metadata": {}}
+
+    def legacy_cover_adapter(current_config):
+        assert Path(current_config["DATA_DIR"]).resolve() == Path(config["DATA_DIR"]).resolve()
+        return PostgresScanCacheAdapter(config, connect=lambda _url: LegacyCoverReadConnection())
+
+    monkeypatch.setattr(cover_lookup_runtime, "select_scan_cache_adapter", legacy_cover_adapter)
+
 
     def reject_unisolated_candidate_snapshot_connection(_database_url):
         pytest.fail(
@@ -146,6 +177,61 @@ def postgres_runtime_fakes(config, monkeypatch):
     }
     config["_TEST_COVER_LOOKUP_NOTIFICATIONS"] = persisted_notifications
     config["_TEST_CANDIDATE_SNAPSHOT_RESOLVE_CALLS"] = candidate_snapshot_resolve_calls
+
+
+def _run_remote_save_with_recording_adapter(
+    task_id, config, logger, library_state, user_agent, album_root, track_paths,
+    candidate_id, selected_image, *, apply_cover_selection_for_tracks,
+    persist_cover_selection_for_tracks=None, **options,
+):
+    """Run the production worker through a real adapter with recording SQL IO.
+
+    Legacy persistence observers now attach at the connection-bound seam rather
+    than a removed worker callback. No product persistence or transport is used.
+    """
+    from functools import wraps
+    from tests.py.test_cover_mutation_boundary import Connection
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    connection = Connection([], {"album_id": 1, "cover_path": None, "metadata": {}})
+    adapter = PostgresScanCacheAdapter(config, connect=lambda _url: connection)
+    original_persist = adapter._persist_cover_selection_in_connection
+    problematic = [None]
+
+    @wraps(apply_cover_selection_for_tracks)
+    def apply(*args, **kwargs):
+        result = apply_cover_selection_for_tracks(*args, **kwargs)
+        problematic[0] = result[1]
+        return result
+
+    def persist(conn, *, track_paths, selected_cover_path, **selection):
+        if persist_cover_selection_for_tracks is not None:
+            remote_fields = {
+                key: selection.get(key) for key in (
+                    "remote_cover_url", "remote_cover_thumbnail_url", "remote_cover_source",
+                    "remote_cover_source_label", "remote_cover_album_url", "remote_cover_width",
+                    "remote_cover_height",
+                )
+            }
+            persist_cover_selection_for_tracks(
+                track_paths, cover_path=Path(selected_cover_path) if selected_cover_path else None,
+                cover_selection_origin=selection.get("cover_selection_origin"),
+                explicit_selection=selection.get("explicit_selection", False),
+                **remote_fields, config=config, logger=logger,
+            )
+        return original_persist(conn, track_paths=track_paths,
+                                selected_cover_path=selected_cover_path, **selection)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(adapter, "_persist_cover_selection_in_connection", persist)
+        patch.setattr(cover_lookup_runtime, "run_cover_mutation_for_config",
+                      lambda current_config, **kwargs: adapter.run_cover_mutation(**kwargs))
+        patch.setattr(cover_lookup_runtime, "build_problematic_album_detail_payload",
+                      lambda *args, **kwargs: problematic[0])
+        return cover_lookup_runtime._run_cover_lookup_save_remote_task(
+            task_id, config, logger, library_state, user_agent, album_root, track_paths,
+            candidate_id, selected_image, apply_cover_selection_for_tracks=apply, **options,
+        )
 
 
 def test_cover_lookup_runtime_tests_do_not_depend_on_flask_runtime_helpers():
@@ -699,6 +785,11 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     logger = object()
     library_state: dict[str, object] = {"albums": []}
     requested_track_paths = {str(tmp_path / "song.mp3")}
+    def queued_scope(*, track_paths):
+        assert track_paths == requested_track_paths
+        return {"album_id": 72, "cover_path": None, "metadata": {}}
+    monkeypatch.setattr(cover_lookup_runtime, "select_scan_cache_adapter", lambda _config:
+                        SimpleNamespace(assert_legacy_cover_mutation_allowed=queued_scope))
 
     class FakeSaveExecutor:
         def submit(self, fn, *args, **kwargs):
@@ -778,6 +869,7 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     assert calls["args"][8].height == 1200
     assert calls["args"][8].display_only is True
     assert calls["args"][8].art_kind == "cover"
+    assert calls["kwargs"]["expected_album_id"] == 72
     assert calls["kwargs"]["apply_cover_selection_for_tracks"] is fake_apply_cover_selection_for_tracks
     assert calls["registered"] == ("task-123", "fake-future")
     assert calls["task_update"][0] == "task-123"
@@ -2445,7 +2537,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         lambda **_kwargs: pytest.fail("Spotify linked covers must not download image bytes"),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save",
         config,
         logger,
@@ -2493,6 +2585,8 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         {
             "task_id": "task-save",
             "status": "completed",
+            "persisted": True,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
@@ -2527,7 +2621,7 @@ def test_successful_remote_save_requests_event_only_lookup_cancellation(config, 
         },
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         task_id,
         config,
         logger,
@@ -2576,7 +2670,7 @@ def test_failed_remote_save_does_not_request_lookup_cancellation(config, logger,
         },
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         task_id,
         config,
         logger,
@@ -2648,7 +2742,7 @@ def test_run_cover_lookup_save_remote_task_rejects_display_only_mixed_unsafe_tra
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-display-only-unsafe-root",
         config,
         logger,
@@ -2679,6 +2773,8 @@ def test_run_cover_lookup_save_remote_task_rejects_display_only_mixed_unsafe_tra
         {
             "task_id": "task-display-only-unsafe-root",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -2732,10 +2828,11 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         fetch_calls.append({"image_url": image_url, **kwargs})
         return SimpleNamespace(payload=_jpeg_bytes())
 
-    def delegating_download_remote_cover_to_folder(**kwargs):
+    def delegating_download_remote_cover_to_folder(*, write_cover_func, **kwargs):
         download_calls.append(kwargs)
         return cover_workflow.download_remote_cover_to_folder(
             **kwargs,
+            write_cover_func=write_cover_func,
             fetch_remote_image_func=fake_fetch_remote_image,
         )
 
@@ -2767,7 +2864,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-local",
         config,
         logger,
@@ -2831,6 +2928,8 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         {
             "task_id": "task-save-local",
             "status": "completed",
+            "persisted": True,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
@@ -2926,7 +3025,7 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
         ),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-persistence-failed",
         config,
         task_logger,
@@ -2955,6 +3054,8 @@ def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_o
     assert updates == [{
         "task_id": "task-save-persistence-failed",
         "status": "failed",
+        "persisted": False,
+        "finalization_failed": False,
         "progress": 100,
             "progress_label": "Save failed",
         "finished_at": updates[0]["finished_at"],
@@ -3021,7 +3122,7 @@ def test_downloaded_cover_persistence_failure_removes_new_cover_when_none_existe
         ),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-new-cover-persistence-failed",
         config,
         logger,
@@ -3116,7 +3217,7 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
         ),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-apply-failed",
         config,
         logger,
@@ -3148,6 +3249,7 @@ def test_downloaded_cover_apply_failure_keeps_file_after_persistence_commits(
     assert updates[0]["progress_label"] == "Save failed"
     assert updates[0]["message"] == "Failed to save selected cover art."
     assert updates[0]["result_kind"] == "save-failed"
+    assert updates[0]["persisted"] is True
     assert sensitive_detail not in str(updates)
 
 
@@ -3189,23 +3291,28 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
         },
     )
 
-    def fallback_download_remote_cover_to_folder(folder, image_url, user_agent):
+    def prepared_download(*, folder, image_url, user_agent, write_cover_func):
         assert folder == album_root
         assert image_url == "https://images.example/new-cover.jpg"
         assert user_agent == config["MUSICBRAINZ_USER_AGENT"]
-        canonical_cover.write_bytes(_jpeg_bytes((30, 30, 220)))
-        first_new_reserve.write_bytes(_jpeg_bytes((40, 40, 210)))
-        second_new_reserve.write_bytes(_jpeg_bytes((50, 50, 200)))
-        return canonical_cover, {
-            "reason": "cover_written",
-            "written_path": str(canonical_cover),
-        }
+        return write_cover_func(folder, _jpeg_bytes()), {"reason": "cover_written"}
 
-    monkeypatch.setattr(
-        cover_lookup_runtime,
-        "download_remote_cover_to_folder",
-        fallback_download_remote_cover_to_folder,
-    )
+    def promotion_with_multiple_reserves(folder, prepared, **kwargs):
+        promotion = cover_workflow.begin_external_cover_write_promotion(
+            folder, serialize_selection=False,
+        )
+        try:
+            canonical_cover.write_bytes(_jpeg_bytes((30, 30, 220)))
+            first_new_reserve.write_bytes(_jpeg_bytes((40, 40, 210)))
+            second_new_reserve.write_bytes(_jpeg_bytes((50, 50, 200)))
+            cover_workflow.record_external_cover_write(promotion)
+            return promotion
+        except Exception:
+            cover_workflow.rollback_local_image_promotion(promotion)
+            raise
+
+    monkeypatch.setattr(cover_lookup_runtime, "download_remote_cover_to_folder", prepared_download)
+    monkeypatch.setattr(cover_lookup_runtime, "begin_prepared_remote_cover_promotion", promotion_with_multiple_reserves)
     monkeypatch.setattr(
         cover_lookup_runtime,
         "update_cover_lookup_task",
@@ -3217,7 +3324,7 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
         ),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-multiple-reserves",
         config,
         logger,
@@ -3264,6 +3371,8 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     assert updates == [{
         "task_id": "task-save-multiple-reserves",
         "status": "failed",
+        "persisted": False,
+        "finalization_failed": False,
         "progress": 100,
             "progress_label": "Save failed",
         "finished_at": updates[0]["finished_at"],
@@ -3303,9 +3412,9 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
         },
     )
 
-    def fake_download_remote_cover_to_folder(**kwargs):
+    def fake_download_remote_cover_to_folder(*, write_cover_func, **kwargs):
         download_calls.append(kwargs)
-        written_cover.write_bytes(_jpeg_bytes())
+        assert write_cover_func(kwargs["folder"], _jpeg_bytes()) == written_cover
         return written_cover, {"reason": "cover_written", "written_path": str(written_cover)}
 
     def fake_apply_cover_selection_for_tracks(track_paths, **changes):
@@ -3323,7 +3432,7 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-subfolders",
         config,
         logger,
@@ -3349,6 +3458,8 @@ def test_run_cover_lookup_save_remote_task_accepts_non_numeric_album_subfolders(
         {
             "task_id": "task-save-subfolders",
             "status": "completed",
+            "persisted": True,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Completed",
             "finished_at": updates[0]["finished_at"],
@@ -3395,7 +3506,7 @@ def test_run_cover_lookup_save_remote_task_reports_download_failure_without_appl
     def fail_apply_cover_selection_for_tracks(*_args, **_kwargs):
         raise AssertionError("Failed remote downloads must not update album cover state")
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-failed",
         config,
         logger,
@@ -3412,6 +3523,8 @@ def test_run_cover_lookup_save_remote_task_reports_download_failure_without_appl
         {
             "task_id": "task-save-failed",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -3454,7 +3567,7 @@ def test_run_cover_lookup_save_remote_task_reports_write_no_file_without_applyin
     def fail_apply_cover_selection_for_tracks(*_args, **_kwargs):
         raise AssertionError("Remote write failures must not update album cover state")
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-write-failed",
         config,
         logger,
@@ -3471,6 +3584,8 @@ def test_run_cover_lookup_save_remote_task_reports_write_no_file_without_applyin
         {
             "task_id": "task-save-write-failed",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -3526,7 +3641,7 @@ def test_run_cover_lookup_save_remote_task_rejects_mismatched_album_root_before_
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-unsafe-root",
         config,
         logger,
@@ -3546,6 +3661,8 @@ def test_run_cover_lookup_save_remote_task_rejects_mismatched_album_root_before_
         {
             "task_id": "task-save-unsafe-root",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -3611,7 +3728,7 @@ def test_run_cover_lookup_save_remote_task_rejects_cross_root_common_parent_befo
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-cross-root",
         config,
         logger,
@@ -3631,6 +3748,8 @@ def test_run_cover_lookup_save_remote_task_rejects_cross_root_common_parent_befo
         {
             "task_id": "task-save-cross-root",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -3719,7 +3838,7 @@ def test_run_cover_lookup_save_remote_task_rejects_same_root_mixed_album_folders
         lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
     )
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         "task-save-mixed-album",
         config,
         logger,
@@ -3741,6 +3860,8 @@ def test_run_cover_lookup_save_remote_task_rejects_same_root_mixed_album_folders
         {
             "task_id": "task-save-mixed-album",
             "status": "failed",
+            "persisted": False,
+            "finalization_failed": False,
             "progress": 100,
             "progress_label": "Save failed",
             "finished_at": updates[0]["finished_at"],
@@ -3869,8 +3990,8 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
         clock_value += 0.002
         return clock_value
 
-    def fake_download_remote_cover_to_folder(**_kwargs):
-        written_cover.write_bytes(_jpeg_bytes())
+    def fake_download_remote_cover_to_folder(*, write_cover_func, **kwargs):
+        assert write_cover_func(kwargs["folder"], _jpeg_bytes()) == written_cover
         return written_cover, {"reason": "cover_written"}
 
     original_publish = cover_lookup_runtime._publish_save_runtime_phase_metrics
@@ -3887,7 +4008,7 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     )
     monkeypatch.setattr(cover_lookup_runtime, "_publish_save_runtime_phase_metrics", capture_publish)
 
-    cover_lookup_runtime._run_cover_lookup_save_remote_task(
+    _run_remote_save_with_recording_adapter(
         task_id,
         config,
         logger,

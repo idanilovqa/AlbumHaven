@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from threading import Event, Thread
 
@@ -895,6 +896,60 @@ def test_stop_during_shared_sampling_wait_suppresses_health_and_requests(tmp_pat
     assert len(samples) == 2
     assert emitted == problems == []
     assert coordinator._pending_entry_count == 0
+
+
+def test_stat_signature_uses_named_fields_of_real_stat_result(tmp_path: Path):
+    from music_app.services.library_event_coordinator import _stat_signature
+
+    path = tmp_path / "01.flac"
+    path.write_bytes(b"track")
+    observed = path.stat()
+
+    assert isinstance(observed, tuple)
+    assert _stat_signature(observed) == (observed.st_size, observed.st_mtime_ns)
+
+
+@pytest.mark.parametrize("changed_field", ("size", "mtime"))
+def test_stable_write_waits_for_matching_real_file_samples(
+    tmp_path: Path, changed_field: str,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    path = tmp_path / "01.flac"
+    path.write_bytes(b"track")
+    initial = path.stat()
+    waits = []
+    emitted = []
+    problems = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if len(waits) == 1:
+            if changed_field == "size":
+                path.write_bytes(b"longer track")
+                modified_ns = initial.st_mtime_ns
+            else:
+                modified_ns = initial.st_mtime_ns + 2_000_000_000
+            os.utime(path, ns=(initial.st_atime_ns, modified_ns))
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append, emit_problem=problems.append, wait=wait,
+    )
+    try:
+        coordinator.accept(_event(LibraryEventKind.MODIFIED, tmp_path, "01.flac"))
+        coordinator.flush()
+
+        final = path.stat()
+        assert (final.st_mode, final.st_ino) == (initial.st_mode, initial.st_ino)
+        assert (final.st_size != initial.st_size) is (changed_field == "size")
+        assert (final.st_mtime_ns != initial.st_mtime_ns) is (changed_field == "mtime")
+        assert waits == [0.1, 0.1]
+        assert len(emitted) == 1
+        assert emitted[0].paths == frozenset({path})
+        assert problems == []
+    finally:
+        coordinator.stop()
 
 
 def test_stable_write_retries_transient_sharing_violation(tmp_path: Path):

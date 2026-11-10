@@ -56,6 +56,7 @@ from music_app.services.library_roots import (
     library_category_slug,
     summarize_root_provenance_payloads,
 )
+from music_app.services.ordered_cover_presentation import project_ordered_covers_for_browse
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
 from music_app.services.opinion_read_seams import (
     build_popularity_browse_payload,
@@ -1733,6 +1734,36 @@ class PostgresLibraryBrowseRepository:
                 - sum(selected_subphase_ms.values()),
             )
         return payload
+
+    def load_selected_cover_artwork(
+        self, *, album_id: int, library_id: int,
+    ) -> dict[str, object] | None:
+        """Read a saved reference even when its album has no active local files.
+
+        Active paths constrain local image access only. A saved remote source
+        belongs to the persisted album, independently of the local inventory.
+        """
+        if any(type(value) is not int or not 0 < value < 2**63 for value in (album_id, library_id)):
+            return None
+        with self._browse_connection_context() as connection:
+            row = connection.execute(
+                """
+                select albums.id as album_id, albums.library_id, albums.metadata,
+                       coalesce(array_agg(distinct files.private_path)
+                         filter (where files.scan_cache_stale is false
+                                   and roots.is_active is true), array[]::text[]) as track_paths
+                from library.local_albums albums
+                left join library.local_tracks tracks
+                  on tracks.album_id = albums.id and tracks.library_id = albums.library_id
+                left join library.local_track_files files on files.track_id = tracks.id
+                left join library.library_roots roots
+                  on roots.id = files.library_root_id and roots.library_id = albums.library_id
+                where albums.id = %(album_id)s and albums.library_id = %(library_id)s
+                group by albums.id, albums.library_id
+                """,
+                {"album_id": album_id, "library_id": library_id},
+            ).fetchone()
+        return dict(_row_mapping(row)) if row is not None else None
 
     def build_album_detail_payload(
         self,
@@ -5344,6 +5375,11 @@ def _missing_album_projection_payloads(
         ).strip()
         missing_albums.append(
             {
+                "album_id": first.get("album_id"),
+                **project_ordered_covers_for_browse(
+                    metadata, album_id=first.get("album_id"),
+                    library_id=first.get("album_library_id"),
+                ),
                 "key": album_key,
                 "album_ref": album_key,
                 "_persisted_album_key": album_key,
@@ -7748,6 +7784,11 @@ def _selected_artist_album_payloads(
             if not isinstance(artists, list):
                 artists = [artist_display] if artist_display else []
             album = {
+                "album_id": persisted_album_id,
+                **project_ordered_covers_for_browse(
+                    metadata, album_id=persisted_album_id,
+                    library_id=row_payload.get("album_library_id"),
+                ),
                 "key": album_key,
                 "album_ref": album_key,
                 "_persisted_album_key": persisted_album_key,
@@ -7913,6 +7954,10 @@ def _root_album_browse_album_payloads(
         duration_seconds = _coerce_duration_seconds(row_payload.get("total_duration_seconds"))
         album_payload = {
             "album_id": album_id,
+            **project_ordered_covers_for_browse(
+                metadata, album_id=album_id,
+                library_id=row_payload.get("album_library_id"),
+            ),
             "key": album_key,
             "name": str(row_payload.get("album_title") or "").strip(),
             "album_artist": album_artist,
@@ -8491,6 +8536,7 @@ def _selected_artist_sql() -> str:
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -8510,6 +8556,7 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.album_title,
           selected_artist_albums.album_release_year,
           selected_artist_albums.album_cover_path,
+          selected_artist_albums.album_library_id,
           selected_artist_albums.album_metadata,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
@@ -8678,6 +8725,7 @@ def _album_detail_sql() -> str:
           library.local_albums.title as album_title,
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
+          library.local_albums.library_id as album_library_id,
           library.local_albums.metadata as album_metadata,
           (select array_agg(release_key) from library.separate_releases
            where library_id = library.local_albums.library_id) as separate_release_keys,
@@ -8790,6 +8838,7 @@ def _root_album_browse_sql() -> str:
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata
           from library.local_artists
           join bootstrap_context
@@ -8827,6 +8876,7 @@ def _root_album_browse_sql() -> str:
           album_rows.album_title,
           album_rows.album_release_year,
           album_rows.album_cover_path,
+          album_rows.album_library_id,
           album_rows.album_metadata,
           case
             when cover_candidate_snapshots.album_id is null then null
@@ -9068,6 +9118,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata
           from preview_artists
           join library.local_album_featured_artists
@@ -9140,6 +9191,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             matched_album_rows.album_title,
             matched_album_rows.album_release_year,
             matched_album_rows.album_cover_path,
+            matched_album_rows.album_library_id,
             matched_album_rows.album_metadata,
             coalesce(track_rollups.track_count, 0) as track_count,
             coalesce(
@@ -9508,6 +9560,7 @@ def _selected_artist_preview_sql(
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -9543,6 +9596,7 @@ def _selected_artist_preview_sql(
           matched_album_rows.album_title,
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
+          matched_album_rows.album_library_id,
           matched_album_rows.album_metadata,
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
@@ -9609,6 +9663,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -9645,6 +9700,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.album_title,
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
+          matched_album_rows.album_library_id,
           matched_album_rows.album_metadata,
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
@@ -9995,6 +10051,7 @@ def _search_preview_sql(
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata,
             featured_credits.album_featured_artists
           from matched_album_ids
@@ -10141,6 +10198,7 @@ def _search_preview_sql(
               matched_album_rows.album_title,
               matched_album_rows.album_release_year,
               matched_album_rows.album_cover_path,
+              matched_album_rows.album_library_id,
               matched_album_rows.album_metadata,
               matched_album_rows.album_featured_artists,
               array[]::text[] as album_featured_artist_names,
@@ -10184,6 +10242,7 @@ def _search_preview_sql(
               library.local_albums.title as album_title,
               library.local_albums.release_year as album_release_year,
               library.local_albums.cover_path as album_cover_path,
+              library.local_albums.library_id as album_library_id,
               library.local_albums.metadata as album_metadata,
               null::jsonb as album_featured_artists,
               coalesce(missing_album_featured_artists.artist_names, array[]::text[])
@@ -10278,6 +10337,7 @@ def _cover_state_rows_by_track_paths_sql() -> str:
         select
             library.local_track_files.private_path as file_private_path,
             library.local_albums.cover_path as album_cover_path,
+            library.local_albums.library_id as album_library_id,
             library.local_albums.metadata as album_metadata,
             coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}',
@@ -10383,6 +10443,7 @@ def _album_rows_by_track_paths_sql() -> str:
           library.local_albums.title as album_title,
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
+          library.local_albums.library_id as album_library_id,
           library.local_albums.metadata as album_metadata,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
@@ -10664,6 +10725,7 @@ def _missing_albums_sql(
           library.local_albums.title as album_title,
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
+          library.local_albums.library_id as album_library_id,
           library.local_albums.metadata as album_metadata,
           coalesce(missing_album_featured_artists.artist_names, array[]::text[])
             as album_featured_artist_names,

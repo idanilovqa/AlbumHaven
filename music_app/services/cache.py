@@ -543,6 +543,43 @@ def _rebase_non_cover_cache_entry_changes(
     return rebased_file_cache
 
 
+def run_cover_mutation_for_config(
+    config, *, track_paths, album_root, source_paths, mutate, affected_paths=(),
+    selection_options=None, allow_ordered_selection=False,
+    expected_inventory_mutation_revision=None, expected_album_id=None, commit_guard=None,
+    reserve_variant_bytes=None,
+):
+    """Select the authoritative adapter without entering from a runtime lock."""
+    return _select_runtime_scan_cache_adapter(config).run_cover_mutation(
+        track_paths=track_paths, album_root=album_root, source_paths=source_paths,
+        affected_paths=affected_paths, mutate=mutate, selection_options=selection_options,
+        allow_ordered_selection=allow_ordered_selection,
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+        expected_album_id=expected_album_id, commit_guard=commit_guard,
+        reserve_variant_bytes=reserve_variant_bytes,
+    )
+
+
+def load_cover_selections_for_config(
+    config: dict[str, object], album_ids: set[int],
+) -> dict[int, dict[str, object]]:
+    """Read bounded canonical cover metadata through the runtime database owner."""
+    return _select_runtime_scan_cache_adapter(config).load_cover_selections(album_ids)
+
+
+def persist_ordered_cover_selection_for_config(
+    config: dict[str, object], *, track_paths: set[str], album_root: Path,
+    expected_album_id: int, expected_revision: int, mutation_id: str,
+    references: list[dict[str, object]], commit_guard=None,
+) -> dict[str, object]:
+    """Persist source references through the existing runtime database owner."""
+    return _select_runtime_scan_cache_adapter(config).persist_ordered_cover_selection(
+        track_paths=track_paths, album_root=album_root,
+        expected_album_id=expected_album_id, expected_revision=expected_revision,
+        mutation_id=mutation_id, references=references, commit_guard=commit_guard,
+    )
+
+
 def persist_cover_selection_for_tracks_for_config(
     config: dict[str, object],
     track_paths: set[str],
@@ -657,12 +694,14 @@ def validate_structural_tag_edit_for_config(
     previous_file_entries: dict[str, dict[str, object]],
     updated_file_entries: dict[str, dict[str, object]],
     changed_field_names: set[str],
+    allow_targeted_identity: bool = True,
 ) -> None:
     _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(
         changed_paths=set(changed_paths),
         previous_file_entries=previous_file_entries,
         updated_file_entries=updated_file_entries,
         changed_field_names=set(changed_field_names),
+        **({"allow_targeted_identity": False} if not allow_targeted_identity else {}),
     )
 
 

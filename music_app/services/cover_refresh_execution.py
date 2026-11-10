@@ -14,17 +14,15 @@ from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
 from music_app.services.cache import (
-    persist_cover_selection_for_tracks_for_config,
+    run_cover_mutation_for_config,
     save_cache_to_disk_for_config,
 )
 from music_app.services.cover_workflow import (
-    begin_external_cover_write_promotion,
-    complete_local_image_promotion,
+    begin_prepared_remote_cover_promotion,
+    cover_promotion_effect,
     cover_revision_for_path,
-    record_external_cover_write,
-    rollback_local_image_promotion,
-    run_serialized_cover_selection,
 )
+from music_app.services.cover_mutation import CoverMutationEffect, CoverMutationFinalizationError, CoverMutationCommitUncertainError
 from music_app.services.covers import find_cover_image, images_are_visually_similar
 from music_app.services import cover_refresh_provider
 from music_app.services.cover_provider_candidates import (
@@ -35,8 +33,14 @@ from music_app.services.cover_provider_outcomes_postgres import persist_cover_pr
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
 
 StateGetter = Callable[[], dict[str, object]]
+
+
+class _CoverRefreshSuperseded(RuntimeError):
+    """A prepared background write no longer owns the runtime generation."""
+
 
 _SLOW_COVER_FETCH_LOG_THRESHOLD_MS = 8000
 _LOGGER = logging.getLogger(__name__)
@@ -107,45 +111,61 @@ def _recover_existing_cover_selection(
             for path, values in baseline.items()
         )
 
-    def recover() -> tuple[bool, bool]:
+    scope = select_scan_cache_adapter(config).assert_legacy_cover_mutation_allowed(track_paths=paths)
+    expected_album_id = job.get("album_id")
+    if type(expected_album_id) is not int or expected_album_id <= 0:
+        return False, True
+    retained_album_id = job.get("_cover_mutation_album_id", expected_album_id)
+    if retained_album_id != expected_album_id or scope["album_id"] != expected_album_id:
+        return False, True
+    if album_ids and album_ids != {expected_album_id}:
+        return False, True
+
+    def recover(fresh_scope):
+        paths_still_owned = (
+            Path(job["folder"]).resolve() == folder
+            and cover_path.resolve() == selected
+            and selected.resolve().is_relative_to(folder)
+            and all(Path(path).resolve().is_relative_to(folder) for path in paths)
+        )
+        if not state_is_current() or not paths_still_owned or not selected.is_file():
+            raise RuntimeError("Recovered cover selection changed before mutation.")
+        revision = cover_revision_for_path(selected)
+        if all(entry.get("cover_path") == str(selected) and entry.get("cover_revision") == revision for entry in entries.values()):
+            return CoverMutationEffect()
+        return CoverMutationEffect(
+            selection={"selected_cover_path": selected, "cover_revision": revision},
+            value=revision,
+        )
+
+    def commit_current(commit_action, effect):
         with cache_lock:
             if not state_is_current():
-                return False, True
-            revision = cover_revision_for_path(selected)
-            if all(entry.get("cover_path") == str(selected) and entry.get("cover_revision") == revision for entry in entries.values()):
-                return False, False
-
-        def commit_current(commit_action):
-            with cache_lock:
-                paths_still_owned = (
-                    Path(job["folder"]).resolve() == folder
-                    and cover_path.resolve() == selected
-                    and selected.resolve().is_relative_to(folder)
-                    and all(Path(path).resolve().is_relative_to(folder) for path in paths)
-                )
-                if not state_is_current() or not paths_still_owned or not selected.is_file() or cover_revision_for_path(selected) != revision:
-                    raise RuntimeError("Recovered cover selection changed before commit.")
-                result = commit_action()
-                selection = dict.fromkeys(_COVER_SELECTION_FIELDS)
-                selection.update(cover_path=str(selected), cover_revision=revision, cover_selection_origin="automatic")
-                current_entries = library_state["file_cache"]
-                for path, entry in entries.items():
-                    entry.update(selection)
-                    current_entries[path].update(selection)
+                raise RuntimeError("Recovered cover selection changed before commit.")
+            result = commit_action()
+            if effect.selection is None:
                 return result
+            selection = dict.fromkeys(_COVER_SELECTION_FIELDS)
+            selection.update(cover_path=str(selected), cover_revision=effect.value, cover_selection_origin="automatic")
+            current_entries = library_state["file_cache"]
+            for path, entry in entries.items():
+                entry.update(selection)
+                current_entries[path].update(selection)
+            return result
 
-        result = persist_cover_selection_for_tracks_for_config(
-            config, paths, selected, cover_revision=revision,
-            cover_selection_origin="automatic", reject_if_user_controlled=True,
-            expected_cover_state=(expected_origin or None, expected_revision or None),
-            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-            commit_guard=commit_current,
-        )
-        if result.get("blocked_by_user_selection") or result.get("blocked_by_expected_cover_state"):
-            return False, True
-        return True, False
-
-    return run_serialized_cover_selection(folder, recover)
+    result = run_cover_mutation_for_config(
+        config, track_paths=paths, album_root=folder, source_paths=(selected,),
+        expected_album_id=expected_album_id,
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+        selection_options={
+            "cover_selection_origin": "automatic", "reject_if_user_controlled": True,
+            "expected_cover_state": (expected_origin or None, expected_revision or None),
+        },
+        mutate=recover, commit_guard=commit_current,
+    )
+    if any(value for key, value in result.items() if key.startswith("blocked_by_")):
+        return False, True
+    return result.get("value") is not None, False
 
 
 def _automatic_candidate_payload(candidate: object) -> dict[str, object]:
@@ -174,137 +194,97 @@ def _build_automatic_cover_write_guard(
     track_paths: set[str],
     automatic_write_is_current: Callable[[], bool] | None = None,
     expected_inventory_mutation_revision: int | None = None,
+    expected_album_id: int | None = None,
+    publish_selection: Callable[[dict[str, object]], None] | None = None,
     cache_lock=None,
 ) -> Callable[..., object]:
     if automatic_write_is_current is not None and cache_lock is None:
         raise ValueError("Automatic cover currentness requires the runtime cache lock.")
+    if expected_album_id is None:
+        scope = select_scan_cache_adapter(config).assert_legacy_cover_mutation_allowed(track_paths=track_paths)
+        expected_album_id = scope["album_id"]
 
     def automatic_write_guard(
-        write_action: Callable[[], object],
-        *,
-        cover_selection_origin: str,
+        write_action: Callable[[], object], *, cover_selection_origin: str,
     ) -> object:
         if str(cover_selection_origin or "").strip().casefold() != "automatic":
             raise ValueError("Automatic cover writes require automatic selection origin.")
-        selected_cover_path = Path(
-            getattr(write_action, "selected_cover_path", folder / "cover.jpg")
-        )
-        provisional_revision = str(
-            getattr(write_action, "provisional_cover_revision", "") or ""
-        ).strip()
-        if not provisional_revision:
-            raise RuntimeError("Automatic cover write is missing its provisional revision.")
-        preserve_user_ownership = bool(
-            getattr(write_action, "preserve_user_ownership", False)
-        )
-        replace_legacy_user = bool(getattr(write_action, "replace_legacy_user_selection", False))
-        legacy_revision = getattr(write_action, "legacy_selected_cover_revision", None)
-        expected_cover_revision = str(
-            getattr(write_action, "expected_cover_revision", "") or ""
-        ).strip()
-        prepared_cover_bytes = getattr(write_action, "prepared_cover_bytes", None)
-        if preserve_user_ownership and (
-            not expected_cover_revision or not isinstance(prepared_cover_bytes, bytes)
-        ):
-            raise RuntimeError("Same-art automatic upgrade is missing its guarded baseline.")
-
-        def persist_and_write() -> object:
-            if (
-                automatic_write_is_current is not None
-                and not automatic_write_is_current()
-            ):
+        prepared_bytes = getattr(write_action, "prepared_cover_bytes", None)
+        if not isinstance(prepared_bytes, bytes) or not prepared_bytes:
+            raise RuntimeError("Automatic cover write is missing its prepared image bytes.")
+        target = folder / "cover.jpg"
+        if Path(getattr(write_action, "selected_cover_path", target)) != target:
+            raise ValueError("Automatic cover target differs from its reserved source.")
+        preserve_user = bool(getattr(write_action, "preserve_user_ownership", False))
+        replace_legacy = bool(getattr(write_action, "replace_legacy_user_selection", False))
+        expected_revision = str(getattr(write_action, "expected_cover_revision", "") or "").strip()
+        if preserve_user:
+            if not expected_revision:
+                raise RuntimeError("Same-art automatic upgrade is missing its guarded baseline.")
+            # Decoding is outside the transaction. Recheck this exact source
+            # revision after source locks, before promotion.
+            if (not target.is_file() or cover_revision_for_path(target) != expected_revision
+                    or not images_are_visually_similar(target, prepared_bytes)):
                 return False
-            current_cover = folder / "cover.jpg"
-            if preserve_user_ownership and (
-                not current_cover.is_file()
-                or cover_revision_for_path(current_cover) != expected_cover_revision
-                or not images_are_visually_similar(current_cover, prepared_cover_bytes)
-            ):
-                return False
-            written_holder: dict[str, Path] = {}
+        if automatic_write_is_current is not None and not automatic_write_is_current():
+            return False
 
-            def commit_after_write(commit_action: Callable[[], object]) -> object:
-                with (
-                    cache_lock
-                    if cache_lock is not None
-                    else nullcontext()
-                ):
-                    if (
-                        automatic_write_is_current is not None
-                        and not automatic_write_is_current()
-                    ):
-                        raise RuntimeError(
-                            "Automatic cover refresh changed before commit."
-                        )
-                    promotion = begin_external_cover_write_promotion(
-                        folder,
-                        serialize_selection=False,
-                    )
-                    try:
-                        written = write_action()
-                        if not written:
-                            raise RuntimeError("Automatic cover write returned no file.")
-                        written_holder["path"] = Path(written)
-                        record_external_cover_write(promotion)
-                        result = commit_action()
-                    except Exception:
-                        rollback_local_image_promotion(promotion)
-                        raise
-                    complete_local_image_promotion(promotion)
-                    return result
-
-            persistence_origin = "user" if preserve_user_ownership else "automatic"
-            persistence_result = persist_cover_selection_for_tracks_for_config(
-                config,
-                track_paths,
-                selected_cover_path,
-                cover_revision=provisional_revision,
-                cover_selection_origin=persistence_origin,
+        def mutate(fresh_scope):
+            if automatic_write_is_current is not None and not automatic_write_is_current():
+                raise RuntimeError("Automatic cover refresh changed before mutation.")
+            if preserve_user and (not target.is_file() or cover_revision_for_path(target) != expected_revision):
+                raise RuntimeError("Same-art automatic upgrade source changed before mutation.")
+            promotion = begin_prepared_remote_cover_promotion(
+                folder, prepared_bytes,
+                reserved_cover_variant_path=fresh_scope["reserved_cover_variant_path"],
+            )
+            if promotion is None:
+                raise RuntimeError("Prepared automatic cover could not be written.")
+            return cover_promotion_effect(
+                promotion,
                 local_cover_width=getattr(write_action, "local_cover_width", None),
                 local_cover_height=getattr(write_action, "local_cover_height", None),
-                reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
-                reject_if_explicit_selection=replace_legacy_user,
-                expected_cover_state=("user", legacy_revision) if replace_legacy_user else None,
-                expected_cover_selection_origin=(
-                    "user" if preserve_user_ownership else None
-                ),
-                expected_cover_revision=(
-                    expected_cover_revision if preserve_user_ownership else None
-                ),
-                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-                commit_guard=commit_after_write,
             )
-            if bool(
-                persistence_result.get("blocked_by_user_selection")
-                or persistence_result.get("blocked_by_expected_cover_state")
-            ):
-                return False
-            written_path = written_holder.get("path")
-            if written_path is None:
-                raise RuntimeError("Automatic cover persistence committed without a file write.")
 
-            exact_revision = cover_revision_for_path(written_path)
-            if exact_revision != provisional_revision:
-                persist_cover_selection_for_tracks_for_config(
-                    config,
-                    track_paths,
-                    written_path,
-                    cover_revision=exact_revision,
-                    cover_selection_origin=persistence_origin,
-                    reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
-                    reject_if_explicit_selection=replace_legacy_user,
-                    expected_cover_state=("automatic", provisional_revision) if replace_legacy_user else None,
-                    expected_cover_selection_origin=(
-                        "user" if preserve_user_ownership else None
-                    ),
-                    expected_cover_revision=(
-                        provisional_revision if preserve_user_ownership else None
-                    ),
-                    expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-                )
-            return written_path
+        def commit_current(commit_action, effect):
+            with cache_lock if cache_lock is not None else nullcontext():
+                if automatic_write_is_current is not None and not automatic_write_is_current():
+                    raise RuntimeError("Automatic cover refresh changed before commit.")
+                result = commit_action()
+                if publish_selection is not None:
+                    selection = dict.fromkeys(_COVER_SELECTION_FIELDS)
+                    selection.update(
+                        cover_path=str(effect.value),
+                        cover_revision=effect.selection["cover_revision"],
+                        cover_selection_origin="user" if preserve_user else "automatic",
+                        local_cover_width=effect.selection.get("local_cover_width"),
+                        local_cover_height=effect.selection.get("local_cover_height"),
+                    )
+                    # Preserve proven user provenance for a same-art upgrade.
+                    if preserve_user:
+                        selection.pop("cover_selection_provenance")
+                    publish_selection(selection)
+                return result
 
-        return run_serialized_cover_selection(folder, persist_and_write)
+        result = run_cover_mutation_for_config(
+            config, track_paths=track_paths, album_root=folder,
+            source_paths=(target,), affected_paths=(target,),
+            reserve_variant_bytes=prepared_bytes,
+            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+            expected_album_id=expected_album_id,
+            selection_options={
+                "cover_selection_origin": "user" if preserve_user else "automatic",
+                "reject_if_user_controlled": not (preserve_user or replace_legacy),
+                "reject_if_explicit_selection": replace_legacy,
+                "expected_cover_state": ("user", getattr(write_action, "legacy_selected_cover_revision", None)) if replace_legacy else None,
+                "expected_cover_selection_origin": "user" if preserve_user else None,
+                "expected_cover_revision": expected_revision if preserve_user else None,
+            },
+            mutate=mutate, commit_guard=commit_current,
+        )
+        if any(value for key, value in result.items() if key.startswith("blocked_by_")):
+            return False
+        return result["value"]
 
     return automatic_write_guard
 
@@ -324,6 +304,7 @@ def execute_cover_job(
     candidate_callback: Callable[..., object] | None = None,
     automatic_write_guard: Callable[..., object] | None = None,
     automatic_write_is_current: Callable[[], bool] | None = None,
+    automatic_cover_publisher: Callable[[dict[str, object]], None] | None = None,
     expected_inventory_mutation_revision: int | None = None,
     cache_lock=None,
     search_run: cover_refresh_provider.AutomaticCoverSearchRun | None = None,
@@ -331,6 +312,37 @@ def execute_cover_job(
     folder = job["folder"]
     artist = str(job.get("artist") or "")
     album = str(job.get("album") or "")
+    expected_album_id = job.get("album_id")
+    if config is not None:
+        try:
+            if type(expected_album_id) is not int or expected_album_id <= 0:
+                raise OrderedCoverSelectionConflict("Queued album identity could not be verified.")
+            if job.get("_cover_mutation_album_id", expected_album_id) != expected_album_id:
+                raise OrderedCoverSelectionConflict("Queued album identity changed before artwork lookup.")
+            scope = select_scan_cache_adapter(config).assert_legacy_cover_mutation_allowed(
+                track_paths={str(path) for path in job.get("track_paths") or []},
+            )
+            if scope["album_id"] != expected_album_id:
+                raise OrderedCoverSelectionConflict("Queued album identity changed before artwork lookup.")
+            job["_cover_mutation_album_id"] = expected_album_id
+        except Exception as exc:
+            return None, False, {
+                "reason": (
+                    "ordered_cover_selection_conflict"
+                    if isinstance(exc, OrderedCoverSelectionConflict)
+                    else "cover_selection_preflight_failed"
+                ),
+                "selection_conflict": True,
+                "resolver_trace": [],
+            }
+    committed_selection = None
+
+    def publish_selection(selection):
+        nonlocal committed_selection
+        if automatic_cover_publisher is not None:
+            automatic_cover_publisher(selection)
+        committed_selection = dict(selection)
+
     try:
         provider_kwargs = {
             "folder": folder,
@@ -346,7 +358,7 @@ def execute_cover_job(
             "allow_apple_web_fallback_when_has_cover": allow_apple_web_fallback_when_has_cover,
             "negative_cache_ttl_seconds": negative_cache_ttl_seconds,
         }
-        if "cover_selection_origin" in job:
+        if config is not None or "cover_selection_origin" in job:
             stored_origin = str(
                 job.get("cover_selection_origin") or "automatic"
             ).strip().casefold()
@@ -380,6 +392,8 @@ def execute_cover_job(
                     automatic_write_is_current=automatic_write_is_current,
                     expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                     cache_lock=cache_lock,
+                    expected_album_id=expected_album_id,
+                    publish_selection=publish_selection,
                 )
         elif effective_write_guard is not None and automatic_write_is_current is not None:
             underlying_write_guard = effective_write_guard
@@ -397,8 +411,36 @@ def execute_cover_job(
             provider_kwargs["search_remote_cover_func"] = lambda **kwargs: (
                 cover_refresh_provider.search_primary_remote_cover(**kwargs, search_run=search_run)
             )
-        return cover_refresh_provider.ensure_best_cover_for_folder(**provider_kwargs)
+        cover_path, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(**provider_kwargs)
+        if committed_selection is not None:
+            detail["committed_cover_selection"] = committed_selection
+            detail["runtime_selection_published"] = automatic_cover_publisher is not None
+        return cover_path, downloaded, detail
+    except CoverMutationCommitUncertainError:
+        return None, False, {
+            "reason": "cover_selection_commit_uncertain", "persisted": None,
+            "selection_conflict": True, "resolver_trace": [],
+        }
+    except CoverMutationFinalizationError:
+        return None, False, {
+            "reason": "cover_selection_finalization_failed", "persisted": True,
+            "selection_conflict": True, "resolver_trace": [],
+        }
+    except OrderedCoverSelectionConflict:
+        return None, False, {
+            "reason": "ordered_cover_selection_conflict",
+            "selection_conflict": True,
+            "resolver_trace": [],
+        }
     except Exception as exc:
+        if committed_selection is not None:
+            return None, False, {
+                "reason": "cover_selection_finalization_failed", "persisted": True,
+                "selection_conflict": True, "resolver_trace": [],
+                "committed_cover_selection": committed_selection,
+                "runtime_selection_published": automatic_cover_publisher is not None,
+                "error": str(exc),
+            }
         _LOGGER.warning("Cover refresh failed for %s: %s", folder, exc)
         return (
             (cover_refresh_provider.validated_selected_cover_path(str(job["selected_cover_path"]))
@@ -468,12 +510,46 @@ def run_cover_jobs(
             and (scan_generation is None or int(current.get("scan_generation") or 0) == scan_generation)
         )
 
+    def publish_automatic_selection(job, selection):
+        # Called only inside the mutation's short runtime commit guard.
+        current_entries = library_state.get("file_cache") or {}
+        paths = {str(path) for path in job.get("track_paths") or []}
+        if any(not isinstance(current_entries.get(path), dict) for path in paths):
+            raise RuntimeError("Automatic cover runtime membership changed after commit.")
+        for path in paths:
+            current_entries[path].update(selection)
+            if isinstance(file_cache.get(path), dict):
+                file_cache[path].update(selection)
+
+        for album in library_state.get("albums") or []:
+            tracks = [track for track in getattr(album, "tracks", ()) if str(getattr(track, "path", "")) in paths]
+            if tracks:
+                for item in (album, *tracks):
+                    for field, value in selection.items():
+                        setattr(item, field, value)
+        from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
+        from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+        invalidate_problematic_albums_payload_cache(library_state)
+        invalidate_utility_rules_payload_cache(library_state)
+
+    def commit_if_current(commit_action):
+        # Repository SQL and row locks precede this short runtime-lock section.
+        with cache_lock:
+            if not owns_progress():
+                raise _CoverRefreshSuperseded("Cover refresh generation changed before commit.")
+            return commit_action()
+
     def write_authority_if_current(write_action: Callable[[], object]) -> bool:
         with cache_lock:
             if not owns_progress():
                 return False
+        try:
+            # Every durable action also uses commit_if_current at its repository
+            # boundary, so a generation change after this early check rolls back.
             write_action()
-            return True
+        except _CoverRefreshSuperseded:
+            return False
+        return True
 
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
@@ -497,7 +573,7 @@ def run_cover_jobs(
             continue
         album_id = job.get("album_id")
         try:
-            repository = AlbumCoverCandidateSnapshotRepository(config)
+            repository = AlbumCoverCandidateSnapshotRepository(config, commit_guard=commit_if_current)
             if not isinstance(album_id, int) or album_id <= 0:
                 album_id = repository.resolve_album_id_for_track_paths(
                     track_paths=[
@@ -595,7 +671,7 @@ def run_cover_jobs(
         if not callable(mark_seen):
             return
         try:
-            mark_seen()
+            write_authority_if_current(mark_seen)
         except Exception as exc:
             logger.warning(
                 "Applied automatic candidate acknowledgement failed album_id=%s error=%r",
@@ -629,6 +705,7 @@ def run_cover_jobs(
                     lambda: persist_cover_provider_outcomes(
                         config, album_id=job.get("album_id"),
                         album_key=job.get("album_key"), outcomes=provider_outcomes,
+                        commit_guard=commit_if_current,
                     )
                 )
             except Exception as exc:
@@ -649,6 +726,9 @@ def run_cover_jobs(
         if reason == "remote_provider_group_disabled":
             terminal_category = "skipped"
             skipped += 1
+        elif "persisted" in detail and detail.get("selection_conflict"):
+            terminal_category = "failed"
+            failed += 1
         elif downloaded:
             terminal_category = "downloaded"
             downloaded_count += 1
@@ -718,12 +798,21 @@ def run_cover_jobs(
                 detail["reason"] = "selected_cover_changed_during_fetch"
                 detail["selection_conflict"] = True
         cover_value = str(cover_path) if cover_path else None
-        written_revision: str | None = None
-        if cover_path:
+        committed_selection = detail.get("committed_cover_selection")
+        runtime_published = bool(detail.get("runtime_selection_published"))
+        written_revision: str | None = (
+            str(committed_selection.get("cover_revision") or "")
+            if isinstance(committed_selection, dict) else None
+        )
+        if runtime_published:
+            changed = True
+        if cover_path and written_revision is None:
             written_path = Path(str(detail.get("written_path") or cover_value or "").strip())
             if written_path.is_file() and written_path.resolve().is_relative_to(Path(folder).resolve()):
                 written_revision = cover_revision_for_path(written_path)
                 detail["cover_revision"] = written_revision
+        if written_revision is not None:
+            detail["cover_revision"] = written_revision
         has_cover = bool(cover_value)
         detail["downloaded"] = downloaded
         detail["has_cover"] = has_cover
@@ -780,7 +869,7 @@ def run_cover_jobs(
                 resolver_trace=detail.get("resolver_trace"),
             )
 
-        recovering_selection = bool(cover_path and not downloaded and not retained_selection)
+        recovering_selection = bool(cover_path and not downloaded and not retained_selection and not selection_changed)
         if recovering_selection:
             try:
                 recovered, conflict = _recover_existing_cover_selection(
@@ -790,6 +879,12 @@ def run_cover_jobs(
                     cover_generation=cover_generation,
                         expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 )
+            except CoverMutationCommitUncertainError:
+                recovered, conflict = False, True
+                detail.update(reason="cover_selection_commit_uncertain", persisted=None, selection_conflict=True)
+            except CoverMutationFinalizationError:
+                recovered, conflict = False, True
+                detail.update(reason="cover_selection_finalization_failed", persisted=True, selection_conflict=True)
             except Exception as exc:
                 origin = exc.__traceback__
                 while origin.tb_next is not None:
@@ -811,7 +906,9 @@ def run_cover_jobs(
             selection_conflict = selection_conflict or conflict
             if conflict:
                 detail["recovery_conflict"] = True
-                detail["reason"] = "recovered_cover_selection_conflict"
+                detail.setdefault("recovery_reason", "recovered_cover_selection_conflict")
+                if "persisted" not in detail:
+                    detail["reason"] = "recovered_cover_selection_conflict"
                 log_app_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Existing cover metadata recovery skipped because selection could not be verified",
@@ -819,7 +916,7 @@ def run_cover_jobs(
                 )
 
         for track_path in job.get("track_paths") or []:
-            if recovering_selection or retained_selection or selection_changed:
+            if recovering_selection or retained_selection or selection_changed or runtime_published:
                 continue
             entry = file_cache.get(str(track_path))
             if not isinstance(entry, dict):
@@ -938,6 +1035,7 @@ def run_cover_jobs(
                     config=config,
                     candidate_callback=candidate_callbacks.get(id(job)),
                     automatic_write_is_current=owns_progress,
+                    automatic_cover_publisher=lambda selection, job=job: publish_automatic_selection(job, selection),
                     expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                     cache_lock=cache_lock,
                     search_run=search_run,
@@ -1040,6 +1138,7 @@ def run_cover_jobs(
                 config=config,
                 candidate_callback=candidate_callbacks.get(id(job)),
                 automatic_write_is_current=owns_progress,
+                automatic_cover_publisher=lambda selection, job=job: publish_automatic_selection(job, selection),
                 expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 cache_lock=cache_lock,
                 search_run=search_run,

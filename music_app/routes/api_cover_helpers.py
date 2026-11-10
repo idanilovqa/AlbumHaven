@@ -21,6 +21,67 @@ from music_app.services.covers import image_dimensions
 from music_app.services.repair_previews import build_problematic_album_detail_payload
 
 
+def serialize_ordered_cover_selection_for_read(
+    config: dict[str, object], track_paths: set[str], selection: dict[str, object],
+    *, remote_read: bool,
+) -> list[dict[str, object]]:
+    """Use existing gallery source authority without dropping unavailable slots."""
+    from music_app.services.cover_workflow import (
+        resolve_album_write_root_from_track_paths, restrict_album_root_to_represented_disc,
+    )
+    from music_app.services.library_roots import iter_library_root_paths, resolve_configured_media_path
+    from music_app.services.ordered_cover_references import project_selected_cover_metadata
+
+    references = project_selected_cover_metadata(selection).get("selected_covers", [])
+    album_root = None
+    roots = ()
+    if any(item["kind"] == "local" for item in references):
+        album_root = resolve_album_write_root_from_track_paths(config, track_paths)
+        if album_root is not None:
+            album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
+            roots = tuple(iter_library_root_paths(config))
+    result = []
+    for reference in references:
+        public = {"selection_id": reference["selection_id"], "kind": reference["kind"]}
+        if reference["kind"] == "remote":
+            if remote_read:
+                public = dict(reference)
+        else:
+            path = resolve_configured_media_path(
+                config, reference["path"], require_file=False, require_exists=False,
+                configured_root_paths=roots,
+            )
+            if (path is not None and album_root is not None and path.is_relative_to(album_root)
+                    and path == Path(reference["path"])):
+                public = dict(reference)
+            else:
+                public["unavailable"] = True
+        result.append(public)
+    return result
+
+
+def publish_ordered_cover_selection_for_tracks(
+    library_state: dict[str, object], track_paths: set[str], selection: list[dict[str, object]],
+) -> None:
+    """Publish a committed primary under the caller's runtime/source locks.
+
+    No image inspection or persistence occurs here, including for a saved source
+    that is currently missing. The database remains the ordered-list authority.
+    """
+    primary = selection[0]
+    remote = primary if primary["kind"] == "remote" else {}
+    apply_cover_selection_service(
+        library_state=library_state, track_paths=track_paths,
+        cover_path=Path(primary["path"]) if primary["kind"] == "local" else None,
+        **{"remote_cover_" + field: remote.get(field) for field in (
+            "url", "thumbnail_url", "source", "source_label", "album_url", "width", "height",
+        )},
+        cover_revision=None, manual_selection=True, local_cover_dimensions=(None, None),
+        persist_cache_update=False, cache_path=None, schedule_cache_updates_save=None,
+        find_updated_albums=lambda paths: [], find_problematic_album=lambda paths: None,
+    )
+
+
 def apply_cover_path_for_tracks(
     track_paths: set[str],
     cover_path: Path | None,
@@ -38,6 +99,7 @@ def apply_cover_path_for_tracks(
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
     include_problematic_album: bool = True,
+    local_cover_dimensions: tuple[int | None, int | None] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
         track_paths,
@@ -55,6 +117,7 @@ def apply_cover_path_for_tracks(
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
         include_problematic_album=include_problematic_album,
+        local_cover_dimensions=local_cover_dimensions,
         manual_selection=True,
     )
 
@@ -123,6 +186,7 @@ def apply_cover_selection_for_tracks(
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
     include_problematic_album: bool = True,
+    local_cover_dimensions: tuple[int | None, int | None] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -173,4 +237,5 @@ def apply_cover_selection_for_tracks(
         cover_revision=cover_revision,
         persist_cache_update=schedule_cache_update,
         manual_selection=manual_selection,
+        local_cover_dimensions=local_cover_dimensions,
     )

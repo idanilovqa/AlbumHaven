@@ -1889,10 +1889,15 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         "prevalidate_structural_tag_edit": (
             lambda **options: validate_structural_tag_edit_for_config(
                 config,
+                allow_targeted_identity=(postgres_targeted_structural_edit or postgres_exception_only),
                 **options,
             )
         )
-        if postgres_targeted_structural_edit
+        if postgres_targeted_structural_edit or postgres_exception_only or any(
+            isinstance(edits, Mapping)
+            and set(edits) & (_STRUCTURAL_EDIT_FIELDS | {"artist"})
+            for edits in updates.values()
+        )
         else None,
         "prepare_tag_edit_intent": (
             lambda *, changes: intent_lease.prepare_intent(

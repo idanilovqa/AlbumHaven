@@ -22,7 +22,7 @@ _MAX_EDGE = 2048
 _IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"})
 
 
-def render_browse_artwork(path: Path) -> Response:
+def render_browse_artwork(path: Path, *, max_edge: int = _MAX_EDGE) -> Response:
     """Return only decoded image pixels from an already root-validated path."""
     try:
         with path.open("rb") as source:
@@ -32,7 +32,8 @@ def render_browse_artwork(path: Path) -> Response:
         with Image.open(BytesIO(payload)) as image:
             if image.format not in _IMAGE_FORMATS or image.width * image.height > _MAX_PIXELS:
                 raise ValueError("Artwork is not a supported bounded image.")
-            image.thumbnail((_MAX_EDGE, _MAX_EDGE))
+            edge = min(_MAX_EDGE, max(1, max_edge))
+            image.thumbnail((edge, edge))
             mode = "RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB"
             pixels = image.convert(mode)
             # A fresh image deliberately omits EXIF, comments and other metadata.
@@ -50,6 +51,16 @@ def render_browse_artwork(path: Path) -> Response:
 
 async def browse_artwork_response(request) -> Response | None:
     """Use the restricted representation only when raw media is not allowed."""
+    if any(key in request.query_params for key in ("library_id", "album_id", "selection_id")):
+        from music_app.services.ordered_cover_presentation import selected_cover_artwork_response
+
+        try:
+            return await selected_cover_artwork_response(request)
+        except HTTPException as error:
+            # Saved identities are stable across source recovery and library
+            # switches. Do not let a cached failure outlive this request.
+            error.headers = {**(error.headers or {}), "Cache-Control": "private, no-store"}
+            raise
     from music_app.services.policy_asgi import allowed_actions_for_request
 
     allowed = allowed_actions_for_request(request, ("library.media.read",)).as_payload()

@@ -4502,7 +4502,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.doesNotMatch(cover.innerHTML, /data-album="/);
 }
 
-{
+test('Album Details labels duplicate sources as copies while preserving active source content', () => {
   const album = {
     key: 'alpha',
     name: 'Album Alpha',
@@ -4605,6 +4605,14 @@ test('Various Artists modal playback preserves album artist in markup and queue 
 
   context.renderTrackModalRelease(album);
 
+  assert.equal(duplicateTabs.hidden, false);
+  assert.deepEqual(
+    Array.from(duplicateTabs.innerHTML.matchAll(/<button\b[^>]*>\s*([^<]*?)\s*<\/button>/g), (match) => match[1].trim()),
+    ['Copy 1', 'Copy 2'],
+  );
+  assert.match(duplicateTabs.innerHTML, /class="track-modal-duplicate-tab is-active"[^>]*data-track-duplicate-source-index="0"/);
+  assert.match(duplicateTabs.innerHTML, /title="Folder A"/);
+  assert.match(duplicateTabs.innerHTML, /title="Folder B"/);
   assert.match(duplicateWarning.innerHTML, /data-album-key="alpha"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="0"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
@@ -4614,9 +4622,11 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
   context.state.modalDuplicateSourceIndices.alpha = 1;
   context.renderTrackModalRelease(album);
+  assert.match(duplicateTabs.innerHTML, /class="track-modal-duplicate-tab is-active"[^>]*data-track-duplicate-source-index="1"/);
+  assert.equal(context.state.modalDuplicateSourceIndices.alpha, 1);
   assert.match(baseElements.list.innerHTML, /Total Length: 40:01/);
   assert.doesNotMatch(baseElements.list.innerHTML, /Total Length: 1:20:01/);
-}
+});
 
 {
   const album = {

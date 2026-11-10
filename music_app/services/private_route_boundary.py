@@ -127,6 +127,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/cover-lookup/start"): "library.covers.lookup",
     ("POST", "/utilities/cover-lookup/task/{task_id}/cancel"): "library.covers.lookup.cancel",
     ("POST", "/utilities/cover-lookup/local-select"): "library.covers.write",
+    ("PUT", "/albums/{album_ref}/selected-covers"): "library.covers.write",
+    ("GET", "/albums/{album_ref}/selected-covers"): "library.covers.lookup",
     ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.delete",
     ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.upload",
     ("POST", "/utilities/cover-lookup/save-remote"): "library.covers.write",
@@ -196,6 +198,11 @@ def install_private_route_boundary(app: FastAPI) -> None:
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
+        if route_path == "/cover" and any(
+            key in request.query_params for key in ("library_id", "album_id", "selection_id")
+        ):
+            # Opaque saved-cover URLs remain stable across authorization changes.
+            preference_headers = {"Cache-Control": "private, no-store"}
         await current_actor_from_request(request)
         resource = _private_resource(request, route_path)
         try:

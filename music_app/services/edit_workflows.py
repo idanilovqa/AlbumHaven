@@ -8,6 +8,7 @@ from time import perf_counter
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -571,7 +572,7 @@ def _handle_edit_tags_request_after_reservation(
         if repairs:
             repair_jobs.append((path, entry, repairs))
 
-    if prevalidate_structural_tag_edit is not None and repair_jobs:
+    if prevalidate_structural_tag_edit is not None and (repair_jobs or exception_updates):
         prospective_file_cache = dict(file_cache)
         prospective_changed_paths: set[str] = set()
         prospective_changed_fields: set[str] = set()
@@ -583,6 +584,13 @@ def _handle_edit_tags_request_after_reservation(
             )
             prospective_changed_paths.add(raw_path)
             prospective_changed_fields.update(repairs)
+        for raw_path, entry, overrides in exception_updates:
+            prospective_file_cache[raw_path] = {
+                **prospective_file_cache.get(raw_path, entry),
+                **overrides,
+            }
+            prospective_changed_paths.add(raw_path)
+            prospective_changed_fields.update(overrides)
         try:
             prevalidate_structural_tag_edit(
                 changed_paths=prospective_changed_paths,
@@ -590,7 +598,7 @@ def _handle_edit_tags_request_after_reservation(
                 updated_file_entries=prospective_file_cache,
                 changed_field_names=prospective_changed_fields,
             )
-        except StructuralTagEditDestinationConflict as exc:
+        except (StructuralTagEditDestinationConflict, OrderedCoverSelectionConflict) as exc:
             failure_payload = _record_tag_edit_failure(
                 album=album,
                 paths=prospective_changed_paths,

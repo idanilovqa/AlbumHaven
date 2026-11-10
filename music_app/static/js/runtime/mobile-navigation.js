@@ -18,6 +18,7 @@ function mobilePageDescriptor(kind, album = null) {
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
   const active = mobile ? mobilePageState.pages.at(-1) : null;
+  if (!mobile || active) cancelMobileGalleryPinch();
   const main = document.getElementById('shell-main-surface');
   const header = document.getElementById('mobile-page-header');
   const outlet = document.getElementById('mobile-page-outlet');
@@ -951,48 +952,90 @@ function resolvePinchColumns(columns, scale) {
     : -Math.floor(Math.log(1 / scale) / Math.log(1.28) + 1e-9);
   return Math.max(1, Math.min(3, start - steps));
 }
-function setMobileGalleryColumns(columns) {
+function resolvePinchDensity(columns, scale) {
+  const start = [1, 2, 3].includes(columns) ? columns : 3;
+  if (!Number.isFinite(scale) || scale <= 0) return start;
+  const travel = Math.log(scale) / Math.log(1.28);
+  const magnitude = Math.abs(travel);
+  // Half a cell at the first threshold, then one cell per threshold. The
+  // release resolver above remains the authority for the persisted choice.
+  const continuous = magnitude <= 1 ? magnitude / 2 : magnitude - 0.5;
+  return Math.max(1, Math.min(3, start - Math.sign(travel) * continuous));
+}
+function setMobileGalleryColumns(columns, options = {}) {
   if (![1, 2, 3].includes(columns) || !usesMobilePageLayout()) return false;
   if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) === columns) return false;
-  const anchor = typeof virtualGrid !== 'undefined' ? virtualGrid?.captureScrollAnchor?.() : null;
+  const anchor = options.anchor || (typeof virtualGrid !== 'undefined' ? virtualGrid?.captureScrollAnchor?.() : null);
   window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
   syncMobileGalleryControls();
   if (typeof virtualGrid !== 'undefined' && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true });
+  renderArtistGroups({ preserveScroll: true, semanticScrollAnchor: anchor });
   if (anchor) virtualGrid.restoreScrollAnchor(anchor);
   return true;
 }
+let mobileGalleryPinchCancel = null;
+function cancelMobileGalleryPinch() { mobileGalleryPinchCancel?.(); }
 function initMobileGalleryPinch() {
   const gallery = document.getElementById('albums-scroll');
   if (!gallery || gallery.dataset.pinchBound === 'true') return;
   gallery.dataset.pinchBound = 'true';
   let gesture = null, suppressClickUntil = 0;
   const distance = touches => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+  const eligible = () => usesMobilePageLayout() && !mobilePageState.pages.length
+    && ['cards', 'covers'].includes(ensureGalleryMainState().view);
+  const finish = (cancelled = false) => {
+    const completed = gesture;
+    if (!completed) return;
+    gesture = null;
+    suppressClickUntil = Date.now() + 450;
+    const columns = cancelled ? completed.columns : completed.targetColumns;
+    const anchor = virtualGrid.finishPinchPreview(columns, { cancelled });
+    if (!cancelled && columns !== completed.columns) setMobileGalleryColumns(columns, { anchor });
+  };
+  mobileGalleryPinchCancel = () => finish(true);
   gallery.addEventListener('touchstart', event => {
-    if (!usesMobilePageLayout() || ensureGalleryMainState().view === 'list') return;
-    if (event.touches.length !== 2) { gesture = null; return; }
+    if (!eligible() || event.touches.length > 2) { finish(true); return; }
+    if (gesture) {
+      if (gesture.partiallyReleased || event.touches.length !== 2
+        || Array.from(event.touches).some(touch => !gesture.identifiers.includes(touch.identifier))) finish(true);
+      return;
+    }
+    if (event.touches.length !== 2) return;
     const span = distance(event.touches);
     if (span < 24) return;
-    gesture = { targetColumns: null, distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
+    const saved = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3);
+    const columns = [1, 2, 3].includes(saved) ? saved : 3;
+    if (typeof virtualGrid === 'undefined' || !virtualGrid.beginPinchPreview({
+      clientX: (event.touches[0].clientX + event.touches[1].clientX) / 2,
+      clientY: (event.touches[0].clientY + event.touches[1].clientY) / 2,
+      columns,
+    })) return;
+    gesture = { targetColumns: columns, distance: span, columns,
+      identifiers: Array.from(event.touches, touch => touch.identifier), partiallyReleased: false,
+      reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true };
     if (event.cancelable) event.preventDefault();
     closeGalleryMainSurface(false);
   }, { passive: false });
   gallery.addEventListener('touchmove', event => {
+    if (!eligible() || event.touches.length > 2) { finish(true); return; }
     if (!gesture || event.touches.length !== 2) return;
     if (event.cancelable) event.preventDefault();
     suppressClickUntil = Date.now() + 450;
-    gesture.targetColumns = resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance);
+    const scale = distance(event.touches) / gesture.distance;
+    gesture.targetColumns = resolvePinchColumns(gesture.columns, scale);
+    if (!gesture.reducedMotion) virtualGrid.updatePinchPreview(resolvePinchDensity(gesture.columns, scale));
   }, { passive: false });
   // Keep the touched DOM mounted until both fingers lift. Replacing it mid-gesture
   // cancels native touch delivery and can strand the gallery at an intermediate scale.
-  const finish = event => {
-    const completed = gesture;
-    if (completed) suppressClickUntil = Date.now() + 450;
-    gesture = null;
-    if (event.type === 'touchend' && completed?.targetColumns) setMobileGalleryColumns(completed.targetColumns);
-  };
-  gallery.addEventListener('touchend', finish, { passive: true });
-  gallery.addEventListener('touchcancel', finish, { passive: true });
+  gallery.addEventListener('touchend', event => {
+    if (!event.touches.length) finish(!eligible());
+    else if (gesture) gesture.partiallyReleased = true;
+  }, { passive: true });
+  gallery.addEventListener('touchcancel', () => finish(true), { passive: true });
+  window.addEventListener('resize', () => finish(true));
+  window.addEventListener('blur', () => finish(true));
+  window.addEventListener('pagehide', () => finish(true));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) finish(true); });
   gallery.addEventListener('click', event => {
     if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);

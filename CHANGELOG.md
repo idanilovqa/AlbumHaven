@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.11.0 - 2026-11-09
+## 0.10.1 - 2026-11-10
 
 - Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.
 - Shown matched artists with their MusicBrainz name, links to MusicBrainz and Discogs, country and genres in the Gallery and the artist info panel. Artists matched under another name say how they are tagged, and a name shared by several MusicBrainz artists lists each one with its albums.

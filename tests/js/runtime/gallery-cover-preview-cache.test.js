@@ -1704,3 +1704,94 @@ test('a cover key is computed synchronously, so a cover load waits on nothing ne
   assert.equal(previewCache.storedCoverKey(productionUrl.replace('epoch-9', 'epoch-10')), key);
   assert.equal(previewCache.coverVersionTag(productionUrl), 'epoch-9');
 });
+
+function countCoverHashes(context) {
+  const original = context.galleryCoverSha256Hex;
+  const counter = { count: 0 };
+  context.galleryCoverSha256Hex = (text) => { counter.count += 1; return original(text); };
+  return counter;
+}
+
+test('a new version of a cover reuses its key without hashing again', () => {
+  const { context } = createContext();
+  const hashes = countCoverHashes(context);
+  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
+  const urls = Array.from({ length: 50 }, (_, index) => `http://127.0.0.1:4173/cover?path=album-${index}&size=480&v=epoch-1`);
+
+  const keys = urls.map(url => previewCache.storedCoverKey(url));
+  assert.equal(hashes.count, 50);
+  // A save or a gallery-wide revision bump changes every URL's version.
+  const bumped = urls.map(url => previewCache.storedCoverKey(url.replace('epoch-1', 'epoch-2')));
+
+  assert.equal(hashes.count, 50);
+  assert.deepEqual(bumped, keys);
+});
+
+test('a burst of new covers hashes outside the task that started it', async () => {
+  const { context } = createContext();
+  const hashes = countCoverHashes(context);
+  const cache = { async match() { return null; }, async put() {}, async delete() { return true; } };
+  const previewCache = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => createResponse(String(url)),
+    urlApi: { createObjectURL(blob) { return `blob:${blob.id}`; } },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  const urls = Array.from({ length: 40 }, (_, index) => `http://127.0.0.1:4173/cover?path=burst-${index}&size=480&v=1`);
+
+  const loads = urls.map(url => previewCache.resolve(url));
+  // Every microtask of the starting task has run: no cover was hashed inside it.
+  await Promise.resolve();
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  assert.equal(hashes.count, 0);
+
+  const results = await Promise.all(loads);
+  assert.equal(hashes.count, 40);
+  assert.deepEqual(results.map(result => result.cached), urls.map(() => true));
+});
+
+test('a saved cover shows its new version and never the stale one', async () => {
+  const { context } = createContext();
+  const stored = new Map();
+  const cache = {
+    async match(key) { return stored.get(String(key)) || null; },
+    async put(key, response) { stored.set(String(key), response); },
+    async delete(key) { return stored.delete(String(key)); },
+  };
+  const fetched = [];
+  let objectUrls = 0;
+  const previewCache = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => { fetched.push(String(url)); return createResponse(new URL(String(url)).searchParams.get('v')); },
+    urlApi: { createObjectURL(blob) { objectUrls += 1; return `blob:${blob.id}-${objectUrls}`; }, revokeObjectURL() {} },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  const before = 'http://127.0.0.1:4173/cover?path=saved-album&size=480&v=rev-1';
+  const after = before.replace('rev-1', 'rev-2');
+
+  const first = await previewCache.prefetch(before);
+  assert.equal(first.cached, true);
+  // The gallery card swaps to the saved cover's URL and invalidates the old one.
+  await previewCache.invalidate(before);
+  const saved = await previewCache.resolve(after);
+  await Promise.all([...previewCache.writeChains.values()]);
+
+  assert.match(saved.displayUrl, /^blob:rev-2-/);
+  assert.deepEqual(fetched, [before, after]);
+  assert.equal(stored.get(storeKey(after)).headers.get('X-Album-Haven-Cover-Version'), 'rev-2');
+
+  // Shown again from Cache Storage: the new version, without another request.
+  previewCache.destroy();
+  const reopened = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => { fetched.push(String(url)); return createResponse('unexpected'); },
+    urlApi: { createObjectURL(blob) { return `blob:${blob.id}-again`; } },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  assert.equal((await reopened.resolve(after)).displayUrl, 'blob:rev-2-again');
+  assert.deepEqual(fetched, [before, after]);
+  // The old version is never served from the entry the save replaced.
+  const stale = await reopened.resolve(before);
+  assert.equal(stale.displayUrl, 'blob:unexpected-again');
+  assert.equal(fetched.at(-1), before);
+});

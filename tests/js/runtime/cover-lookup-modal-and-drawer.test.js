@@ -3361,6 +3361,18 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.markTrackModalCoverTransitionPending({
     tracks: [{ path: 'C:/music/Other/01.mp3' }],
   }), false);
+
+  // UI-2 (owner, 11-10): with the chosen picture's preview at hand, Album Details shows it at once instead of an
+  // empty box until the save finishes.
+  const shown = { removeCalled: 0, remove() { this.removeCalled += 1; }, src: '/cover?path=old.jpg' };
+  image.removeCalled = 0;
+  visual.querySelector = (selector) => (selector === 'img' ? shown : null);
+  assert.equal(context.markTrackModalCoverTransitionPending(
+    { tracks: [{ path: 'C:/music/Kaipa/01.mp3' }] },
+    '/cover?path=new.jpg&size=480',
+  ), true);
+  assert.equal(shown.src, '/cover?path=new.jpg&size=480');
+  assert.equal(shown.removeCalled, 0);
 }
 
 {

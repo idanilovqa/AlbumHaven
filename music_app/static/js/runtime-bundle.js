@@ -32241,7 +32241,7 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   }
 }
 
-function markTrackModalCoverTransitionPending(album) {
+function markTrackModalCoverTransitionPending(album, optimisticSrc = '') {
   if (typeof document === 'undefined') return false;
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return false;
@@ -32253,6 +32253,12 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
+  // UI-2 (owner, 11-10): Album Details shows the chosen picture at once, like the gallery, instead of an empty
+  // box until the save finishes; the lookup already loaded this preview.
+  if (optimisticSrc) {
+    image.src = optimisticSrc;
+    return true;
+  }
   image.remove();
   visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
@@ -32338,13 +32344,12 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
   const signature = getAlbumPathSignature(album)
     || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
   if (!signature) return;
-  state.coverLookup.optimisticAlbumCovers[signature] = {
-    src: buildCoverUrl(normalizedSourcePath, {
-      size: 480,
-      revision: selectedCandidate?.cover_revision,
-    }),
-    coverPath: normalizedSourcePath,
-  };
+  const src = buildCoverUrl(normalizedSourcePath, {
+    size: 480,
+    revision: selectedCandidate?.cover_revision,
+  });
+  state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
+  return src;
 }
 
 function preloadCoverLookupAlbumImage(album) {
@@ -34952,11 +34957,11 @@ async function saveLocalCoverFromLookup(sourcePath) {
   try {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
-    applyOptimisticLocalCoverSelection(album, sourcePath);
+    const optimisticSrc = applyOptimisticLocalCoverSelection(album, sourcePath);
     // The optimistic cover is already visible and a failure rolls back with an
     // error alert, so Save closes at once instead of waiting for promotion.
     closeCoverLookupModal();
-    markTrackModalCoverTransitionPending(album);
+    markTrackModalCoverTransitionPending(album, optimisticSrc);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);

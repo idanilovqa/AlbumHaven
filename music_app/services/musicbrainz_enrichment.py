@@ -596,8 +596,10 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             # With the budget spent, the name the albums' credits gave is enough to list it.
             artists.append(dict(lookup["artist"]) if lookup else {
                 key: owner.get(key) for key in ("mbid", "canonical_name", "disambiguation", "artist_type")})
+        # Same name means each artist's own MusicBrainz name, not an alias: "Ольга Арефьева
+        # и Ковчег" is her group, a separate artist from her solo work (owner, 2026-11-10).
         person = _person_of_member_bands(artists, mirror) if all(
-            owner.get("name_agrees") for owner in decision["candidates"]) else None
+            name_keys(artist.get("canonical_name")) & local_keys for artist in artists) else None
         if person is not None:
             # Owner 2026-11-09: a person and the same-named groups they belong to are one
             # artist (Alice Cooper and his 1969-74 band). The person is the artist; each

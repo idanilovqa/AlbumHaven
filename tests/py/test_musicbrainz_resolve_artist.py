@@ -479,3 +479,27 @@ def test_another_release_never_replaces_an_album_with_weaker_evidence():
     partial = {"title": "partial", "level": "strong", "signals": {"year", "track_count", "track_list"}}
     assert _better_than({"title": "exact", "level": "strong", "signals": {"year", "track_count"}}, partial)
     assert _better_than({"title": "exact", "level": "title", "signals": set()}, {"title": None, "level": None, "signals": set()})
+
+
+def test_a_person_s_group_named_otherwise_stays_a_separate_artist():
+    """Owner 2026-11-10: "Ольга Арефьева и Ковчег" is her group, a separate artist from her
+    solo work, even when MusicBrainz lists her name as the group's alias."""
+    person = {"id": GERMAN, "name": "Axxis", "type": "Person",
+              "relations": [{"type": "member of band", "direction": "forward",
+                             "artist": {"id": TRANCE, "name": "Axxis and the Ark"}}]}
+    group = {"id": TRANCE, "name": "Axxis and the Ark", "type": "Group",
+             "aliases": [{"name": "Axxis", "locale": None, "primary": False}]}
+    search = [{"id": GERMAN, "name": "Axxis", "score": 100, "type": "Person"},
+              {"id": TRANCE, "name": "Axxis and the Ark", "score": 90, "type": "Group",
+               "aliases": [{"name": "Axxis"}]}]
+    client, _calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Dancefloor Mix"]},
+                             artists={GERMAN: person, TRANCE: group}, search=search)
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II", "Dancefloor Mix"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "per_album"
+    assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
+        1: GERMAN, 2: GERMAN, 3: TRANCE}

@@ -1,4 +1,6 @@
 """Recording contracts for coordinated media effects, not live PostgreSQL tests."""
+
+import os
 from pathlib import Path
 
 import pytest
@@ -297,13 +299,13 @@ def test_source_alias_changed_during_advisory_wait_is_not_relocked_out_of_order(
 
 def test_missing_reference_and_existing_alias_keep_shared_source_identity(tmp_path):
     missing = tmp_path / "missing.jpg"
-    assert "path:" + str(missing) in mutation.cover_source_keys(missing)
+    assert "path:" + os.path.normcase(str(missing)) in mutation.cover_source_keys(missing)
     source = tmp_path / "source.jpg"
     source.write_bytes(b"fixture")
     alias = tmp_path / "alias.jpg"
     alias.symlink_to(source)
     assert mutation.cover_source_keys(source) & mutation.cover_source_keys(alias)
-    assert "path:" + str(alias) in mutation.cover_source_keys(alias)
+    assert "path:" + os.path.normcase(str(alias)) in mutation.cover_source_keys(alias)
 
 
 @pytest.mark.parametrize("metadata,options,flag", [
@@ -437,7 +439,7 @@ def test_reserved_backup_destination_is_locked_and_protected_even_when_reference
     with pytest.raises(OrderedCoverSelectionConflict):
         b.run(reserve_variant_bytes=b"incoming cover")
     keys = [params["source_key"] for _, params in b.connection.operations if params and "source_key" in params]
-    assert "album-haven:cover-source:path:" + str(backup) in keys
+    assert "album-haven:cover-source:path:" + os.path.normcase(str(backup)) in keys
     assert "media" not in b.events and not backup.exists()
     assert b.target.read_bytes() == b"old cover"
 

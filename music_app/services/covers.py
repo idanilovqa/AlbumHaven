@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from threading import Lock, RLock
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 try:
@@ -266,12 +267,11 @@ def plan_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
         or _album_image_has_bytes(folder, current_cover, current_bytes)
     ):
         return None
-    index = 1
-    while True:
+    for index in range(1, 100):
         candidate = folder / f"cover-existing-{index}.jpg"
         if not os.path.lexists(candidate):
             return candidate
-        index += 1
+    return None
 
 
 def reserve_existing_cover_variant(

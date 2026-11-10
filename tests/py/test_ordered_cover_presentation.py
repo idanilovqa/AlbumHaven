@@ -110,6 +110,7 @@ def test_album_detail_owner_preserves_the_same_concrete_selection(monkeypatch):
     monkeypatch.setattr(repository, "_load_album_detail_rows", lambda *args, **kwargs: [deepcopy(row)])
     monkeypatch.setattr(repository, "_attach_duplicate_sources", lambda *args, **kwargs: None)
     monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *args, **kwargs: None)
+    monkeypatch.setattr(browse, "_album_musicbrainz_artist", lambda *args, **kwargs: None)
     result = repository._build_album_detail_payload_with_connection(
         "artist::release", client_surface_class="private_web", connection=object())
     assert result["album_id"] == 72

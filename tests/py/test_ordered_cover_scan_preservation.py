@@ -237,7 +237,7 @@ def test_full_scan_synchronizes_existing_ordered_primary_before_publication(monk
     album = SimpleNamespace(key="fixture::child")
     monkeypatch.setattr(persistence, "_inventory_rows_from_albums", lambda *args: ([], [{"album_key": album.key}], [], [], []))
     monkeypatch.setattr(persistence, "_execute_pipeline_batches", lambda *args: None)
-    monkeypatch.setattr(persistence, "_execute_set_based_batches", lambda *args: None)
+    monkeypatch.setattr(persistence, "_execute_set_based_batches", lambda *args: [])
     monkeypatch.setattr(persistence, "_execute_semantic_local_album_key_adoptions", lambda *args: None)
     adapter(connection, build_albums=lambda *args: [album]).save_snapshot(
         Path("unused"), {}, "fixture-root", 13.0, separate_release_keys=set(),
@@ -389,7 +389,7 @@ def test_targeted_scan_synchronizes_ordered_primary_before_commit(monkeypatch):
                         ([], [{"album_key": album.key}], [], tracks, files))
     monkeypatch.setattr(persistence, "_remap_targeted_album_identity_rows", lambda **kwargs: None)
     monkeypatch.setattr(persistence, "_execute_pipeline_batches", lambda *args: None)
-    monkeypatch.setattr(persistence, "_execute_set_based_batches", lambda *args: None)
+    monkeypatch.setattr(persistence, "_execute_set_based_batches", lambda *args: [])
     monkeypatch.setattr(persistence, "_execute_semantic_local_album_key_adoptions", lambda *args: None)
     monkeypatch.setattr(persistence, "_commit_structural_relation_projection", lambda *args, **kwargs: None)
     adapter(connection, build_albums=lambda *args: [album]).persist_targeted_inventory_mutation(

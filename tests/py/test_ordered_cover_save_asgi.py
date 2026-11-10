@@ -205,7 +205,7 @@ def test_committed_primary_is_published_then_targeted_invalidation_uses_exact_re
     status, _ = api.request()
     assert status == 200
     entry = next(iter(api.app.state.library_state["file_cache"].values()))
-    assert entry["cover_path"] == "/private/never-disclose.jpg"
+    assert entry["cover_path"] == str(Path("/private/never-disclose.jpg"))
     assert api.app.state.library_state["scan_generation"] == 1
     events = [name for name, _ in api.calls]
     assert events.index("commit") < events.index("invalidate")

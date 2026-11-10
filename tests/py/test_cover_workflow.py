@@ -194,7 +194,7 @@ def test_serialized_same_album_cover_promotions_run_in_order_and_release_lock(
     second_worker = Thread(target=select_second_cover)
     first_worker.start()
     try:
-        assert first_acquired.wait(1)
+        assert first_acquired.wait(1), worker_errors
         assert canonical_cover.read_bytes() == first_bytes
         second_worker.start()
         assert second_started.wait(1)

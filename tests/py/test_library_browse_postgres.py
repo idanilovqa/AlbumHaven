@@ -103,6 +103,10 @@ class _EmptyAlbumRatingsService:
         del connection
         return {}
 
+    def load_album_disc_ratings(self, _album_keys, *, connection=None):
+        del connection
+        return {}
+
 
 class _NoopSearchSnapshotConnection:
     def __init__(self, inventory_state=None):
@@ -237,6 +241,7 @@ class _EmptyMissingAlbumConnection:
             "transaction_timestamp() as observed_at", "select distinct albums.id as album_id",
             "requested_identities as materialized",
             "candidate_containers as materialized",
+            "library.local_album_artist_identities",
         )):
             return _InventoryCursor()
         assert _is_missing_album_query(sql)
@@ -11372,13 +11377,14 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "active_candidate_ids as" in summary_sql
     assert "duplicate_track_ids as" not in summary_sql
     assert "duplicate_candidate_ids as" not in summary_sql
-    assert "having count(distinct source_directory) > 1" in summary_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in summary_sql
+    assert "having count(*) > 1" in summary_sql
     assert "identity_candidates.file_year = candidate.file_year" in summary_sql
     assert "select duplicate_album_ids.album_id from duplicate_album_ids" in summary_sql
     assert "candidate_album_ids as" in summary_sql
     assert "active_file_refs as" not in summary_sql
     assert "active_file_entry_scalars as" not in summary_sql
-    assert "join candidate_album_ids on candidate_album_ids.album_id = library.local_albums.id" in summary_sql
+    assert "library.local_albums.id = any(array(select album_id from candidate_album_ids))" in summary_sql
     assert "octet_length(file_album) <> length(file_album)" in summary_sql
     assert summary_sql.count("translate(") >= 4
     assert summary_sql.count("~ %(mojibake_candidate_pattern)s::text") >= 2
@@ -11476,7 +11482,7 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "local_album_membership as materialized" in candidate_sql
     assert "local_membership_sources as materialized" not in candidate_sql
     assert "{scan_cache,file_entry,local_album_membership_problem}" in candidate_sql
-    assert "physical_file_context.local_album_membership_problem is not null" in candidate_sql
+    assert "join local_album_membership membership on membership.file_id = active_problem_rows.file_id" in candidate_sql
     order_rows_sql = candidate_sql.split(
         "active_problem_rows as materialized (",
         1,
@@ -11496,12 +11502,10 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
         "active_track_order_rollup as (",
         1,
     )[1].split("candidate_album_ids as (", 1)[0]
-    assert (
-        "group by active_problem_rows.album_id, "
-        "active_problem_rows.disc_number"
-    ) in order_rollup_sql
-    assert "min(active_problem_rows.effective_track_number) <> 1" in order_rollup_sql
-    assert "count(distinct active_problem_rows.effective_track_number)" in order_rollup_sql
+    assert "select distinct album_id, disc_number, effective_track_number" in order_rollup_sql
+    assert "group by track_numbers.album_id, track_numbers.disc_number" in order_rollup_sql
+    assert "min(track_numbers.effective_track_number) <> 1" in order_rollup_sql
+    assert "count(*) <> max(track_numbers.effective_track_number)" in order_rollup_sql
     assert "incomplete_track_order" in order_rollup_sql
     assert "active_track_order_rollup.incomplete_track_order is true" in candidate_sql
 
@@ -12593,7 +12597,7 @@ def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encod
     assert "position('??'" in candidate_sql
     assert "in ('', 'unknown', 'unknown artist', 'unknown album', 'none', 'null')" in candidate_sql
     assert "library.local_track_files.scan_file_entry_is_object is true" in summary_sql
-    assert "having count(distinct source_directory) > 1" in candidate_sql
+    assert "select distinct file_year, file_album_identity, source_directory" in candidate_sql
     assert "identity_candidates.file_year = candidate.file_year" in candidate_sql
     assert "relational_file_candidate_ids" not in candidate_sql
     assert "duplicate_track_ids" not in candidate_sql
@@ -14596,7 +14600,7 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
         return []
 
     repository._load_missing_album_rows = load_missing_rows
-    repository._get_cached_utility_projection = lambda _kind: None
+    repository._get_cached_utility_projection = lambda _kind, **_options: None
     repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
         AssertionError("bounded page must not build the complete projection")
     )
@@ -14623,7 +14627,7 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
             AssertionError("a warm bounded page must not query Postgres")
         ),
     )
-    repository._get_cached_utility_projection = lambda kind: {
+    repository._get_cached_utility_projection = lambda kind, **_options: {
         "count": 3,
         "items": [
             {"key": "album-1", "detail_loaded": False},
@@ -14642,6 +14646,157 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
     assert payload["complete"] is False
     assert payload["projection_cache_status"] == "bounded"
     assert payload["initial_detail"]["key"] == "album-1"
+
+
+def test_a_built_first_page_is_reused_until_problematic_files_change():
+    """Every open repeated the whole-library candidate query (7-13 s on the owner's
+    library) until the complete list was cached."""
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-cache-test"
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": url},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    repository._browse_connection_context = lambda: _ProblematicSnapshotConnectionStub()
+    queries = []
+    row = _normal_problematic_product_row(album_key="album-1", album_title="Album 1")
+    row.update({"album_id": 1, "track_id": 501, "track_key": "track-1"})
+    repository._load_problematic_candidate_ids = lambda *, connection, limit: queries.append(limit) or [1]
+    repository._load_problematic_file_rows = lambda album_key=None, **kwargs: [row]
+    repository._load_missing_album_rows = lambda *, connection, limit: []
+    try:
+        first = repository.build_problematic_files_page(limit=50)
+        first["items"].clear()  # a caller's mutation never reaches the cache
+        again = repository.build_problematic_files_page(limit=50)
+        assert queries == [50], "the second open reuses the built page"
+        assert [item["key"] for item in again["items"]] == ["album-1"]
+
+        browse.invalidate_postgres_utility_projection_cache(database_url=url, kinds=("problematic-files",))
+        repository.build_problematic_files_page(limit=50)
+        assert queries == [50, 50], "a Problematic Files change drops the cached page"
+    finally:
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+def test_a_cached_complete_list_serves_the_first_page_without_copying_it_whole():
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-slice-test"
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": url},
+                                                        connect=lambda _url: None)
+    complete = {"items": [{"key": f"album-{index}", "detail_loaded": False} for index in range(500)],
+                "count": 500, "projection_cache_status": "hit"}
+    repository._set_cached_utility_projection("problematic-files", complete)
+    try:
+        page = repository.build_problematic_files_page(limit=50)
+        page["items"][0]["key"] = "mutated"
+        cached = repository._get_cached_utility_projection("problematic-files")
+        assert [item["key"] for item in page["items"][1:3]] == ["album-1", "album-2"]
+        assert cached["items"][0]["key"] == "album-0" and len(cached["items"]) == 500
+        assert page["count"] == 50 and page["projection_cache_status"] == "bounded"
+    finally:
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+def test_concurrent_first_opens_share_one_candidate_query():
+    """A second open while the first page was still building ran the whole-library
+    candidate query again (about 5 s each on the owner's library)."""
+    import threading
+
+    from music_app.services import library_browse_postgres as browse
+
+    url = "postgresql://album_haven_app@localhost/page-single-flight-test"
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": url},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    repository._browse_connection_context = lambda: _ProblematicSnapshotConnectionStub()
+    row = _normal_problematic_product_row(album_key="album-1", album_title="Album 1")
+    row.update({"album_id": 1, "track_id": 501, "track_key": "track-1"})
+    queries, building, release, second_looked = [], Event(), Event(), Event()
+
+    def load_candidate_ids(*, connection, limit):
+        queries.append(limit)
+        building.set()
+        assert release.wait(10)
+        return [1]
+
+    cached = repository._get_cached_utility_projection
+
+    def get_cached(kind, **options):
+        if threading.current_thread().name == "second-open":
+            second_looked.set()
+        return cached(kind, **options)
+
+    repository._load_problematic_candidate_ids = load_candidate_ids
+    repository._load_problematic_file_rows = lambda album_key=None, **kwargs: [row]
+    repository._load_missing_album_rows = lambda *, connection, limit: []
+    repository._get_cached_utility_projection = get_cached
+    pages = {}
+
+    def open_page(name):
+        pages[name] = repository.build_problematic_files_page(limit=50)
+
+    first = threading.Thread(target=open_page, args=("first",))
+    second = threading.Thread(target=open_page, args=("second",), name="second-open")
+    try:
+        first.start()
+        assert building.wait(10)
+        second.start()
+        assert second_looked.wait(10)
+        release.set()
+        first.join(10)
+        second.join(10)
+        assert queries == [50], "the second open waits for the first build"
+        assert [item["key"] for item in pages["first"]["items"]] == ["album-1"]
+        assert [item["key"] for item in pages["second"]["items"]] == ["album-1"]
+    finally:
+        release.set()
+        browse.invalidate_postgres_utility_projection_cache(database_url=url)
+
+
+@pytest.mark.parametrize(("previous_quota", "category", "invalidated"), [
+    (False, "no_candidate", False),
+    (False, "timeout", False),
+    (False, "rate_limit_quota", True),
+    (True, "rate_limit_quota", False),
+    (True, "no_candidate", True),
+])
+def test_spotify_outcomes_drop_problematic_files_only_when_the_quota_problem_changes(
+    monkeypatch, previous_quota, category, invalidated,
+):
+    """Every Spotify outcome of a cover lookup dropped the cached list, so a running
+    lookup kept Problematic Files cold; only a failed quota outcome is listed."""
+    from music_app.services import cover_provider_outcomes_postgres as outcomes
+    from music_app.services import library_browse_postgres as browse
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def transaction(self):
+            return self
+
+        def execute(self, sql, params):
+            return self
+
+        def fetchone(self):
+            return {"quota": previous_quota}
+
+    dropped = []
+    monkeypatch.setattr(browse, "invalidate_postgres_utility_projection_cache",
+                        lambda **kwargs: dropped.append(kwargs["kinds"]))
+    outcomes.persist_cover_provider_outcomes(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/quota-test"},
+        album_id=7, album_key="album-7",
+        outcomes={"search_spotify": {"category": category}},
+        connect=lambda _url: Connection(),
+    )
+    assert dropped == ([("problematic-files",)] if invalidated else [])
 
 
 def test_problematic_files_summary_and_initial_detail_share_one_repeatable_read_snapshot():
@@ -16094,6 +16249,7 @@ class _RecordingAlbumRatingsService:
         self.config = config
         self.connect = connect
         self.load_calls: list[list[str]] = []
+        self.disc_load_calls: list[list[str]] = []
         self.__class__.instances.append(self)
 
     def load_album_ratings(self, album_keys, *, connection=None):
@@ -16104,6 +16260,11 @@ class _RecordingAlbumRatingsService:
             "numeric-album": {"rating": 8, "provenance": "explicit_import"},
             "cleared-album": {"rating": None, "provenance": "explicit_clear"},
         }
+
+    def load_album_disc_ratings(self, album_keys, *, connection=None):
+        del connection
+        self.disc_load_calls.append([str(album_key) for album_key in album_keys])
+        return {"numeric-album": [{"disc_key": "bonus disc", "rating": 5}]}
 
 
 def _rating_overlay_test_rows() -> list[dict[str, object]]:
@@ -16647,6 +16808,8 @@ def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(m
     assert payload["tag_album_rating_source"] == "file_tag"
     assert len(_RecordingAlbumRatingsService.instances) == 1
     assert _RecordingAlbumRatingsService.instances[0].load_calls == [["numeric-album"]]
+    assert payload["album_preference"]["disc_ratings"] == [{"disc_key": "bonus disc", "rating": 5}]
+    assert _RecordingAlbumRatingsService.instances[0].disc_load_calls == [["numeric-album"]]
 
 
 def test_root_startup_gallery_and_search_sql_exclude_supported_non_album_exceptions_before_rollups():
@@ -17930,3 +18093,128 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
     assert connection.calls[0][1] == {"album_id": 14674}
     assert loaded == [("overhead::telepathic minds", None, connection)]
 
+
+
+def test_gallery_cover_prewarm_leaves_previews_a_running_move_has_not_reached(monkeypatch, tmp_path):
+    """Gallery payloads during a reverse move must not regenerate a preview at the
+    destination while it still waits in the source root to be moved."""
+    from music_app.services import covers as covers_module
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    revision = "b" * 64
+    custom_root = tmp_path / "Generated Previews"
+    waiting = tmp_path / "Waiting" / "Album" / "cover.jpg"
+    fresh = tmp_path / "Fresh" / "Album" / "cover.jpg"
+    pending = build_cover_variant_base_path(
+        waiting, cache_root=custom_root / "v1", max_size=480, revision=revision
+    ).with_suffix(".jpg")
+    pending.parent.mkdir(parents=True)
+    pending.write_bytes(b"not yet moved")
+    queued = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, **kwargs: queued.append((Path(source_path), Path(kwargs["cache_root"]))),
+    )
+    policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(
+            mode="custom", active_root=custom_root, requested_mode="album_folders", operation_state="running",
+        )
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {"_GENERATED_PREVIEW_STORAGE_POLICY": policy},
+        [{"albums": [
+            {"cover_path": str(waiting), "cover_revision": revision},
+            {"cover_path": str(fresh), "cover_revision": revision},
+        ]}],
+    )
+
+    assert queued == [(fresh, fresh.parent / ".album-haven")]
+
+
+def _cte_body(sql: str, name: str) -> str:
+    start = sql.index(f"{name} as")
+    depth = 0
+    for index in range(sql.index("(", start), len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return sql[start:index]
+    raise AssertionError(f"unterminated CTE {name}")
+
+
+@pytest.mark.parametrize("candidate_ids_page", [True, False])
+def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_ids_page):
+    """Cold Problematic Files took 30-40 s at 160k files: every request re-ran
+    path regular expressions per file and sorted every file for distinct counts."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, candidate_ids_page=candidate_ids_page, path_columns=True,
+    )
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "regexp_replace" not in active_rows
+    assert "local_path_key(" not in active_rows
+    assert "duplicate_identity_text(" not in active_rows
+    for column in (
+        "scan_physical_parent", "scan_source_directory", "scan_physical_album_container",
+        "scan_path_key_present", "scan_file_album_identity",
+    ):
+        assert f"library.local_track_files.{column}" in active_rows
+    duplicates = _cte_body(sql, "duplicate_album_ids")
+    assert "file_album_identity" in duplicates
+    # The broad non-ASCII year superset made all 14.6k albums of the owner's
+    # library candidates (and duplicate checks) for minutes per full load. It
+    # remains only as the duplicate fallback for servers without casefold();
+    # the reasons it used to hide are prefiltered explicitly below.
+    assert sql.count("octet_length(file_album) <> length(file_album)") == 1
+    assert "server_version_num')::integer < 180000" in duplicates
+    rollup = _cte_body(sql, "active_album_rollup")
+    assert "count(active_problem_rows.file_year) < count(*) as has_blank_year" in rollup
+    assert "active_album_rollup.has_blank_year" in sql
+    # parse_edition_title superset: bracketed edition, издание, or remaster.
+    assert "active_problem_rows.file_album ~ '[])]$'" in sql
+    assert "position('издание' in active_problem_rows.file_album) > 0" in sql
+    for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
+        assert "count(distinct" not in _cte_body(sql, cte)
+    # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
+    assert "join candidate_album_ids" not in sql
+    assert "any(array(select album_id from candidate_album_ids))" in sql
+
+
+def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migration():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(candidate_summary=True, candidate_ids_page=True)
+    active_rows = _cte_body(sql, "active_problem_rows")
+    assert "scan_physical_parent" not in active_rows
+    assert "library.local_path_key(library.local_track_files.private_path) <> ''" in active_rows
+
+
+def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
+    """The first Problematic Files page loads rows for about 50 albums, yet on the
+    real 160k-file library it took 3.1 s: the planner sorted every track to join
+    the mis-estimated album CTE, hashed every track to scope folder files, and
+    rebuilt the folder-context hash once per selected file."""
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = _problematic_files_sql(
+        candidate_summary=True, selected_album_ids=True, path_columns=True,
+    )
+
+    assert "where library.local_tracks.album_id = any(array(select id from selected_albums))" in _cte_body(
+        sql, "selected_tracks"
+    )
+    scope = _cte_body(sql, "physical_scope_file_ids")
+    lateral = scope[scope.index("join lateral"):]
+    assert "join library.local_tracks scoped_tracks" in lateral
+    assert lateral.index("join library.local_tracks scoped_tracks") < lateral.index(") scoped_files on true")
+    assert "physical_file_context" not in _cte_body(sql, "selected_track_file_rows")
+    assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
+        sql, "selected_active_track_file_rows"
+    )

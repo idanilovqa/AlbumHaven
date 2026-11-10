@@ -3,6 +3,7 @@
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/scan_cache_persistence.py",
+    "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
     "music_app/services/gallery_projection_postgres.py",
     "music_app/routes/api_read_asgi_routes.py",
@@ -40,7 +41,9 @@
     "music_app/static/css/runtime/album-details-components.css",
     "music_app/static/css/mobile-layout.css",
     "music_app/services/problematic_albums.py",
+    "migrations/postgres/0112_add_problematic_file_path_projection.sql",
     "music_app/routes/api_problematic_albums.py",
+    "music_app/routes/musicbrainz_enrichment_asgi.py",
     "music_app/services/scan_state.py",
     "music_app/services/edit_workflows.py",
     "music_app/services/cover_state.py",
@@ -61,6 +64,8 @@
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
+    "music_app/services/cover_provider_outcomes_postgres.py",
+    "music_app/services/album_ratings_postgres.py",
     "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
   ],
   "rules": [
@@ -71,6 +76,7 @@
     {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
+        "music_app/services/empty_local_album_retirement.py",
         "music_app/services/relation_projection_postgres.py",
         "music_app/services/gallery_projection_postgres.py"
       ],
@@ -179,8 +185,10 @@
       "paths": [
         "music_app/services/library_browse_postgres.py",
         "music_app/services/problematic_albums.py",
+        "migrations/postgres/0112_add_problematic_file_path_projection.sql",
         "music_app/routes/api_problematic_albums.py",
         "music_app/routes/api_read_asgi_routes.py",
+        "music_app/routes/musicbrainz_enrichment_asgi.py",
         "music_app/services/scan_state.py",
         "music_app/services/edit_workflows.py",
         "music_app/services/cover_state.py",
@@ -201,7 +209,9 @@
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
-        "music_app/services/album_local_membership.py"
+        "music_app/services/album_local_membership.py",
+        "music_app/services/cover_provider_outcomes_postgres.py",
+        "music_app/services/album_ratings_postgres.py"
       ],
       "targets": [
         "utility-problematic-files",

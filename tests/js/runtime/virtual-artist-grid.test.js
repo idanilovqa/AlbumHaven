@@ -5691,6 +5691,102 @@ test('startup preview cards survive layout events until an authoritative virtual
   assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
 });
 
+function musicBrainzArtistGroup(overrides = {}) {
+  return {
+    artist: 'Axxis',
+    artist_display: 'Axxis',
+    albums: [{
+      key: 'axxiskingdom-of-the-night',
+      name: 'Kingdom of the Night',
+      album_artist: 'Axxis',
+      tracks: [],
+    }],
+    ...overrides,
+  };
+}
+
+function assertArtistProblemHeader(markup) {
+  const infoAt = markup.indexOf('data-artist-info-trigger="1"');
+  const infoEndAt = markup.indexOf('</button>', infoAt);
+  const alertAt = markup.indexOf('small-alert small-alert--warning');
+  const lineAt = markup.indexOf('gallery-divider__line', alertAt);
+  assert.ok(infoAt >= 0 && infoAt < infoEndAt && infoEndAt < alertAt && alertAt < lineAt,
+    'the shared alert must follow the existing info action and move only the separator line');
+  assert.match(markup, /data-open-musicbrainz-artist-problem="artist-problem-19"/);
+  assert.match(markup, /MBID: Multiple matches/);
+  assert.doesNotMatch(markup, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+}
+
+test('virtual and fallback artist-header paths render the same exact active identity problem', () => {
+  const { context } = createRuntimeContext();
+  const group = musicBrainzArtistGroup({
+    artist_musicbrainz: { country: 'Germany', genres: ['Heavy Metal'] },
+    artist_musicbrainz_problem: {
+      occurrence_id: 'artist-problem-19',
+      label: 'MBID: Multiple matches',
+    },
+  });
+
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.setGroups([], [], [group]);
+  const section = virtualGrid.sections.find((candidate) => candidate.group);
+  assert.ok(section, 'the virtual path must expose its artist section');
+  assertArtistProblemHeader(virtualGrid.renderSection(section, 0, Number.MAX_SAFE_INTEGER));
+
+  for (const [primary, family, fallback] of [
+    [[group], [], []],
+    [[], [group], []],
+    [[], [], [group]],
+  ]) {
+    const markup = context.renderArtistGroupsMarkupFallback(
+      primary, family, fallback, 1, context.CARD_GALLERY_LAYOUT_CONFIG,
+    );
+    assertArtistProblemHeader(markup);
+  }
+});
+
+test('virtual and fallback headers keep pending distinct and matched artists alert-free', () => {
+  const { context } = createRuntimeContext();
+  const pending = musicBrainzArtistGroup({ artist_musicbrainz_state: 'pending' });
+  const matched = musicBrainzArtistGroup({
+    artist: 'Matched Artist', artist_display: 'Matched Artist',
+    artist_musicbrainz: { country: 'Germany', genres: ['Heavy Metal'] },
+  });
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+
+  virtualGrid.setGroups([], [], [pending]);
+  const pendingSection = virtualGrid.sections.find((candidate) => candidate.group);
+  const virtualPending = virtualGrid.renderSection(pendingSection, 0, Number.MAX_SAFE_INTEGER);
+  const fallbackPending = context.renderArtistGroupsMarkupFallback(
+    [], [], [pending], 1, context.CARD_GALLERY_LAYOUT_CONFIG,
+  );
+  for (const markup of [virtualPending, fallbackPending]) {
+    assert.match(markup, /artist-musicbrainz-pending/);
+    assert.match(markup, /aria-label="Metadata pending">Metadata pending</);
+    assert.doesNotMatch(markup, /MusicBrainz: Metadata pending/);
+    assert.equal((markup.match(/data-pending-dot/g) || []).length, 3);
+    assert.doesNotMatch(markup, /small-alert--(?:warning|error)|ui-metadata-pill/);
+  }
+
+  const matchedMarkup = context.renderArtistGroupsMarkupFallback(
+    [], [], [matched], 1, context.CARD_GALLERY_LAYOUT_CONFIG,
+  );
+  assert.doesNotMatch(matchedMarkup, /small-alert|artist-musicbrainz-pending|ui-metadata-pill/);
+});
+
+test('artist enrichment does not alter unrelated GalleryCard markup', () => {
+  const { context } = createRuntimeContext();
+  const album = {
+    key: 'unchanged-card', name: 'Unchanged Card', album_artist: 'Axxis', tracks: [],
+  };
+  const baseline = context.albumCardHtml(album);
+  const enriched = context.albumCardHtml({
+    ...album,
+    artist_musicbrainz: { country: 'Germany', genres: ['Heavy Metal'] },
+  });
+  assert.equal(enriched, baseline);
+  assert.doesNotMatch(enriched, /ui-metadata-pill|artist-musicbrainz-pending|small-alert/);
+});
 
 test('virtual artist sections model the rendered 32px header and 10px bottom margin', () => {
   const { context } = createRuntimeContext();

@@ -127,6 +127,7 @@ LOCAL_ALBUM_FEATURED_ARTIST_DELETE_GRANT_MIGRATION = (
     MIGRATIONS_DIR / "0025_grant_local_album_featured_artist_delete.sql"
 )
 ALBUM_RATINGS_MIGRATION = MIGRATIONS_DIR / "0026_create_album_ratings.sql"
+ALBUM_DISC_RATINGS_MIGRATION = MIGRATIONS_DIR / "0176_create_album_disc_ratings.sql"
 COVER_LOOKUP_TASK_DELETE_GRANT_REPAIR_MIGRATION = (
     MIGRATIONS_DIR / "0027_repair_cover_lookup_task_delete_grant.sql"
 )
@@ -464,14 +465,13 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     migration_numbers = [int(name[:4]) for name in migration_names]
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-58:] == [
-        "0041_create_local_album_cover_candidate_snapshots.sql",
-        "0042_track_distinct_cover_improvement_alerts.sql",
-        "0043_create_local_track_waveform_peaks.sql",
-        "0044_create_tag_edit_intents.sql",
-        "0045_add_non_album_candidate_index.sql",
-        "0046_add_local_auth_lifecycle.sql",
+    # Numbers stay contiguous, except migrations reserved past numbers that
+    # unmerged branches and the production ledger already use.
+    reserved = {112, 171, 172, 173, 174, 175, 176, 177}
+    contiguous = [number for number in migration_numbers if number not in reserved]
+    assert contiguous == list(range(1, len(contiguous) + 1))
+    assert len(set(migration_numbers)) == len(migration_numbers)
+    assert migration_names[-60:] == [
         "0047_add_auth_preauth_tokens.sql",
         "0048_add_password_reset_transactions.sql",
         "0049_enforce_single_use_password_reset_exchange.sql",
@@ -524,6 +524,14 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0096_create_generated_preview_storage.sql",
         "0097_repair_generated_preview_inventory_path_constraint.sql",
         "0098_track_generated_preview_current_path.sql",
+        "0112_add_problematic_file_path_projection.sql",
+        "0171_create_musicbrainz_artist_enrichment.sql",
+        "0172_add_musicbrainz_artist_discogs_link.sql",
+        "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
+        "0174_add_musicbrainz_matcher_version_and_credit_name.sql",
+        "0175_add_musicbrainz_match_album_evidence.sql",
+        "0176_create_album_disc_ratings.sql",
+        "0177_create_local_album_artist_identities.sql",
     ]
 
 
@@ -1642,6 +1650,30 @@ def test_cover_lookup_task_delete_grant_repair_is_role_guarded_and_least_privile
         r"\bgrant\s+(?:select|insert|update|truncate|references|trigger)\b",
         sql,
     )
+
+
+def test_album_disc_ratings_migration_scopes_nullable_disc_authority_to_the_local_album():
+    sql = _normalized_sql(ALBUM_DISC_RATINGS_MIGRATION.read_text(encoding="utf-8"))
+
+    required_fragments = {
+        "create table if not exists app.album_disc_ratings",
+        "account_id bigint not null references app.accounts(id) on delete cascade",
+        "library_id bigint not null references library.libraries(id) on delete cascade",
+        "album_key text not null",
+        "disc_key text not null",
+        "rating smallint,",
+        "provenance text not null",
+        "check ( disc_key <> '' and disc_key = lower(btrim(disc_key)) )",
+        "rating is null or rating between 1 and 10",
+        "references library.local_albums(library_id, album_key) on update cascade on delete cascade",
+        "create unique index if not exists album_disc_ratings_account_library_album_disc_idx "
+        "on app.album_disc_ratings (account_id, library_id, album_key, disc_key)",
+        "grant select on table app.album_disc_ratings to album_haven_readonly",
+        "grant select, insert, update on table app.album_disc_ratings to album_haven_app",
+    }
+
+    assert sorted(fragment for fragment in required_fragments if fragment not in sql) == []
+    assert "delete on table app.album_disc_ratings" not in sql
 
 
 def test_album_ratings_migration_file_exists():

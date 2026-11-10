@@ -17,12 +17,28 @@ function buildAlertIconHtml(severity) {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
 }
 
+function buildSmallAlertAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:aria-label|data-open-musicbrainz-artist-problem)$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeAlertHtml(value)}"`;
+  }).join('');
+}
+
 function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
+  const interactive = config.interactive === true;
+  const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  const attributes = buildSmallAlertAttributes(config.attributes);
+  const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  if (interactive) {
+    return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
+  }
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {

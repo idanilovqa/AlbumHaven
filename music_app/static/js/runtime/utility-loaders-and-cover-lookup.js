@@ -138,7 +138,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
-        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        // This forced refresh supersedes any clicked detail request, so it must
+        // paint whenever this load will not render its own final state.
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, {
+          render: options.render === false && !navigationOwnsRendering(),
+        });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -222,6 +226,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (!normalizedKey) return null;
   const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
+    return currentAlbum;
+  }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {

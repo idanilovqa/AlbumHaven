@@ -266,6 +266,20 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  const musicBrainzSyncAction = event.target.closest('[data-status-action="musicbrainz-sync"]');
+  if (musicBrainzSyncAction) {
+    event.preventDefault();
+    triggerMusicBrainzArtistSync();
+    return;
+  }
+
+  const artistProblemAction = event.target.closest('[data-open-musicbrainz-artist-problem]');
+  if (artistProblemAction) {
+    event.preventDefault();
+    openMusicBrainzArtistProblem(artistProblemAction.dataset.openMusicbrainzArtistProblem);
+    return;
+  }
+
   const indicator = event.target.closest('#scan-indicator');
   if (indicator) {
     event.preventDefault();

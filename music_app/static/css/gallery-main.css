@@ -7,8 +7,15 @@
 .gallery-bar__title { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
 .gallery-bar__title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-bar__artist-divider { flex: 1 1 auto; min-width: 24px; overflow: visible !important; }
-.gallery-bar__artist-total { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
-.gallery-bar__summary { display: block; margin: 2px 0 0; color: var(--muted); font-size: .72rem; }
+/* An artist header reads "Name (i) • N albums"; its pills take the second line. */
+.gallery-bar__artist-total { flex: 0 0 auto; color: var(--muted); font-size: .82rem; font-weight: 500; }
+.gallery-bar__artist-total::before { content: "\2022"; margin: 0 6px 0 2px; font-size: 1.25em; line-height: 0; vertical-align: -.08em; }
+/* The second line keeps one height for the summary and the pills, so the
+   header never moves when an artist takes it over while scrolling. */
+.gallery-bar__summary, .gallery-bar__artist-metadata { box-sizing: border-box; min-height: 20px; margin: 2px 0 0; }
+.gallery-bar__summary { display: block; color: var(--muted); font-size: .72rem; line-height: 20px; }
+.gallery-bar__artist-metadata { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow: hidden; }
+.gallery-bar__summary[hidden], .gallery-bar__artist-metadata[hidden] { display: none; }
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--gallery-toolbar-button-background, var(--appearance-main-surface, var(--panel))); color: var(--text); cursor: pointer; }
@@ -88,8 +95,18 @@
 .gallery-divider { margin: 4px 0 14px; }
 .gallery-divider__line { height: 1px; background: var(--border); }
 .artist-family-panel__primary-divider { width: 100%; margin: 2px 0 12px; }
-.family-artist-header { grid-template-columns: minmax(0, auto) auto minmax(0, 1fr) auto; padding-top: 2px; margin: 0 0 10px; }
+.family-artist-header { grid-template-columns: minmax(0, auto) auto minmax(0, 1fr) auto; height: 32px; box-sizing: border-box; padding-top: 2px; margin: 0 0 10px; }
+.family-artist-header:has(.artist-musicbrainz-status:not(:empty)) { grid-template-columns: minmax(0, auto) auto auto minmax(0, 1fr) auto; }
 .family-artist-header h2 { min-width: 0; overflow-wrap: anywhere; margin: 0; color: var(--text); font-size: 1.05rem; letter-spacing: 0; text-transform: none; }
+.artist-musicbrainz-status { display: inline-flex; align-items: center; min-width: 0; }
+.artist-musicbrainz-status:empty { display: none; }
+.artist-musicbrainz-pending { display: inline-flex; align-items: center; color: var(--appearance-player-accent, #55c7ff); font-size: .68rem; font-weight: 700; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+.artist-musicbrainz-pending [data-pending-dot] { display: inline-block; animation: artist-musicbrainz-pending-dots 1.2s ease-in-out infinite; }
+.artist-musicbrainz-pending [data-pending-dot]:nth-child(2) { animation-delay: 160ms; }
+.artist-musicbrainz-pending [data-pending-dot]:nth-child(3) { animation-delay: 320ms; }
+@keyframes artist-musicbrainz-pending-dots { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-1px); } }
+@media (max-width: 720px) { .gallery-bar__artist-metadata { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .artist-musicbrainz-pending [data-pending-dot] { animation: none; } }
 .artist-family-panel { position: fixed; z-index: 70; top: calc(var(--app-bar-height) + 54px); right: 0; bottom: var(--player-height); width: min(390px, 92vw); box-sizing: border-box; display: flex; flex-direction: column; border: 1px solid var(--border); border-right: 0; background: var(--panel); box-shadow: -18px 0 48px #0008; border-top: 0; clip-path: inset(-1px 0 100% 0); opacity: 0; transition: clip-path 240ms cubic-bezier(.22, 1, .36, 1); }
 .artist-family-panel::before {
   content: ''; position: absolute;
@@ -171,14 +188,14 @@
 .artist-info-overlay h2 { margin: 4px 0; font-size: 1.1rem; }
 .artist-info-overlay__image { width: 112px; height: 112px; display: grid; place-items: center; flex: 0 0 auto; object-fit: cover; object-position: center top; border-radius: 11px; background: var(--panel-2, var(--app-active, #1b3047)); }
 .artist-info-overlay__body { max-height: 300px; overflow: auto; padding: 0 16px 16px; line-height: 1.5; user-select: text; }
-.artist-info-overlay__body [data-artist-info-summary] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 5; }
-.artist-info-overlay__body [data-artist-info-summary].is-expanded { display: block; overflow: visible; }
-.artist-info-overlay__links { display: flex; gap: 14px; }
-.artist-info-overlay__links :is(a, button) { border: 0; background: transparent; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); padding: 0; }
-:root .artist-info-overlay__links :is(a, button):is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: transparent !important; box-shadow: none; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]) { cursor: pointer; text-underline-offset: .2em; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) { text-decoration: underline; }
-.artist-info-overlay__links :is(a, button):not(:disabled):not([aria-disabled="true"]):focus-visible { text-decoration-thickness: 2px; }
+/* A long biography is cut after five lines, ending in "… Open full page" over a fade in the panel colour. */
+.artist-info-overlay__body [data-artist-info-summary][data-artist-info-long] { position: relative; max-height: 7.5em; overflow: hidden; }
+.artist-info-overlay__body [data-artist-info-long] .artist-info-overlay__full-page { position: absolute; right: 0; bottom: 0; padding-left: 2.5em; --artist-info-full-page-background: linear-gradient(to right, transparent, var(--panel) 2em); }
+.artist-info-overlay__body [data-artist-info-long] .artist-info-overlay__full-page::before { content: "…"; display: inline-block; margin-right: .3em; color: var(--text); }
+/* Disabled for every artist until artist pages exist; the dimmed colour, not opacity, keeps the fade opaque. */
+.artist-info-overlay__full-page { border: 0; padding: 0; font: inherit; line-height: inherit; color: var(--appearance-accent, var(--appearance-player-accent, #55c7ff)); background: var(--artist-info-full-page-background, transparent); }
+:root .artist-info-overlay__full-page:is(:hover, :focus-visible, :active) { border: 0; outline: none !important; background: var(--artist-info-full-page-background, transparent) !important; box-shadow: none; }
+.artist-info-overlay__full-page:disabled { color: color-mix(in srgb, var(--appearance-accent, var(--appearance-player-accent, #55c7ff)) 45%, transparent); cursor: default; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
@@ -201,12 +218,12 @@
 
 .artist-info-overlay__image { width: 176px; height: 176px; flex-basis: 176px; }
 .artist-info-overlay { max-height: calc(100dvh - 100px); }
-.artist-info-overlay.is-expanded { width: min(720px, calc(100vw - 24px)); }
 .artist-info-overlay__body { max-height: min(360px, calc(100dvh - 330px)); }
 .artist-info-overlay__body [data-artist-info-summary] { white-space: pre-line; }
 .artist-info-overlay__links { padding: 8px 0 14px; }
-.artist-info-overlay__links [aria-disabled="true"] { opacity: .45; cursor: default; }
 .artist-info-overlay__source { color: var(--muted); font-size: .7rem; }
+.artist-info-overlay__identities ul { list-style: none; margin: 4px 0 12px; padding: 0; display: grid; gap: 6px; }
+.artist-info-overlay__identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 @media (max-width: 480px) {
   .artist-info-overlay__image { width: 132px; height: 132px; flex-basis: 132px; }
 }

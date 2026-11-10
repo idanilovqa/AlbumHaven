@@ -130,6 +130,9 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   font-size: 0.72rem;
   font-weight: 750;
 }
+/* An interactive SmallAlert (it opens its exact problem) is the same compact alert. */
+button.small-alert { padding: 0; font: inherit; cursor: pointer; }
+button.small-alert:is(:hover, :focus-visible) { width: 200px; }
 .small-alert svg,
 .on-page-alert svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 

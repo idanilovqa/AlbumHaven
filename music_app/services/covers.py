@@ -593,6 +593,20 @@ def find_existing_cover_display_variant(
     return _find_existing_cover_variant(variant_base_path)
 
 
+def display_variant_awaits_relocation(
+    source_path: Path,
+    *,
+    storage_policy,
+    max_size: int,
+    revision: str | None = None,
+) -> bool:
+    """True while a running preview move has not yet moved this display preview."""
+    root = storage_policy.relocation_source_root(source_path) if storage_policy is not None else None
+    return root is not None and find_existing_cover_display_variant(
+        source_path, cache_root=root, max_size=max_size, revision=revision,
+    ) is not None
+
+
 def resolve_cover_display_variant(
     source_path: Path,
     *,

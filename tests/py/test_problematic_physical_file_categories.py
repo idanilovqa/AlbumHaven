@@ -115,7 +115,8 @@ def test_targeted_physical_context_uses_normalized_folder_index_equality(modes):
     assert "physical_seed_folders as materialized" in sql
     assert "physical_folder_prefixes as" not in sql
     assert "= physical_seed_folders.physical_parent" in sql
-    assert "library.local_path_key(private_path)" in sql
+    # The folder probe keeps 0088's index expression; the table alias does not change it.
+    assert "library.local_path_key(files.private_path)" in sql
     assert "from selected_albums" in sql.split("physical_seed_folders as materialized", 1)[1]
     assert "physical_seed_folders.library_root_id" in sql
     assert "physical_seed_folders.library_id" in sql

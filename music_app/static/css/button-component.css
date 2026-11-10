@@ -179,6 +179,56 @@ box-shadow: none;
 .ui-button, .action-button { transition: none; }
 }
 
+.ui-metadata-pill {
+display: inline-flex;
+align-items: center;
+min-height: 18px;
+padding: 1px 7px;
+border: 1px solid var(--appearance-line, #526173);
+border-radius: 999px;
+background: var(--appearance-control, #182230);
+color: var(--appearance-ink, #edf4fb);
+font-size: .68rem;
+font-weight: 700;
+line-height: 1.2;
+white-space: nowrap;
+}
+.ui-metadata-pill--genre { background: #11202a; border: 1px solid #4199c3; color: #8bd9ff; }
+/* Country: owner-approved violet (2026-11-07). Text contrast 9.7:1 dark, 8.5:1 light. */
+.ui-metadata-pill--country {
+--ui-metadata-pill-country-fill: #1c1730;
+--ui-metadata-pill-country-border: #8b6fd6;
+--ui-metadata-pill-country-ink: #cbb8ff;
+background: var(--ui-metadata-pill-country-fill);
+border: 1px solid var(--ui-metadata-pill-country-border);
+color: var(--ui-metadata-pill-country-ink);
+}
+:root[data-appearance-mode='light'] .ui-metadata-pill--country {
+--ui-metadata-pill-country-fill: #f1ecfd;
+--ui-metadata-pill-country-ink: #4a2e99;
+}
+
+/* External service links: a small service icon and plain text, in one left-aligned row. */
+.ui-external-link-list { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px 16px; }
+.ui-external-link {
+display: inline-flex;
+align-items: center;
+gap: 6px;
+color: inherit;
+text-decoration: none;
+text-underline-offset: .2em;
+outline: none;
+}
+/* Plain text with no box in any state: an underline marks hover, a thicker one keyboard focus. */
+.ui-external-link:hover { text-decoration: underline; }
+.ui-external-link:focus-visible { text-decoration: underline; text-decoration-thickness: 2px; }
+/* Each service's own full-colour favicon, as MusicBrainz shows them (see images/icons/SERVICE-FAVICONS-NOTICE.txt). */
+.ui-external-link__icon { flex: 0 0 auto; width: 16px; height: 16px; background: var(--ui-external-link-icon) center / 16px 16px no-repeat; }
+.ui-external-link--musicbrainz { --ui-external-link-icon: url("/static/images/icons/musicbrainz-favicon-32.png"); }
+.ui-external-link--discogs { --ui-external-link-icon: url("/static/images/icons/discogs-favicon-32.png"); }
+/* Discogs' black record disappears on dark surfaces, so dark themes (including the default) show it in white. */
+:root:not([data-appearance-mode='light']) .ui-external-link--discogs .ui-external-link__icon { filter: invert(1); }
+
 /* Explicit compound fields share focus ownership; embedded actions own their own focus. */
 :root .ui-input-action:has(> input:focus):not(:has(button:active, .trigger-anchor-open, > input[aria-expanded="true"])) {
 outline: var(--ui-input-action-focus-outline, 1px solid var(--muted, var(--appearance-muted, #9ca3af))) !important;

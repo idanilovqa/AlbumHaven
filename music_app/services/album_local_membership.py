@@ -135,13 +135,19 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
         # durable projection instead of rebuilding every source on each request.
         return """
         local_album_membership as materialized (
-          select files.id as file_id, files.track_id, files.private_path,
-            files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
-          from library.local_track_files files
+          select files.id as file_id, files.track_id, files.private_path, files.problem
+          from (
+            -- Planned alone so the sparse partial index from 0112 drives it; joined
+            -- to the roots first, it read every file's metadata root by root.
+            select id, track_id, private_path, library_root_id,
+              metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
+            from library.local_track_files
+            where scan_cache_stale is false
+              and nullif(metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
+            offset 0
+          ) files
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
           join bootstrap_context on bootstrap_context.library_id = roots.library_id
-          where files.scan_cache_stale is false
-            and nullif(files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
         )
         """
     seeds = ""

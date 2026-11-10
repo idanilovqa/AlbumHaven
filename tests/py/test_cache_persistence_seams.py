@@ -1227,20 +1227,23 @@ def test_scheduled_cache_update_forwards_intent_completion_to_snapshot_transacti
     assert observed == [before_commit]
 
 
-def test_runtime_cache_save_forwards_explicit_scan_rating_seed_intent(
+def test_runtime_cache_save_forwards_the_publication_commit_guard(
     tmp_path,
     monkeypatch,
 ):
-    seed_intents: list[bool] = []
+    forwarded_guards: list[object] = []
+
+    def guard(commit_action):
+        return commit_action()
 
     class FakePostgresScanCacheAdapter:
         def save_snapshot(
             self,
             *_args,
-            seed_missing_album_ratings=False,
+            publication_commit_guard=None,
             **_kwargs,
         ):
-            seed_intents.append(seed_missing_album_ratings)
+            forwarded_guards.append(publication_commit_guard)
 
     monkeypatch.setattr(
         cache_module,
@@ -1254,10 +1257,10 @@ def test_runtime_cache_save_forwards_explicit_scan_rating_seed_intent(
         {},
         "root-1",
         123.0,
-        seed_missing_album_ratings=True,
+        publication_commit_guard=guard,
     )
 
-    assert seed_intents == [True]
+    assert forwarded_guards == [guard]
 
 
 def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch):

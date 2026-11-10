@@ -10,6 +10,14 @@
 .album-track-table__disc { min-width: 0; }
 .album-track-table__disc + .album-track-table__disc { margin-top: 14px; }
 .album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
+.album-track-table__disc-header { display: flex; align-items: center; gap: 12px; margin: 0 0 7px; }
+.album-track-table__disc-header > .album-track-table__disc-heading { margin: 0; }
+.album-track-table__disc-rating { width: 150px; }
+@media (max-width: 900px) {
+  .album-track-table__disc-rating { width: auto; }
+  .album-track-table__disc-rating .stars,
+  .album-track-table__disc-rating::after { display: none; }
+}
 .album-track-table__disc--collapsible > summary { cursor: pointer; list-style: none; }
 .album-track-table__disc--collapsible > summary::-webkit-details-marker { display: none; }
 .album-track-table__disc--collapsible > summary::before { content: '\203A'; display: inline-block; margin-right: 7px; transition: transform 120ms ease; }

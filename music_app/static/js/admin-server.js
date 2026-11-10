@@ -64,8 +64,10 @@
     let disposed = false;
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
-    const savedMode = () => String(state?.requested_mode || state?.mode || 'album_folders');
-    const savedPath = () => String(state?.requested_root || state?.active_root || '');
+    // Owner (11-10): the choice shows where previews live now; a requested folder becomes the choice only once the
+    // move has switched to it.
+    const savedMode = () => String(state?.mode || 'album_folders');
+    const savedPath = () => String(state?.active_root || '');
     // Save is available only for a valid, unsaved choice: a special path always needs a folder.
     const syncControls = () => {
       const locked = !state || configurationLocked(state.operation_state);
@@ -118,7 +120,22 @@
           regenerateLater ? ` · ${regenerateLater} to be regenerated` : '',
           ` · ${Number(next.failed_count || 0)} failed`].join('')
         : '';
-      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}`;
+      // Owner (11-09): the move cleans the album folders' leftover .album-haven folders and says what it left.
+      const cleanup = next.cache_cleanup || {};
+      const cleaned = [
+        Number(cleanup.cleaned_count || 0) ? ` · cleaned up ${Number(cleanup.cleaned_count)} cache folders` : '',
+        Number(cleanup.kept_count || 0) ? ` · ${Number(cleanup.kept_count)} kept (they hold other files)` : '',
+        Number(cleanup.left_count || 0) ? ` · ${Number(cleanup.left_count)} left for later (drive unavailable)` : '',
+      ].join('');
+      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}${cleaned}`;
+      // Owner (11-10): an unfinished move says so plainly instead of looking like the new folder is in use.
+      const destination = next.requested_mode === 'custom' ? String(next.requested_root || 'the special path') : 'album folders';
+      const failedCount = Number(next.failed_count || 0);
+      if (next.requested_mode && !active) {
+        showAlert(status, canceled
+          ? `Moving to ${destination} was canceled. Previews stay where they are until the move is resumed.`
+          : `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`);
+      }
       counts.hidden = false;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);

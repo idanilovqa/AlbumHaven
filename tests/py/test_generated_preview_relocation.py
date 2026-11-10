@@ -53,6 +53,9 @@ class FakeRepository:
     def operation_lock(self):
         return nullcontext(True)
 
+    def covered_source_paths(self, *, operation_id):
+        return []
+
     def stage_inventory(self, *, operation_id):
         self.staged.append(operation_id)
 
@@ -580,3 +583,107 @@ def test_worker_recovers_requested_location_left_before_operation_start():
 
     assert len(repository.started) == 1
     assert repository.finished == [repository.operation_id]
+
+
+# Owner (11-09): "application should clean them during such a preview move". A move to a custom folder leaves no
+# .album-haven folders behind in the album folders it covered.
+def _album_cache(tmp_path, name):
+    cache = tmp_path / "music" / name / ".album-haven"
+    (cache / "cover_variants" / "ab").mkdir(parents=True)
+    return cache
+
+
+def test_cleanup_moves_a_newer_preview_and_removes_the_folder(tmp_path):
+    cache = _album_cache(tmp_path, "Album")
+    late = cache / "cover_variants" / "ab" / "abcdef.png"
+    late.write_bytes(_png("red"))
+    root = tmp_path / "custom"
+
+    summary = relocation.clean_album_preview_folders([cache], root, operation_id="op")
+
+    assert summary == {"cleaned": 1, "kept": [], "left": []}
+    assert (root / "v1" / "cover_variants" / "ab" / "abcdef.png").read_bytes() == _png("red")
+    assert not cache.exists()
+    assert (tmp_path / "music" / "Album").is_dir(), "the album folder itself stays"
+
+
+def test_cleanup_removes_an_empty_cache_folder(tmp_path):
+    cache = _album_cache(tmp_path, "Empty")
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary["cleaned"] == 1
+    assert not cache.exists()
+
+
+def test_cleanup_keeps_and_reports_a_folder_with_other_files(tmp_path):
+    cache = _album_cache(tmp_path, "Notes")
+    (cache / "notes.txt").write_text("mine", encoding="utf-8")
+    (cache / "cover_variants" / "ab" / "abcdef.png").write_bytes(_png("blue"))
+    root = tmp_path / "custom"
+
+    summary = relocation.clean_album_preview_folders([cache], root, operation_id="op")
+
+    assert summary == {"cleaned": 0, "kept": [str(cache)], "left": []}
+    assert (cache / "notes.txt").read_text(encoding="utf-8") == "mine", "user files are never deleted"
+    assert (root / "v1" / "cover_variants" / "ab" / "abcdef.png").exists(), "the app's own preview still moves"
+    assert not (cache / "cover_variants").exists()
+
+
+def test_cleanup_keeps_a_preview_when_the_destination_holds_a_different_file(tmp_path):
+    cache = _album_cache(tmp_path, "Conflict")
+    late = cache / "cover_variants" / "ab" / "abcdef.png"
+    late.write_bytes(_png("red"))
+    published = tmp_path / "custom" / "v1" / "cover_variants" / "ab" / "abcdef.png"
+    published.parent.mkdir(parents=True)
+    published.write_bytes(_png("green"))
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary["kept"] == [str(cache)]
+    assert late.read_bytes() == _png("red")
+    assert published.read_bytes() == _png("green")
+
+
+def test_cleanup_leaves_an_unreachable_drive_for_later(tmp_path, monkeypatch):
+    cache = _album_cache(tmp_path, "Offline")
+    monkeypatch.setattr(relocation, "_drive_reachable", lambda _directory: False)
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary == {"cleaned": 0, "kept": [], "left": [str(cache)]}
+    assert cache.exists()
+
+
+def test_finishing_a_custom_move_cleans_its_album_folders_and_retries_unreachable_ones(tmp_path, monkeypatch):
+    moved = _album_cache(tmp_path, "Moved")
+    offline = _album_cache(tmp_path, "Offline")
+    root = tmp_path / "custom"
+
+    class CustomMove(FakeRepository):
+        def load(self):
+            return {**super().load(), "requested_mode": "custom", "requested_root": str(root)}
+
+        def covered_source_paths(self, *, operation_id):
+            assert operation_id == self.operation_id
+            return [str(moved / "cover_variants" / "ab" / "one.png"), str(offline / "cover_variants" / "ab" / "two.png")]
+
+    reachable = {"offline": False}
+    monkeypatch.setattr(relocation, "_drive_reachable", lambda directory: directory != offline or reachable["offline"])
+    repository = CustomMove([])
+    worker = GeneratedPreviewRelocationWorker(repository, batch_size=2, sync_grace_seconds=0)
+
+    worker._drain()
+
+    assert not moved.exists()
+    assert offline.exists()
+    assert worker.cleanup_summary == {"cleaned_count": 1, "kept_count": 0, "left_count": 1}
+
+    # Once the drive is back, a later pass cleans it.
+    reachable["offline"] = True
+    worker._next_cleanup_at = 0.0
+    repository.operation_state = "completed"
+    worker._drain()
+
+    assert not offline.exists()
+    assert worker.cleanup_summary == {"cleaned_count": 1, "kept_count": 0, "left_count": 0}

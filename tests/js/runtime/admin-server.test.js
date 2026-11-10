@@ -301,3 +301,30 @@ test('folder browse stays disabled without the browse permission', async () => {
   assert.equal(ui.pathInput.disabled, false);
   assert.equal(ui.browse.disabled, true);
 });
+
+test('an unfinished move shows where previews live now and why the switch has not happened', async () => {
+  // Owner (11-10): "what do you mean it never did?" Special path looked chosen while previews still lived in
+  // the album folders, because 148 files failed and the move never switched.
+  const ui = runtime({
+    mode: 'album_folders', active_root: null,
+    requested_mode: 'custom', requested_root: 'C:\Users\Owner\Documents\Album Haven\Generated Previews',
+    revision: 12, operation_state: 'completed_with_failures', operation_id: 'operation-2',
+    total_count: 14310, completed_count: 14162, failed_count: 148,
+    total_bytes: 1000, completed_bytes: 900,
+    cache_cleanup: { cleaned_count: 14058, kept_count: 2, left_count: 1 },
+    suggested_path: 'C:\Previews',
+  });
+  await mount(ui);
+
+  assert.equal(ui.albumFolders.checked, true, 'the album folders are still in use');
+  assert.equal(ui.custom.checked, false);
+  assert.equal(ui.pathInput.value, '');
+  assert.equal(ui.status.hidden, false);
+  assert.equal(ui.status.textContent,
+    "Moving to C:\Users\Owner\Documents\Album Haven\Generated Previews: 148 files failed. The switch happens after they're retried.");
+  assert.equal(ui.retry.hidden, false);
+  assert.equal(ui.retry.textContent, 'Retry failed files');
+  // Owner (11-09): the move reports the album folders' .album-haven folders it cleaned, kept and left.
+  assert.match(ui.form.querySelector('[data-preview-counts]').textContent,
+    / · cleaned up 14058 cache folders · 2 kept \(they hold other files\) · 1 left for later \(drive unavailable\)$/);
+});

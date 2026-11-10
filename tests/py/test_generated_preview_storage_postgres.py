@@ -401,3 +401,15 @@ def test_non_owner_serialization_never_exposes_server_paths():
     assert "requested_root" not in public
     assert owner["active_root"] == "C:/private/previews"
     assert owner["requested_root"] == "D:/private/previews"
+
+
+def test_covered_source_paths_lists_where_the_moves_previews_came_from():
+    """Owner (11-09): the move cleans the album folders its previews came from."""
+    connection = FakeConnection([FakeCursor(rows=[{"source_path": "N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"}])])
+
+    paths = repository_for(connection).covered_source_paths(operation_id="10e2fc89-439a-4f74-a508-97596cf20771")
+
+    assert paths == ["N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"]
+    sql, params = connection.calls[0]
+    assert "select distinct source_path from app.generated_preview_relocation_items" in sql
+    assert params == {"operation_id": "10e2fc89-439a-4f74-a508-97596cf20771"}

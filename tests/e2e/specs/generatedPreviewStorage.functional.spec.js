@@ -229,6 +229,14 @@ test(
         const albumCacheRoot = path.join(fixture.albumDirectory, '.album-haven');
         initialHashes = hashTree(albumCacheRoot);
         if (fs.existsSync(customRoot)) fs.rmSync(customRoot, { recursive: true });
+        // Owner (11-10): a move with a failed file has not switched yet, and Settings must say so. A different file
+        // already at one preview's destination is the one failure the move refuses.
+        const [conflictRelative, conflictSource] = Object.keys(initialHashes)
+          .filter((relative) => relative.startsWith('cover_variants/') && !relative.includes('f'.repeat(40)))
+          .sort();
+        const conflictTarget = path.join(customRoot, 'v1', conflictRelative);
+        fs.mkdirSync(path.dirname(conflictTarget), { recursive: true });
+        fs.writeFileSync(conflictTarget, fs.readFileSync(path.join(albumCacheRoot, conflictSource)));
         const started = await selectStorage(page, { mode: 'custom', root: customRoot });
         expect(['queued', 'running']).toContain(started.operation_state);
         // Owner (11-09, UI-8): once the move has recorded its list, a preview that changes on disk (regenerated
@@ -250,6 +258,12 @@ test(
         fs.rmSync(path.join(albumCacheRoot, missingRelative));
         initialHashes[staleRelative] = createHash('sha256').update(regenerated).digest('hex');
         delete initialHashes[missingRelative];
+        // Owner (11-09): a preview written into the album folder after the move passed it (never recorded) is moved
+        // by the move's cleanup, which then removes the emptied .album-haven folder.
+        const lateRelative = `cover_variants/ee/${'e'.repeat(40)}.webp`;
+        fs.mkdirSync(path.join(albumCacheRoot, 'cover_variants', 'ee'), { recursive: true });
+        fs.writeFileSync(path.join(albumCacheRoot, lateRelative), regenerated);
+        initialHashes[lateRelative] = createHash('sha256').update(regenerated).digest('hex');
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
@@ -293,18 +307,42 @@ test(
         await coverLookupActions.closeModal();
         await trackModalActions.close();
 
+        const unfinished = await waitForStorageState(
+          page,
+          (state) => state.operation_state === 'completed_with_failures',
+          'the move should finish with the one refused file',
+        );
+        expect({ mode: unfinished.mode, failed: unfinished.failed_count }).toEqual({ mode: 'album_folders', failed: 1 });
+        const adminServer = new AdminServerPage(page);
+        await page.goto('/admin/server');
+        // The previews still live in the album folders: that is the choice shown, with the reason the switch waits.
+        await expect(adminServer.mode('album_folders')).toBeChecked();
+        await expect(adminServer.mode('custom')).not.toBeChecked();
+        await expect(adminServer.status).toContainText(
+          `Moving to ${customRoot}: 1 file failed. The switch happens after they're retried.`,
+        );
+        // Owner (11-10): the selected radio shows a filled dot in its ring.
+        // parity-check: allow-read-only-measurement-evaluate -- read the rendered radio dot
+        expect(await adminServer.mode('album_folders').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(1);
+        expect(await adminServer.mode('custom').evaluate((input) => getComputedStyle(input, '::before').transform)).not.toBe('none');
+        expect(await adminServer.mode('custom').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(0);
+        fs.rmSync(conflictTarget);
+        await adminServer.retry.click();
         const completed = await waitForStorageState(
           page,
           (state) => state.mode === 'custom' && state.operation_state === 'completed' && !state.requested_mode,
-          'custom preview relocation should complete',
+          'custom preview relocation should complete after the retry',
         );
         expect(completed.failed_count).toBe(0);
         expect({ rechecked: completed.rechecked_count, regenerateLater: completed.regenerate_later_count })
           .toEqual({ rechecked: 1, regenerateLater: 1 });
         expect(hashTree(path.join(customRoot, 'v1'))).toMatchObject(initialHashes);
-        const adminServer = new AdminServerPage(page);
         await page.goto('/admin/server');
-        await expect(adminServer.counts).toContainText(/ moved · 1 re-checked · 1 to be regenerated · 0 failed$/);
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(adminServer.counts).toContainText('cleaned up 1 cache folders');
+        // The late preview was never recorded, so the reverse move below does not bring it back.
+        delete initialHashes[lateRelative];
+        await expect(adminServer.counts).toContainText(/ moved · 1 re-checked · 1 to be regenerated · 0 failed · cleaned up 1 cache folders$/);
         await expect(page.locator('[data-preview-failure]')).toBeHidden();
         expect(hashTree(albumCacheRoot)).toEqual({});
         testArtifacts.queueJsonAttachment('generated-preview-storage-relocation-performance.json', {

@@ -7,6 +7,8 @@ export class AdminServerPage {
     this.counts = page.locator('[data-preview-counts]');
     this.browse = page.getByRole('button', { name: 'Choose server folder', exact: true });
     this.save = page.getByRole('button', { name: 'Save', exact: true });
+    this.retry = page.locator('[data-preview-retry]');
+    this.status = page.locator('[data-preview-status]');
   }
 
   mode(value) {

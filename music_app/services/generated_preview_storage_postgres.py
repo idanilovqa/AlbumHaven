@@ -235,6 +235,16 @@ class PostgresGeneratedPreviewStorageRepository:
                 "Preview relocation cleanup failure could not be recorded."
             )
 
+    def covered_source_paths(self, *, operation_id: str) -> list[str]:
+        """Where the move's previews came from, so their album folders can be cleaned afterwards."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                "select distinct source_path from app.generated_preview_relocation_items"
+                " where operation_id = %(operation_id)s::uuid",
+                {"operation_id": str(UUID(str(operation_id)))},
+            ).fetchall()
+        return [str(_row_mapping(row).get("source_path") or "") for row in rows]
+
     def finish_operation(self, operation_id: str) -> dict[str, object]:
         with self._connect_to_database() as connection:
             with _transaction(connection):

@@ -291,6 +291,15 @@ def _finish_live_startup(config):
     initialize_gallery_membership(config)
 
 
+def _finish_live_reconciliation(config):
+    """Finish the publication that production queues after a low-level mutation."""
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+    from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+
+    ensure_pending_relation_projection_ready(config)
+    ensure_gallery_projection_ready(config)
+
+
 @pytest.fixture
 def watcher_repair_inventory(monkeypatch, tmp_path):
     """Real migrated inventory used only by the bounded watcher repair cases."""
@@ -3745,6 +3754,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             },
             changed_field_names={"album"},
         )
+        _finish_live_reconciliation(config)
 
         assert result["track_rows_updated"] == 1
         assert result["track_file_rows_updated"] == 1
@@ -4154,6 +4164,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
                 updated_file_entries=current_entries,
                 changed_field_names={"album"},
             )
+            _finish_live_reconciliation(config)
             assert split_result["track_rows_updated"] == 1
             assert split_result["track_file_rows_updated"] == 1
             watcher_result = adapter.persist_targeted_inventory_mutation(
@@ -4242,6 +4253,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
                 updated_file_entries=current_entries,
                 changed_field_names={"album"},
             )
+            _finish_live_reconciliation(config)
             assert restore_result["track_rows_updated"] == 1
             assert restore_result["track_file_rows_updated"] == 1
 

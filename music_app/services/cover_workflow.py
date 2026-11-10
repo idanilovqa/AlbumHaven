@@ -303,6 +303,25 @@ def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_ro
     )
 
 
+def _is_in_album_track_folder(config: dict[str, object], image: Path, track_paths: set[str]) -> bool:
+    """Owner (11-09): an image Cover Look Up shows for the album can be used. An album whose tracks span several
+    folders (two editions grouped as one album) lists the art of each, so art in any folder holding the album's
+    own tracks qualifies, as does art beside its disc folders; always inside the configured library roots."""
+    library_roots = tuple(iter_library_root_paths(config))
+    for raw_path in track_paths:
+        if not str(raw_path or "").strip():
+            continue
+        folder = Path(str(raw_path)).resolve(strict=False).parent
+        if not any(_is_path_within(folder, root) for root in library_roots):
+            continue
+        if is_disc_like_folder(folder):
+            if _is_path_within(image, folder) or _is_shared_disc_parent_image(config, image, folder):
+                return True
+        elif _is_path_within(image, folder) and _is_valid_album_root(config, folder, enforce_layout_depth=True):
+            return True
+    return False
+
+
 def validate_local_cover_source(
     config: dict[str, object],
     album_root: Path,
@@ -319,7 +338,8 @@ def validate_local_cover_source(
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
     if not (_is_path_within(resolved, resolved_album_root)
-            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)):
+            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)
+            or _is_in_album_track_folder(config, resolved, track_paths or set())):
         raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")

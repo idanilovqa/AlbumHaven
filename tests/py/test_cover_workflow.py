@@ -1090,6 +1090,31 @@ def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):
         )
 
 
+def test_album_spanning_two_edition_folders_accepts_art_from_either(config, tmp_path: Path):
+    """Owner (11-09): Holy War groups the 2002 and 2014 editions as one album; Cover Look Up shows the art of
+    both folders, so Save accepts it. Art in the artist folder stays outside the album."""
+    library_root = (tmp_path / "Library").resolve()
+    first = (library_root / "Dragonland" / "2002 - Holy War" / "01.mp3").resolve()
+    second = (library_root / "Dragonland" / "2014 - Holy War (Deluxe Edition)" / "01.mp3").resolve()
+    edition_art = (first.parent / "Covers" / "Front.jpg").resolve()
+    artist_art = (library_root / "Dragonland" / "artist.jpg").resolve()
+    for track in (first, second):
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"track")
+    edition_art.parent.mkdir(parents=True)
+    edition_art.write_bytes(_image_bytes((200, 40, 40), image_format="JPEG"))
+    artist_art.write_bytes(_image_bytes((40, 200, 40), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    track_paths = {str(first), str(second)}
+
+    assert validate_local_cover_source(config, second.parent, str(edition_art), track_paths=track_paths) == edition_art
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, second.parent, str(artist_art), track_paths=track_paths)
+
+
 def test_resolve_album_root_accepts_non_numeric_album_subfolders(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()

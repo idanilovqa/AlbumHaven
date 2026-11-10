@@ -328,3 +328,59 @@ test('an unfinished move shows where previews live now and why the switch has no
   assert.match(ui.form.querySelector('[data-preview-counts]').textContent,
     / · cleaned up 14058 cache folders · 2 kept \(they hold other files\) · 1 left for later \(drive unavailable\)$/);
 });
+
+const unfinishedMove = (overrides = {}) => ({
+  mode: 'album_folders', active_root: null, requested_mode: 'custom', requested_root: 'C:\Previews',
+  revision: 12, operation_state: 'completed_with_failures', operation_id: 'operation-2',
+  total_count: 14310, completed_count: 14162, failed_count: 148, total_bytes: 1000, completed_bytes: 900,
+  suggested_path: 'C:\Previews', ...overrides,
+});
+
+test('Retry failed files reacts at once, shows progress and ends with a readable result', async () => {
+  // Owner (11-10): "I clicked Retry failed files - but saw no reaction to that click on UI - change that."
+  const ui = runtime(unfinishedMove());
+  let answerRetry;
+  const answers = [];
+  const request = async (url, options = {}) => {
+    if (url.endsWith('/retry')) {
+      return new Promise((resolve) => { answerRetry = resolve; });
+    }
+    const payload = answers.shift() || unfinishedMove();
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  await mount(ui, { request });
+
+  const clicked = ui.retry.listeners.get('click')();
+  assert.equal(ui.retry.disabled, true);
+  assert.equal(ui.retry['aria-busy'], 'true', 'the shared Button shows it is working');
+  assert.equal(ui.status.textContent, 'Retrying 148 files…');
+
+  answerRetry({ ok: true, status: 202, json: async () => unfinishedMove({ operation_state: 'running', completed_count: 14200, failed_count: 0 }) });
+  await clicked;
+  assert.equal(ui.status.textContent, 'Moving to C:\Previews: 14200 of 14310 files done…');
+
+  answers.push(unfinishedMove({
+    mode: 'custom', active_root: 'C:\Previews', requested_mode: null, requested_root: null,
+    operation_state: 'completed', completed_count: 14310, failed_count: 0, regenerate_later_count: 148,
+  }));
+  await ui.polls.at(-1).callback();
+  await settleController();
+  assert.equal(ui.status.textContent, 'Done: switched to C:\Previews. 148 set to be rebuilt.');
+  assert.equal(ui.custom.checked, true);
+  assert.equal(ui.retry.hidden, true);
+});
+
+test('a refused retry says why and frees the button', async () => {
+  const ui = runtime(unfinishedMove());
+  const request = async (url) => (url.endsWith('/retry')
+    ? { ok: false, status: 403, json: async () => ({ detail: 'CSRF validation failed.' }) }
+    : { ok: true, status: 200, json: async () => unfinishedMove() });
+  await mount(ui, { request });
+
+  await ui.retry.listeners.get('click')();
+
+  assert.equal(ui.error.hidden, false);
+  assert.equal(ui.error.textContent, 'Your session changed. Reload the page and try again.');
+  assert.equal(ui.retry.disabled, false);
+  assert.equal(ui.retry['aria-busy'], undefined);
+});

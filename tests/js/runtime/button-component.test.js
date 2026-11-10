@@ -184,3 +184,20 @@ test('shared Button state changes update both native and accessible disabled sta
   assert.equal(element.disabled, true);
   assert.equal(attributes.get('aria-disabled'), 'true');
 });
+
+test('a busy shared Button is disabled and marked busy until its action finishes', () => {
+  // Owner (11-10): a click always shows a reaction; the shared CSS draws a spinner for aria-busy.
+  const { setBusy } = require(componentPath);
+  const attributes = new Map();
+  const element = {
+    disabled: false,
+    setAttribute(name, value) { attributes.set(name, value); },
+    removeAttribute(name) { attributes.delete(name); },
+  };
+  setBusy(element, true);
+  assert.equal(element.disabled, true);
+  assert.equal(attributes.get('aria-busy'), 'true');
+  setBusy(element, false);
+  assert.equal(element.disabled, false);
+  assert.equal(attributes.has('aria-busy'), false);
+});

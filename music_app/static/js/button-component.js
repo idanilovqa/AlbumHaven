@@ -112,7 +112,14 @@
     element.setAttribute('aria-disabled', String(element.disabled));
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
+  // A button running its action is disabled and marked busy, which the shared CSS shows as a spinner.
+  function setBusy(element, busy) {
+    setDisabled(element, busy);
+    if (busy) element.setAttribute('aria-busy', 'true');
+    else element.removeAttribute('aria-busy');
+  }
+
+  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled, setBusy };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

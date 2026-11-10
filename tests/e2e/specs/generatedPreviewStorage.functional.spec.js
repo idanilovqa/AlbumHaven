@@ -327,7 +327,27 @@ test(
         expect(await adminServer.mode('custom').evaluate((input) => getComputedStyle(input, '::before').transform)).not.toBe('none');
         expect(await adminServer.mode('custom').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(0);
         fs.rmSync(conflictTarget);
+        // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once, the move
+        // reports progress, and it ends with a readable result.
+        // parity-check: allow-read-only-measurement-evaluate -- record the Retry button and status on every frame
+        await page.evaluate(() => {
+          const frames = [];
+          window.__retryFrames = frames;
+          const read = () => {
+            const button = document.querySelector('[data-preview-retry]');
+            const status = document.querySelector('[data-preview-status]');
+            const entry = `${button?.getAttribute('aria-busy') === 'true' ? 'busy' : 'idle'}|${status && !status.hidden ? status.textContent.trim() : ''}`;
+            if (frames.at(-1) !== entry) frames.push(entry);
+            if (frames.length < 400 && !/Done: switched/.test(entry)) requestAnimationFrame(read);
+          };
+          requestAnimationFrame(read);
+        });
         await adminServer.retry.click();
+        await expect(adminServer.status).toContainText(`Done: switched to ${customRoot}.`, { timeout: 60_000 });
+        const retryFrames = await page.evaluate(() => window.__retryFrames);
+        expect(retryFrames, JSON.stringify(retryFrames)).toContain('busy|Retrying 1 file…');
+        expect(retryFrames.some((frame) => frame.includes(`Moving to ${customRoot}: `) && frame.includes(' files done…')),
+          JSON.stringify(retryFrames)).toBe(true);
         const completed = await waitForStorageState(
           page,
           (state) => state.mode === 'custom' && state.operation_state === 'completed' && !state.requested_mode,

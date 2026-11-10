@@ -25,9 +25,15 @@
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
+  // Refusals read as sentences, never as a silent no-op (owner, 11-10).
+  const REFUSALS = {
+    'CSRF validation failed.': 'Your session changed. Reload the page and try again.',
+    'Action not permitted.': 'Preview storage can be changed only by the server owner on a computer.',
+  };
+
   async function readJson(response) {
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.detail || 'The request could not be completed.');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(REFUSALS[data?.detail] || data?.detail || 'The request could not be completed.');
     return data;
   }
 
@@ -60,6 +66,7 @@
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
+    let wasActive = false;
     let pollTimer = null;
     let disposed = false;
 
@@ -131,11 +138,24 @@
       // Owner (11-10): an unfinished move says so plainly instead of looking like the new folder is in use.
       const destination = next.requested_mode === 'custom' ? String(next.requested_root || 'the special path') : 'album folders';
       const failedCount = Number(next.failed_count || 0);
-      if (next.requested_mode && !active) {
+      // Owner (11-10): a move or retry shows live progress and ends with a readable result.
+      const operationState = String(next.operation_state || 'idle');
+      const done = Number(next.completed_count || 0) + failedCount;
+      if (active) {
+        showAlert(status, `Moving to ${destination}: ${done} of ${totalCount} files done…`);
+      } else if (next.requested_mode) {
         showAlert(status, canceled
           ? `Moving to ${destination} was canceled. Previews stay where they are until the move is resumed.`
           : `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`);
+      } else if (wasActive && operationState === 'completed') {
+        const where = next.mode === 'custom' ? String(next.active_root || 'the special path') : 'album folders';
+        showAlert(status, [`Done: switched to ${where}.`,
+          regenerateLater ? ` ${regenerateLater} set to be rebuilt.` : '',
+          rechecked ? ` ${rechecked} re-checked.` : ''].join(''));
       }
+      wasActive = active;
+      window.ButtonComponent.setBusy(retry, false);
+      window.ButtonComponent.setBusy(cancel, false);
       counts.hidden = false;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);
@@ -217,10 +237,19 @@
       }
     });
     retry.addEventListener('click', async () => {
+      if (retry.disabled) return;
+      // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once.
+      const failedCount = Number(state?.failed_count || 0);
+      window.ButtonComponent.setBusy(retry, true);
+      showAlert(status, failedCount
+        ? `Retrying ${failedCount} ${failedCount === 1 ? 'file' : 'files'}…`
+        : 'Resuming the move…');
       try {
+        wasActive = true;
         await mutate('/admin/server/preview-storage/retry', {});
-        showAlert(status, 'Failed preview files were queued again.');
       } catch (failure) {
+        window.ButtonComponent.setBusy(retry, false);
+        showAlert(status);
         showAlert(error, failure.message);
       }
     });

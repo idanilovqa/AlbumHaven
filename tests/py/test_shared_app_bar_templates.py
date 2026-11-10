@@ -425,6 +425,14 @@ def test_server_settings_compose_shared_radio_path_and_button_components(render)
     save = form.one("button", **{"data-preview-save": None})
     assert {"ui-button", "ui-button--primary"} <= set(save.attrs["class"].split())
     assert "disabled" in save.attrs
+    # Owner (11-10): "I clicked Retry failed files - but saw no reaction". The alerts kept no hook, so every message
+    # was dropped; they carry their data attributes and sit right before the buttons that cause them.
+    status = form.one("section", **{"data-preview-status": None})
+    error = form.one("section", **{"data-preview-error": None})
+    assert (status.attrs["role"], error.attrs["role"]) == ("status", "alert")
+    siblings = status.parent.children
+    actions = next(child for child in siblings if child.find_all("button", **{"data-preview-retry": None}))
+    assert siblings.index(status) < siblings.index(error) < siblings.index(actions)
     assert not form.find_all("progress"), "Relocation uses concise text, not a progress bar"
     assert "Loading" not in form.text
     assert len(document.find_all(id="app-form-modal")) == 1, "The folder picker dialog is available on direct loads"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import hmac
+import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -21,6 +22,7 @@ from music_app.services.auth_session_csrf import issue_session_csrf, matches_ses
 _PUBLIC_AUTH_PATHS = frozenset(
     {"/login", "/forgot-password", "/reset-password", "/accept-invitation"}
 )
+_LOGGER = logging.getLogger(__name__)
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
@@ -214,6 +216,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
                     _refresh_session_csrf_cookie(request, artwork)
                     return artwork
         except HTTPException as exc:
+            if exc.status_code == 403 and request.method.upper() not in _READ_METHODS:
+                _LOGGER.warning("Write refused: %s %s needs %s.", request.method, route_path, action)
             if (
                 exc.status_code == 401
                 and request.method.upper() in _READ_METHODS
@@ -244,11 +248,21 @@ def install_private_route_boundary(app: FastAPI) -> None:
             )
         csrf_mode = csrf_mode_for_route(request.method, route_path)
         if csrf_mode == "session_header" and not _valid_session_csrf(request):
-            return JSONResponse(
+            # Owner (11-09): writes failed now and then with a stale or missing page token. The refusal carries the
+            # session's current token, so the page can retry once; the reason is logged for diagnosis.
+            _LOGGER.warning(
+                "Write refused: CSRF validation failed for %s %s (same origin %s, token cookie %s, token header %s).",
+                request.method, route_path, _same_origin(request),
+                bool(request.cookies.get(_SESSION_CSRF_COOKIE)), bool(request.headers.get(_SESSION_CSRF_HEADER)),
+            )
+            rejected = JSONResponse(
                 {"detail": "CSRF validation failed."},
                 status_code=403,
                 headers=preference_headers,
             )
+            if _same_origin(request):
+                _refresh_session_csrf_cookie(request, rejected)
+            return rejected
         response = await call_next(request)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)

@@ -106,7 +106,7 @@ def retirement_database():
             admin.execute("create role album_haven_app nologin; create role pytest_duplicate_retirement_denied nologin")
             admin.execute(SCHEMA)
             admin.execute((Path(__file__).resolve().parents[2] / "migrations/postgres/0043_create_local_track_waveform_peaks.sql").read_text())
-            admin.execute((Path(__file__).resolve().parents[2] / "migrations/postgres/0105_add_confirmed_copy_retirement.sql").read_text())
+            admin.execute((Path(__file__).resolve().parents[2] / "migrations/postgres/0180_add_confirmed_copy_retirement.sql").read_text())
             admin.execute("grant usage on schema app,library to album_haven_app,pytest_duplicate_retirement_denied")
             admin.execute("grant select on all tables in schema app to album_haven_app")
             admin.execute("grant select,insert,update on all tables in schema library to album_haven_app")

@@ -422,7 +422,7 @@ the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
 expressions on databases without these columns, so rollback only drops the index
 and the columns; a running server retries with the inline form once it finds them gone.
-`0104_add_ordered_cover_metadata_constraint.sql` adds a structural CHECK for
+`0179_add_ordered_cover_metadata_constraint.sql` adds a structural CHECK for
 optional ordered cover references in `library.local_albums.metadata`. Existing
 nonobject metadata and objects without `selected_covers` remain legacy values,
 including orphan revision/request fields. No rows, image files or provenance
@@ -450,7 +450,7 @@ saved metadata and migration ledger history; removing the guard is not proof
 that older servers preserve ordered selections.
 
 
-`0105_add_confirmed_copy_retirement.sql` adds the internal exact-generation
+`0180_add_confirmed_copy_retirement.sql` adds the internal exact-generation
 physical-row retirement function. It follows the existing bounded
 security-definer mutation pattern: the application can execute this function,
 but receives no direct DELETE permission on `local_track_files`. PUBLIC cannot

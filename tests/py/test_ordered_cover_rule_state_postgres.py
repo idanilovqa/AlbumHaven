@@ -3,7 +3,7 @@
 Opt in with ALBUM_HAVEN_RULE_STATE_TEST_DATABASE JSON containing exactly host,
 port, dbname, user and password for an EMPTY, owned loopback database named
 pytest_rule_state_<8-32 hex characters>. No ambient PG/app credentials are used.
-Only six queried tables and the unchanged 0104 constraint are installed. This
+Only six queried tables and the ordered-cover constraint are installed. This
 is not the full migration tree, deployment-role, HTTP, media or UI qualification.
 Each case owns its schemas and unique synthetic data; no media is created/read.
 """
@@ -21,7 +21,7 @@ from music_app.services.rule_state_postgres import RuleStatePostgresAdapter
 
 TARGET_ENV = "ALBUM_HAVEN_RULE_STATE_TEST_DATABASE"
 METHODS = ["save_exception_overrides", "upsert_exception_overrides"]
-MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0104_add_ordered_cover_metadata_constraint.sql"
+MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0179_add_ordered_cover_metadata_constraint.sql"
 SCHEMA = """
 create schema app;
 create schema library;

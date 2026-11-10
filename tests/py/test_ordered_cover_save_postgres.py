@@ -29,7 +29,7 @@ from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
 
 TARGET_ENV = "ALBUM_HAVEN_ORDERED_SAVE_TEST_DATABASE"
-MIGRATION = (Path(__file__).resolve().parents[2] / "migrations/postgres/0104_add_ordered_cover_metadata_constraint.sql")
+MIGRATION = (Path(__file__).resolve().parents[2] / "migrations/postgres/0179_add_ordered_cover_metadata_constraint.sql")
 # Deliberately minimal queried columns. Generated projections match migration 0021;
 # candidate-generation UUID/FK match 0041. Omitted deployment tables are not tested.
 SCHEMA = """

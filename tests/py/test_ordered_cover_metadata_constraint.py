@@ -21,7 +21,7 @@ from music_app.services.ordered_cover_references import project_selected_cover_m
 
 
 MIGRATION = (Path(__file__).resolve().parents[2] / "migrations" / "postgres"
-             / "0104_add_ordered_cover_metadata_constraint.sql")
+             / "0179_add_ordered_cover_metadata_constraint.sql")
 TARGET_ENV = "ALBUM_HAVEN_ORDERED_COVER_TEST_DATABASE"
 UUID_TEXT = "2cfe2385-c225-4501-9a71-3d7fc286b3d1"
 RECEIPT = {"mutation_id": UUID_TEXT, "request_hash": "a1" * 32}

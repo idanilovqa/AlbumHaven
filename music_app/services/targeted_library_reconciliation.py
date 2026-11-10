@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 from threading import Event, Lock
@@ -46,6 +47,9 @@ class TargetedLibraryReconciler:
         after_commit: Callable[[TargetedReconciliationResult], object] | None = None,
         reservation_acquirer: Callable[[set[str]], object] | None = None,
         publication_guard: Callable | None = None,
+        prepare_stable_file: Callable[
+            [Path, tuple[int, int], Callable[[], bool]], None
+        ] | None = None,
         stat_path: Callable[[Path], object] | None = None,
         wait: Callable[[float], object] | None = None,
         max_stable_attempts: int = 4,
@@ -62,6 +66,7 @@ class TargetedLibraryReconciler:
         self._reservation_acquirer = reservation_acquirer
         self._publication_guard = publication_guard
         self._stop_event = Event()
+        self._prepare_stable_file = prepare_stable_file
         self._stat_path = stat_path or Path.stat
         self._wait = wait or self._stop_event.wait
         self._max_stable_attempts = max(2, int(max_stable_attempts))
@@ -98,6 +103,46 @@ class TargetedLibraryReconciler:
         def is_supported_media(path: Path) -> bool:
             return not supported_extensions or path.suffix.casefold() in supported_extensions
 
+        normalization_extensions = supported_extensions | {
+            str(extension).casefold()
+            for extension in self._config.get("IMAGE_EXTENSIONS", ())
+        }
+        active_targets: list[tuple[Path, dict[str, object]]] = []
+        normalization_paths: dict[str, Path] = {}
+        event_directories: set[tuple[str, str]] = set()
+
+        def add_event_file(path: Path, root: dict[str, object]) -> None:
+            if is_supported_media(path):
+                active_targets.append((path, root))
+            if (
+                self._prepare_stable_file is not None
+                and path.suffix.casefold() in normalization_extensions
+            ):
+                try:
+                    key = str(path.resolve(strict=False))
+                except OSError:
+                    if is_supported_media(path):
+                        raise
+                    logging.getLogger(__name__).warning(
+                        "Unable to resolve an optional library image.", exc_info=True,
+                    )
+                    return
+                normalization_paths.setdefault(key, path)
+
+        def add_event_directory(path: Path, root: dict[str, object]) -> None:
+            key = (str(root.get("id") or ""), str(path.resolve(strict=False)))
+            if key in event_directories:
+                return
+            event_directories.add(key)
+            extensions = (
+                normalization_extensions
+                if self._prepare_stable_file is not None
+                else supported_extensions
+            )
+            for candidate in self._supported_media_descendants(path, extensions=extensions):
+                if self._belongs_to_root(candidate, root):
+                    add_event_file(candidate, root)
+
         deleted_paths = tuple(
             path
             for path in (Path(value) for value in getattr(request, "deleted_paths", ()))
@@ -113,19 +158,14 @@ class TargetedLibraryReconciler:
         if not root_healthy and (deleted_paths or deleted_subtrees or moves):
             return TargetedReconciliationResult(0, (), "root_unhealthy")
 
-        active_targets: list[tuple[Path, dict[str, object]]] = []
         for path in getattr(request, "paths", ()) or ():
             candidate = Path(path)
             if not self._belongs_to_root(candidate, primary_root):
                 return TargetedReconciliationResult(0, (), "invalid_path")
             if candidate.is_dir():
-                active_targets.extend(
-                    (media_path, primary_root)
-                    for media_path in self._supported_media_descendants(candidate)
-                    if self._belongs_to_root(media_path, primary_root)
-                )
-            elif is_supported_media(candidate):
-                active_targets.append((candidate, primary_root))
+                add_event_directory(candidate, primary_root)
+            else:
+                add_event_file(candidate, primary_root)
         if not all(self._belongs_to_root(path, primary_root) for path in deleted_paths):
             return TargetedReconciliationResult(0, (), "invalid_path")
         if not all(self._belongs_to_root(path, primary_root) for path in deleted_subtrees):
@@ -166,14 +206,11 @@ class TargetedLibraryReconciler:
             if is_directory:
                 deleted_subtrees += (source,)
                 source_subtrees.setdefault(source_root_id, set()).add(str(source))
-                for media_path in self._supported_media_descendants(destination):
-                    if self._belongs_to_root(media_path, destination_root):
-                        active_targets.append((media_path, destination_root))
+                add_event_directory(destination, destination_root)
             else:
                 if is_supported_media(source):
                     deleted_paths += (source,)
-                if is_supported_media(destination):
-                    active_targets.append((destination, destination_root))
+                add_event_file(destination, destination_root)
                 if not is_supported_media(source) and not is_supported_media(destination):
                     continue
             normalized_moves.append(
@@ -188,7 +225,10 @@ class TargetedLibraryReconciler:
 
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
-        if not active_targets and not deleted_paths and not deleted_subtrees and not normalized_moves:
+        has_inventory_work = bool(
+            active_targets or deleted_paths or deleted_subtrees or normalized_moves
+        )
+        if not has_inventory_work and not normalization_paths:
             return TargetedReconciliationResult(0, ())
 
         expanded_targets: list[tuple[Path, dict[str, object]]] = list(active_targets)
@@ -240,9 +280,30 @@ class TargetedLibraryReconciler:
                 structural_tag_edit_resource_keys(None, reservation_paths)
             )
         try:
-            disposition = self._stable_targets_disposition(active_by_path)
+            disposition, stable_signatures = self._stable_targets_disposition(
+                active_by_path, optional_paths=normalization_paths,
+            )
             if disposition != "ready":
                 return TargetedReconciliationResult(0, (), disposition)
+            if self._prepare_stable_file is not None:
+                for key, path in sorted(
+                    normalization_paths.items(), key=lambda item: item[0].casefold(),
+                ):
+                    if self._stop_event.is_set():
+                        return TargetedReconciliationResult(0, (), "cancelled")
+                    signature = stable_signatures.get(Path(key))
+                    if signature is None:
+                        continue
+                    try:
+                        self._prepare_stable_file(path, signature, self._stop_event.is_set)
+                    except Exception:
+                        logging.getLogger(__name__).warning(
+                            "Unable to prepare a stable library file.", exc_info=True,
+                        )
+                    if self._stop_event.is_set():
+                        return TargetedReconciliationResult(0, (), "cancelled")
+            if not has_inventory_work:
+                return TargetedReconciliationResult(0, ())
             exception_overrides = (
                 dict(self._exception_overrides_provider() or {})
                 if self._exception_overrides_provider is not None
@@ -324,28 +385,43 @@ class TargetedLibraryReconciler:
             if callable(release):
                 release()
 
-    def _stable_targets_disposition(self, paths: Iterable[str]) -> str:
-        targets = tuple(sorted((Path(path) for path in paths), key=lambda path: str(path).casefold()))
+    def _stable_targets_disposition(
+        self, paths: Iterable[str], *, optional_paths: Iterable[str] = (),
+    ) -> tuple[str, dict[Path, tuple[int, int]]]:
+        required = {Path(path) for path in paths}
+        targets = tuple(sorted(
+            required | {Path(path) for path in optional_paths},
+            key=lambda path: str(path).casefold(),
+        ))
         if not targets:
-            return "cancelled" if self._stop_event.is_set() else "ready"
+            return ("cancelled" if self._stop_event.is_set() else "ready"), {}
         previous: dict[Path, tuple[int, int]] = {}
+        stable: dict[Path, tuple[int, int]] = {}
         for attempt in range(self._max_stable_attempts):
             current: dict[Path, tuple[int, int]] = {}
             for path in targets:
                 if self._stop_event.is_set():
-                    return "cancelled"
+                    return "cancelled", {}
                 try:
                     current[path] = _stat_signature(self._stat_path(path))
                 except OSError:
-                    # Never turn a failed expansion read into a partial album
-                    # rebuild or a destructive move/deletion publication.
+                    # Required audio must remain a complete album snapshot.
+                    # Optional images never veto inventory publication.
                     continue
-            if len(current) == len(targets) and current == previous:
-                return "ready"
+            if self._stop_event.is_set():
+                return "cancelled", {}
+            stable = {
+                path: signature for path, signature in current.items()
+                if previous.get(path) == signature
+            }
+            if (required and required <= stable.keys()) or len(stable) == len(targets):
+                return "ready", stable
             previous = current
             if attempt + 1 < self._max_stable_attempts:
                 self._wait(self._stable_sample_interval)
-        return "cancelled" if self._stop_event.is_set() else "stable_write_unavailable"
+        if self._stop_event.is_set():
+            return "cancelled", {}
+        return ("stable_write_unavailable", {}) if required else ("ready", stable)
 
     def _root_by_id(
         self,
@@ -393,11 +469,15 @@ class TargetedLibraryReconciler:
                 )
         return tuple(media_paths)
 
-    def _supported_media_descendants(self, directory: Path) -> tuple[Path, ...]:
-        supported = {
+    def _supported_media_descendants(
+        self, directory: Path, *, extensions: set[str] | None = None,
+    ) -> tuple[Path, ...]:
+        audio_extensions = {
             str(extension).casefold()
             for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
         }
+        supported = extensions if extensions is not None else audio_extensions
+        optional_extensions = supported - audio_extensions if audio_extensions else set()
         if not supported or not directory.is_dir():
             return ()
         paths: list[Path] = []
@@ -413,8 +493,18 @@ class TargetedLibraryReconciler:
                         return ()
                     if entry.is_dir(follow_symlinks=False):
                         pending.append(Path(entry.path))
-                    elif Path(entry.name).suffix.casefold() in supported and entry.is_file():
-                        paths.append(Path(entry.path))
+                    elif (suffix := Path(entry.name).suffix.casefold()) in supported:
+                        try:
+                            is_file = entry.is_file()
+                        except OSError:
+                            if suffix not in optional_extensions:
+                                raise
+                            logging.getLogger(__name__).warning(
+                                "Unable to inspect an optional library image.", exc_info=True,
+                            )
+                            continue
+                        if is_file:
+                            paths.append(Path(entry.path))
         return tuple(paths)
 
     @staticmethod

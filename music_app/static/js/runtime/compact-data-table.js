@@ -6,12 +6,15 @@ function buildCompactDataTable(config = {}) {
     : 'visible';
   const density = config.density === 'default' ? 'default' : 'compact';
   const overflow = config.overflow === 'local' ? 'local' : 'none';
-  const mobile = config.mobile === 'stack' ? 'stack' : 'preserve';
+  const mobile = ['stack', 'grouped'].includes(config.mobile) ? config.mobile : 'preserve';
   const frame = ['outline', 'inset', 'none'].includes(config.frame) ? config.frame : 'inset';
   const gridColumns = String(config.columns || '').trim();
   const actionTrack = String(config.actionTrackWidth || '').trim();
   const styleParts = [];
   if (gridColumns) styleParts.push(`--cdt-columns: ${gridColumns}`);
+  if (mobile === 'grouped' && config.mobileColumns) {
+    styleParts.push(`--cdt-mobile-columns: ${String(config.mobileColumns).trim()}`);
+  }
   if (actionTrack) styleParts.push(`--cdt-action-track: ${actionTrack}`);
   const style = styleParts.length ? ` style="${escapeHtml(styleParts.join('; '))}"` : '';
   const ariaLabel = String(config.ariaLabel || '').trim();
@@ -29,6 +32,9 @@ function buildCompactDataTable(config = {}) {
       : { content: cellValue };
     const content = cell?.content || '';
     const actionAttribute = column.action ? ' data-cdt-action' : '';
+    const visibility = mobile === 'grouped' && ['desktop', 'mobile'].includes(column.visibility)
+      ? ` data-cdt-visibility="${column.visibility}"`
+      : '';
     const effectiveHeaderMode = column.header || headerMode;
     const headerClass = role === 'columnheader' && effectiveHeaderMode === 'screen-reader'
       ? ' class="sr-only"'
@@ -45,7 +51,7 @@ function buildCompactDataTable(config = {}) {
     const headerAssociation = role === 'cell' && effectiveHeaderMode !== 'absent' && headerMode !== 'absent'
       ? ` aria-labelledby="${escapeHtml(headerId)}"`
       : '';
-    return `<div role="${role}" data-cdt-column="${escapeHtml(column.key || '')}"${headerIdentity}${actionAttribute}${headerClass}${selected}${disabled}${ariaLabel}${headerAssociation}>${content}</div>`;
+    return `<div role="${role}" data-cdt-column="${escapeHtml(column.key || '')}"${visibility}${headerIdentity}${actionAttribute}${headerClass}${selected}${disabled}${ariaLabel}${headerAssociation}>${content}</div>`;
   };
 
   const header = headerMode === 'absent'

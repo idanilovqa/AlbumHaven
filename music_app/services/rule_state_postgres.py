@@ -201,38 +201,51 @@ class RuleStatePostgresAdapter:
         return overrides
 
     def save_exception_overrides(self, overrides: Mapping[object, object] | None) -> None:
-        normalized = _normalize_exception_overrides(overrides)
-        with self._connect_to_database() as connection:
-            with _transaction(connection):
-                _ensure_bootstrap_context(connection)
-                if not normalized:
-                    connection.execute(_delete_table_rows_sql("exception_overrides"))
-                    return
-                for track_key, override_payload in sorted(normalized.items()):
-                    connection.execute(
-                        _upsert_exception_override_sql(),
-                        (track_key, _jsonb(override_payload)),
-                    )
-                connection.execute(
-                    _delete_exception_overrides_except_sql(),
-                    (len(normalized), sorted(normalized)),
-                )
+        self._write_exception_overrides(_normalize_exception_overrides(overrides), replace=True)
 
     def upsert_exception_overrides(
         self,
         overrides: Mapping[object, object] | None,
     ) -> None:
         normalized = _normalize_exception_overrides(overrides)
-        if not normalized:
-            return
+        if normalized:
+            self._write_exception_overrides(normalized, replace=False)
+
+    def _write_exception_overrides(
+        self, normalized: dict[str, dict[str, str]], *, replace: bool,
+    ) -> None:
+        from music_app.services.scan_cache_persistence import (
+            _increment_inventory_mutation_revision_sql,
+            _inventory_publication_advisory_lock_sql,
+            assert_ordered_cover_exception_overrides_allowed,
+        )
+
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                connection.execute(_inventory_publication_advisory_lock_sql())
                 _ensure_bootstrap_context(connection)
+                assert_ordered_cover_exception_overrides_allowed(
+                    connection, normalized, replace=replace,
+                )
                 for track_key, override_payload in sorted(normalized.items()):
                     connection.execute(
                         _upsert_exception_override_sql(),
                         (track_key, _jsonb(override_payload)),
                     )
+                if replace:
+                    if normalized:
+                        connection.execute(
+                            _delete_exception_overrides_except_sql(),
+                            (len(normalized), sorted(normalized)),
+                        )
+                    else:
+                        connection.execute(_delete_table_rows_sql("exception_overrides"))
+                revision = _row_mapping(
+                    _first_row(connection.execute(_increment_inventory_mutation_revision_sql())),
+                    ("inventory_mutation_revision",),
+                )
+                if int(revision.get("inventory_mutation_revision") or 0) < 1:
+                    raise RuntimeError("Could not advance exception inventory revision.")
 
     def _load_rows(self, sql: str) -> list[object]:
         with self._connect_to_database() as connection:

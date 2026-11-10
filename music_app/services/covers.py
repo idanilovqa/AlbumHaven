@@ -236,16 +236,56 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
             pass
 
 
-def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
+def _album_image_has_bytes(folder: Path, excluded: Path, data: bytes) -> bool:
+    for root, directories, files in os.walk(folder):
+        directories[:] = [name for name in directories if not is_managed_preview_path(Path(root) / name)]
+        for name in files:
+            path = Path(root) / name
+            if path == excluded or path.suffix.lower() not in _COVER_IMAGE_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size == len(data) and path.read_bytes() == data:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+UNPLANNED_COVER_RESERVE = object()
+
+
+def plan_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
+    """Choose the exact existing-workflow backup destination without writing it."""
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
-    if images_are_visually_similar(current_cover, raw_bytes):
-        return None
     current_bytes = current_cover.read_bytes()
+    if (
+        current_bytes == raw_bytes
+        or images_are_visually_similar(current_cover, raw_bytes)
+        or _album_image_has_bytes(folder, current_cover, current_bytes)
+    ):
+        return None
     index = 1
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"
+        if not os.path.lexists(candidate):
+            return candidate
+        index += 1
+
+
+def reserve_existing_cover_variant(
+    folder: Path, raw_bytes: bytes, *, reserved_path=UNPLANNED_COVER_RESERVE,
+) -> Path | None:
+    from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
+
+    while True:
+        candidate = plan_existing_cover_variant(folder, raw_bytes)
+        if reserved_path is not UNPLANNED_COVER_RESERVE and candidate != reserved_path:
+            raise OrderedCoverSelectionConflict("The image backup destination changed. Retry the selection.")
+        if candidate is None:
+            return None
+        current_bytes = (folder / "cover.jpg").read_bytes()
         try:
             with suppress_library_watch_events((candidate,)):
                 with candidate.open("xb") as reserve_file:
@@ -253,7 +293,8 @@ def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | Non
                     reserve_file.flush()
                     os.fsync(reserve_file.fileno())
         except FileExistsError:
-            index += 1
+            if reserved_path is not UNPLANNED_COVER_RESERVE:
+                raise OrderedCoverSelectionConflict("The image backup destination changed. Retry the selection.")
             continue
         except Exception:
             candidate.unlink(missing_ok=True)

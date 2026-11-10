@@ -439,6 +439,8 @@ class LibraryEventCoordinator:
                 except (OSError, PermissionError):
                     current = None
                 if current is not None and current == previous[path]:
+                    if self._stop_event.is_set():
+                        return {}
                     dispositions[path] = "ready"
                     del previous[path]
                 else:
@@ -474,6 +476,10 @@ class LibraryEventCoordinator:
 
 
 def _stat_signature(value: object) -> tuple[int, int]:
-    if isinstance(value, tuple) and len(value) >= 2:
-        return int(value[0]), int(value[1])
-    return int(getattr(value, "st_size")), int(getattr(value, "st_mtime_ns"))
+    try:
+        # os.stat_result is also a tuple, whose first fields are mode and inode.
+        return int(getattr(value, "st_size")), int(getattr(value, "st_mtime_ns"))
+    except AttributeError:
+        if isinstance(value, tuple) and len(value) >= 2:
+            return int(value[0]), int(value[1])
+        raise

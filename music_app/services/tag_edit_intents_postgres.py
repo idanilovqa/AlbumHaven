@@ -131,20 +131,7 @@ class PostgresTagEditIntentRepository:
         status: str = "completed",
         last_error: str | None = None,
     ) -> None:
-        normalized_updates = {
-            str(path or "").strip(): (
-                {
-                    "exception_type": str(value.get("exception_type") or "").strip(),
-                    "custom_collection_name": str(
-                        value.get("custom_collection_name") or ""
-                    ).strip(),
-                }
-                if isinstance(value, Mapping)
-                else {"exception_type": str(value or "").strip()}
-            )
-            for path, value in (exception_updates or {}).items()
-            if str(path or "").strip()
-        }
+        normalized_updates = _normalize_exception_updates(exception_updates)
         if normalized_updates:
             if _first_row(connection.execute(_bootstrap_context_ready_sql())) is None:
                 raise RuntimeError(
@@ -175,8 +162,18 @@ class PostgresTagEditIntentRepository:
         status: str = "completed",
         last_error: str | None = None,
     ) -> None:
+        normalized_updates = _normalize_exception_updates(exception_updates)
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                if normalized_updates:
+                    from music_app.services.scan_cache_persistence import (
+                        _inventory_publication_advisory_lock_sql,
+                        _increment_inventory_mutation_revision_sql,
+                        assert_ordered_cover_edit_updates_allowed,
+                    )
+
+                    connection.execute(_inventory_publication_advisory_lock_sql())
+                    assert_ordered_cover_edit_updates_allowed(connection, normalized_updates)
                 self.complete_in_transaction(
                     connection,
                     intent_id,
@@ -184,6 +181,12 @@ class PostgresTagEditIntentRepository:
                     status=status,
                     last_error=last_error,
                 )
+                if normalized_updates:
+                    row = _row_mapping(_first_row(connection.execute(
+                        _increment_inventory_mutation_revision_sql(),
+                    )))
+                    if int(row.get("inventory_mutation_revision") or 0) < 1:
+                        raise RuntimeError("Could not advance exception inventory revision.")
 
     def mark_recovery_failed(self, intent_id: str, error: object) -> None:
         with self._connect_to_database() as connection:
@@ -287,6 +290,23 @@ class _TagEditIntentLease:
                     )
         finally:
             self._stack.close()
+
+
+def _normalize_exception_updates(exception_updates: Mapping[str, object] | None) -> dict[str, object]:
+    return {
+        str(path or "").strip(): (
+            {
+                "exception_type": str(value.get("exception_type") or "").strip(),
+                "custom_collection_name": str(
+                    value.get("custom_collection_name") or ""
+                ).strip(),
+            }
+            if isinstance(value, Mapping)
+            else {"exception_type": str(value or "").strip()}
+        )
+        for path, value in (exception_updates or {}).items()
+        if str(path or "").strip()
+    }
 
 
 def _connect(database_url: str) -> Any:

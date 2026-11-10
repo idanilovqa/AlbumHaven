@@ -6,6 +6,7 @@ from typing import Any
 from music_app.services.album_cover_candidate_publisher import (
     sanitize_persisted_candidate_snapshot,
 )
+from music_app.services.cover_mutation import guarded_cover_transaction
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
@@ -46,10 +47,12 @@ class AlbumCoverCandidateSnapshotRepository:
         config: Mapping[str, object],
         *,
         connect: Callable[[str], Any] | None = None,
+        commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._use_shared_connection_pool = connect is None
         self._connect = connect or _connect
+        self._commit_guard = commit_guard
 
     def get_for_album_context(self, *, album_id: int) -> dict[str, object] | None:
         with self._connect_to_database() as connection:
@@ -106,6 +109,7 @@ class AlbumCoverCandidateSnapshotRepository:
             return None
         return {
             "album_id": int(payload["album_id"]),
+            **({"library_id": int(payload["library_id"])} if payload.get("library_id") is not None else {}),
             "album_key": str(payload.get("album_key") or ""),
             "track_paths": track_paths,
         }
@@ -137,7 +141,7 @@ class AlbumCoverCandidateSnapshotRepository:
             "automatic_improvement": bool(automatic_improvement),
         }
         with self._connect_to_database() as connection:
-            with _transaction(connection):
+            with guarded_cover_transaction(_transaction(connection), self._commit_guard):
                 row = _first_row(connection.execute(_publish_generation_sql(), params))
         return bool(_row_mapping(row).get("accepted"))
 
@@ -157,7 +161,7 @@ class AlbumCoverCandidateSnapshotRepository:
             "status": normalized_status,
         }
         with self._connect_to_database() as connection:
-            with _transaction(connection):
+            with guarded_cover_transaction(_transaction(connection), self._commit_guard):
                 row = _first_row(connection.execute(_finish_generation_sql(), params))
         return bool(_row_mapping(row).get("accepted"))
 
@@ -176,7 +180,7 @@ class AlbumCoverCandidateSnapshotRepository:
         if not params["candidate_id"]:
             return False
         with self._connect_to_database() as connection:
-            with _transaction(connection):
+            with guarded_cover_transaction(_transaction(connection), self._commit_guard):
                 row = _first_row(
                     connection.execute(_mark_automatic_improvement_sql(), params)
                 )
@@ -184,7 +188,7 @@ class AlbumCoverCandidateSnapshotRepository:
 
     def mark_seen(self, *, album_id: int) -> dict[str, object] | None:
         with self._connect_to_database() as connection:
-            with _transaction(connection):
+            with guarded_cover_transaction(_transaction(connection), self._commit_guard):
                 row = _first_row(
                     connection.execute(_mark_seen_sql(), {"album_id": album_id})
                 )
@@ -363,6 +367,7 @@ def _resolve_album_track_context_sql() -> str:
         )
         select
             resolved_album.album_id,
+            active_library.library_id,
             resolved_album.album_key,
             array_agg(distinct files.private_path order by files.private_path) as track_paths
         from active_library
@@ -373,7 +378,7 @@ def _resolve_album_track_context_sql() -> str:
         join library.local_track_files as files
           on files.track_id = tracks.id
          and files.scan_cache_stale is false
-        group by resolved_album.album_id, resolved_album.album_key;
+        group by resolved_album.album_id, resolved_album.album_key, active_library.library_id;
     """
 
 

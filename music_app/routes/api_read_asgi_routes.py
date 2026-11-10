@@ -54,7 +54,9 @@ from music_app.routes.musicbrainz_enrichment_asgi import (
     load_problematic_artist_items,
     project_artist_problems_into_problematic_files,
 )
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
+from music_app.services.ordered_cover_presentation import project_ordered_covers_for_request
+from music_app.services.duplicate_copy_review import project_duplicate_copy_review
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -111,6 +113,8 @@ def _repair_album_detail_cover_identity(
 def _project_missing_album_actions_for_request(
     request: Request,
     payload: object,
+    *,
+    include_duplicate_copy_review: bool = False,
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
@@ -121,6 +125,11 @@ def _project_missing_album_actions_for_request(
         if isinstance(value, dict):
             if isinstance(value.get("duplicate_sources"), list):
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
+                if include_duplicate_copy_review:
+                    value["duplicate_copy_review"] = project_duplicate_copy_review(
+                        value["duplicate_sources"],
+                        include_paths=bool(allowed_actions.as_payload().get("library.paths.read")),
+                    )
                 if not allowed_actions.as_payload().get("library.paths.read"):
                     value["duplicate_sources"] = []
             if "suggested_edits" in value or (
@@ -137,6 +146,15 @@ def _project_missing_album_actions_for_request(
 
     visit(payload)
     return payload
+
+
+def _project_album_payload_for_request(
+    request: Request, payload: object, *, include_duplicate_copy_review: bool = False,
+) -> object:
+    payload = project_ordered_covers_for_request(request, payload)
+    return _project_missing_album_actions_for_request(
+        request, payload, include_duplicate_copy_review=include_duplicate_copy_review,
+    )
 
 
 def _project_library_watch_health_for_request(
@@ -557,9 +575,9 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
     }
 
 
-def _transient_scan_view_response(
+def _build_transient_scan_view_payload(
     request: Request, browse_state: Mapping[str, object], page_params: Mapping[str, object] | None = None
-) -> JSONResponse:
+) -> dict[str, object]:
     request_started_at = time.perf_counter()
     payload = build_view_payload(
         query_args=_AsgiQueryArgs(request.query_params),
@@ -578,12 +596,25 @@ def _transient_scan_view_response(
         _transient_view_album_payloads(payload),
     )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return payload
 
 
 @router.get("/view-data")
-def view_data(request: Request) -> JSONResponse:
+async def view_data(request: Request) -> JSONResponse:
+    payload = await run_in_threadpool(_build_view_data_payload, request)
+    if isinstance(payload, JSONResponse):
+        return payload
+    # Release the browse worker before refreshing actor state. The resolver
+    # uses the same worker pool; a sync-to-async bridge can deadlock that pool.
+    await require_action("library.browse.read", refresh_actor=True)(request)
+    payload = await run_in_threadpool(_project_album_payload_for_request, request, payload)
+    return await run_in_threadpool(
+        JSONResponse, compact_selected_artist_wire_payload(payload),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+def _build_view_data_payload(request: Request) -> dict[str, object] | JSONResponse:
     library_state = _library_state(request)
     request_inventory_mutation_revision = int(
         library_state.get("inventory_mutation_revision") or 0
@@ -617,7 +648,7 @@ def view_data(request: Request) -> JSONResponse:
         page_params = QueryParams([*request.query_params.multi_items(), *([] if "gallery_page_size" in request.query_params else [("gallery_page_size", "50")])])
         try:
             if _should_use_transient_scan_browse_state(library_state, browse_state):
-                return _transient_scan_view_response(request, browse_state, page_params)
+                return _build_transient_scan_view_payload(request, browse_state, page_params)
             payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
                 query_params=page_params, library_state=library_state)
         except GalleryProjectionPending:
@@ -631,19 +662,17 @@ def view_data(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return payload
 
     if _should_use_transient_scan_browse_state(library_state, browse_state):
-        return _transient_scan_view_response(request, browse_state)
+        return _build_transient_scan_view_payload(request, browse_state)
 
     if _is_postgres_root_sidebar_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
             query_params=request.query_params,
         )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return payload
     if _is_postgres_selected_artist_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         payload = repository.build_selected_artist_payload(
@@ -677,8 +706,7 @@ def view_data(request: Request) -> JSONResponse:
                 }
             )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(compact_selected_artist_wire_payload(payload))
+        return payload
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -704,15 +732,13 @@ def view_data(request: Request) -> JSONResponse:
             )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _log_view_data_request_from_asgi(request, payload, request_started_at)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(compact_selected_artist_wire_payload(payload))
+        return payload
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
         )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return payload
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
     if unsupported_selected_artist_response is not None:
         return unsupported_selected_artist_response
@@ -735,8 +761,7 @@ def view_data(request: Request) -> JSONResponse:
     )
     payload["inventory_mutation_revision"] = request_inventory_mutation_revision
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return payload
 
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
@@ -1164,8 +1189,9 @@ async def album_details(request: Request) -> JSONResponse:
             _app_config(request),
             payload,
         )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse({"ok": True, "album": payload})
+        await require_action("library.browse.read", refresh_actor=True)(request)
+        payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+        return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
     _hydrate_cached_library_for_asgi(request)
     payload = build_album_detail_payload(
@@ -1178,8 +1204,9 @@ async def album_details(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):
         _apply_transient_scan_album_rating_overlays(request, [payload])
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse({"ok": True, "album": payload})
+    await require_action("library.browse.read", refresh_actor=True)(request)
+    payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+    return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
 
 def _should_use_postgres_album_detail_path(
@@ -1258,17 +1285,17 @@ def utilities_problematic_files(
                 if limit is not None
                 else repository.build_problematic_files_payload()
             )
-            _project_missing_album_actions_for_request(request, payload)
+            payload = _project_album_payload_for_request(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
-        return JSONResponse(_attach_library_watch_health(request, payload))
+        return JSONResponse(_attach_library_watch_health(request, payload), headers={"Cache-Control": "private, no-store"})
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_albums_payload(
         config=_app_config(request),
         library_state=_library_state(request),
         logger=_app_logger(request),
     )
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(_attach_library_watch_health(request, payload))
+    payload = _project_album_payload_for_request(request, payload)
+    return JSONResponse(_attach_library_watch_health(request, payload), headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/utilities/problematic-files/detail")
@@ -1283,8 +1310,8 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
                 {"ok": False, "error": "Problematic album not found."},
                 status_code=404,
             )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+        return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(
         album_key,
@@ -1297,8 +1324,8 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
             {"ok": False, "error": "Problematic album not found."},
             status_code=404,
         )
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/utilities/problematic-files/{album_key:path}")
@@ -1310,8 +1337,8 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
                 {"ok": False, "error": "Problematic album not found."},
                 status_code=404,
             )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+        return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(
         album_key,
@@ -1324,8 +1351,8 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
             {"ok": False, "error": "Problematic album not found."},
             status_code=404,
         )
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
 
 
 def _is_postgres_utility_projection_request(request: Request) -> bool:

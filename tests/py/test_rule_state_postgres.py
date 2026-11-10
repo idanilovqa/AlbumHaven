@@ -53,6 +53,8 @@ class FakeConnection:
         normalized_sql = " ".join(str(sql).lower().split())
         if "bootstrap_context_ready" in normalized_sql:
             return FakeCursor([{"bootstrap_context_ready": 1}])
+        if "update library.libraries" in normalized_sql and "inventory_mutation_revision" in normalized_sql:
+            return FakeCursor([{"inventory_mutation_revision": 1}])
         for table_name, rows in self.rows_by_table.items():
             if f"from library.{table_name}" in normalized_sql:
                 return FakeCursor(rows)

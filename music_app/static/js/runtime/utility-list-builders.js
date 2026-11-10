@@ -2996,6 +2996,8 @@ function getAlbumProblemFilterSortIndex(album) {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
+const renderedProblemFilterOptions = new WeakMap();
+
 function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
@@ -3021,7 +3023,7 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    els.problemFilterMenu.innerHTML = reasonTypes.length
+    const optionsHtml = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
             <span class="utility-problem-filter-check">${selectedSet.has(reason) ? 'on' : ''}</span>
@@ -3029,6 +3031,12 @@ function renderProblemFilterControls(els) {
           </button>
         `).join('')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+    // List refreshes re-render the controls while the menu is open; rewriting
+    // unchanged options would reset its scroll position and keyboard focus.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+      els.problemFilterMenu.innerHTML = optionsHtml;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+    }
   }
 
   if (els.problemFilterChips) {
@@ -3285,6 +3293,394 @@ async function openUtilityModalForTrack(trackPath) {
       state.utility.problematicNavigationActiveToken = 0;
     }
   }
+}
+
+async function openMusicBrainzArtistProblem(occurrenceId) {
+  const normalizedOccurrenceId = String(occurrenceId || '').trim();
+  if (!normalizedOccurrenceId) return;
+  const hadLoadedProblems = Boolean(state.utility.loaded);
+  if (!state.utility.loaded) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+  }
+  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+    item?.occurrence_id,
+    item?.musicbrainz_occurrence_id,
+    item?.key,
+  ].some((value) => String(value || '').trim() === normalizedOccurrenceId));
+  let problem = findProblem();
+  if (!problem && hadLoadedProblems) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+    problem = findProblem();
+  }
+  if (!problem) {
+    showToast('This artist issue is not currently listed in Problematic Files.', 'error', 3200);
+    return;
+  }
+  state.utility.selectedProblematicKey = String(problem.key || normalizedOccurrenceId);
+  state.utility.deferProblematicAutoSelection = false;
+  state.utility.selectedProblemFilters = [];
+  state.utility.problemDropdownOpen = false;
+  setUtilityActiveTab('problematic-files');
+  if (isMusicBrainzArtistProblem(problem)) {
+    await loadMusicBrainzArtistProblemDetail(problem, { render: false });
+  } else if (!problem.detail_loaded) {
+    await loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true, { render: false });
+  }
+  openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+}
+
+const MUSICBRAINZ_ARTIST_MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS = 350;
+
+function isMusicBrainzArtistProblem(item) {
+  return item?.entity_kind === 'artist';
+}
+
+function readMusicBrainzArtistMbid(value) {
+  const trimmed = String(value || '').trim();
+  const urlMatch = trimmed.match(/^https:\/\/musicbrainz\.org\/artist\/([0-9a-f-]{36})\/?$/i);
+  const mbid = urlMatch ? urlMatch[1] : trimmed;
+  return MUSICBRAINZ_ARTIST_MBID_PATTERN.test(mbid) ? mbid.toLowerCase() : null;
+}
+
+function getMusicBrainzArtistProblemView(detail = {}) {
+  const reason = String(detail.problem_reason_code || '');
+  if (reason === 'musicbrainz_artist_not_found') return 'not-found';
+  // An unconfirmed single name match is a candidate to confirm, like several matches.
+  if (reason === 'musicbrainz_artist_ambiguous' || reason === 'musicbrainz_manual_review_required') return 'multiple';
+  if (reason === 'musicbrainz_artist_metadata_conflict') return 'conflict';
+  if (reason === 'musicbrainz_mirror_replication_pending' || reason === 'musicbrainz_matched_entity_unavailable') return 'pending';
+  return 'provider';
+}
+
+function getMusicBrainzArtistProblemIdentityRows(detail = {}) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const candidates = Array.isArray(detail.candidates) ? detail.candidates : [];
+  if (view !== 'conflict' || !detail.artist_mbid) return candidates.map((candidate) => ({ ...candidate, role: 'candidate' }));
+  const current = {
+    artist_mbid: detail.artist_mbid,
+    canonical_name: detail.canonical_name || detail.local_artist_name,
+    disambiguation: detail.disambiguation,
+    artist_kind: detail.artist_kind,
+    country: detail.country,
+    evidence_summary: detail.evidence_summary,
+    musicbrainz_url: detail.musicbrainz_url,
+    role: 'current',
+  };
+  return [current, ...candidates.filter((candidate) => candidate.artist_mbid !== detail.artist_mbid)
+    .map((candidate) => ({ ...candidate, role: 'suggested' }))];
+}
+
+function formatMusicBrainzAttemptTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatMusicBrainzNextRetry(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'With the next library scan';
+  const minutes = Math.round((date.getTime() - Date.now()) / 60000);
+  if (minutes <= 0) return 'Shortly';
+  if (minutes < 60) return `In ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return formatMusicBrainzAttemptTime(value);
+}
+
+function buildMusicBrainzExternalLinkHtml(url, label, { disabled = false, className = '' } = {}) {
+  return ButtonComponent.renderActionButton({
+    ariaLabel: label,
+    title: disabled ? 'Enter a valid artist URL or MBID first' : 'Open artist page',
+    icon: 'external',
+    presentation: 'bare',
+    className,
+    disabled,
+    attributes: { 'data-open-musicbrainz-url': disabled ? '' : url },
+  });
+}
+
+function buildMusicBrainzIdentityTableHtml(detail, ui) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const rows = getMusicBrainzArtistProblemIdentityRows(detail);
+  const tableRows = rows.map((row) => {
+    const selected = ui.selectedMbid === row.artist_mbid;
+    const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
+    const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
+    return {
+      key: row.artist_mbid,
+      ariaSelected: selected,
+      className: selected ? 'is-selected' : '',
+      cells: {
+        target: `<label class="musicbrainz-identity-choice"><input class="musicbrainz-identity-radio" type="radio" name="musicbrainz-artist-identity" value="${escapeHtml(row.artist_mbid)}" data-musicbrainz-select-identity="${escapeHtml(row.artist_mbid)}"${selected ? ' checked' : ''} aria-label="Select ${escapeHtml(name)}"><span class="musicbrainz-identity-copy"><span class="musicbrainz-identity-line"><strong>${escapeHtml(name)}</strong>${facts ? `<small>${escapeHtml(facts)}</small>` : ''}</span><span class="musicbrainz-identity-mbid">${escapeHtml(row.artist_mbid)}</span></span></label>`,
+        reason: `<span class="musicbrainz-identity-evidence">${escapeHtml(row.evidence_summary || 'Name only')}</span>`,
+        action: buildMusicBrainzExternalLinkHtml(row.musicbrainz_url, `Open ${row.canonical_name || 'artist'} on MusicBrainz`),
+      },
+    };
+  });
+  return buildUtilityCompactTable({
+    id: 'musicbrainz-artist-identities',
+    ariaLabel: view === 'conflict' ? 'MusicBrainz identity comparison' : 'MusicBrainz artist candidates',
+    columns: 'minmax(220px,1.4fr) minmax(160px,1fr) 44px',
+    actionTrackWidth: '44px',
+    columnsConfig: [
+      { key: 'target', label: view === 'conflict' ? 'Artist identity / MBID' : 'Candidate artist / MBID' },
+      { key: 'reason', label: 'Local evidence' },
+      { key: 'action', label: 'Actions', action: true, header: 'screen-reader' },
+    ],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline',
+    selection: 'single', rows: tableRows,
+    emptyHtml: '<p class="utility-detail-meta">No candidate artists are stored yet. Retry to search again.</p>',
+  });
+}
+
+function buildMusicBrainzManualResolutionHtml(detail, ui) {
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
+  const helper = ui.validating ? 'Verifying with MusicBrainz…'
+    : ui.validationError ? ui.validationError
+      : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+        : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+  return `<div class="musicbrainz-manual-resolution">
+      <strong>No MusicBrainz artist matched automatically.</strong>
+      <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
+      <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
+      <div class="musicbrainz-manual-field-row">
+        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1">
+        ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
+        ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
+      </div>
+      <div class="musicbrainz-manual-helper${ui.validationError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(helper)}</div>
+    </div>`;
+}
+
+function buildMusicBrainzProviderStatusHtml(detail, view) {
+  const lastAttempt = formatMusicBrainzAttemptTime(detail.last_attempt_at) || 'Not yet attempted';
+  const intro = view === 'pending'
+    ? 'The local MusicBrainz mirror is catching up. Local library data is unaffected.'
+    : 'Existing identity and metadata preserved. Album Haven will retry automatically.';
+  const guidance = view === 'pending'
+    ? 'Album Haven retries automatically while the mirror replicates. Use Retry now to check immediately.'
+    : 'Restore the configured local service, then use Retry now if you do not want to wait. Candidate selection stays unavailable until provider evidence can be verified.';
+  return `<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+    <h4 class="utility-detail-section-title">Retry status</h4>
+    <dl class="musicbrainz-retry-status">
+      <dt>Last attempt</dt><dd>${escapeHtml(lastAttempt)}</dd>
+      <dt>Next retry</dt><dd>${escapeHtml(formatMusicBrainzNextRetry(detail.next_attempt_at))}</dd>
+      <dt>Configured provider</dt><dd>Local metadata service</dd>
+      <dt>Local library</dt><dd>Unaffected</dd>
+    </dl>
+    <p class="utility-detail-meta">${escapeHtml(guidance)}</p>`;
+}
+
+function buildMusicBrainzArtistProblemDetail(item) {
+  const detail = item?.musicbrainz_detail;
+  if (item?.musicbrainz_detail_failed) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
+  }
+  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
+  const ui = item.musicbrainz_ui || {};
+  const view = getMusicBrainzArtistProblemView(detail);
+  const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
+  const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
+  const lastChecked = formatMusicBrainzAttemptTime(detail.last_checked_at);
+  const artwork = buildAlbumArtboxHtml({ state: 'missing', label: `Artist ${detail.local_artist_name || ''}` });
+  let body = '';
+  let actions = '';
+  if (view === 'not-found') {
+    body = buildMusicBrainzManualResolutionHtml(detail, ui);
+    actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
+  } else if (view === 'multiple' || view === 'conflict') {
+    body = `<h4 class="utility-detail-section-title">${view === 'conflict' ? 'Identity comparison' : 'Candidate artists'}</h4>
+      <div class="utility-detected-table">${buildMusicBrainzIdentityTableHtml(detail, ui)}</div>`;
+    const canAssign = Boolean(ui.selectedMbid) && ui.selectedMbid !== (view === 'conflict' ? detail.artist_mbid : null);
+    actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;
+  } else {
+    body = buildMusicBrainzProviderStatusHtml(detail, view);
+    actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
+  }
+  const pendingDots = view === 'pending'
+    ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
+    : '';
+  return `<div class="utility-detail-header musicbrainz-artist-problem" data-musicbrainz-artist-problem="${escapeHtml(item.local_artist_id)}">
+      <div class="utility-detail-cover">${artwork}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(detail.local_artist_name || item.name || 'Unknown Artist')}</h3>
+        <div class="utility-detail-meta">Artist</div>
+        <div class="utility-detail-meta">${escapeHtml(`${albumCount} local album${albumCount === 1 ? '' : 's'}`)}</div>
+        ${lastChecked ? `<div class="utility-detail-meta">Last checked: ${escapeHtml(lastChecked)}</div>` : ''}
+        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}</div>
+      </div>
+    </div>
+    ${body}
+    ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
+    <div class="utility-detected-actions">${actions}</div>`;
+}
+
+async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
+  if (!isMusicBrainzArtistProblem(item)) return null;
+  if (!force && (item.musicbrainz_detail || item.musicbrainz_detail_loading)) return item.musicbrainz_detail || null;
+  item.musicbrainz_detail_loading = true;
+  item.musicbrainz_detail_failed = false;
+  try {
+    const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}`, { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.artist) throw new Error(payload?.detail || 'Artist details unavailable.');
+    const detail = payload.artist;
+    const view = getMusicBrainzArtistProblemView(detail);
+    const identities = getMusicBrainzArtistProblemIdentityRows(detail);
+    item.musicbrainz_detail = detail;
+    item.musicbrainz_ui = {
+      selectedMbid: view === 'conflict'
+        ? (identities.find((row) => row.role === 'suggested')?.artist_mbid || detail.artist_mbid || null)
+        : (identities.length === 1 ? identities[0].artist_mbid : null),
+      manualValue: '',
+    };
+  } catch {
+    item.musicbrainz_detail_failed = true;
+  } finally {
+    item.musicbrainz_detail_loading = false;
+  }
+  if (render) renderProblematicFiles({ preserveProblematicTree: true });
+  return item.musicbrainz_detail || null;
+}
+
+function getSelectedMusicBrainzArtistProblem() {
+  const item = getSelectedProblematicAlbum();
+  return isMusicBrainzArtistProblem(item) ? item : null;
+}
+
+async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
+  const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(response.status === 404 ? 'No MusicBrainz artist has that MBID.' : (payload?.detail || 'MusicBrainz is unavailable. Try again shortly.'));
+  }
+  return payload;
+}
+
+async function runMusicBrainzArtistMutation(item, perform, successMessage) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (ui.busy) return;
+  ui.busy = true;
+  ui.error = '';
+  renderProblematicFiles({ preserveProblematicTree: true });
+  try {
+    await perform();
+    if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
+    await loadProblematicFiles(true);
+    void refreshGalleryArtistMusicBrainzStatus({ force: true });
+  } catch (error) {
+    ui.error = error?.message || 'MusicBrainz action failed.';
+  } finally {
+    ui.busy = false;
+    renderProblematicFiles({ preserveProblematicTree: true });
+  }
+}
+
+function scheduleMusicBrainzManualValidation(item) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  clearTimeout(ui.validationTimer);
+  ui.validated = null;
+  ui.validationError = '';
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  ui.validating = Boolean(mbid);
+  if (!mbid) return;
+  const requestedValue = ui.manualValue;
+  ui.validationTimer = setTimeout(async () => {
+    try {
+      const payload = await postMusicBrainzArtistAction(item, 'validate', { artist_reference: requestedValue });
+      if (ui.manualValue === requestedValue) ui.validated = payload.candidate || null;
+    } catch (error) {
+      if (ui.manualValue === requestedValue) ui.validationError = error?.message || 'Unable to verify that artist.';
+    } finally {
+      if (ui.manualValue === requestedValue) {
+        ui.validating = false;
+        syncMusicBrainzManualStatus(ui);
+      }
+    }
+  }, MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS);
+  syncMusicBrainzManualStatus(ui);
+}
+
+// Updates only the helper and Assign button so the field keeps focus and caret.
+function syncMusicBrainzManualStatus(ui) {
+  const helper = document.querySelector('.musicbrainz-manual-helper');
+  if (helper) {
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
+      : ui.validationError ? ui.validationError
+        : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+          : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+    helper.classList.toggle('is-error', Boolean(ui.validationError));
+  }
+  const assign = document.querySelector('[data-musicbrainz-assign]');
+  if (assign) ButtonComponent.setDisabled(assign, !ui.validated || Boolean(ui.busy));
+}
+
+function handleMusicBrainzArtistProblemEvent(event) {
+  const target = event.target;
+  const externalLink = target?.closest?.('[data-open-musicbrainz-url]');
+  if (event.type === 'click' && externalLink) {
+    event.preventDefault();
+    const url = externalLink.dataset.openMusicbrainzUrl;
+    if (url && /^https:\/\/musicbrainz\.org\//.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  const item = getSelectedMusicBrainzArtistProblem();
+  if (!item) return false;
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (event.type === 'input' && target?.matches?.('[data-musicbrainz-manual-artist]')) {
+    ui.manualValue = target.value;
+    scheduleMusicBrainzManualValidation(item);
+    const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+    const row = target.closest('.musicbrainz-manual-field-row');
+    const link = row?.querySelector('[data-open-musicbrainz-url]');
+    if (link) {
+      ButtonComponent.setDisabled(link, !mbid);
+      link.dataset.openMusicbrainzUrl = mbid ? `https://musicbrainz.org/artist/${mbid}` : '';
+      link.title = mbid ? 'Open artist page' : 'Enter a valid artist URL or MBID first';
+    }
+    return true;
+  }
+  if (event.type === 'change' && target?.matches?.('[data-musicbrainz-select-identity]')) {
+    ui.selectedMbid = target.value;
+    renderProblematicFiles({ preserveProblematicTree: true });
+    return true;
+  }
+  if (event.type !== 'click') return false;
+  const detail = item.musicbrainz_detail || {};
+  if (target?.closest?.('[data-musicbrainz-retry]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-keep-current]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: detail.artist_mbid,
+      evidence_summary: 'Owner kept the currently assigned MusicBrainz artist.',
+    }, 'PUT'), 'Current MBID kept.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-assign]')) {
+    event.preventDefault();
+    const mbid = getMusicBrainzArtistProblemView(detail) === 'not-found' ? ui.validated?.artist_mbid : ui.selectedMbid;
+    if (!mbid) return true;
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: mbid,
+      evidence_summary: getMusicBrainzArtistProblemView(detail) === 'not-found'
+        ? 'Owner assigned a verified MusicBrainz artist manually.'
+        : 'Owner selected this MusicBrainz artist in Problematic Files.',
+    }, 'PUT'), 'MBID assigned.');
+    return true;
+  }
+  return false;
 }
 
 function getIgnorableProblemRows(album) {

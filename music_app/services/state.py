@@ -112,6 +112,10 @@ def invalidate_targeted_library_projections(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
         kinds=("problematic-files", "rules"),
     )
+    if config.get("ALBUM_HAVEN_APP_DATABASE_URL") and library_browse_postgres_is_effective(config):
+        # As after a scan: rebuild the dropped projections in the background
+        # (when prewarm is enabled) so the next Problematic Files open is warm.
+        PostgresLibraryBrowseRepository(config).queue_settings_projection_prewarm()
 
 
 def queue_watcher_cover_refresh_for_track_paths_for_state(
@@ -834,7 +838,7 @@ def refresh_relation_views_for_state(
     library_state: dict[str, object],
     config: dict[str, object],
     *,
-    seed_missing_album_ratings: bool = False,
+    final_scan_publication: bool = False,
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
     expected_inventory_mutation_revision: int | None = None,
@@ -845,7 +849,7 @@ def refresh_relation_views_for_state(
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
-        and not seed_missing_album_ratings
+        and not final_scan_publication
     )
     target_state = (
         dict(library_state)
@@ -884,17 +888,16 @@ def refresh_relation_views_for_state(
         snapshot_options["expected_inventory_mutation_revision"] = (
             expected_inventory_mutation_revision
         )
-    if seed_missing_album_ratings:
+    if final_scan_publication:
         if expected_scan_generation is None:
             raise ValueError(
-                "expected_scan_generation is required when seeding album ratings"
+                "expected_scan_generation is required for the final scan publication"
             )
-        snapshot_options["seed_missing_album_ratings"] = True
-        snapshot_options["album_rating_seed_guard"] = (
-            lambda seed_action: _run_album_rating_seed_for_current_generation(
+        snapshot_options["publication_commit_guard"] = (
+            lambda commit_action: _run_scan_publication_commit_for_current_generation(
                 library_state,
                 expected_scan_generation,
-                seed_action,
+                commit_action,
             )
         )
     elif guarded_live_repair:
@@ -1008,15 +1011,15 @@ def _run_snapshot_commit_for_current_generation(
         return commit_action()
 
 
-def _run_album_rating_seed_for_current_generation(
+def _run_scan_publication_commit_for_current_generation(
     library_state: dict[str, object],
     expected_scan_generation: int,
-    seed_action: Callable[[], object],
+    commit_action: Callable[[], object],
 ) -> object:
     with _CACHE_LOCK:
         if int(library_state.get("scan_generation") or 0) != expected_scan_generation:
             raise ScanCancelled()
-        result = seed_action()
+        result = commit_action()
         library_state["scan_committed_generation"] = expected_scan_generation
         return result
 
@@ -1237,15 +1240,15 @@ def refresh_library_for_state(
 ) -> None:
     def refresh_relation_views(
         *,
-        seed_missing_album_ratings: bool = False,
+        final_scan_publication: bool = False,
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
-        if seed_missing_album_ratings:
-            options["seed_missing_album_ratings"] = True
+        if final_scan_publication:
+            options["final_scan_publication"] = True
         if expected_scan_generation is not None:
             options["expected_scan_generation"] = expected_scan_generation
         if expected_cover_mutation_revision is not None:
@@ -1338,6 +1341,9 @@ def refresh_library_for_state(
                 logger,
                 kwargs,
             ),
+        ),
+        queue_musicbrainz_enrichment=config.get(
+            "_MUSICBRAINZ_ENRICHMENT_SCHEDULER"
         ),
         recover_library_watch_health=config.get(
             "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"

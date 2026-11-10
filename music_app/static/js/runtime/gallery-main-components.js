@@ -14,6 +14,140 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+// MusicBrainz stores ISO 3166-1 codes; show the full English country name.
+const galleryCountryNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+function galleryCountryName(country) {
+  const value = String(country || '').trim();
+  if (!/^[A-Za-z]{2}$/.test(value) || !galleryCountryNames) return value;
+  try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
+}
+
+// Country and genre pills only; the album count follows the artist name.
+// An artist matched under another name shows its MusicBrainz name. Display only: the
+// tag changes only through an approved tag edit.
+function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
+  const credited = String(artistMusicBrainz?.credited_as || '').trim();
+  const canonical = String(artistMusicBrainz?.canonical_name || '').trim();
+  return credited && canonical ? canonical : String(artist || '');
+}
+
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
+    ? artistMusicBrainz
+    : {};
+  const country = galleryCountryName(projection.country);
+  const genres = (Array.isArray(projection.genres) ? projection.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const countryHtml = country
+    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
+    : '';
+  const genreHtml = genres.map((genre) => (
+    genre === 'Genre unavailable'
+      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+  )).join('');
+  return `${countryHtml}${genreHtml}`;
+}
+
+const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
+const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
+
+function galleryArtistMusicBrainzStatusKey(artist) {
+  return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+// Owner-only repair status from the stored review projection; the shared,
+// cached Gallery payload never carries it.
+function getGalleryArtistMusicBrainzStatus(group = {}) {
+  if (group?.artist_musicbrainz_problem || group?.artist_musicbrainz_state) {
+    return { problem: group.artist_musicbrainz_problem || null, state: group.artist_musicbrainz_state || '' };
+  }
+  return galleryArtistMusicBrainzStatus.byArtist.get(galleryArtistMusicBrainzStatusKey(group?.artist)) || { problem: null, state: '' };
+}
+
+function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
+  if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
+    galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.signature = '[]';
+    return Promise.resolve(false);
+  }
+  if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
+  // Poll quickly only while a first lookup is pending; otherwise back off.
+  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
+  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
+    return Promise.resolve(false);
+  }
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      if (!Array.isArray(payload?.artists)) return false;
+      const next = new Map();
+      for (const row of payload.artists) {
+        // Keyed by the canonical Gallery artist, so alias-combined groups match.
+        const key = galleryArtistMusicBrainzStatusKey(row?.gallery_artist || row?.local_artist_name);
+        if (!key || next.get(key)?.problem) continue;
+        if (row.unresolved_reason && row.problem_occurrence_id != null) {
+          next.set(key, { problem: { occurrence_id: String(row.problem_occurrence_id), label: row.unresolved_reason }, state: '' });
+        } else if (row.match_state === 'pending') {
+          next.set(key, { problem: null, state: 'pending' });
+        }
+      }
+      const signature = JSON.stringify([...next]);
+      if (signature === galleryArtistMusicBrainzStatus.signature) return false;
+      const previous = galleryArtistMusicBrainzStatus.byArtist;
+      const changed = galleryArtistMusicBrainzStatus.loadedAt > 0
+        ? new Set([...previous.keys(), ...next.keys()].filter((key) => (
+          JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
+        )))
+        : new Set();
+      galleryArtistMusicBrainzStatus.signature = signature;
+      galleryArtistMusicBrainzStatus.byArtist = next;
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      // A finished lookup, re-check or manual match changes the shared Gallery
+      // projection (links, pills). Reload the view when it shows such an artist,
+      // and only then: a library-wide sync changes many artists every poll.
+      const shown = typeof getGalleryMainGroups === 'function' ? getGalleryMainGroups() : [];
+      if (changed.size && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+          && shown.some((group) => changed.has(galleryArtistMusicBrainzStatusKey(group?.artist)))) {
+        void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
+      }
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      galleryArtistMusicBrainzStatus.loadedAt = Date.now();
+      galleryArtistMusicBrainzStatus.promise = null;
+    });
+  return galleryArtistMusicBrainzStatus.promise;
+}
+
+function buildGalleryArtistStatusHtml(config = {}) {
+  const problem = config.artistMusicBrainzProblem;
+  if (problem?.occurrence_id && problem?.label) {
+    return buildSmallAlertHtml({
+      severity: 'warning',
+      message: problem.label,
+      interactive: true,
+      attributes: {
+        'data-open-musicbrainz-artist-problem': problem.occurrence_id,
+        'aria-label': `Open ${problem.label} for ${config.artist || 'artist'}`,
+      },
+    });
+  }
+  if (String(config.artistMusicBrainzState || '').trim().toLowerCase() === 'pending') {
+    return '<span class="artist-musicbrainz-pending" role="status" aria-label="Metadata pending">Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
+  }
+  return '';
+}
+
 const LIBRARY_SOURCE_MARKERS = Object.freeze({
   hoard: Object.freeze({
     label: 'Hoard',
@@ -85,16 +219,18 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
-  const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
+  const title = isArtist
+    ? galleryArtistDisplayName(config.artist, config.artist_musicbrainz)
+    : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
-  const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
+  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -115,20 +251,14 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
-function buildArtistInfoOverlayHtml(config = {}) {
-  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
-  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
-  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
-  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
-}
-
 function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
+  const status = buildGalleryArtistStatusHtml(config);
   const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -137,7 +267,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const className = ['rating-row', config.className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(className)}" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {

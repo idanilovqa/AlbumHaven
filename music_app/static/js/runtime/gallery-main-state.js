@@ -191,7 +191,7 @@ function resolveGalleryArtistInfo(group = {}, artist = '') {
     summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
     imageUrl,
     wikipediaUrl,
-    canReadMore: providedSummary.length > 280,
+    isLongBiography: providedSummary.length > 280,
   };
 }
 
@@ -204,7 +204,7 @@ function reconcileGalleryMain(config = {}) {
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
     ? (config.hasFamily === false
-      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount, artist_musicbrainz: config.artist_musicbrainz }
       : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
   if (summaryContext.kind === 'single-artist') return summaryContext;
@@ -214,7 +214,7 @@ function resolveGalleryBarContext(config = {}) {
   const threshold = Number(config.scrollTop || 0);
   const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
-    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
+    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount, artist_musicbrainz: current.artist_musicbrainz }
     : summaryContext;
 }
 

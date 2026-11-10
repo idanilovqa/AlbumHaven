@@ -6,6 +6,7 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -159,8 +160,6 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -181,8 +180,6 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
-    if (state.utility.problematicFilesComplete === false
-        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;
@@ -1002,6 +999,7 @@ function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
 }
 
 function handleUtilityBootstrapInput(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const localPlaylistFileInput = event.target.closest('[data-local-playlist-import-file]');
   if (localPlaylistFileInput) {
     const file = Array.isArray(localPlaylistFileInput.files)
@@ -1190,6 +1188,7 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
     void stageCoverLookupFiles(coverLookupFiles);

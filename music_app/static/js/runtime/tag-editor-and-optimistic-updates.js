@@ -1956,11 +1956,11 @@ function renderTrackModalRelease(album) {
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
-      artist: album.album_artist || '',
+      artist: albumDisplayArtist(album),
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
       releaseType: album.release_type || 'ALBUM',
-      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
@@ -2188,6 +2188,16 @@ function getTrackDiscLabel(track) {
   return '';
 }
 
+// Matches album_disc_key() in album_ratings_postgres.py, the identity of
+// app-owned disc ratings.
+function getTrackDiscRatingKey(track) {
+  const raw = String((track && track.disc_number_raw) || '').split('/')[0].trim().replace(/\s+/g, ' ').toLowerCase();
+  if (/^\d+$/.test(raw)) return String(Number(raw));
+  if (raw) return raw;
+  const numeric = Number(track && track.disc_number);
+  return Number.isInteger(numeric) && numeric >= 1 ? String(numeric) : '';
+}
+
 function isBonusDiscTrack(track) {
   const rawDisc = [track?.disc_number_raw, track?.disc_subtitle]
     .map((value) => String(value || '').trim())
@@ -2290,6 +2300,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const albumPreference = album?.album_preference || {};
+  const discRatingByKey = new Map(
+    (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
+      .map((discRating) => [discRating?.disc_key, discRating?.rating])
+  );
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -2338,6 +2353,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discNumber: group.discNumber,
       discLabel,
       isBonus: Boolean(group.isBonus),
+      discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,
     };
   });
@@ -2355,6 +2371,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+    albumRating: albumPreference.rating ?? null,
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),

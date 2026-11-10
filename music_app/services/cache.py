@@ -296,8 +296,6 @@ def save_cache_to_disk_for_config(
     relation_views: dict[str, object] | None = None,
     relations_last_built: float | None = None,
     separate_release_keys: set[str] | None = None,
-    seed_missing_album_ratings: bool = False,
-    album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
     publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
     before_commit: Callable[[object], object] | None = None,
     expected_cover_mutation_revision: int | None = None,
@@ -315,10 +313,6 @@ def save_cache_to_disk_for_config(
             for key in separate_release_keys
             if str(key).strip()
         }
-    if seed_missing_album_ratings:
-        snapshot_options["seed_missing_album_ratings"] = True
-        if album_rating_seed_guard is not None:
-            snapshot_options["album_rating_seed_guard"] = album_rating_seed_guard
     if expected_cover_mutation_revision is not None:
         snapshot_options["expected_cover_mutation_revision"] = expected_cover_mutation_revision
     if expected_inventory_mutation_revision is not None:

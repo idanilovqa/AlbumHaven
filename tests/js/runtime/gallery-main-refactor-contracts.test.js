@@ -27,8 +27,22 @@ const galleryMainCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'),
   'utf8',
 );
+const galleryMainComponentsSource = fs.readFileSync(path.join(runtimeRoot, 'gallery-main-components.js'), 'utf8');
+const galleryMainStateSource = fs.readFileSync(path.join(runtimeRoot, 'gallery-main-state.js'), 'utf8');
+const mobileLayoutCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'mobile-layout.css'),
+  'utf8',
+);
+const buttonComponentCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'button-component.css'),
+  'utf8',
+);
 const triggerAnchorCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'),
+  'utf8',
+);
+const galleryBarTemplateSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'gallery-bar.html'),
   'utf8',
 );
 const indexTemplateSource = fs.readFileSync(
@@ -157,12 +171,17 @@ test('search gallery retains artist information and dividers in artist section h
   const galleryBar = context.buildGalleryBarHtml(config);
   const artistHeading = context.buildFamilyArtistHeaderHtml(config);
 
-  assert.doesNotMatch(galleryBar, /data-artist-info-trigger/);
+  // The owner asked for the artist's i icon in the header during search too.
+  assert.match(galleryBar, /data-artist-info-trigger/);
   assert.match(
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
   );
-  assert.doesNotThrow(() => context.openGalleryArtistInfo(null));
+  // Search results open the same artist panel, with its MusicBrainz and Discogs links.
+  const opener = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
+  assert.doesNotMatch(opener.slice(0, opener.search(/\r?\n}\r?\n/)), /state\.view\.query/);
+  const chrome = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function updateGalleryMainChrome('));
+  assert.doesNotMatch(chrome.slice(0, chrome.search(/\r?\n}\r?\n/)), /closeGalleryMainSurface/, 'searching does not close an open artist panel');
 });
 
 function plain(value) {
@@ -307,12 +326,11 @@ test('Album Types uses the same theme-inheriting stacked-sleeves icon before and
   assert.doesNotMatch(icon(bar), /#[0-9a-f]{3,8}|fill="(?:white|black)"/i);
 });
 
-test('reusable GalleryBar, switch, panel, info overlay, divider, and artist heading render accessible contracts', () => {
+test('reusable GalleryBar, switch, panel, divider, and artist heading render accessible contracts', () => {
   const context = loadRuntime();
   const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
   const buildSwitchHtml = requireContract(context, 'buildGallerySwitchHtml');
   const buildArtistFamilyPanelHtml = requireContract(context, 'buildArtistFamilyPanelHtml');
-  const buildArtistInfoOverlayHtml = requireContract(context, 'buildArtistInfoOverlayHtml');
   const buildGalleryDividerHtml = requireContract(context, 'buildGalleryDividerHtml');
   const buildFamilyArtistHeaderHtml = requireContract(context, 'buildFamilyArtistHeaderHtml');
 
@@ -347,8 +365,9 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(singleArtistBar, /data-gallery-context-name>Alestorm</);
   assert.match(singleArtistBar, /data-artist-info-trigger/);
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
-  assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary>4 albums</);
+  // "Alestorm (i) • 4 albums" on the title line; the summary line is free for pills.
+  assert.match(singleArtistBar, /data-gallery-context-inline-total>4 albums<\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-summary hidden><\/span>/);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -366,20 +385,128 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(panel, /role="switch"/);
   assert.match(panel, />Combine similar artists</);
 
-  const overlay = buildArtistInfoOverlayHtml({
-    artist: 'Neal Morse', summary: 'Selectable biography', imageUrl: '/artist.jpg',
-    readMoreUrl: '/artists/neal-morse', wikipediaUrl: 'https://en.wikipedia.org/wiki/Neal_Morse',
-  });
-  assert.match(overlay, /data-artist-info-overlay/);
-  assert.match(overlay, /Selectable biography/);
-  assert.match(overlay, /src="\/artist\.jpg"/);
-  assert.match(overlay, />Read more</);
-  assert.match(overlay, />Wikipedia</);
-
   assert.match(buildGalleryDividerHtml({ label: 'Family', albumCount: 9 }), /Family[\s\S]*9 albums/);
   const artistHeading = buildFamilyArtistHeaderHtml({ artist: 'Flying Colors', albumCount: 4 });
   assert.match(artistHeading, /class="artist-name"[^>]*>Flying Colors</);
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
+});
+
+test('current GalleryBar owner puts the album count on the name line and the pills under it', () => {
+  const context = loadRuntime();
+  const projection = {
+    country: 'Russia',
+    genres: ['Heavy Metal', 'Power Metal', 'Hard Rock', 'Fourth Genre'],
+  };
+  const markup = requireContract(context, 'buildGalleryBarHtml')({
+    contextKind: 'artist',
+    artist: 'Kipelov',
+    albumCount: 4,
+    artist_musicbrainz: projection,
+  });
+
+  const nameAt = markup.indexOf('Kipelov');
+  const infoAt = markup.indexOf('data-artist-info-trigger');
+  const countAt = markup.indexOf('4 albums');
+  const countryAt = markup.indexOf('Russia');
+  const firstGenreAt = markup.indexOf('Heavy Metal');
+  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countAt && countAt < countryAt && countryAt < firstGenreAt);
+  assert.match(markup, /data-gallery-context-metadata/);
+  assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 3);
+  assert.match(markup, />Heavy Metal</);
+  assert.match(markup, />Power Metal</);
+  assert.match(markup, />Hard Rock</);
+  assert.doesNotMatch(markup, /Fourth Genre/);
+  assert.doesNotMatch(markup, /gallery-bar__actions[\s\S]*MusicBrainz/);
+
+  assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(buttonComponentCssSource, /\.ui-metadata-pill--genre\s*\{[^}]*background:\s*#11202a[^}]*border[^;]*#4199c3[^}]*color:\s*#8bd9ff/is);
+  // Country pill: the owner-approved violet (2026-11-07), as tokens with a light-theme variant.
+  assert.match(buttonComponentCssSource, /\.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#1c1730;[^}]*--ui-metadata-pill-country-border:\s*#8b6fd6;[^}]*--ui-metadata-pill-country-ink:\s*#cbb8ff;[^}]*background:\s*var\(--ui-metadata-pill-country-fill\)/s);
+  assert.match(buttonComponentCssSource, /:root\[data-appearance-mode='light'\] \.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#f1ecfd;[^}]*--ui-metadata-pill-country-ink:\s*#4a2e99;/s);
+  assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
+  assert.match(markup, /data-gallery-context-inline-total>4 albums</, 'the count follows the name and i icon');
+  assert.match(markup, /data-gallery-context-summary hidden><\/span>/);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-total::before\s*\{[^}]*content:\s*"\\2022"/s, 'a fat dot leads the count');
+  // Summary and pills share one fixed-height second line, so the header never shifts while scrolling.
+  assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*min-height:\s*20px/s);
+});
+
+test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
+  const context = loadRuntime();
+  const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
+  const confirmedEmpty = buildGalleryBarHtml({
+    contextKind: 'single-artist', artist: 'Unknown Artist', albumCount: 1,
+    artist_musicbrainz: { country: null, genres: ['Genre unavailable'] },
+  });
+  assert.match(confirmedEmpty, /ui-metadata-pill--genre-unavailable[^>]*>Genre unavailable</);
+
+  const family = buildGalleryBarHtml({
+    contextKind: 'family', primaryArtist: 'Kipelov', artistCount: 2, albumCount: 6,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  assert.doesNotMatch(family, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+
+  const familyHeader = requireContract(context, 'buildFamilyArtistHeaderHtml')({
+    artist: 'Kipelov', albumCount: 4,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  const separator = requireContract(context, 'buildGalleryDividerHtml')({
+    label: 'Family', albumCount: 2,
+    artist_musicbrainz: { country: 'Russia', genres: ['Heavy Metal'] },
+  });
+  assert.doesNotMatch(familyHeader, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+  assert.doesNotMatch(separator, /ui-metadata-pill|Russia|Heavy Metal|Genre unavailable/);
+});
+
+test('stored artist metadata survives the existing sticky-context projection into current owners', () => {
+  const projection = { country: 'Russia', genres: ['Heavy Metal', 'Power Metal'] };
+  const context = loadRuntime({
+    virtualGrid: {
+      sectionHeaderHeight: 52,
+      sections: [{
+        kind: 'artist', top: 200,
+        group: { artist: 'Kipelov', albums: [{}, {}], artist_musicbrainz: projection },
+      }],
+    },
+    document: {
+      getElementById: () => ({ scrollTop: 260, getBoundingClientRect: () => ({ top: 100 }) }),
+      querySelectorAll: () => [],
+    },
+  });
+
+  const sections = plain(context.getGalleryMainContextSections());
+  assert.deepEqual(sections[0].artist_musicbrainz, projection);
+  const sticky = plain(context.resolveGalleryBarContext({
+    scrollTop: 260,
+    artistCount: 1,
+    albumCount: 2,
+    groups: sections,
+  }));
+  assert.deepEqual(sticky.artist_musicbrainz, projection);
+  assert.equal(sticky.artist, 'Kipelov');
+
+  assert.match(galleryMainInteractionsSource, /data-gallery-context-metadata/);
+  assert.match(galleryMainInteractionsSource, /buildGalleryArtistMetadataHtml\s*\(/);
+  assert.equal((galleryBarTemplateSource.match(/data-gallery-context-metadata/g) || []).length, 1,
+    'the shared GalleryBar macro keeps one metadata slot for the gallery context');
+  assert.match(indexTemplateSource, /gallery_bar\([^)]*gallery_context=true/);
+});
+
+test('the existing delegated Gallery handler opens the exact artist problem occurrence', () => {
+  assert.match(
+    bootstrapGalleryEventHandlersSource,
+    /closest\(['"]\[data-open-musicbrainz-artist-problem\]['"]\)/,
+  );
+  assert.match(
+    bootstrapGalleryEventHandlersSource,
+    /openMusicBrainzArtistProblem\s*\([^)]*(?:dataset\.openMusicbrainzArtistProblem|getAttribute\(['"]data-open-musicbrainz-artist-problem['"]\))[^)]*\)/,
+  );
+  assert.doesNotMatch(
+    bootstrapGalleryEventHandlersSource,
+    /data-open-musicbrainz-artist-problem[\s\S]{0,300}openProblematicFiles\s*\(\s*\)/,
+    'activation must carry the occurrence identity rather than opening a generic list',
+  );
 });
 
 test('the retired inline Artist Family surface is removed while GalleryBar owns the only panel', () => {
@@ -504,7 +631,7 @@ test('artist info triggers use a larger plain information glyph with neutral env
   assert.match(markup, /gallery-info-button__glyph/);
   assert.doesNotMatch(markup, /ⓘ/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay\s*\{[^}]*background:\s*var\(--panel\);[^}]*color:\s*var\(--text\);/);
-  assert.match(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)\s*\{[^}]*color:\s*var\(--appearance-accent,/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__full-page\s*\{[^}]*color:\s*var\(--appearance-accent,/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
@@ -1016,8 +1143,8 @@ test('GalleryBar scroll context uses absolute virtual section coordinates instea
   });
   const getGalleryMainContextSections = requireContract(context, 'getGalleryMainContextSections');
   assert.deepEqual(plain(getGalleryMainContextSections()), [
-    { artist: 'Neal Morse & The Resonance', albumCount: 2, top: 1200, labelBottom: 1200 },
-    { artist: 'Cosmic Cathedral', albumCount: 1, top: 2200, labelBottom: 2200 },
+    { artist: 'Neal Morse & The Resonance', albumCount: 2, artist_musicbrainz: null, top: 1200, labelBottom: 1200 },
+    { artist: 'Cosmic Cathedral', albumCount: 1, artist_musicbrainz: null, top: 2200, labelBottom: 2200 },
   ]);
 });
 
@@ -1314,7 +1441,7 @@ test('local artist information stays capability-bounded and leaves unavailable o
     summary: 'Local Artist has 2 albums in this Gallery view.',
     imageUrl: '',
     wikipediaUrl: '',
-    canReadMore: false,
+    isLongBiography: false,
   });
   const unsafe = resolveGalleryArtistInfo({
     albums: [],
@@ -1916,4 +2043,62 @@ test('reopening a family drawer cancels the earlier closing callbacks', () => {
   staleFinish();
   assert.equal(run.panel.hidden, false, 'a stale close cannot finish the new animation');
   assert.equal(run.hiddenWrites(), writes);
+});
+
+
+test('artist information links MusicBrainz and Discogs only for an accepted match, as icon and text', () => {
+  const ButtonComponent = require('../../../music_app/static/js/button-component.js');
+  const context = loadRuntime({ ButtonComponent, state: { view: { query: '' } } });
+  const build = requireContract(context, 'buildGalleryArtistExternalLinksHtml');
+  const mbid = 'c0926f5d-098c-4f29-a463-5489b43a273a';
+
+  const links = build({
+    artist_mbid: mbid,
+    musicbrainz_url: `https://musicbrainz.org/artist/${mbid}`,
+    discogs_url: 'https://www.discogs.com/artist/218108',
+  }, 'Neal Morse');
+  assert.match(links, new RegExp(`<a class="ui-external-link ui-external-link--musicbrainz" href="https://musicbrainz\.org/artist/${mbid}" target="_blank" rel="noopener noreferrer" aria-label="Open Neal Morse on MusicBrainz">`));
+  assert.match(links, /ui-external-link__icon[^>]*aria-hidden="true"[\s\S]*?<span class="ui-external-link__text">MusicBrainz<\/span>/);
+  assert.match(links, /href="https:\/\/www\.discogs\.com\/artist\/218108"[^>]*aria-label="Open Neal Morse on Discogs"[\s\S]*?>Discogs</);
+  assert.doesNotMatch(links, /ui-button/, 'links are plain icon and text, not buttons');
+  assert.match(links, /^<div class="ui-external-link-list"><a class="ui-external-link ui-external-link--musicbrainz"[\s\S]*<\/a><\/div>$/,
+    'service links share one vertical list');
+
+  assert.equal(build(null, 'Angra'), '', 'unresolved artists carry no projection and show no links');
+  assert.doesNotMatch(build({ musicbrainz_url: `https://musicbrainz.org/artist/${mbid}` }, 'Angra'), /Discogs/);
+  assert.equal(build({ musicbrainz_url: `http://127.0.0.1:5050/artist/${mbid}`, discogs_url: 'https://evil.example/artist/1' }, 'Angra'), '',
+    'only the public MusicBrainz and Discogs artist pages are linked');
+});
+
+test('the artist panel ends its text with one disabled Open full page and lists service links below it', () => {
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)/);
+  assert.doesNotMatch(galleryMainCssSource, /\.ui-external-link[^,{]*\{/, 'no page-local external link styling');
+  const panelSources = galleryMainInteractionsSource + galleryMainComponentsSource + galleryMainStateSource + galleryMainCssSource + mobileLayoutCssSource;
+  assert.doesNotMatch(panelSources, /Read more|Read less|data-artist-info-read-more|canReadMore|is-expanded|artist-info-overlay__actions|data-artist-info-full-page|buildArtistInfoOverlayHtml/,
+    'no expand or collapse, no Read more, and no separate Full page action');
+
+  assert.match(galleryMainInteractionsSource, /^const GALLERY_ARTIST_FULL_PAGE_LABEL = 'Open full page';$/m, 'one label constant');
+  const builder = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
+  assert.match(builder, /const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">\$\{GALLERY_ARTIST_FULL_PAGE_LABEL\}<\/button>`;/,
+    'disabled for every artist, with the same title Full page had');
+  assert.match(builder, /<p data-artist-info-summary\$\{isLongBiography \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{fullPage\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,
+    'the control is the last item of the text, and the service links follow below it');
+  // An artist matched under another name shows the MusicBrainz name as its title and
+  // names the tag under its links; a split artist lists its MusicBrainz artists first.
+  assert.match(builder, /<\/div>` : ''\}\$\{identities\}\$\{credit\}/);
+  assert.match(builder, /data-artist-info-credit>Tagged as \$\{escapeHtml\(artist\)\} in your files\.<\/p>/);
+  assert.match(builder, /<h2>\$\{escapeHtml\(displayName\)\}<\/h2>/);
+  assert.match(builder, /scrollHeight <= summaryElement\.clientHeight \+ 1\) summaryElement\.removeAttribute\('data-artist-info-long'\)/,
+    'text that fits in five lines gets no clamp or fade');
+
+  const clamp = galleryMainCssSource.match(/\.artist-info-overlay__body \[data-artist-info-summary\]\[data-artist-info-long\]\s*\{([^}]*)\}/);
+  assert.ok(clamp, 'a long biography is clamped');
+  assert.match(clamp[1], /max-height:\s*7\.5em;\s*overflow:\s*hidden/, 'five 1.5-line-height lines');
+  assert.match(galleryMainCssSource, /\[data-artist-info-long\] \.artist-info-overlay__full-page\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*0;[^}]*--artist-info-full-page-background:\s*linear-gradient\(to right, transparent, var\(--panel\) 2em\)/,
+    'the clamped control sits at the end of line five over a fade in the panel colour of either theme');
+  assert.match(galleryMainCssSource, /\[data-artist-info-long\] \.artist-info-overlay__full-page::before\s*\{\s*content:\s*"…";\s*display:\s*inline-block/);
+  assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /-webkit-line-clamp/, 'one clamp mechanism, on desktop and mobile');
+  const disabled = galleryMainCssSource.match(/\.artist-info-overlay__full-page:disabled\s*\{([^}]*)\}/)[1];
+  assert.match(disabled, /color:\s*color-mix\(in srgb, var\(--appearance-accent,[^)]*\)\) 45%, transparent\)/, 'dimmed like Full page was');
+  assert.doesNotMatch(disabled, /opacity/, 'dimming the colour keeps the fade behind it opaque');
 });

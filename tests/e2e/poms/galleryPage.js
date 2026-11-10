@@ -548,7 +548,8 @@ export class GalleryPage extends BasePage {
         && document.querySelectorAll(selectors.artistSectionSelector).length === 1
         && String(context?.querySelector('[data-gallery-context-name]')?.textContent || '').trim() === selectors.artistName;
       const artistMetaText = String(sectionCount?.textContent
-        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-summary]')?.textContent : '') || '').trim();
+        // A single-artist header reads "Name (i) • N albums": the count follows the name.
+        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-inline-total]')?.textContent : '') || '').trim();
       const expectedAlbums = new Set(selectors.expectedAlbumNames);
       const renderedIdentities = [...element.querySelectorAll(selectors.albumCardSelector)]
         .map((card) => ({

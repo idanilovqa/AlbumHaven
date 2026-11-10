@@ -256,6 +256,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.appearance_asgi import router as appearance_asgi_router
     from music_app.routes.client_layout_asgi import router as client_layout_asgi_router
     from music_app.routes.selection_accent_asgi import router as selection_accent_asgi_router
+    from music_app.routes.musicbrainz_enrichment_asgi import (
+        router as musicbrainz_enrichment_asgi_router,
+    )
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
     from music_app.routes.api_wave_c_asgi_routes import router as api_wave_c_asgi_router
@@ -377,6 +380,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(appearance_asgi_router)
     app.include_router(client_layout_asgi_router)
     app.include_router(selection_accent_asgi_router)
+    app.include_router(musicbrainz_enrichment_asgi_router)
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)
@@ -439,6 +443,21 @@ def create_asgi_app():
         invalidate_targeted_library_projections,
         queue_watcher_cover_refresh_for_track_paths_for_state,
         start_background_refresh_for_state,
+    )
+    from music_app.services.musicbrainz_enrichment import MusicBrainzEnrichmentScheduler
+    from music_app.services.musicbrainz_enrichment_api import (
+        build_musicbrainz_enrichment_api_service,
+    )
+    from music_app.services.musicbrainz_enrichment_postgres import (
+        MusicBrainzEnrichmentPostgresRepository,
+    )
+    from music_app.services.musicbrainz_enrichment_triggers import (
+        schedule_after_targeted_commit,
+        schedule_startup_backfill,
+    )
+    from music_app.services.musicbrainz_enrichment_worker import (
+        start_musicbrainz_enrichment_worker,
+        stop_musicbrainz_enrichment_worker,
     )
 
     runtime = _create_asgi_runtime_state()
@@ -543,6 +562,8 @@ def create_asgi_app():
         targeted_reconciler = None
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
+        _app.state.musicbrainz_enrichment_worker = None
+        _app.state.musicbrainz_enrichment_api_service = None
 
         async def shutdown_resources() -> None:
             _app.state.library_warmup_thread.request_stop()
@@ -582,6 +603,10 @@ def create_asgi_app():
                     if lastfm_started
                     else None,
                 ),
+                (
+                    "MusicBrainz enrichment worker",
+                    lambda: stop_musicbrainz_enrichment_worker(_app),
+                ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
                 ("runtime asset versions", runtime_asset_version_cache.close),
@@ -604,6 +629,28 @@ def create_asgi_app():
 
         lastfm_started = True
         try:
+            if (
+                runtime.config.get("MUSICBRAINZ_ENRICHMENT_ENABLED") is True
+                and str(
+                    runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+                ).strip()
+            ):
+                enrichment_scheduler = MusicBrainzEnrichmentScheduler(
+                    MusicBrainzEnrichmentPostgresRepository(runtime.config)
+                )
+                runtime.config["_MUSICBRAINZ_ENRICHMENT_SCHEDULER"] = (
+                    enrichment_scheduler
+                )
+                _app.state.musicbrainz_enrichment_api_service = (
+                    build_musicbrainz_enrichment_api_service(runtime.config)
+                )
+                try:
+                    schedule_startup_backfill(enrichment_scheduler)
+                except Exception:
+                    # Enrichment is optional; a missing migration or transient
+                    # database error must not keep the application down.
+                    runtime.logger.warning("MusicBrainz startup backfill could not be scheduled.")
+            start_musicbrainz_enrichment_worker(_app)
             start_lastfm_retry_worker(runtime)
             welcome_worker = start_welcome_retry_worker(_app)
             targeted_executor = _BoundedExecutorAdmission(
@@ -626,6 +673,11 @@ def create_asgi_app():
                     runtime.logger,
                     set(result.new_track_paths),
                     affected_album_keys=result.affected_album_keys,
+                )
+                schedule_after_targeted_commit(
+                    runtime.config.get("_MUSICBRAINZ_ENRICHMENT_SCHEDULER"),
+                    result,
+                    logger=runtime.logger,
                 )
 
             targeted_reconciler = TargetedLibraryReconciler(

@@ -35,6 +35,58 @@ test('SmallAlert exposes a near-circular compact error that expands to Album not
   assert.match(html, /small-alert__text">Album not found</);
 });
 
+test('an interactive SmallAlert is the regular compact alert as a button for its exact problem', () => {
+  const context = loadAlertComponents();
+  const html = context.buildSmallAlertHtml({
+    severity: 'warning',
+    message: 'MBID: Multiple matches',
+    interactive: true,
+    attributes: {
+      'data-open-musicbrainz-artist-problem': 'artist-problem-19',
+      'aria-label': 'Open MBID: Multiple matches for Axxis',
+    },
+  });
+
+  assert.match(html, /^<button/);
+  assert.match(html, /class="small-alert small-alert--warning"/);
+  assert.match(html, /type="button"/);
+  assert.match(html, /data-open-musicbrainz-artist-problem="artist-problem-19"/);
+  assert.match(html, /aria-label="Open MBID: Multiple matches for Axxis"/);
+  assert.match(html, /small-alert__icon[^]*<path d="M10\.3 3\.8/);
+  assert.match(html, /small-alert__text">MBID: Multiple matches</);
+});
+
+test('the separator alert keeps its own column so the divider line stops at it', () => {
+  const alertCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
+    'utf8',
+  );
+  const galleryCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'gallery-main.css'),
+    'utf8',
+  );
+  assert.doesNotMatch(alertCss, /triangle-only/, 'the owner asked for the regular compact alert');
+  assert.match(alertCss, /button\.small-alert\s*\{[^}]*padding:\s*0[^}]*cursor:\s*pointer/s);
+  // The longest artist label must fit when the alert expands.
+  assert.match(alertCss, /button\.small-alert:is\(:hover,\s*:focus-visible\)\s*\{[^}]*width:\s*200px/s);
+  assert.match(alertCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.small-alert[^}]*transition:\s*none/s);
+  // Name, i, alert, line, count: the alert is a grid column of its own.
+  assert.match(galleryCss, /\.family-artist-header:has\(\.artist-musicbrainz-status:not\(:empty\)\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*auto\)\s+auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto/s);
+  assert.doesNotMatch(galleryCss, /\.family-artist-header:(?:hover|focus-within)[^}]*height:/s);
+});
+
+test('metadata pending uses a distinct non-error moving-dots treatment', () => {
+  const galleryCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'gallery-main.css'),
+    'utf8',
+  );
+  assert.match(galleryCss, /\.artist-musicbrainz-pending\s*\{[^}]*color:/s);
+  assert.doesNotMatch(galleryCss, /\.artist-musicbrainz-pending\s*\{[^}]*var\(--appearance-error/s);
+  assert.match(galleryCss, /\.artist-musicbrainz-pending[^}]*data-pending-dot[\s\S]*animation:/s);
+  assert.match(galleryCss, /@keyframes\s+artist-musicbrainz-pending-dots/);
+  assert.match(galleryCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*data-pending-dot[^}]*animation:\s*none/s);
+});
+
 test('OnPageAlert supports semantic variants and shared action slots', () => {
   const context = loadAlertComponents();
   const html = context.buildOnPageAlertHtml({

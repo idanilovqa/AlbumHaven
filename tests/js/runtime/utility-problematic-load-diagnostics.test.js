@@ -471,35 +471,46 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.completeLoadPromise, null);
 });
 
-test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {
+test('a render-suppressed complete load paints the refreshed detail that replaced a clicked album request', async () => {
   const fullResponse = createDeferred();
-  const renderedLengths = [];
-  const item = (key) => ({ key, name: key, detail_loaded: false });
-  const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
-  const { context } = loadHelper({
+  const clickedDetail = createDeferred();
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const detailBody = (name) => ({
+    key: 'clicked',
+    name,
+    detail_loaded: true,
+    tracks: [],
+    repair_preview_rows: [],
+    track_problem_rows: [],
+    problematic_track_paths: [],
+  });
+  let detailRequests = 0;
+  const { context, calls } = loadHelper({
     async fetch(url) {
-      if (String(url).endsWith('?limit=50')) {
-        return response({ complete: false, items: [item('first')] });
+      const target = String(url);
+      if (target.endsWith('?limit=50')) {
+        return json({ complete: false, items: [{ key: 'clicked', name: 'Clicked', issue_count: 1, detail_loaded: false }] });
+      }
+      if (target.includes('/detail?')) {
+        detailRequests += 1;
+        return detailRequests === 1 ? clickedDetail.promise : json(detailBody('Clicked refreshed detail'));
       }
       return fullResponse.promise;
     },
-    renderUtilityModalContent() {
-      renderedLengths.push(context.state.utility.problematicFiles.length);
-    },
-  });
-  Object.assign(context.state.utility, {
-    loaded: true,
-    problematicFilesComplete: true,
-    problematicFiles: [item('first'), item('second'), item('third')],
   });
 
-  const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  const load = context.loadProblematicFiles(true, { render: false });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(context.state.utility.problematicFilesComplete, false);
-  fullResponse.resolve(response({ items: [item('first'), item('third')] }));
-  await refresh;
+  context.state.utility.selectedProblematicKey = 'clicked';
+  void context.loadProblematicAlbumDetail('clicked');
+  fullResponse.resolve(json({ items: [{ key: 'clicked', name: 'Clicked', issue_count: 2, detail_loaded: false }] }));
+  await load;
+  clickedDetail.resolve(json(detailBody('Clicked stale detail')));
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(renderedLengths, [3, 2], 'only the replaced and the complete list paint');
+  assert.equal(detailRequests, 2);
+  assert.equal(context.state.utility.problematicFiles[0].name, 'Clicked refreshed detail');
+  assert.ok(calls.renders >= 1, 'the refreshed detail replaced the clicked request, so it must paint');
 });
 
 test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
@@ -1081,10 +1092,6 @@ test('loadProblematicFiles rejects a JSON HTTP error without committing empty su
 
   assert.equal(context.state.utility.problematicFiles.length, 0);
   assert.equal(context.state.utility.loaded, false);
-  assert.equal(
-    context.state.utility.problematicLoadError,
-    'Problematic-file projection is temporarily unavailable.',
-  );
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(calls.consoleErrors.length, 1);
@@ -1209,7 +1216,6 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 0);
-  assert.match(context.state.utility.problematicLoadError, /Unexpected end (?:of )?JSON input/);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, false);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.match(context.state.utility.problematicDiagnostics.summaryLoad.error, /Unexpected end of JSON input/);
@@ -1224,7 +1230,6 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].key, 'album-1');
-  assert.equal(context.state.utility.problematicLoadError, '');
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, true);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.error, null);
@@ -2531,4 +2536,35 @@ test('full-summary initial detail supersedes an older in-flight preview detail',
   await h.context.state.utility.completeLoadPromise;
   assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta').name,
     'Canonical initial detail');
+});
+
+test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {
+  const fullResponse = createDeferred();
+  const renderedLengths = [];
+  const item = (key) => ({ key, name: key, detail_loaded: false });
+  const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
+  const { context } = loadHelper({
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ complete: false, items: [item('first')] });
+      }
+      return fullResponse.promise;
+    },
+    renderUtilityModalContent() {
+      renderedLengths.push(context.state.utility.problematicFiles.length);
+    },
+  });
+  Object.assign(context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: true,
+    problematicFiles: [item('first'), item('second'), item('third')],
+  });
+
+  const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  fullResponse.resolve(response({ items: [item('first'), item('third')] }));
+  await refresh;
+
+  assert.deepEqual(renderedLengths, [3, 2], 'only the replaced and the complete list paint');
 });

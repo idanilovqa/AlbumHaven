@@ -12,6 +12,7 @@
     copy: 'M8 8h12v12H8V8ZM4 16H3V3h13v1M8 4H4v4',
     cover: 'M5 5h14v14H5V5Zm0 10 4-4 4 4 2-2 4 4M14.5 8.5h.01',
     search: 'M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z',
+    external: 'M14 5h5v5M11 13l8-8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5',
     play: 'M9 6.4v11.2l9-5.6-9-5.6Z',
     pause: 'M7.5 6.5h3.25v11H7.5v-11Zm5.75 0h3.25v11h-3.25v-11Z',
     edit: 'm6.5 16.6.55-3.15L15.9 4.6a1.65 1.65 0 0 1 2.35 0l1.15 1.15a1.65 1.65 0 0 1 0 2.35l-8.85 8.85-3.15.55-.9-.9Zm8.3-9.9 2.5 2.5',
@@ -102,12 +103,31 @@
     );
   }
 
+  // External services shown as an icon and plain text, like MusicBrainz's own links list.
+  // Each accepts only its own public artist-page URL shape.
+  const externalServices = Object.freeze({
+    musicbrainz: { label: 'MusicBrainz', href: /^https:\/\/musicbrainz\.org\/artist\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/ },
+    discogs: { label: 'Discogs', href: /^https:\/\/www\.discogs\.com\/artist\/[1-9][0-9]{0,11}$/ },
+  });
+
+  function renderExternalServiceLink(options = {}) {
+    const service = externalServices[options.service];
+    if (!service) throw new TypeError('Unknown external service.');
+    const href = String(options.href || '');
+    if (!service.href.test(href)) return '';
+    const subject = String(options.subject || '').trim();
+    const ariaLabel = subject ? `Open ${subject} on ${service.label}` : `Open on ${service.label}`;
+    return `<a class="ui-external-link ui-external-link--${escape(options.service)}" href="${escape(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(ariaLabel)}">`
+      + '<span class="ui-external-link__icon" aria-hidden="true"></span>'
+      + `<span class="ui-external-link__text">${escape(service.label)}</span></a>`;
+  }
+
   function setDisabled(element, disabled) {
     element.disabled = Boolean(disabled);
     element.setAttribute('aria-disabled', String(element.disabled));
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
+  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

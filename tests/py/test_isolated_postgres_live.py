@@ -1208,7 +1208,9 @@ def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_in
             "select private_path, scan_cache_stale from library.local_track_files order by private_path"
         ).fetchall()
     stale = {row["private_path"]: row["scan_cache_stale"] for row in rows}
-    assert all(stale[entry["path"]] for entry in loose)
+    # Owner 2026-11-08: untouched files that were truly deleted leave no trace, so these
+    # untouched loose tracks are removed outright (migration 0120), not kept as missing.
+    assert not any(entry["path"] in stale for entry in loose)
     assert stale[kept["path"]] is False
 
 

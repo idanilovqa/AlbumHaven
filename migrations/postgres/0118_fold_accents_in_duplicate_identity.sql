@@ -11,7 +11,12 @@ parallel safe
 strict
 set search_path = pg_catalog, pg_temp
 as $$
-  select btrim(regexp_replace(library.fold_search_accents(value), '[[:space:]]+', ' ', 'g'))
+  -- Accent folding costs about 3x a plain lower() per row; ASCII text has no
+  -- accents to fold, so only non-ASCII values pay for it.
+  select btrim(regexp_replace(
+    case when value ~ '[^\x01-\x7f]' then library.fold_search_accents(value) else lower(value) end,
+    '[[:space:]]+', ' ', 'g'
+  ))
 $$;
 
 reindex index library.local_track_files_active_duplicate_identity_idx;

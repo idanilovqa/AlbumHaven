@@ -7293,9 +7293,11 @@ def _queue_display_cover_variants_for_groups(
                 revision_options = (
                     {"revision": cover_revision} if cover_revision else {}
                 )
+                # Only a revisioned preview follows the storage policy; any other stays in app data.
+                preview_policy = storage_policy if cover_revision else None
                 if not display_variant_awaits_relocation(
                     source_path,
-                    storage_policy=storage_policy,
+                    storage_policy=preview_policy,
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
                     revision=cover_revision or None,
                 ):
@@ -7307,8 +7309,8 @@ def _queue_display_cover_variants_for_groups(
                         source_path,
                         cache_root=display_cover_variant_cache_root(
                             source_path,
-                            data_dir=config.get("DATA_DIR") if cover_revision else None,
-                            storage_policy=storage_policy,
+                            data_dir=config.get("DATA_DIR"),
+                            storage_policy=preview_policy,
                         ),
                         max_size=_DISPLAY_COVER_VARIANT_SIZE,
                         **revision_options,

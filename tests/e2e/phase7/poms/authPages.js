@@ -19,11 +19,15 @@ export class LoginPage {
     await this.password.fill(password);
     // The sign-in script posts in the background; its answer carries the session cookie (or the
     // rejection), so a caller's next request never races it.
-    await Promise.all([
-      this.page.waitForResponse((response) => new URL(response.url()).pathname === '/login'
-        && response.request().method() === 'POST'),
+    const [response] = await Promise.all([
+      this.page.waitForResponse((answer) => new URL(answer.url()).pathname === '/login'
+        && answer.request().method() === 'POST'),
       this.submit.click(),
     ]);
+    // An accepted sign-in navigates on to its return path; a caller's next navigation must not abort it.
+    if (response.ok()) {
+      await this.page.waitForURL((url) => url.pathname !== '/login');
+    }
   }
 }
 

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { applyPerformanceChangeImpact } = require('./performance-change-impact.cjs');
+const { applyPerformanceChangeImpact, matchesPattern } = require('./performance-change-impact.cjs');
 const {
   FUNCTIONAL_SHARDS: FUNCTIONAL_SHARD_CONFIGS,
   PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS,
@@ -25,7 +25,7 @@ const SUPPORTED_FOCUSED_AREAS = Object.freeze([
 ]);
 const FUNCTIONAL_SHARDS = Object.freeze(Object.keys(FUNCTIONAL_SHARD_CONFIGS));
 const FUNCTIONAL_SHARD_LABELS = Object.freeze({
-  'gallery-search-visual': ['gallery-search-visual'],
+  'gallery-search-visual': ['gallery-search-visual-1', 'gallery-search-visual-2'],
   'cover-providers': ['cover-providers-1', 'cover-providers-2'],
   'metadata-mutations': ['metadata-mutations'],
   'playback-utilities': [
@@ -50,6 +50,50 @@ function isDocumentationPath(filePath) {
   // Downloadable helpers remain executable code even when shipped under docs/.
   if (/\.(?:ps1|py)$/.test(lower)) return false;
   return lower.startsWith('docs/') || (!normalized.includes('/') && lower.endsWith('.md'));
+}
+
+// The Android shell, its future native modules, the contract fixtures its Kotlin tests share
+// with the browser, and the tests only the Android jobs run. Markdown there is documentation and
+// never needs a Gradle or emulator run.
+const ANDROID_PATH_PATTERNS = Object.freeze([
+  'apps/android-shell/**',
+  'packages/native/**',
+  'tests/fixtures/android-bridge/**',
+  'tests/fixtures/listen-sessions-v1.json',
+  'tests/fixtures/playback-protocol-v1.json',
+  'scripts/ci/android-update-e2e.py',
+  'tests/py/test_playback_decoder_conformance.py',
+]);
+// A release bump (scripts/prepare_release.py always writes version.py) names the version stable
+// promotion builds and the changelog it requires; promotion accepts only a head whose own run
+// passed the Android jobs, so a release head always runs them.
+const RELEASE_BUMP_PATHS = Object.freeze(['version.py']);
+// The Android job definitions live in this workflow beside every other job; editing them runs them.
+const PIPELINE_WORKFLOW = '.github/workflows/pr-gates.yml';
+const ANDROID_JOBS = Object.freeze(['test_android', 'test_android_instrumentation']);
+
+function isAndroidPath(filePath) {
+  const normalized = normalizePath(filePath);
+  return RELEASE_BUMP_PATHS.includes(normalized) || (!normalized.toLowerCase().endsWith('.md')
+    && ANDROID_PATH_PATTERNS.some((pattern) => matchesPattern(normalized, pattern)));
+}
+
+/** Whether a zero-context diff of the pipeline workflow changes a line of an Android job definition. */
+function changesAndroidJobs(workflowDiff, headWorkflow) {
+  const lines = String(headWorkflow || '').split(/\r?\n/);
+  const jobStarts = lines.flatMap((line, index) => {
+    const job = /^ {2}([a-z0-9_]+):\s*$/.exec(line);
+    return job ? [{ name: job[1], line: index + 1 }] : [];
+  });
+  // 1-based head-side line ranges, from each Android job's key to the line before the next job.
+  const ranges = jobStarts.flatMap((job, index) => (ANDROID_JOBS.includes(job.name)
+    ? [{ first: job.line, last: (jobStarts[index + 1]?.line ?? lines.length + 1) - 1 }] : []));
+  return [...String(workflowDiff || '').matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].some((hunk) => {
+    const first = Number(hunk[1]);
+    // A pure deletion names the head line before it, which belongs to the job it was cut from.
+    const last = hunk[2] === '0' ? first : first + Number(hunk[2] ?? 1) - 1;
+    return ranges.some((range) => first <= range.last && last >= range.first);
+  });
 }
 
 function parseNumstat(numstat) {
@@ -321,15 +365,24 @@ function runCli(env = process.env) {
   const pipeline = classifyPipelineLabels(labels, focusedRequest, action, headSha);
   const selectedBase = selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview: pipeline.forceFullReview });
   // Whole-PR scope excludes commits added only to the target branch.
-  const diffBase = selectedBase === baseSha
-    ? requireSha(execFileSync('git', ['merge-base', baseSha, headSha], { encoding: 'utf8' }).trim(), 'merge base')
-    : selectedBase;
-  const numstat = execFileSync(
+  const mergeBase = requireSha(execFileSync('git', ['merge-base', baseSha, headSha], { encoding: 'utf8' }).trim(), 'merge base');
+  const diffBase = selectedBase === baseSha ? mergeBase : selectedBase;
+  const changedNumstat = (from) => execFileSync(
     'git',
-    ['diff', '--numstat', '--no-renames', diffBase, headSha],
+    ['diff', '--numstat', '--no-renames', from, headSha],
     { encoding: 'utf8' },
   );
+  const numstat = changedNumstat(diffBase);
   const changedPaths = parseNumstat(numstat).map(({ path: changedPath }) => changedPath);
+  // Android jobs cover the whole pull request, so an incremental review never drops them.
+  const wholePrPaths = diffBase === mergeBase
+    ? changedPaths
+    : parseNumstat(changedNumstat(mergeBase)).map(({ path: changedPath }) => changedPath);
+  const runAndroid = pipeline.pipelineMode === 'full' && (wholePrPaths.some(isAndroidPath)
+    || (wholePrPaths.includes(PIPELINE_WORKFLOW) && changesAndroidJobs(
+      execFileSync('git', ['diff', '--unified=0', '--no-renames', mergeBase, headSha, '--', PIPELINE_WORKFLOW], { encoding: 'utf8' }),
+      execFileSync('git', ['show', `${headSha}:${PIPELINE_WORKFLOW}`], { encoding: 'utf8' }),
+    )));
   const performanceChangeImpact = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', '..', 'tests', 'ci', 'performance-change-impact.json'),
     'utf8',
@@ -392,6 +445,7 @@ function runCli(env = process.env) {
     `run_performance=${String(performanceShards.length > 0)}`,
     `run_phase7_auth=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth'))}`,
     `run_phase7_admin=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-admin'))}`,
+    `run_android=${String(runAndroid)}`,
     `selected_families_json=${JSON.stringify([
       ...(functionalShards.length ? ['e2e_functional'] : []),
       ...(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth') ? ['e2e_phase7_auth'] : []),
@@ -417,6 +471,8 @@ module.exports = {
   classifyPipelineLabels,
   applyPipelineSkips,
   parseFocusedE2eRequest,
+  changesAndroidJobs,
+  isAndroidPath,
   isDocumentationPath,
   parseNumstat,
   classifyReviewScope,

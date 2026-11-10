@@ -136,3 +136,18 @@ def test_duplicate_folder_actions_share_open_location_policy_without_hiding_file
     desktop = projection(['owner'])
     assert desktop['allowed_actions']['library.files.open_location'] is True
     assert selector not in desktop['denied_selectors']
+
+
+def test_offline_read_only_hides_every_permitted_write_but_no_read():
+    # IAR-005: a copy shown while the server is unreachable hides the account's write controls
+    # through the same projection as denied ones; reads and playback stay.
+    value = projection(["owner", "admin"], bootstrap=True)
+    read_only = set(value["read_only_selectors"])
+    assert {"#track-modal-edit-tags", "[data-open-tag-editor]", "[data-delete-local-cover]",
+            '[data-status-action="full-rescan"]', '[data-required-action="library.files.edit_tags"]'} <= read_only
+    assert ".play-track-button" not in read_only
+    assert "[data-open-track-problematic]" not in read_only
+    assert '[data-required-action="library.browse.read"]' not in read_only
+    # A write the account cannot do is already denied, never listed twice.
+    assert not read_only & set(value["denied_selectors"])
+    assert not set(projection(["viewer"])["read_only_selectors"]) & {"#track-modal-edit-tags", "[data-open-tag-editor]"}

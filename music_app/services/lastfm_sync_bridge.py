@@ -4,12 +4,20 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from music_app.services.lastfm import LastfmError
-from music_app.services.measured_listen_history import measured_provider_guard
+from music_app.services.measured_listen_history import (
+    MeasuredListenError,
+    load_measured,
+    measured_provider_guard,
+    normalize_measurement,
+    playback_handoff_completion_digest,
+    validate_playback_completion,
+)
 from music_app.services.lastfm_listen_sync import (
     build_playback_complete_entry,
     build_scrobble_result_updates,
     clear_pending_scrobble,
     load_lastfm_sync_state,
+    playback_scrobble_threshold_seconds,
     record_pending_scrobble,
 )
 
@@ -47,6 +55,94 @@ def build_lastfm_integration_status(
     return payload
 
 
+def prepare_measured_playback_completion(
+    payload: JsonDict,
+    *,
+    user_timezone: str,
+    account_id: int,
+    library_id: int,
+    is_meaningful_listen_session: ListenHistoryMeaningChecker,
+) -> JsonDict | None:
+    validate_playback_completion(payload)
+    entry = build_playback_complete_entry({**payload, "user_timezone": user_timezone})
+    for key in ("measurement_version", "device_id", "session_id", "sequence",
+                "measured_listened_seconds", "max_measured_contiguous_seconds"):
+        entry[key] = payload.get(key)
+    entry["finalized"] = payload.get("finalized", True)
+    entry = normalize_measurement(entry, account_id=account_id, library_id=library_id)
+    threshold = playback_scrobble_threshold_seconds(entry.get("duration_seconds"))
+    entry["scrobble_eligible"] = (
+        threshold > 0 and entry["measured_listened_seconds"] >= threshold
+    )
+    return entry if is_meaningful_listen_session(entry) else None
+
+
+def prepare_handoff_completion(
+    payload: JsonDict | None,
+    *,
+    user_timezone: str,
+    account_id: int,
+    library_id: int,
+    is_meaningful_listen_session: ListenHistoryMeaningChecker,
+) -> tuple[JsonDict | None, bytes]:
+    """The measured entry a reload handoff persists (None without a completion) and its fingerprint.
+
+    A handoff ends its listen, so a completion must be finalized."""
+    if payload is None:
+        return None, playback_handoff_completion_digest(None)
+    entry = prepare_measured_playback_completion(
+        payload,
+        user_timezone=user_timezone,
+        account_id=account_id,
+        library_id=library_id,
+        is_meaningful_listen_session=is_meaningful_listen_session,
+    )
+    if payload.get("finalized") is not True:
+        raise MeasuredListenError("Listen handoff completion must be finalized")
+    if entry is None:
+        raise MeasuredListenError("Listen completion is below the persistence threshold")
+    return entry, playback_handoff_completion_digest(entry)
+
+
+_CREDENTIAL_UNAVAILABLE = "Account-scoped Last.fm credential is unavailable"
+
+
+def _seed_measured_playback_completion(entry: JsonDict) -> JsonDict:
+    seeded = dict(entry)
+    eligible = bool(entry["scrobble_eligible"])
+    seeded.update({
+        "scrobbled": False,
+        "scrobble_error": _CREDENTIAL_UNAVAILABLE if eligible else "",
+        "scrobble_retryable": eligible,
+        "sync_problem": {
+            "provider": "lastfm",
+            "kind": "scrobble",
+            "status": "account_credential_unavailable",
+            "message": _CREDENTIAL_UNAVAILABLE,
+        } if eligible else None,
+    })
+    return seeded
+
+
+def persist_measured_playback_completion(
+    config: ConfigDict,
+    entry: JsonDict,
+    *,
+    account_id: int,
+    library_id: int,
+    connection,
+    append_listen_history_entry: ListenHistoryAppender,
+) -> JsonDict:
+    """Appends a prepared handoff entry, not yet scrobbled, inside the caller's transaction."""
+    return append_listen_history_entry(
+        config,
+        _seed_measured_playback_completion(entry),
+        account_id=account_id,
+        library_id=library_id,
+        connection=connection,
+    )
+
+
 def record_playback_session_complete(
     config: ConfigDict,
     payload: JsonDict,
@@ -61,28 +157,39 @@ def record_playback_session_complete(
     update_listen_history_entry: ListenHistoryUpdater,
     scrobble_track: LastfmScrobbler,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
+    persisted_entry: JsonDict | None = None,
 ) -> tuple[JsonDict, int]:
-    entry = build_playback_complete_entry({
-        **payload,
-        "user_timezone": user_timezone,
-    })
+    """``persisted_entry`` is the prepared measured entry a caller already committed; its stored
+    row is reloaded under the provider guard instead of being appended again."""
     if payload.get("measurement_version") is not None:
-        from music_app.services.measured_listen_history import normalize_measurement
-        for key in ("measurement_version", "device_id", "session_id", "sequence",
-                    "measured_listened_seconds", "max_measured_contiguous_seconds"):
-            entry[key] = payload.get(key)
-        entry["finalized"] = payload.get("finalized", True)
-        entry = normalize_measurement(entry, account_id=account_id, library_id=library_id)
-        if not is_meaningful_listen_session(entry):
+        entry = persisted_entry if persisted_entry is not None else prepare_measured_playback_completion(
+            payload,
+            user_timezone=user_timezone,
+            account_id=account_id,
+            library_id=library_id,
+            is_meaningful_listen_session=is_meaningful_listen_session,
+        )
+        if entry is None:
             return {"ok": True, "entry": None, "scrobbled": False, "scrobble_error": "", "ignored": True}, 200
         with measured_provider_guard(config, account_id=account_id, library_id=library_id,
-                                     device_id=entry["device_id"], session_id=entry["session_id"]):
+                                     device_id=entry["device_id"], session_id=entry["session_id"]) as provider_connection:
             provider_attempted = False
-            error = "Account-scoped Last.fm credential is unavailable"
-            entry.update({"scrobbled": False, "scrobble_error": error, "scrobble_retryable": True,
-                          "sync_problem": {"provider": "lastfm", "kind": "scrobble",
-                                           "status": "account_credential_unavailable", "message": error}})
-            stored = append_listen_history_entry(config, entry, account_id=account_id, library_id=library_id)
+            error = _CREDENTIAL_UNAVAILABLE if entry["scrobble_eligible"] else ""
+            if persisted_entry is not None:
+                stored = load_measured(
+                    provider_connection,
+                    account_id=account_id,
+                    library_id=library_id,
+                    device_id=entry["device_id"],
+                    session_id=entry["session_id"],
+                )
+            else:
+                stored = append_listen_history_entry(
+                    config,
+                    _seed_measured_playback_completion(entry),
+                    account_id=account_id,
+                    library_id=library_id,
+                )
             scrobbled = bool(stored.get("scrobbled"))
             if scrobbled:
                 error = ""
@@ -147,6 +254,10 @@ def record_playback_session_complete(
                 "scrobble_error": error,
                 "scrobble_attempted": provider_attempted,
             }, 200
+    entry = build_playback_complete_entry({
+        **payload,
+        "user_timezone": user_timezone,
+    })
     if not is_meaningful_listen_session(entry):
         return ({
             "ok": True,

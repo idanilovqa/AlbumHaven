@@ -82,6 +82,9 @@ function loadHelper() {
     getPlayerPlaybackSnapshot() {
       return { currentTime: 130, duration: 240 };
     },
+    AbortController,
+    setTimeout,
+    clearTimeout,
     isoNow() {
       clock += 1;
       return `2026-07-22T00:00:${clock.toString().padStart(2, '0')}Z`;
@@ -104,8 +107,11 @@ function beginEligibleSession(context, selectedTrack) {
   context.state.player.current = selectedTrack;
   context.startListenSession(selectedTrack);
   context.beginListenSegment(0);
-  context.state.player.listenSession.duration_seconds = 240;
-  return context.state.player.listenSession;
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 240;
+  session.measurement.total = 130;
+  session.measurement.longest = 130;
+  return session;
 }
 
 function finishEligibleSession(context, session) {
@@ -148,6 +154,8 @@ test('three automatic track transitions allocate distinct sessions while prior s
   context.state.player.current = secondTrack;
   const secondSession = await context.resumeListenSessionPlayback(secondTrack, 0);
   secondSession.duration_seconds = 240;
+  secondSession.measurement.total = 130;
+  secondSession.measurement.longest = 130;
   await context.maybeSendNowPlaying(secondTrack, secondSession);
 
   const secondFinalization = finishEligibleSession(context, secondSession);

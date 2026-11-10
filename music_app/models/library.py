@@ -9,12 +9,15 @@ class Track:
     track_number: int | None = None
     disc_number: int | None = None
     disc_number_raw: str | None = None
+    total_discs: int | None = None
+    disc_subtitle: str | None = None
     artist: str | None = None
     album: str | None = None
     album_artist: str | None = None
     genre: str | None = None
     year: int | None = None
     edition: str | None = None
+    album_type: str | None = None
     album_rating: int | None = None
     exception_type: str | None = None
     custom_collection_name: str | None = None
@@ -59,6 +62,7 @@ class Album:
     remote_cover_height: int | None = None
     year: int | None = None
     edition: str | None = None
+    release_type: str | None = None
     album_rating: int | None = None
     total_duration_seconds: int = 0
     release_date: str | None = None

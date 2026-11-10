@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-RELEASE_VERSION = "0.10.1"
+RELEASE_VERSION = "0.11.1"
 
 _SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 _RELEASE_LINE_PATTERN = re.compile(r'(?m)^RELEASE_VERSION = "[^"]+"[ \t]*\r?$')

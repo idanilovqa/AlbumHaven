@@ -95,6 +95,7 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
     const reopened = await trackModalActions.waitForLoadedSummary();
     expect(reopened.title).toContain(PLAYING_ALBUM);
     expect(`${reopened.title} ${reopened.subtitle}`).toContain(PLAYING_ALBUM_ARTIST);
+    await trackModalActions.waitForExactTrackRowCount(18);
     expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
     await trackModalActions.closeForegroundWithEscape();
     await settingsModalAppBarActions.waitForOpen();

@@ -212,5 +212,22 @@ for (const theme of ['light', 'charcoal', 'black']) {
     }
     await page.locator('.utility-loop-timeline-wrap').first().evaluate(element => element.classList.add('is-stereo-waveform'));
     await expect(page.locator('.utility-loop-timeline').first()).toHaveCSS('height', '44px');
+    await page.evaluate(() => {
+      const player = document.createElement('section');
+      player.className = 'global-player';
+      player.innerHTML = renderPlaybackControlCluster({ variant: 'expanded-player' });
+      document.body.append(player);
+    });
+    for (const button of [page.locator('.utility-loop-play').first(), page.locator('#player-play')]) {
+      await button.evaluate(element => { element.disabled = true; });
+      await expect(button).toBeDisabled();
+      await expect(button).toHaveCSS('opacity', '0.38');
+      await expect(button).toHaveCSS('cursor', 'not-allowed');
+      await expect(button).toHaveCSS('box-shadow', 'none');
+      await button.evaluate(element => { element.disabled = false; });
+      await expect(button).toBeEnabled();
+      await expect(button).toHaveCSS('opacity', '1');
+      await expect(button).toHaveCSS('cursor', 'pointer');
+    }
   });
 }

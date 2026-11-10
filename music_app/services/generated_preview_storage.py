@@ -12,6 +12,18 @@ _MANAGED_MARKERS = (
     (".album-haven", "v1", "cover_variants"),
     ("display-cover-cache", "cover_variants"),
 )
+_GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
+_APP_ARTIFACT_DIRECTORY = ".album-haven"
+
+
+def is_generated_cover_artifact(path: Path, album_root: Path) -> bool:
+    stem = path.stem.casefold()
+    relative_parts = path.relative_to(album_root).parts
+    return (
+        _APP_ARTIFACT_DIRECTORY in (part.casefold() for part in relative_parts)
+        or stem == _GENERATED_COVER_PREVIEW_STEM
+        or stem.startswith(f"{_GENERATED_COVER_PREVIEW_STEM}-")
+    )
 
 
 @dataclass(frozen=True)

@@ -156,7 +156,7 @@ def test_cover_candidate_to_lookup_match_preserves_current_use_payload_contract_
         "album_url": "https://musicbrainz.example/release/1",
         "query_mode": "release-group",
         "variant": "front",
-        "display_only": True,
+        "display_only": False,
         "art_kind": "other",
         "art_label": "Back cover",
         "debug": {
@@ -438,6 +438,29 @@ def test_cover_candidate_to_lookup_match_marks_only_spotify_display_only(
 ):
     match = cover_candidate_to_lookup_match(
         CoverCandidate(source=source, url=f"https://{source}.example/front.jpg"),
+        lookup_group="services",
+    )
+
+    assert match["display_only"] is expected_display_only
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_display_only"),
+    [
+        ("discogs", False),
+        ("cover_art_archive", False),
+    ],
+)
+def test_cover_candidate_to_lookup_match_allows_secondary_art_selection_from_every_provider(
+    source: str,
+    expected_display_only: bool,
+):
+    match = cover_candidate_to_lookup_match(
+        CoverCandidate(
+            source=source,
+            url=f"https://{source}.example/booklet.jpg",
+            debug_payload={"art_kind": "other", "art_label": "Booklet"},
+        ),
         lookup_group="services",
     )
 

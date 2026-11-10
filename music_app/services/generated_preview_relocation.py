@@ -155,15 +155,16 @@ class GeneratedPreviewRelocationWorker:
                             return False
                         quiet_sweep_complete = True
                         continue
+                    previous_state = state
                     state = self._repository.finish_operation(operation_id)
                     if self._on_state is not None:
                         self._on_state(state)
+                    _remove_superseded_custom_previews(previous_state, state)
                     return False
                 quiet_sweep_complete = False
                 for item in items:
                     result = _relocate_item(item, operation_id=operation_id)
                     source_to_delete = result.pop("source_to_delete", None)
-                    self._repository.complete_item(operation_id=operation_id, **result)
                     if source_to_delete is not None and _matches(
                         source_to_delete,
                         int(item["expected_bytes"]),
@@ -172,15 +173,13 @@ class GeneratedPreviewRelocationWorker:
                         try:
                             source_to_delete.unlink()
                         except OSError as exc:
-                            self._repository.fail_item_cleanup(
-                                operation_id=operation_id,
-                                item_id=int(item["id"]),
-                                error=str(exc),
-                            )
+                            result["status"] = "failed"
+                            result["error"] = str(exc)
                             self._logger.exception(
                                 "Generated preview source cleanup failed for %s.",
                                 source_to_delete,
                             )
+                    self._repository.complete_item(operation_id=operation_id, **result)
                     if self._stop_requested.is_set():
                         return False
                 state = self._repository.load()
@@ -190,6 +189,21 @@ class GeneratedPreviewRelocationWorker:
                         self._on_state(state)
                     return False
         return False
+
+
+def _remove_superseded_custom_previews(
+    previous_state: Mapping[str, object],
+    state: Mapping[str, object],
+) -> None:
+    """A finished move leaves this regenerable cache unreachable, including any late copy."""
+    previous_root = previous_state.get("active_root")
+    if (
+        previous_state.get("mode") == "custom"
+        and previous_root
+        and state.get("operation_state") == "completed"
+        and state.get("active_root") != previous_root
+    ):
+        shutil.rmtree(Path(str(previous_root)) / "v1" / "cover_variants", ignore_errors=True)
 
 
 def _relocate_item(item: Mapping[str, object], *, operation_id: str) -> dict[str, object]:

@@ -24,6 +24,7 @@ from music_app.routes.api_rules_helpers import (
     year_problem_reason,
 )
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService, valid_tag_rating_sql
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.gallery_display import (
     DEFAULT_GALLERY_DISPLAY_MODE,
     DEFAULT_GALLERY_SCALE_PERCENT,
@@ -76,6 +77,7 @@ from music_app.services.utility_rule_fallbacks import fallback_version_album_pay
 from music_app.services.utils import (
     MOJIBAKE_CANDIDATE_PATTERN,
     MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+    artist_collation_key,
     format_duration,
 )
 from version import RELEASE_VERSION
@@ -724,8 +726,10 @@ class PostgresLibraryBrowseRepository:
         ordered_artist_keys = sorted(
             artist_counts,
             key=lambda key: (
-                artist_sort_values.get(key, artist_displays.get(key, key)).casefold(),
-                artist_displays.get(key, key).casefold(),
+                artist_collation_key(
+                    artist_sort_values.get(key, artist_displays.get(key, key))
+                ),
+                artist_collation_key(artist_displays.get(key, key)),
             ),
         )
         artists_sidebar = [
@@ -1008,8 +1012,10 @@ class PostgresLibraryBrowseRepository:
                 ordered_sidebar_keys = sorted(
                     sidebar_counts,
                     key=lambda key: (
-                        sidebar_sort_values.get(key, sidebar_displays[key]).casefold(),
-                        sidebar_displays[key].casefold(),
+                        artist_collation_key(
+                            sidebar_sort_values.get(key, sidebar_displays[key])
+                        ),
+                        artist_collation_key(sidebar_displays[key]),
                     ),
                 )
                 if not sidebar_only:
@@ -2271,7 +2277,12 @@ class PostgresLibraryBrowseRepository:
             if not omit_sidebar:
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
-                    sidebar_artist_groups,
+                    _without_release_coartists(
+                        sidebar_artist_groups,
+                        exact_artist_match,
+                        query=query,
+                        canonical_to_aliases=canonical_to_aliases,
+                    ),
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups
@@ -2942,6 +2953,15 @@ class PostgresLibraryBrowseRepository:
             if path not in normalized_paths:
                 continue
             file_entry = dict(_row_json_mapping(row_payload.get("file_entry")))
+            album_cover_path = str(row_payload.get("album_cover_path") or "").strip()
+            if album_cover_path:
+                file_entry["cover_path"] = album_cover_path
+            album_cover_revision = str(
+                _row_json_mapping(row_payload.get("album_metadata")).get("cover_revision")
+                or ""
+            ).strip()
+            if album_cover_revision:
+                file_entry["cover_revision"] = album_cover_revision
             file_entry.update(
                 {
                     "album_id": row_payload.get("album_id"),
@@ -4121,7 +4141,9 @@ def _non_album_entries_from_inventory_candidates(
         entry["exception_type"] = exception_type
         if not entry_visible_in_categories(entry, visible_library_categories):
             continue
-        relative_path = str(payload.get("relative_path") or "").strip()
+        relative_path = str(
+            payload.get("relative_path") or payload.get("private_path") or ""
+        ).strip()
         path_parts = {
             normalize_search_text(part)
             for part in Path(relative_path).parts[:-1]
@@ -4281,7 +4303,8 @@ def _prepare_root_gallery_snapshot(
         ):
             occurrences[occurrence_key] = row
     ordered = sorted(occurrences.values(), key=lambda row: (
-        row["artist_sort_name"].casefold(), str(row["artist_name"]).casefold(), str(row["artist_id"]),
+        artist_collation_key(row["artist_sort_name"]),
+        artist_collation_key(row["artist_name"]), str(row["artist_id"]),
         _coerce_int(row.get("album_release_year")) if row.get("album_release_year") else 9999,
         str(row.get("album_title") or "").casefold(), row["album_key"]))
     # Membership and order are the revision authority. Cover/rating changes do not
@@ -4985,9 +5008,13 @@ def _duplicate_sources_from_rows(
             path=path, title=str(entry.get("title") or ""),  # type: ignore[arg-type]
             album=entry.get("album"), album_artist=entry.get("album_artist"),
             artist=entry.get("artist"), year=entry.get("year"),
-            disc_number=entry.get("disc_number"), track_number=entry.get("track_number"),
+            disc_number=entry.get("disc_number"),
+            disc_number_raw=entry.get("disc_number_raw"),
+            total_discs=entry.get("total_discs"),
+            disc_subtitle=entry.get("disc_subtitle"),
+            track_number=entry.get("track_number"),
             duration_seconds=_coerce_duration_seconds(payload.get("duration_seconds")),
-            edition=entry.get("edition"), release_date=entry.get("release_date"),
+            edition=entry.get("edition"), album_type=entry.get("album_type"), release_date=entry.get("release_date"),
             cover_path=cover_path if cover_path else None,
             library_root_id=payload.get("file_library_root_id") or file_entry.get("library_root_id"),
             library_root_category=payload.get("file_library_root_category") or file_entry.get("library_root_category"),
@@ -5518,6 +5545,8 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "track_number": raw_track_number,
         "disc_number": file_entry.get("disc_number", row_payload.get("disc_number")),
         "disc_number_raw": file_entry.get("disc_number_raw"),
+        "total_discs": file_entry.get("total_discs"),
+        "disc_subtitle": file_entry.get("disc_subtitle"),
         "duration_seconds": file_entry.get("duration_seconds", row_payload.get("duration_seconds")),
         "cover_path": file_entry.get("cover_path", row_payload.get("album_cover_path")),
         "cover_revision": file_entry.get("cover_revision", row_payload.get("album_cover_revision")),
@@ -6088,6 +6117,8 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield "Mixed album metadata in one folder"
     if entry.get("local_album_membership_problem"):
         yield str(entry["local_album_membership_problem"])
+    if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+        yield "Edition descriptor in album name"
 
 
 def _iter_problematic_track_reasons(
@@ -7084,8 +7115,15 @@ def _group_rows_by_artist_identity(rows: list[object]) -> list[tuple[str, list[o
     ordered_artist_ids = sorted(
         rows_by_artist,
         key=lambda artist_identity: (
-            artist_sort_values.get(artist_identity, artist_displays.get(artist_identity, artist_identity)).casefold(),
-            artist_displays.get(artist_identity, artist_identity).casefold(),
+            artist_collation_key(
+                artist_sort_values.get(
+                    artist_identity,
+                    artist_displays.get(artist_identity, artist_identity),
+                )
+            ),
+            artist_collation_key(
+                artist_displays.get(artist_identity, artist_identity)
+            ),
         ),
     )
     return [
@@ -7255,9 +7293,11 @@ def _queue_display_cover_variants_for_groups(
                 revision_options = (
                     {"revision": cover_revision} if cover_revision else {}
                 )
+                # Only a revisioned preview follows the storage policy; any other stays in app data.
+                preview_policy = storage_policy if cover_revision else None
                 if not display_variant_awaits_relocation(
                     source_path,
-                    storage_policy=storage_policy,
+                    storage_policy=preview_policy,
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
                     revision=cover_revision or None,
                 ):
@@ -7269,8 +7309,8 @@ def _queue_display_cover_variants_for_groups(
                         source_path,
                         cache_root=display_cover_variant_cache_root(
                             source_path,
-                            data_dir=config.get("DATA_DIR") if cover_revision else None,
-                            storage_policy=storage_policy,
+                            data_dir=config.get("DATA_DIR"),
+                            storage_policy=preview_policy,
                         ),
                         max_size=_DISPLAY_COVER_VARIANT_SIZE,
                         **revision_options,
@@ -7847,6 +7887,7 @@ def _selected_artist_album_payloads(
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
+                "is_split_album": bool(metadata.get("is_split_album")),
                 "root_provenance": dict(root_provenance),
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
@@ -7889,6 +7930,7 @@ def _selected_artist_album_payloads(
                 "title": str(row_payload.get("track_title") or "").strip(),
                 "artist": str(
                     file_entry.get("artist")
+                    or track_metadata.get("artist")
                     or row_payload.get("track_artist_name")
                     or album.get("album_artist")
                     or artist_display
@@ -7902,6 +7944,8 @@ def _selected_artist_album_payloads(
                 "cover_revision": album.get("cover_revision"),
                 "disc_number": row_payload.get("disc_number"),
                 "disc_number_raw": file_entry.get("disc_number_raw"),
+                "total_discs": file_entry.get("total_discs"),
+                "disc_subtitle": file_entry.get("disc_subtitle"),
                 "track_number": row_payload.get("track_number"),
                 "duration_seconds": duration_seconds,
                 "duration_display": format_duration(duration_seconds),
@@ -8023,6 +8067,7 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
+            "is_split_album": bool(metadata.get("is_split_album")),
             "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
             "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
@@ -8290,7 +8335,9 @@ def _merge_missing_albums_into_artist_groups(
                     str(item.get("name") or "").casefold(),
                 )
             )
-    artist_groups.sort(key=lambda group: str(group.get("artist") or "").casefold())
+    artist_groups.sort(
+        key=lambda group: artist_collation_key(group.get("artist") or "")
+    )
 
 
 def _replace_active_albums_with_missing(
@@ -8390,6 +8437,39 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
         for group in artist_groups
         if str(group.get("artist") or "").strip()
     ]
+
+
+def _without_release_coartists(
+    groups: list[dict[str, object]],
+    artist: str,
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    """Drop artists found only through a release they share with the searched artist."""
+    artist_key = _artist_display_dedupe_key(artist)
+    artist_album_keys = {
+        album.get("key")
+        for group in groups
+        if _artist_display_dedupe_key(str(group.get("artist") or "").strip()) == artist_key
+        for album in group.get("albums") or []
+    }
+
+    def _is_release_coartist(group: dict[str, object]) -> bool:
+        name = str(group.get("artist") or "").strip()
+        albums = list(group.get("albums") or [])
+        return (
+            bool(albums)
+            and _artist_display_dedupe_key(name) != artist_key
+            and all(album.get("key") in artist_album_keys for album in albums)
+            and not _artist_name_matches_search_query(
+                query,
+                name,
+                canonical_to_aliases.get(name, []),
+            )
+        )
+
+    return [group for group in groups if not _is_release_coartist(group)]
 
 
 def _merge_artist_groups_for_sidebar(
@@ -8821,12 +8901,12 @@ def _selected_artist_sql() -> str:
             library_id="selected_artist_albums.library_id",
             artist_id="selected_artist_albums.artist_id",
         )}
-        left join library.local_tracks
+        join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
          and library.local_tracks.album_id = selected_artist_albums.album_id
-        left join library.local_track_files
+        join library.local_track_files
           on library.local_track_files.track_id = library.local_tracks.id
-         and coalesce((library.local_track_files.metadata #>> '{{scan_cache,stale}}')::boolean, false) is false
+         and library.local_track_files.scan_cache_stale is false
         left join lateral (
           select library.exception_overrides.override_payload
           from library.exception_overrides
@@ -9013,7 +9093,7 @@ def _album_detail_sql() -> str:
         from library.local_albums
         join bootstrap_context
           on bootstrap_context.library_id = library.local_albums.library_id
-        join library.local_artists
+        left join library.local_artists
           on library.local_artists.library_id = library.local_albums.library_id
          and library.local_artists.id = library.local_albums.artist_id
         __ARTIST_MUSICBRAINZ_JOINS__
@@ -9204,9 +9284,13 @@ from library.local_artists
           offset 0
         )
         order by
-          lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+          regexp_replace(
+            lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+            '^[[:punct:][:space:]]+',
+            ''
+          ),
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name),
-          lower(library.local_artists.name),
+          regexp_replace(lower(library.local_artists.name), '^[[:punct:][:space:]]+', ''),
           library.local_artists.name
         limit {normalized_candidate_limit};
     """
@@ -9339,9 +9423,17 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             canonical_artist_sort_values.*,
             dense_rank() over (
               order by
-                lower(canonical_artist_sort_values.canonical_sort_name),
+                regexp_replace(
+                  lower(canonical_artist_sort_values.canonical_sort_name),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_sort_name,
-                lower(canonical_artist_sort_values.canonical_artist_name),
+                regexp_replace(
+                  lower(canonical_artist_sort_values.canonical_artist_name),
+                  '^[[:punct:][:space:]]+',
+                  ''
+                ),
                 canonical_artist_sort_values.canonical_artist_name
             ) as canonical_artist_rank
           from canonical_artist_sort_values

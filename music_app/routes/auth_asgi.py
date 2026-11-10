@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
@@ -76,6 +76,12 @@ def _no_store(response: Response) -> Response:
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+def _wants_json(request: Request) -> bool:
+    """The sign-in script asks for JSON; native form posts keep the HTML flow."""
+    accept = request.headers.get("accept", "").split(",", 1)[0]
+    return accept.split(";", 1)[0].strip().casefold() == "application/json"
 
 
 def _render_login(
@@ -345,11 +351,15 @@ async def _login_page(
         resolved_return_to = _safe_return_path(
             request.query_params.get("return_to") if return_to is None else return_to
         )
-        response = _render_login(
-            request,
-            issued.raw_token,
-            failed=failed,
-            return_to=resolved_return_to,
+        response = (
+            JSONResponse({"csrf_token": issued.raw_token})
+            if _wants_json(request)
+            else _render_login(
+                request,
+                issued.raw_token,
+                failed=failed,
+                return_to=resolved_return_to,
+            )
         )
     except Exception:
         return _generic_unavailable()
@@ -434,7 +444,12 @@ async def post_login(request: Request) -> Response:
     session_lifetime_seconds = int(
         (result.session.absolute_expires_at - result.session.authenticated_at).total_seconds()
     )
-    response = RedirectResponse(_safe_return_path(payload.get("return_to")), status_code=303)
+    return_path = _safe_return_path(payload.get("return_to"))
+    response = (
+        JSONResponse({"redirect": return_path})
+        if _wants_json(request)
+        else RedirectResponse(return_path, status_code=303)
+    )
     response.set_cookie(
         _SESSION_COOKIE,
         result.session.raw_token,

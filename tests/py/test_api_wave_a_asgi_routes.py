@@ -208,8 +208,9 @@ def test_suggested_tag_apply_hydrates_verified_proposal_without_mutating_shared_
             events.append("entries")
             return {track_path: entry, sibling_path: {"path": sibling_path}}
 
-    def read_physical(path, _fields):
+    def read_physical(path, fields):
         assert str(path) == track_path
+        assert "edition" in fields
         events.append("physical")
         return entry
 
@@ -3572,8 +3573,11 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
             assert set(paths) == {track_path}
             return {track_path: dict(app.library_state["file_cache"][track_path])}
 
+    media_jobs = []
+
     def fake_media_worker(path, repairs):
-        return path, True, ["title"]
+        media_jobs.append((path, dict(repairs)))
+        return path, True, list(repairs)
 
     def fake_update_cache_entry_after_repairs(path, entry, repairs):
         updated = dict(entry)
@@ -3625,7 +3629,14 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
         json_body={
             "confirmed": True,
             "album": {"tracks": [{"path": track_path}]},
-            "updates": {track_path: {"title": "New Title"}},
+            "updates": {
+                track_path: {
+                    "title": "New Title",
+                    "disc_number": "2",
+                    "total_discs": "2",
+                    "disc_subtitle": "Bonus",
+                }
+            },
         },
     )
     save_status, _save_headers, save_body = _run_asgi_request(
@@ -3640,6 +3651,17 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
     assert edit_payload["save_task_id"] == "task-edit-tags-postgres-media"
     assert edit_payload["updated_albums"] == []
     assert edit_payload["requires_view_refresh"] is True
+    assert media_jobs == [
+        (
+            track_path,
+            {
+                "title": "New Title",
+                "disc_number": "2",
+                "total_discs": "2",
+                "disc_subtitle": "Bonus",
+            },
+        )
+    ]
     assert save_status == 200
     assert save_payload["ok"] is True
     assert save_payload["updated_albums"] == []

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.1 - 2026-11-10
+## 0.11.1 - 2026-11-10
 
 - Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.
 - Shown matched artists with their MusicBrainz name, links to MusicBrainz and Discogs, country and genres in the Gallery and the artist info panel. Artists matched under another name say how they are tagged, and a name shared by several MusicBrainz artists lists each one with its albums.
@@ -9,6 +9,16 @@
 - Retired album rows that a track move or rescan leaves empty, carrying ratings and other owner decisions to the album that replaces them.
 - Fixed album details occasionally failing on the first open after a search, and sped up Problematic Files first-page loading and duplicate checks.
 - Added Android release promotion tooling and builds on the image with NDK 27.3, and made hosted reviews opt-in for trusted pull requests.
+
+## 0.11.0 - 2026-11-09
+
+- Added the Android app's native playback: compressed streaming decoded on the phone, gapless queues, loops, a media card with the album year, Bluetooth and lock-screen controls, playback resumption after reboot, and recently played songs kept on the device.
+- Playback starts and resumes at once, seeks inside already downloaded audio without the server, keeps playing through a Wi-Fi to mobile-data switch with no gap, and keeps a paused card so Android does not freeze the app.
+- Added one-press in-app updates for the Android app: download, verify and install from the cogwheel menu, which stays open to show progress, then reopen on the same page ("Appear on top") or offer a notification.
+- The Android app opens instantly from a copy of the last library view after Android ends it in the background, then refreshes in place; the copy and every cover cache store no file paths and are cleared on sign-out, account or sandbox switch.
+- The web player gained the same shared behavior: seeking inside received audio, socket keepalive, instant start and resume, and a browser song cache.
+- Songs started part-way down an album start faster: the server prepares the started song first and reads each MP3 once.
+- Added an Android suite to the pull-request pipeline that runs only when the Android app changes: build, lint, unit tests, decoder conformance on Linux, and on-device tests for network changes, the paused card, in-app updates, the media card and leaving for Settings.
 
 ## 0.10.0 - 2026-10-25
 

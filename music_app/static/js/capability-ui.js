@@ -9,6 +9,7 @@
       return Object.freeze({
         actions: Object.freeze({ ...actions }),
         deniedSelectors: Array.isArray(payload.denied_selectors) ? payload.denied_selectors : [],
+        readOnlySelectors: Array.isArray(payload.read_only_selectors) ? payload.read_only_selectors : [],
         deniedTabs: Array.isArray(payload.denied_tabs) ? payload.denied_tabs : [],
         availableTabs: Object.freeze(Array.isArray(payload.available_tabs)
           ? payload.available_tabs.filter(tab => typeof tab === 'string') : []),
@@ -24,21 +25,47 @@
   function install(document) {
     const policy = readPolicy(document);
     const allows = (action) => Boolean(policy && policy.actions[action] === true);
-    const allowsUtilityTab = (tab) => Boolean(policy && policy.availableTabs.includes(tab));
+    // The Android tab is client-owned: only the APK's injected bridge object can reveal it, never an
+    // element or frame window that named access exposes under its name. The runtime's bridge
+    // client asks this same predicate.
+    const isAndroidShell = () => {
+      const bridge = root.AlbumHavenBridge;
+      return typeof bridge?.postMessage === 'function' && bridge.window !== bridge;
+    };
+    const allowsUtilityTab = (tab) => tab === 'android'
+      ? isAndroidShell()
+      : Boolean(policy && policy.availableTabs.includes(tab));
     const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
-    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate,
-      clientSurface: policy?.clientSurface || 'private_web' });
+    // The Android app's offline copy (app-copy.js) hides permitted writes the same way as denied
+    // ones until the server answers.
+    const readOnlySelectors = policy ? policy.readOnlySelectors.join(',\n') : '';
+    let readOnlyStyle = null;
+    const setReadOnly = (on) => {
+      if (Boolean(on) === Boolean(readOnlyStyle) || !readOnlySelectors) return;
+      if (readOnlyStyle) {
+        readOnlyStyle.remove();
+        readOnlyStyle = null;
+        return;
+      }
+      readOnlyStyle = document.createElement('style');
+      readOnlyStyle.id = 'capability-read-only';
+      readOnlyStyle.textContent = `${readOnlySelectors} { display: none !important; }`;
+      document.head.append(readOnlyStyle);
+    };
+    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate, isAndroidShell,
+      setReadOnly, clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;
     const denied = policy.deniedSelectors.join(',');
-    if (denied) {
+    if (denied || readOnlySelectors) {
       // CSS is applied before first paint. This capture guard also rejects
       // synthetic activation of a hidden control; the server remains decisive.
       document.addEventListener('click', (event) => {
-        if (event.target?.closest?.(denied)) {
+        const target = event.target;
+        if ((denied && target?.closest?.(denied)) || (readOnlyStyle && target?.closest?.(readOnlySelectors))) {
           event.preventDefault();
           event.stopImmediatePropagation();
         }

@@ -11,6 +11,7 @@ function createGalleryMainState(overrides = {}) {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
     showFeaturedOn: overrides.showFeaturedOn !== false,
+    showSplitAlbums: overrides.showSplitAlbums !== false,
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -38,6 +39,8 @@ function reduceGalleryMainState(current, action = {}) {
     next.sources[action.source] = !next.sources[action.source];
   } else if (action.type === 'toggle-featured-on') {
     next.showFeaturedOn = !next.showFeaturedOn;
+  } else if (action.type === 'toggle-split-albums') {
+    next.showSplitAlbums = !next.showSplitAlbums;
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -93,6 +96,11 @@ function classifyGalleryReleaseType(album = {}) {
   return 'studio';
 }
 
+function isGallerySplitAlbum(album = {}) {
+  return album.is_split_album === true
+    || String(album.release_type || album.releaseType || '').trim().toLowerCase() === 'split';
+}
+
 function resolveGalleryAlbumSources(album = {}) {
   const allowed = new Set(['main_library', 'new_arrivals', 'hoard']);
   const provenance = Array.isArray(album.root_provenance?.categories)
@@ -118,6 +126,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
       && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
+      && (filterState.showSplitAlbums !== false || !isGallerySplitAlbum(album))
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -228,6 +237,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     || filterState.albumTypes?.length !== 3
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
+    || filterState.showSplitAlbums === false
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;

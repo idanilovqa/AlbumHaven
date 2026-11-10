@@ -261,6 +261,7 @@ export class GalleryPage extends BasePage {
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
+    this.gallerySurface = page.locator('.shell-main-surface:has(> [data-gallery-bar-instance="gallery"])');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
@@ -381,6 +382,24 @@ export class GalleryPage extends BasePage {
   albumRowsByArtistName(artistName) {
     return this.sectionByArtistHeading(artistName)
       .locator(this.albumRowWithinSectionSelector);
+  }
+
+  albumRowsByArtistAndAlbumName(artistName, albumName) {
+    return this.albumRowsByArtistName(artistName).filter({
+      has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({
+        hasText: exactNormalizedText(albumName),
+      }),
+    });
+  }
+
+  async readAlbumSubsectionTitle(artistName, albumName) {
+    const row = this.albumRowsByArtistAndAlbumName(artistName, albumName).first();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read the production subsection preceding one owned album row
+    return row.evaluate((element) => {
+      let sibling = element.previousElementSibling;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
   }
 
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
@@ -1280,13 +1299,18 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(async (url) => {
       const diagnostics = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
       const cache = await globalThis.caches.open(String(diagnostics?.cacheName || ''));
-      const cacheKey = new URL(url);
-      cacheKey.searchParams.delete('v');
-      const response = await cache.match(cacheKey.href);
-      const cachedProductionUrl = String(
-        response?.headers?.get?.('X-Album-Haven-Cover-Production-Url') || '',
-      );
-      const exactResponse = cachedProductionUrl === url ? response : null;
+      // Stored covers name no file path: the key is the SHA-256 of the unversioned URL, and the
+      // version they answer is the URL's `v` (gallery-cover-preview-cache.js storedCoverKey, coverVersionTag).
+      const sha256Hex = async (text) => Array.from(
+        new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(text))),
+        (byte) => byte.toString(16).padStart(2, '0'),
+      ).join('');
+      const unversioned = new URL(url);
+      unversioned.searchParams.delete('v');
+      const source = `${unversioned.pathname}${unversioned.search}`;
+      const response = await cache.match(`${unversioned.origin}/__album-haven-cover/${await sha256Hex(source)}`);
+      const cachedVersion = String(response?.headers?.get?.('X-Album-Haven-Cover-Version') || '');
+      const exactResponse = cachedVersion === (new URL(url).searchParams.get('v') || '') ? response : null;
       return {
         active: Array.isArray(diagnostics?.activeProductionUrls)
           && diagnostics.activeProductionUrls.includes(url),

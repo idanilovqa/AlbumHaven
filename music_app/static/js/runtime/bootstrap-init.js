@@ -19,6 +19,7 @@ attachPlayerEvents();
 if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
+  if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'
@@ -225,7 +226,11 @@ updateStatusIndicator({
   covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
-  last_scan_display: bootstrap.lastScanDisplay || ''
+  last_scan_display: bootstrap.lastScanDisplay || '',
+  // The first status poll compares against the revision this page was rendered at.
+  ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
+    ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);
@@ -321,6 +326,11 @@ if (shouldStartImmediateHydration) {
   }
 }
 
+// A page shown from the Android app's copy brings its view up to date in place once the server
+// answers, keeping its scroll position and open album (app-copy.js).
+window.AlbumHavenAppCopy?.onServerAnswer(() => {
+  void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+});
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
@@ -388,6 +398,7 @@ document.addEventListener('contextmenu', (event) => {
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
+  clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
@@ -467,15 +478,17 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('pageshow', (event) => {
   if (event?.persisted) {
-    resetPlayerUnloadPersistence();
+    const playbackSnapshot = resetPlayerUnloadPersistence();
     unloadStreamingCleanupPromise = null;
+    if (typeof restorePlaybackOwnershipFromPageCache === 'function') {
+      void Promise.resolve(restorePlaybackOwnershipFromPageCache(playbackSnapshot)).then((restored) => {
+        if (!restored || typeof resumePlayerPlaybackFromPageCache !== 'function') return;
+        return resumePlayerPlaybackFromPageCache(playbackSnapshot);
+      }).catch(() => {});
+    }
   }
   if (!state.player.loopActive) return;
   setLoopActive(false);
-});
-window.addEventListener('beforeunload', () => {
-  persistPlayerStateForUnload('beforeunload');
-  void cleanupStreamingPlaybackForUnload();
 });
 window.addEventListener('resize', () => {
   hideAlbumCardContextMenu();

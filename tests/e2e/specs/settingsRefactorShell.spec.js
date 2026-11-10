@@ -160,6 +160,7 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
   const keys = ['problematic-files', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
   await expect(shell.tabs).toHaveCount(6);
+  await expect(shell.androidTab).toBeHidden();
   for (const key of keys) {
     await shell.tab(key).click();
     await expect(shell.tab(key)).toHaveAttribute('aria-selected', 'true');

@@ -5,6 +5,61 @@ function exactNormalizedText(value) {
   return new RegExp(`^\\s*${escaped.replace(/\\s+/g, '\\s+')}\\s*$`, 'u');
 }
 
+// Runs in the page. Measures the alert's bounds against independently hit-tested actionable controls;
+// given its message selector, instead returns a live list that a read-only observer fills with the
+// message and measurement of each presentation, taken as the alert becomes visible.
+function inspectRepairAlert(alert, messageSelector) {
+  const measure = () => {
+    const bounds = alert.getBoundingClientRect();
+    const overlaps = [];
+    const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+    for (const control of document.querySelectorAll(selector)) {
+      if (alert.contains(control) || control.matches(':disabled')
+        || control.closest('[hidden], [inert], [aria-hidden="true"], [aria-disabled="true"]')) continue;
+      const style = getComputedStyle(control);
+      if (style.visibility !== 'visible' || Number(style.opacity) === 0) continue;
+      const rect = control.getBoundingClientRect();
+      const left = Math.max(0, bounds.left, rect.left);
+      const right = Math.min(innerWidth, bounds.right, rect.right);
+      const top = Math.max(0, bounds.top, rect.top);
+      const bottom = Math.min(innerHeight, bounds.bottom, rect.bottom);
+      if (right <= left || bottom <= top) continue;
+      const hit = document.elementsFromPoint((left + right) / 2, (top + bottom) / 2)
+        .find((element) => !alert.contains(element));
+      if (hit && (hit === control || control.contains(hit))) {
+        overlaps.push(control.getAttribute('aria-label') || control.textContent.trim() || control.tagName);
+      }
+    }
+    // Shown as Playwright judges visibility, read in the same evaluation as its placement.
+    const rendered = bounds.width > 0 && bounds.height > 0
+      && getComputedStyle(alert).visibility === 'visible';
+    return {
+      rendered,
+      withinViewport: rendered
+        && bounds.left >= 0 && bounds.top >= 0
+        && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
+      overlaps,
+    };
+  };
+  if (!messageSelector) return measure();
+  const presentations = [];
+  let shown = false;
+  const record = () => {
+    const visible = alert.classList.contains('is-visible');
+    if (visible && !shown) {
+      const message = String(alert.querySelector(messageSelector)?.textContent || '').trim();
+      presentations.push({ message, ...measure() });
+    }
+    shown = visible;
+  };
+  const observer = new MutationObserver(record);
+  observer.observe(alert, { attributes: true, attributeFilter: ['class'] });
+  record();
+  // The alert node outlives the delivery, so the caller stops observing once it has read the list.
+  presentations.stop = () => observer.disconnect();
+  return presentations;
+}
+
 export class TagEditor extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
@@ -57,6 +112,7 @@ export class TagEditor extends BasePage {
     this.autoNumberHelp = this.overlay.locator('#tag-editor-auto-number-help');
     this.autoNumberStatus = this.overlay.locator('#tag-editor-auto-number-status');
     this.applyButton = this.overlay.getByRole('button', { name: 'Apply', exact: true });
+    this.closeButton = this.overlay.getByRole('button', { name: 'Close tag editor', exact: true });
     this.cancelButton = this.overlay.getByRole('button', { name: 'Cancel', exact: true });
     this.confirmOverlay = page.locator('#tag-edit-confirm-modal');
     this.confirmDialog = this.confirmOverlay.getByRole('dialog', {
@@ -105,34 +161,20 @@ export class TagEditor extends BasePage {
 
   async readRepairAlertOverlap() {
     // parity-check: allow-read-only-measurement-evaluate -- measure notification bounds against independently hit-tested actionable controls
-    return this.repairAlert.evaluate((alert) => {
-      const bounds = alert.getBoundingClientRect();
-      const overlaps = [];
-      const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
-      for (const control of document.querySelectorAll(selector)) {
-        if (alert.contains(control) || control.matches(':disabled')
-          || control.closest('[hidden], [inert], [aria-hidden="true"], [aria-disabled="true"]')) continue;
-        const style = getComputedStyle(control);
-        if (style.visibility !== 'visible' || Number(style.opacity) === 0) continue;
-        const rect = control.getBoundingClientRect();
-        const left = Math.max(0, bounds.left, rect.left);
-        const right = Math.min(innerWidth, bounds.right, rect.right);
-        const top = Math.max(0, bounds.top, rect.top);
-        const bottom = Math.min(innerHeight, bounds.bottom, rect.bottom);
-        if (right <= left || bottom <= top) continue;
-        const hit = document.elementsFromPoint((left + right) / 2, (top + bottom) / 2)
-          .find((element) => !alert.contains(element));
-        if (hit && (hit === control || control.contains(hit))) {
-          overlaps.push(control.getAttribute('aria-label') || control.textContent.trim() || control.tagName);
-        }
-      }
-      return {
-        withinViewport: bounds.width > 0 && bounds.height > 0
-          && bounds.left >= 0 && bounds.top >= 0
-          && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
-        overlaps,
-      };
-    });
+    return this.repairAlert.evaluate(inspectRepairAlert);
+  }
+
+  // A live list of each presentation from now on, measured as readRepairAlertOverlap does while it is
+  // shown, so a timed toast that closes before it can be read is still proven rendered and placed.
+  async recordRepairAlertPresentations() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe the alert's class without changing it and measure each presentation
+    return this.repairAlert.evaluateHandle(inspectRepairAlert, this.repairAlertMessageSelector);
+  }
+
+  async stopRecordingRepairAlertPresentations(presentations) {
+    // parity-check: allow-read-only-measurement-evaluate -- disconnect this probe's own observer; the app is untouched
+    await presentations.evaluate((list) => list.stop());
+    await presentations.dispose();
   }
 
   async readFormAndStripeColors() {
@@ -169,7 +211,7 @@ export class TagEditor extends BasePage {
   }
 
   get cancelButtonSelector() {
-    return '[data-close-tag-editor="1"].button';
+    return '#tag-editor-footer [data-close-tag-editor="1"]';
   }
 
   get applyButtonSelector() {

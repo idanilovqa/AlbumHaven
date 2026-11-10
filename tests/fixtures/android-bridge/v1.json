@@ -1,0 +1,209 @@
+{
+  "protocol": 1,
+  "maxMessageBytes": 65536,
+  "capabilities": {
+    "stable": [
+      "playback.native.v1",
+      "playback.queue.v1",
+      "playback.loops.v2",
+      "playback.media_session.v1",
+      "playback.resumption.v1",
+      "playback.album_details.v1",
+      "updates.manual.v1",
+      "downloads.link.v1",
+      "files.save.v1",
+      "app.copy.v1"
+    ],
+    "sandbox": [
+      "sandbox.select.v1",
+      "playback.native.v1",
+      "playback.queue.v1",
+      "playback.loops.v2",
+      "playback.media_session.v1",
+      "playback.resumption.v1",
+      "playback.album_details.v1",
+      "updates.manual.v1",
+      "downloads.link.v1",
+      "files.save.v1",
+      "app.copy.v1"
+    ]
+  },
+  "handshakeRequest": {
+    "protocol": 1,
+    "id": "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10",
+    "type": "command",
+    "name": "bridge.handshake",
+    "payload": {
+      "protocolMin": 1,
+      "protocolMax": 1,
+      "requiredCapabilities": []
+    }
+  },
+  "handshakeResponse": {
+    "protocol": 1,
+    "id": "6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10",
+    "type": "response",
+    "name": "bridge.handshake",
+    "payload": {
+      "ok": true,
+      "applicationId": "org.albumhaven.app.sandbox",
+      "variant": "sandbox",
+      "versionName": "0.9.50",
+      "versionCode": 1,
+      "bridgeProtocol": 1,
+      "bridgeProtocolMin": 1,
+      "bridgeProtocolMax": 1,
+      "capabilities": [
+        "sandbox.select.v1",
+        "playback.native.v1",
+        "playback.queue.v1",
+        "playback.loops.v2",
+        "playback.media_session.v1",
+        "playback.resumption.v1",
+        "playback.album_details.v1",
+        "updates.manual.v1",
+        "downloads.link.v1",
+        "files.save.v1",
+        "app.copy.v1"
+      ],
+      "origin": "https://sandbox2.albumhaven.org",
+      "playback": {
+        "state": "idle",
+        "clientId": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70",
+        "queueRevision": 0,
+        "currentIndex": null,
+        "positionMs": 0,
+        "durationMs": 0
+      },
+      "updates": {
+        "state": "idle",
+        "versionName": null,
+        "versionCode": null,
+        "progress": null,
+        "checkedAt": null,
+        "error": null,
+        "reason": null
+      },
+      "sandbox": {
+        "slot": 2,
+        "connectedSlot": null
+      },
+      "appCopy": {
+        "forget": false
+      }
+    }
+  },
+  "loadQueueRequest": {
+    "protocol": 1,
+    "id": "7a1d3c2e-5b4f-4e6a-8c9d-0e1f2a3b4c5d",
+    "type": "command",
+    "name": "playback.loadQueue",
+    "payload": {
+      "queueRevision": 1,
+      "items": [
+        {
+          "playbackRef": "opaque-ref-a",
+          "listenKey": "lk1-0f4c2a9e8d1b3c57",
+          "title": "Signal A",
+          "artist": "Android Acceptance",
+          "album": "Playback Ownership",
+          "artworkUrl": "/playback/artwork/opaque-resume-a",
+          "durationMs": 180000,
+          "trackNumber": "1",
+          "queueGroup": 0,
+          "resumeToken": "opaque-resume-a"
+        },
+        {
+          "playbackRef": "opaque-ref-b",
+          "listenKey": "lk1-7e2d9b04a6c13f88",
+          "title": "Signal B",
+          "artist": "Android Acceptance",
+          "album": "Playback Ownership",
+          "artworkUrl": null,
+          "durationMs": 180000,
+          "trackNumber": "2",
+          "queueGroup": 0,
+          "resumeToken": "opaque-resume-b"
+        }
+      ],
+      "currentIndex": 0,
+      "positionMs": 0,
+      "loop": null,
+      "autoplay": true
+    }
+  },
+  "stateEvent": {
+    "protocol": 1,
+    "id": "9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e",
+    "type": "event",
+    "name": "playback.state",
+    "payload": {
+      "state": "playing",
+      "clientId": "0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70",
+      "queueRevision": 1,
+      "currentIndex": 0,
+      "positionMs": 1250,
+      "durationMs": 180000
+    }
+  },
+  "rejectedEnvelopes": [
+    "not json",
+    "[]",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\"}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{},\"extra\":1}",
+    "{\"protocol\":0,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":\"1\",\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"not-a-uuid\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"other\",\"name\":\"bridge.handshake\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"Bad Name\",\"payload\":{}}",
+    "{\"protocol\":1,\"id\":\"6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a10\",\"type\":\"command\",\"name\":\"bridge.handshake\",\"payload\":[]}"
+  ],
+  "updateStateEvent": {
+    "protocol": 1,
+    "id": "3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a99",
+    "type": "event",
+    "name": "updates.state",
+    "payload": {
+      "state": "downloading",
+      "versionName": "0.10.0-sandbox.763af93",
+      "versionCode": 2,
+      "progress": 42,
+      "checkedAt": null,
+      "error": null,
+      "reason": null
+    }
+  },
+  "downloadLinkRequest": {
+    "protocol": 1,
+    "id": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+    "type": "command",
+    "name": "downloads.link",
+    "payload": {
+      "path": "/utilities/integrations/foobar/assets/text-tools-standard-preset?download=1"
+    }
+  },
+  "downloadLinkResponse": {
+    "protocol": 1,
+    "id": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a",
+    "type": "response",
+    "name": "downloads.link",
+    "payload": {
+      "ok": true,
+      "url": "/downloads/eyJ2IjoxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "fileSaveRequest": {
+    "protocol": 1,
+    "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "type": "command",
+    "name": "files.save",
+    "payload": {
+      "transfer": "3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a99",
+      "name": "album-haven-log-history-2026-11-05_10-00-00-000.json",
+      "mimeType": "application/json",
+      "size": 3,
+      "offset": 0,
+      "data": "e30K"
+    }
+  }
+}

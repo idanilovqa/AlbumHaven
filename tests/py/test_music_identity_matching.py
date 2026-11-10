@@ -35,6 +35,22 @@ def test_same_artist_identity_rejects_distinct_external_credits(
     assert identity.same_artist_identity(target_artist, candidate_artist) is False
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        pytest.param("Beyoncé", "BEYONCE.", True, id="credit-variant"),
+        pytest.param("Beyoncé", "Beyonce\u0301", True, id="unicode-composition"),
+        pytest.param("Kino", "Кино", False, id="different-script"),
+        pytest.param("M", "MØ", False, id="non-ascii-letter"),
+        pytest.param("क", "का", False, id="script-vowel-sign"),
+        pytest.param("क", "क़", False, id="script-letter-mark"),
+        pytest.param("M", "M+", False, id="meaningful-symbol"),
+    ],
+)
+def test_same_artist_credit_spelling_is_script_preserving(left, right, expected):
+    assert identity.same_artist_credit_spelling(left, right) is expected
+
+
 def test_normalize_search_text_expands_meaningful_symbols():
     assert (
         identity.normalize_search_text("AC/DC & R+D? + 100%")

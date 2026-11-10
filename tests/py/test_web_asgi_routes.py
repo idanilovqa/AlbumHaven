@@ -1788,6 +1788,149 @@ def test_asgi_cover_serves_opaque_png_display_variant_as_jpeg(app, monkeypatch):
     with image_module.open(io.BytesIO(body)) as rendered:
         assert rendered.format == "JPEG"
         assert rendered.size == (480, 480)
+    assert list((app.config["DATA_DIR"] / "display-cover-cache").rglob("*.jpg"))
+    assert not (cover_path.parent / ".album-haven").exists()
+
+
+def test_asgi_cover_snapshots_new_variant_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    image_module = pytest.importorskip("PIL.Image")
+    cover_path = (Path(app.config["MUSIC_DIR"]) / "relocating-cover.png").resolve()
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    image_module.new("RGB", (1200, 1200), color=(64, 128, 192)).save(
+        cover_path,
+        format="PNG",
+    )
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    original_response = web_asgi._conditional_file_response
+    relocated_paths = []
+
+    def relocate_before_send(request, path, **kwargs):
+        if path != cover_path:
+            assert kwargs.get("content") == path.read_bytes()
+            assert kwargs.get("stat_result") is not None
+            relocated_paths.append(path)
+            path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(app),
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert relocated_paths
+    assert headers.get("content-type") == "image/jpeg"
+    with image_module.open(io.BytesIO(body)) as rendered:
+        assert rendered.size == (480, 480)
+
+
+def test_asgi_cover_snapshots_existing_active_variant_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+    from music_app.services.covers import resolve_cover_display_variant
+
+    image_module = pytest.importorskip("PIL.Image")
+    cover_path = (Path(app.config["MUSIC_DIR"]) / "active-relocating-cover.png").resolve()
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    image_module.new("RGB", (1200, 1200), color=(96, 64, 192)).save(
+        cover_path,
+        format="PNG",
+    )
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    active_variant = resolve_cover_display_variant(
+        cover_path,
+        cache_root=Path(app.config["DATA_DIR"]) / "display-cover-cache",
+        max_size=480,
+    )
+
+    original_response = web_asgi._conditional_file_response
+    relocated_paths = []
+
+    def relocate_before_send(request, path, **kwargs):
+        if path == active_variant:
+            assert kwargs.get("content") == path.read_bytes()
+            assert kwargs.get("stat_result") is not None
+            relocated_paths.append(path)
+            path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+    status, headers, body = _run_asgi_request(
+        _make_asgi_app(app),
+        "GET",
+        "/cover",
+        query={"path": str(cover_path), "size": "480"},
+    )
+
+    assert status == 200
+    assert relocated_paths == [active_variant]
+    assert headers.get("content-type") == "image/jpeg"
+    with image_module.open(io.BytesIO(body)) as rendered:
+        assert rendered.size == (480, 480)
+
+
+def test_asgi_cover_snapshots_legacy_fallback_before_relocation_can_remove_it(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+    from music_app.services.covers import build_cover_variant_base_path
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+
+    source_path = (Path(app.config["MUSIC_DIR"]) / "legacy-cover.jpg").resolve()
+    revision = "a" * 64
+    legacy_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=Path(app.config["DATA_DIR"]) / "display-cover-cache",
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    expected = b"legacy-relocation-safe-cover-bytes"
+    legacy_variant.parent.mkdir(parents=True, exist_ok=True)
+    legacy_variant.write_bytes(expected)
+    _configure_selected_postgres_library_roots(app.config, monkeypatch)
+    asgi_app = _make_asgi_app(app)
+    asgi_app.state.generated_preview_storage_policy = PreviewStoragePolicy(
+        PreviewStorageSnapshot(mode="album_folders")
+    )
+
+    original_response = web_asgi._conditional_file_response
+
+    def relocate_before_send(request, path, **kwargs):
+        assert path == legacy_variant
+        assert kwargs.get("content") == expected
+        assert kwargs.get("stat_result") is not None
+        path.unlink()
+        return original_response(request, path, **kwargs)
+
+    monkeypatch.setattr(
+        web_asgi,
+        "_conditional_file_response",
+        relocate_before_send,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(source_path), "size": "480", "v": revision},
+    )
+
+    assert status == 200
+    assert body == expected
 
 
 def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
@@ -1959,6 +2102,38 @@ def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
     assert payload["bootstrap"]["coversCancelable"] is True
     assert payload["bootstrap"]["startupPreview"]["mode"] == "full_view"
     assert startup_preview["mode"] == "full_view"
+
+
+def test_bootstrap_reports_the_inventory_revision_read_before_its_view(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+
+    library_state = {"inventory_mutation_revision": 41}
+
+    def build_view_while_a_mutation_commits(**_kwargs):
+        library_state["inventory_mutation_revision"] = 42
+        return {"artist_groups": [], "album_count": 0, "artist_count": 0}, None, 1.0
+
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_root_startup_view",
+        build_view_while_a_mutation_commits,
+    )
+
+    payload, _, _ = web_asgi._build_bootstrap_payload(
+        query_args=QueryParams([("surface", "albums")]),
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state=library_state,
+        query_raw="",
+        selected_artist="",
+        refreshed=False,
+        request_started_epoch_ms=1,
+    )
+
+    # The first status poll then sees 42 as newer and refreshes the rendered view.
+    assert payload["bootstrap"]["inventoryMutationRevision"] == 41
 
 
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):

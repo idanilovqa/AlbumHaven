@@ -8,7 +8,7 @@ const componentPath = path.join(repoRoot, 'music_app', 'static', 'js', 'button-c
 
 test('shared icon renderer emits normalized decorative SVGs from a fixed registry', () => {
   const button = require(componentPath);
-  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'bolt']) {
+  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'refresh', 'bolt']) {
     const html = button.renderIconSvg(name, { className: `ui-icon--${name}` });
     assert.match(html, /^<svg class="ui-icon ui-icon--/);
     assert.match(html, /viewBox="0 0 24 24"/);
@@ -51,6 +51,7 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   const bootstrap = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'appearance-bootstrap.html'), 'utf8');
   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
+  assert.match(css, /\.ui-button--medium\s*\{[^}]*box-sizing:\s*border-box[^}]*height:\s*34px[^}]*padding:\s*0 12px/s);
   assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
   assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,[^}]*background:\s*var\(--appearance-item-action-hover-background,/s);
   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
@@ -154,6 +155,7 @@ test('ActionButton CSS owns one 34px theme-aware surface and inert disabled trea
   assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
   assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);
   assert.match(css, /\.action-button__icon\.ui-icon\s*\{[^}]*display:\s*block[^}]*stroke:\s*currentColor[^}]*fill:\s*none/s);
+  assert.match(css, /\.action-button\[aria-busy='true'\][^{]*::before\s*\{[^}]*animation:\s*spin/s);
   assert.match(css, /\.action-button--destructive:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)[^{]*\{[^}]*border-color:\s*var\(--alert-error-edge[^}]*outline-color:\s*var\(--alert-error-focus/s);
   assert.match(css, /\.action-button--destructive:focus-visible\s*\{[^}]*outline-color:\s*var\(--alert-error-focus/s);
 });

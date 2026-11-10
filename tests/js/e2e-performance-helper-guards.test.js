@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -9,6 +10,283 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
+
+class PlaybackEvidencePage extends EventEmitter {
+  async waitForFunction() {}
+}
+
+class PlaybackEvidenceSocket extends EventEmitter {
+  url() {
+    return 'ws://127.0.0.1:4173/playback/pcm';
+  }
+}
+
+function playbackSessionRequest(pathname = '/playback/session/now-playing') {
+  return {
+    failure: () => ({ errorText: 'net::ERR_FAILED secret-token C:\\private\\track.flac' }),
+    method: () => 'POST',
+    url: () => `http://127.0.0.1:4173${pathname}`,
+  };
+}
+
+async function loadPlaybackEvidenceHelpers() {
+  const helperUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/gaplessPlaybackHelpers.js'),
+  ).href;
+  return import(helperUrl);
+}
+
+async function loadPlaybackEvidenceObserver() {
+  return (await loadPlaybackEvidenceHelpers()).observePlaybackPcmTraffic;
+}
+
+test('playback evidence records received metadata and EOS timestamps', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+  const page = new PlaybackEvidencePage();
+  const observer = observePlaybackPcmTraffic(page);
+  const socket = new PlaybackEvidenceSocket();
+  page.emit('websocket', socket);
+  const mark = observer.eventMark();
+
+  socket.emit('framereceived', {
+    payload: JSON.stringify({ type: 'metadata', generation: 3, streamId: 9 }),
+  });
+  socket.emit('framereceived', {
+    payload: JSON.stringify({ type: 'eos', generation: 3, streamId: 9 }),
+  });
+
+  const events = observer.eventsSince(mark);
+  assert.deepEqual(events.map(({ receivedAtEpochMs, ...event }) => event), [
+    { direction: 'received', type: 'metadata', generation: 3, streamId: 9 },
+    { direction: 'received', type: 'eos', generation: 3, streamId: 9 },
+  ]);
+  assert.ok(events.every((event) => Number.isFinite(event.receivedAtEpochMs)));
+  observer.stop();
+});
+
+test('playback evidence records safe ownership request statuses without credentials or media paths', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+  const page = new PlaybackEvidencePage();
+  const observer = observePlaybackPcmTraffic(page);
+  const request = {
+    method: () => 'PUT',
+    postData: () => JSON.stringify({ claimToken: 'secret-token', path: 'C:\\private\\track.flac' }),
+    url: () => 'http://127.0.0.1:4173/playback/state?client_id=secret-client',
+  };
+  const mark = observer.eventMark();
+
+  page.emit('request', request);
+  page.emit('response', { request: () => request, status: () => 409 });
+
+  const events = observer.eventsSince(mark);
+  assert.deepEqual(events.map(({ receivedAtEpochMs, requestedAtEpochMs, ...event }) => event), [
+    { direction: 'sent', type: 'http-request', method: 'PUT', pathname: '/playback/state' },
+    {
+      direction: 'received',
+      type: 'http-response',
+      method: 'PUT',
+      pathname: '/playback/state',
+      status: 409,
+    },
+  ]);
+  assert.ok(events.every((event) => (
+    Number.isFinite(event.requestedAtEpochMs) || Number.isFinite(event.receivedAtEpochMs)
+  )));
+  assert.doesNotMatch(JSON.stringify(events), /secret-token|secret-client|private|track\.flac/);
+  observer.stop();
+});
+
+test('playback evidence records only a sanitized request failure type', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+  const page = new PlaybackEvidencePage();
+  const observer = observePlaybackPcmTraffic(page);
+  const request = playbackSessionRequest();
+  const mark = observer.eventMark();
+
+  page.emit('request', request);
+  page.emit('requestfailed', request);
+
+  const events = observer.eventsSince(mark);
+  assert.deepEqual(events.map(({ receivedAtEpochMs, requestedAtEpochMs, ...event }) => event), [
+    {
+      direction: 'sent',
+      type: 'http-request',
+      method: 'POST',
+      pathname: '/playback/session/now-playing',
+    },
+    {
+      direction: 'received',
+      type: 'http-failure',
+      method: 'POST',
+      pathname: '/playback/session/now-playing',
+      failure: 'net::ERR_FAILED',
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /secret-token|private|track\.flac/);
+  observer.stop();
+});
+
+test('gapless near-end boundary verification retains the successor protocol event window', () => {
+  const spec = readRepoFile('tests/e2e/performance/gaplessPlayback.spec.js');
+  const nearEndStep = spec.slice(
+    spec.indexOf("stepLogger.step('Honor a visible near-end seek"),
+    spec.indexOf("stepLogger.step('Replace active Album Details playback"),
+  );
+
+  assert.ok(nearEndStep.indexOf('const nearEndEventMark = traffic.eventMark()')
+    < nearEndStep.indexOf('trackModalActions.playTrackAt(nearEndIndex)'));
+  assert.ok(nearEndStep.indexOf('runWithPlaybackEventWindowAttachment({')
+    < nearEndStep.indexOf('trackModalActions.playTrackAt(nearEndIndex)'));
+  assert.match(nearEndStep, /events: \(\) => traffic\.eventsSince\(nearEndEventMark\)/);
+  assert.match(nearEndStep, /streamId: \(\) => preparedSuccessorStreamId/);
+  assert.match(nearEndStep, /testInfo\.attach\('near-end-successor-protocol-events'/);
+  assert.doesNotMatch(nearEndStep, /waitForStreamingContinuity\(nearEndSuccessor\.path[\s\S]*waitForStreamingContinuity\(nearEndSuccessor\.path/);
+  assert.match(nearEndStep, /waitForControl\(\{[\s\S]*type: 'promote',[\s\S]*streamId: preparedNearEndDiagnostics\.continuityStreamId/);
+});
+
+test('seek completion is bound to the requested current track identity', () => {
+  const actions = readRepoFile('tests/e2e/actions/globalPlayerActions.js');
+  const helper = readRepoFile('tests/e2e/helpers/gaplessPlaybackHelpers.js');
+  const player = readRepoFile('tests/e2e/poms/globalPlayer.js');
+
+  assert.match(actions, /currentPath === expected\.currentPath/);
+  assert.match(actions, /currentStreamId === expected\.currentStreamId/);
+  assert.match(actions, /currentStreamId !== expected\.continuityStreamId/);
+  assert.match(actions, /completion\.currentPath/);
+  assert.match(actions, /completion\.currentStreamId/);
+  assert.match(helper, /expect\(seekResult\.currentPath\)\.toBe\(path\)/);
+  assert.match(helper, /expect\(seekResult\.currentStreamId\)\.not\.toBe\(seekResult\.continuityStreamIdBeforeSeek\)/);
+  assert.match(player, /currentPath: String\(current\?\.track\?\.path \|\| ''\)/);
+  assert.match(player, /currentStreamId: Number\(current\?\.streamId \|\| 0\)/);
+});
+
+test('gapless buffered seek verification preserves both decoder roles without replacement', () => {
+  const helper = readRepoFile('tests/e2e/helpers/gaplessPlaybackHelpers.js');
+  const spec = readRepoFile('tests/e2e/performance/gaplessPlayback.spec.js');
+
+  assert.match(helper, /an in-ring forward seek must not discard prepared queued-next PCM/);
+  assert.match(helper, /an in-ring forward seek must not open a replacement decoder/);
+  assert.match(helper, /an in-ring forward seek must not promote either decoder role/);
+  assert.match(spec, /preservedCurrentStreamId: preparedNearEndDiagnostics\.currentStreamId/);
+  assert.match(spec, /preservedContinuityStreamId: preparedNearEndDiagnostics\.continuityStreamId/);
+  assert.match(spec, /preservedCurrentStreamId: preparedDiagnostics\.currentStreamId/);
+  assert.match(spec, /preservedContinuityStreamId: preparedDiagnostics\.continuityStreamId/);
+});
+
+test('playback event window is attached when boundary observation throws', async () => {
+  const { runWithPlaybackEventWindowAttachment } = await loadPlaybackEvidenceHelpers();
+  const boundaryError = new Error('boundary observation failed');
+  let attachedEvents = null;
+
+  await assert.rejects(
+    runWithPlaybackEventWindowAttachment({
+      attach: async (events) => { attachedEvents = events; },
+      events: () => [
+        { direction: 'sent', type: 'open', streamId: 8 },
+        { direction: 'sent', type: 'open', streamId: 9 },
+        { direction: 'received', type: 'pcm', streamId: 9, samples: [0.25] },
+        { direction: 'sent', type: 'open', streamId: 10 },
+      ],
+      streamId: 9,
+    }, async () => { throw boundaryError; }),
+    (error) => error === boundaryError,
+  );
+  assert.deepEqual(attachedEvents, {
+    expectedStreamId: 9,
+    events: [
+      { direction: 'sent', type: 'open', streamId: 8 },
+      { direction: 'sent', type: 'open', streamId: 9 },
+      { direction: 'received', type: 'pcm', streamId: 9 },
+      { direction: 'sent', type: 'open', streamId: 10 },
+    ],
+  });
+});
+
+test('playback event attachment resolves a lazy successor stream identity at failure time', async () => {
+  const { runWithPlaybackEventWindowAttachment } = await loadPlaybackEvidenceHelpers();
+  let preparedSuccessorStreamId = 0;
+  let attachedEvents = null;
+
+  await runWithPlaybackEventWindowAttachment({
+    attach: async (events) => { attachedEvents = events; },
+    events: () => [],
+    streamId: () => preparedSuccessorStreamId,
+  }, async () => {
+    preparedSuccessorStreamId = 23;
+  });
+
+  assert.deepEqual(attachedEvents, { expectedStreamId: 23, events: [] });
+});
+
+test('playback evidence background settlement waits for finished and failed session requests', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+
+  for (const completionEvent of ['requestfinished', 'requestfailed']) {
+    const page = new PlaybackEvidencePage();
+    const observer = observePlaybackPcmTraffic(page);
+    const request = playbackSessionRequest();
+    page.emit('request', request);
+    let settled = false;
+    const settlement = observer.waitForBackgroundSettled({ timeout: 1000 })
+      .then(() => { settled = true; });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, `pending request must block before ${completionEvent}`);
+
+    page.emit(completionEvent, request);
+    await settlement;
+    assert.equal(settled, true);
+    observer.stop();
+  }
+});
+
+test('playback evidence background settlement keeps one timeout budget across both stages', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+  const page = new PlaybackEvidencePage();
+  const observer = observePlaybackPcmTraffic(page);
+  page.emit('request', playbackSessionRequest());
+  const originalNow = Date.now;
+  const originalSetTimeout = global.setTimeout;
+  const scheduledDelays = [];
+  let now = 1000;
+  Date.now = () => now;
+  page.waitForFunction = async () => { now = 5990; };
+  global.setTimeout = (callback, delay, ...args) => {
+    scheduledDelays.push(delay);
+    return originalSetTimeout(callback, 0, ...args);
+  };
+
+  try {
+    await assert.rejects(
+      observer.waitForBackgroundSettled({ timeout: 5000 }),
+      /did not settle within 5000 ms/,
+    );
+    assert.deepEqual(scheduledDelays, [10]);
+  } finally {
+    Date.now = originalNow;
+    global.setTimeout = originalSetTimeout;
+    observer.stop();
+  }
+});
+
+test('playback evidence observer removes every page listener on stop', async () => {
+  const observePlaybackPcmTraffic = await loadPlaybackEvidenceObserver();
+  const page = new PlaybackEvidencePage();
+  const observer = observePlaybackPcmTraffic(page);
+  page.emit('request', playbackSessionRequest());
+  const settlement = observer.waitForBackgroundSettled({ timeout: 1000 });
+
+  for (const event of ['websocket', 'request', 'response', 'requestfinished', 'requestfailed']) {
+    assert.equal(page.listenerCount(event), 1, `${event} listener must be installed`);
+  }
+
+  observer.stop();
+  await settlement;
+
+  for (const event of ['websocket', 'request', 'response', 'requestfinished', 'requestfailed']) {
+    assert.equal(page.listenerCount(event), 0, `${event} listener must be removed`);
+  }
+});
 
 test('root gallery continuation uses the approved 800/1200 timing contract', () => {
   const spec = readRepoFile(

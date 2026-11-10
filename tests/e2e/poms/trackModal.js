@@ -20,9 +20,14 @@ export class TrackModal extends BasePage {
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);
     this.mobilePage = page.locator('#track-modal.is-mobile-page');
+    this.albumSurface = page.locator('.shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"])');
+    this.mobileSummary = this.albumSurface.locator('#mobile-page-summary');
+    this.identitySecondary = this.albumSurface.locator('#track-modal-subtitle');
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
+    this.currentReleaseChoices = this.dialog.locator('[data-track-modal-current-release]');
+    this.currentReleaseChoiceTitles = this.currentReleaseChoices.locator('span:first-child');
     this.footer = page.locator(this.footerSelector);
     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
     this.discTotals = this.dialog.locator('.album-track-table__disc-total');
@@ -44,6 +49,7 @@ export class TrackModal extends BasePage {
     this.lightbox = page.locator(this.lightboxSelector);
     this.lightboxLoading = page.locator(this.lightboxLoadingSelector);
     this.lightboxImage = page.locator(this.lightboxImageSelector);
+    this.lightboxRetryButton = page.getByRole('button', { name: /retry full-size cover/i });
     this.lightboxCloseButton = page.locator(this.lightboxCloseButtonSelector);
     this.lightboxPreviousButton = page.locator('#image-lightbox-prev');
     this.lightboxNextButton = page.locator('#image-lightbox-next');
@@ -92,6 +98,38 @@ export class TrackModal extends BasePage {
       if (layout === 'editorial_canvas') return [values[0], primary, values[1]].filter(Boolean).join(' • ');
       if (layout === 'stacked_bar') return [primary, values[0]].filter(Boolean).join(' • ');
       return primary;
+    });
+  }
+
+  async readExactAlbumDetailsSnapshot() {
+    // parity-check: allow-read-only-measurement-evaluate -- one atomic rendered album-details observation
+    return this.dialog.evaluate((dialog) => {
+      const header = dialog.querySelector('.album-details-header');
+      const primary = header?.querySelector('.album-details-header__primary')?.textContent.trim() || '';
+      const values = Array.from(
+        header?.querySelectorAll('.album-details-header__secondary > span:not([aria-hidden]):not([class])') || [],
+        (node) => node.textContent.trim(),
+      );
+      const layout = header?.getAttribute('data-album-details-layout');
+      const title = layout === 'editorial_canvas'
+        ? [values[0], primary, values[1]].filter(Boolean).join(' • ')
+        : (layout === 'stacked_bar'
+          ? [primary, values[0]].filter(Boolean).join(' • ')
+          : primary);
+      const rows = Array.from(dialog.querySelectorAll('[data-track-row-path]'));
+      return {
+        title,
+        trackRowCount: rows.length,
+        trackTitles: rows.map((row) => String(
+          row.querySelector('[data-track-title]')?.getAttribute('data-track-title') || '',
+        ).trim()),
+        displayedTrackNumbers: rows.map((row) => {
+          const text = String(
+            row.querySelector('[data-cdt-column="number"]')?.textContent || '',
+          ).trim();
+          return Number.parseInt(text.replace(/\.$/u, ''), 10);
+        }),
+      };
     });
   }
 
@@ -294,6 +332,12 @@ export class TrackModal extends BasePage {
     return this.trackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({ hasText: exactNormalizedText(trackTitle) }),
     }).first();
+  }
+
+  currentReleaseChoiceByTitle(albumName) {
+    return this.currentReleaseChoices.filter({
+      has: this.page.getByText(albumName, { exact: true }),
+    });
   }
 
   playButtonByTrackTitle(trackTitle) {

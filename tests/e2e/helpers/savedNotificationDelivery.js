@@ -7,12 +7,21 @@ import { ScanPageActions } from '../actions/scanPageActions.js';
 export async function acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout }) {
   await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
   await expect(tagEditor.repairAlert).toBeVisible({ timeout });
-  expect(await tagEditor.readRepairAlertOverlap()).toEqual({ withinViewport: true, overlaps: [] });
+  expect(await tagEditor.readRepairAlertOverlap()).toEqual({ rendered: true, withinViewport: true, overlaps: [] });
   await tagEditor.repairAlertDismiss.click();
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
-export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, beforeNavigation }) {
+// A completed save shows a timed toast that can close at any moment, even mid-click, so it is
+// confirmed without clicking: one of the presentations recorded while it was shown must carry its
+// message and a clear on-screen placement, and it must then close on its own.
+export async function confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout }) {
+  await expect.poll(() => presentations.jsonValue(), { timeout })
+    .toContainEqual({ message: expectedMessage, rendered: true, withinViewport: true, overlaps: [] });
+  await expect(tagEditor.repairAlert).toBeHidden({ timeout });
+}
+
+export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
   const appBar = new AppBarActions(new AppBar(tagEditor.page));
   const scan = new ScanPageActions(new ScanPage(tagEditor.page));
   await expect(tagEditor.overlay).toBeHidden({ timeout });
@@ -23,7 +32,17 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   let deliveryError;
   try {
     await scan.openStatusPageFromMenu();
-    await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
+    if (autoDismisses) {
+      // Placement is judged on Status, where these cases assert it; recording starts there.
+      const presentations = await tagEditor.recordRepairAlertPresentations();
+      try {
+        await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
+      } finally {
+        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+      }
+    } else {
+      await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
+    }
   } catch (error) {
     deliveryError = error;
   }

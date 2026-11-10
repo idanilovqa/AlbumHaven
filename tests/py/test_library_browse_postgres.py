@@ -1700,6 +1700,186 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
     assert track["reason_label"] == "Unmarked"
 
 
+def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    tracks = [
+        {"title": "Family loose", "artist": "Broadcast", "album_artist": "Broadcast",
+         "display_path": "Broadcast/Loose/family.flac", "library_root_category": "main_library"},
+        {"title": "Other loose", "artist": "Other", "album_artist": "Other",
+         "display_path": "Other/Loose/other.flac", "library_root_category": "main_library"},
+    ]
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: tracks)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("a valid snapshot must avoid global candidate loading"),
+    )
+    monkeypatch.setattr(
+        browse,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {
+            "family_artists": [],
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+    )
+
+    count = repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast", "availability": "1"}
+    )
+    payload = repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast"}
+    )
+
+    assert count == {"non_album_track_count": 1}
+    assert [track["title"] for track in payload["non_album_tracks"]] == ["Family loose"]
+
+
+def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    stored = []
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        browse,
+        "_problematic_inventory_fingerprint",
+        lambda _connection: "fingerprint-before-build",
+    )
+    monkeypatch.setattr(
+        repository,
+        "_store_non_album_track_snapshot",
+        lambda _connection, tracks, fingerprint: stored.append((tracks, fingerprint)),
+    )
+
+    repository.build_library_loose_tracks_payload()
+
+    assert stored == [([], "fingerprint-before-build")]
+
+
+def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    queued = []
+    invalidated = []
+    cache_key = repository._utility_projection_cache_key("loose-tracks")
+
+    def invalidate(**options):
+        invalidated.append(options)
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("an artist request must not rebuild the global snapshot"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "queue_utility_projection_prewarm",
+        lambda kind: queued.append(kind),
+    )
+    monkeypatch.setattr(
+        browse,
+        "invalidate_postgres_utility_projection_cache",
+        invalidate,
+    )
+
+    try:
+        browse._UTILITY_PROJECTION_CACHE[cache_key] = {"ready": True}
+        count = repository.build_library_loose_tracks_payload(
+            query_params={"artist": "Broadcast", "availability": "1"}
+        )
+        payload = repository.build_library_loose_tracks_payload(
+            query_params={"artist": "Broadcast"}
+        )
+    finally:
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+    assert count == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+    assert payload["non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
+    assert queued == ["loose-tracks", "loose-tracks"]
+    assert invalidated == [{
+        "database_url": repository._database_url,
+        "kinds": ("loose-tracks",),
+    }]
+
+
+def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapshot(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+            "SHARED_LIBRARY_BROWSE_ONLY": True,
+        },
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("browse-only mode must not rebuild the global snapshot"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "queue_utility_projection_prewarm",
+        lambda _kind: pytest.fail("browse-only mode must not queue a writer refresh"),
+    )
+
+    class RejectingConnection:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("browse-only mode must not write the shared database")
+
+    assert repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast", "availability": "1"}
+    ) == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+    global_payload = repository.build_library_loose_tracks_payload()
+    assert global_payload["library_non_album_tracks"] == []
+    assert global_payload["non_album_tracks_deferred"] is True
+    repository._store_non_album_track_snapshot(RejectingConnection(), [], "fingerprint")
+
+
 def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_exact_pseudo_key(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
@@ -16205,6 +16385,7 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
     repository.queue_settings_projection_prewarm()
 
     assert [submission[1] for submission in submissions] == [
+        "loose-tracks",
         "problematic-files",
         "rules",
     ]
@@ -16237,7 +16418,53 @@ def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index
 
     assert calls == [(connection, [], repository)]
 
-def test_postgres_library_browse_can_disable_background_utility_projection_prewarm(monkeypatch):
+def test_non_album_snapshot_prewarm_builds_and_registers_invalidation_refresh(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+    cache_key = repository._utility_projection_cache_key("loose-tracks")
+    builds = []
+    timers = []
+    monkeypatch.setattr(
+        repository,
+        "build_library_loose_tracks_payload",
+        lambda: builds.append("built") or {"library_non_album_tracks": []},
+    )
+    monkeypatch.setattr(
+        module,
+        "Timer",
+        lambda delay, callback, args: type(
+            "RecordedTimer",
+            (),
+            {
+                "daemon": False,
+                "start": lambda self: timers.append((delay, callback, args)),
+            },
+        )(),
+    )
+
+    try:
+        module._UTILITY_PROJECTION_GENERATIONS[cache_key] = 0
+        repository._run_utility_projection_prewarm("loose-tracks", cache_key, 0)
+        module.invalidate_postgres_utility_projection_cache(
+            database_url=repository._database_url,
+            kinds=("loose-tracks",),
+        )
+
+        assert builds == ["built"]
+        assert len(timers) == 1
+        assert timers[0][0] == module._UTILITY_PROJECTION_REWARM_DELAY_SECONDS
+    finally:
+        with module._UTILITY_PROJECTION_CACHE_LOCK:
+            module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+            module._UTILITY_PROJECTION_REWARM.pop(cache_key, None)
+            module._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+
+
+def test_postgres_library_browse_keeps_required_loose_track_refresh_when_optional_prewarm_is_disabled(monkeypatch):
     from music_app.services import library_browse_postgres as module
 
     submissions = []
@@ -16255,7 +16482,31 @@ def test_postgres_library_browse_can_disable_background_utility_projection_prewa
     repository.queue_settings_projection_prewarm()
     repository.queue_utility_projection_prewarm("problematic-files")
 
-    assert submissions == []
+    assert [submission[1] for submission in submissions] == ["loose-tracks"]
+
+
+def test_browse_only_settings_prewarm_never_queues_loose_track_writer(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    submissions = []
+
+    class RecordingExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    with module._UTILITY_PROJECTION_CACHE_LOCK:
+        module._UTILITY_PROJECTION_CACHE.clear()
+        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED": True,
+        "SHARED_LIBRARY_BROWSE_ONLY": True,
+    })
+
+    repository.queue_settings_projection_prewarm()
+
+    assert [submission[1] for submission in submissions] == ["problematic-files", "rules"]
 
 
 def test_postgres_library_browse_disables_background_utility_projection_prewarm_by_default(monkeypatch):

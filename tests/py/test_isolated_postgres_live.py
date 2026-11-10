@@ -1179,22 +1179,83 @@ def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_r
     assert removed == {deleted["path"]}
 
 
-def test_live_library_loose_tracks_come_without_the_gallery(watcher_repair_inventory):
+def test_live_library_loose_tracks_come_without_the_gallery(
+    watcher_repair_inventory,
+    monkeypatch,
+):
     # Owner PERF-1: library-wide Loose Tracks took minutes because it shipped the whole gallery.
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     fixture = watcher_repair_inventory
     album_track = fixture.entry("Owner/Album/01.flac", album="Album")
-    loose = {**fixture.entry("Loose/01.flac", album=""), "artist": "", "album_artist": "", "title": "Loose One"}
-    fixture.seed(album_track, loose)
+    family_loose = {
+        **fixture.entry("Owner/Loose/01.flac", album=""),
+        "title": "Family Loose",
+    }
+    other_loose = {
+        **fixture.entry("Other/Loose/01.flac", album="", artist="Other"),
+        "album_artist": "Other",
+        "title": "Other Loose",
+    }
+    fixture.seed(album_track, family_loose, other_loose)
 
-    payload = PostgresLibraryBrowseRepository(
+    repository = PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
-    ).build_library_loose_tracks_payload()
+    )
+    payload = repository.build_library_loose_tracks_payload()
 
     assert "artist_groups" not in payload
-    assert [track.get("path") for track in payload["library_non_album_tracks"]] == [loose["path"]]
+    assert {track.get("path") for track in payload["library_non_album_tracks"]} == {
+        family_loose["path"],
+        other_loose["path"],
+    }
     assert payload["non_album_tracks_deferred"] is False
+
+    cached_repository = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    )
+    monkeypatch.setattr(
+        cached_repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("the persisted snapshot must avoid a global rebuild"),
+    )
+    assert cached_repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    ) == {"non_album_track_count": 1}
+    family_payload = cached_repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Owner"}
+    )
+    assert [track["path"] for track in family_payload["non_album_tracks"]] == [
+        family_loose["path"]
+    ]
+
+    added_loose = {
+        **fixture.entry("Owner/Loose/02.flac", album=""),
+        "title": "Added Loose",
+    }
+    fixture.seed(album_track, family_loose, other_loose, added_loose)
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert cached_repository._load_non_album_track_snapshot(connection) is None
+
+    stale = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    )
+    assert stale == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+
+    PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload()
+    refreshed = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    )
+    assert refreshed == {"non_album_track_count": 2}
 
 
 def test_live_superseded_scan_never_republishes_an_album_removed_after_its_walk(watcher_repair_inventory):

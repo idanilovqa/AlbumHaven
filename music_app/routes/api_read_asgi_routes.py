@@ -578,7 +578,7 @@ def _transient_scan_view_response(
 
 @router.get("/library/loose-tracks")
 def library_loose_tracks(request: Request) -> JSONResponse:
-    """Library-wide Loose Tracks without the gallery the full view-data response carries."""
+    """Loose Tracks without the gallery the full view-data response carries."""
     if not is_library_browse_postgres_available(_app_config(request)):
         return JSONResponse({"ok": False, "error": "Loose Tracks needs the Postgres library."}, status_code=409)
     payload = PostgresLibraryBrowseRepository(_app_config(request)).build_library_loose_tracks_payload(

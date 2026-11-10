@@ -326,10 +326,73 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   await context.hydrateDeferredNonAlbumTracks();
 
   assert.equal(requested.length, 1);
-  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
+  assert.equal(new URL(requested[0], 'http://localhost').pathname, '/library/loose-tracks');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('artist'), 'Agalloch');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), null);
   assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
   assert.equal(context.state.view.non_album_tracks_deferred, false);
   assert.equal(controlSyncs, 1);
+});
+
+test('artist loose-track availability retries a deferred snapshot and follows inventory revision', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  const responses = [
+    { non_album_track_count: 0, non_album_tracks_deferred: true },
+    { non_album_track_count: 2 },
+  ];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.status = { inventory_mutation_revision: 7 };
+  context.state.view = {
+    selected_artist: 'Agalloch',
+    visible_library_categories: ['main_library'],
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => responses.shift() };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 0);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 2);
+
+  const url = new URL(requested[0], 'http://localhost');
+  assert.equal(url.pathname, '/library/loose-tracks');
+  assert.equal(url.searchParams.get('artist'), 'Agalloch');
+  assert.equal(url.searchParams.get('availability'), '1');
+  assert.equal(url.searchParams.get('inventory_revision'), '7');
+  assert.equal(context.state.view.non_album_tracks_deferred, true);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), true);
+  context.state.status.inventory_mutation_revision = 8;
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
+});
+
+test('library loose tracks retry a deferred snapshot and follow inventory revision', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  const responses = [
+    { library_non_album_tracks: [], non_album_tracks_deferred: true },
+    { library_non_album_tracks: [{ path: '/music/loose.flac', title: 'Loose' }] },
+  ];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.status = { inventory_mutation_revision: 7 };
+  context.state.view = { visible_library_categories: ['main_library'] };
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => responses.shift() };
+  };
+
+  assert.deepEqual(await context.hydrateLibraryNonAlbumTracks(), []);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  assert.equal((await context.hydrateLibraryNonAlbumTracks())[0].title, 'Loose');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('inventory_revision'), '7');
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
+  context.state.status.inventory_mutation_revision = 8;
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
 });
 
 test('deferred non-album hydration accepts an equivalent reordered category scope', async () => {
@@ -408,8 +471,9 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => {
     requested.push(String(url));
-    const libraryWide = new URL(url, 'http://localhost')
-      .pathname === '/library/loose-tracks';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     return {
       ok: true,
       status: 200,
@@ -461,8 +525,9 @@ test('current artist hydration reaches terminal state while library-wide hydrati
   context.URL = URL;
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
-    const libraryWide = new URL(url, 'http://localhost')
-      .pathname === '/library/loose-tracks';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     const respond = () => resolve({
       ok: true,
       status: 200,
@@ -509,8 +574,9 @@ test('late artist hydration preserves completed library-wide non-album tracks', 
   context.URL = URL;
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
-    const libraryWide = new URL(url, 'http://localhost')
-      .pathname === '/library/loose-tracks';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     const respond = () => resolve({
       ok: true,
       status: 200,

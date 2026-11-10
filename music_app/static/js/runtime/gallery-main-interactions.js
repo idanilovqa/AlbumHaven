@@ -435,8 +435,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  // Selecting an artist stays one request; its loose tracks load when the menu opens.
-  if (String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
+  // The compact family count is independent of the deferred track payload.
+  if (hasSelectedArtist || String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
       || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
@@ -471,10 +471,17 @@ function updateGalleryMainControls() {
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
     const libraryWide = button.dataset.libraryWide === '1';
+    const selectedArtist = Boolean(String(state.view?.selected_artist || '').trim());
+    const artistFamily = !libraryWide && selectedArtist && !String(state.view?.query || '').trim();
+    const familyCountReady = artistFamily
+      && typeof hasHydratedArtistNonAlbumAvailability === 'function'
+      && hasHydratedArtistNonAlbumAvailability();
     const scopePending = libraryWide
       ? !hasHydratedLibraryNonAlbumTracks()
       : Boolean(state.view?.non_album_tracks_deferred);
-    const enabled = scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0;
+    const enabled = artistFamily
+      ? familyCountReady && Number(state.view.non_album_track_count) > 0
+      : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
     const matches = typeof hasNonAlbumSearchMatches === 'function'
@@ -513,9 +520,15 @@ function updateGalleryMainControls() {
 
 function hydrateDeferredNonAlbumTracksForAlbumTypes() {
   const searching = Boolean(String(state.view?.query || '').trim());
-  if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
   const artistSelected = Boolean(String(state.view.selected_artist || '').trim());
   const warn = error => console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  if (artistSelected && !searching) {
+    if (typeof hydrateArtistNonAlbumAvailability === 'function') {
+      void hydrateArtistNonAlbumAvailability().catch(warn);
+    }
+    return;
+  }
+  if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
   void hydrateDeferredNonAlbumTracks({ libraryWide: searching || !artistSelected }).catch(warn);
   // A search probes library-wide loose tracks for its match indicator; the open menu's artist
   // button still needs that artist's own loose tracks to know whether it has any.

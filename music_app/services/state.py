@@ -126,7 +126,7 @@ def invalidate_targeted_library_projections(
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files", "rules"),
+        kinds=("problematic-files", "rules", "loose-tracks"),
     )
 
 

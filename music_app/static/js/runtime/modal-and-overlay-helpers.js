@@ -307,6 +307,19 @@ function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = t
   const url = new URL('/library/loose-tracks', 'http://localhost');
   (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
   if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
+  const inventoryRevision = Number(state.status?.inventory_mutation_revision);
+  if (Number.isSafeInteger(inventoryRevision)) url.searchParams.set('inventory_revision', String(inventoryRevision));
+  return url;
+}
+
+function buildArtistNonAlbumRequestUrl(view = state.view || {}, { availability = false } = {}) {
+  const url = new URL('/library/loose-tracks', 'http://localhost');
+  url.searchParams.set('artist', String(view.selected_artist || '').trim());
+  (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
+  if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
+  const inventoryRevision = Number(state.status?.inventory_mutation_revision);
+  if (Number.isSafeInteger(inventoryRevision)) url.searchParams.set('inventory_revision', String(inventoryRevision));
+  if (availability) url.searchParams.set('availability', '1');
   return url;
 }
 
@@ -345,6 +358,13 @@ function getDeferredNonAlbumScopeKey(url) {
 }
 
 let libraryNonAlbumHydrationRequest = null;
+let artistNonAlbumAvailabilityRequest = null;
+
+function hasHydratedArtistNonAlbumAvailability(view = state.view || {}) {
+  if (!String(view.selected_artist || '').trim()) return false;
+  return view.non_album_track_count_scope
+    === getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(view, { availability: true }));
+}
 
 async function fetchNonAlbumPayload(url) {
   const response = await fetch(`${url.pathname}${url.search}`, {
@@ -355,6 +375,38 @@ async function fetchNonAlbumPayload(url) {
     throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
   }
   return payload;
+}
+
+function hydrateArtistNonAlbumAvailability() {
+  const view = state.view || {};
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist || String(view.query || '').trim()) return Promise.resolve(0);
+  const url = buildArtistNonAlbumRequestUrl(view, { availability: true });
+  const scopeKey = getDeferredNonAlbumScopeKey(url);
+  if (hasHydratedArtistNonAlbumAvailability(view)) {
+    return Promise.resolve(Number(view.non_album_track_count) || 0);
+  }
+  if (artistNonAlbumAvailabilityRequest?.key === scopeKey) {
+    return artistNonAlbumAvailabilityRequest.promise;
+  }
+  const request = { key: scopeKey, promise: null };
+  request.promise = fetchNonAlbumPayload(url).then((payload) => {
+    if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) {
+      return Number(state.view?.non_album_track_count) || 0;
+    }
+    state.view.non_album_track_count = Number(payload?.non_album_track_count) || 0;
+    if (payload?.non_album_tracks_deferred) {
+      delete state.view.non_album_track_count_scope;
+      return state.view.non_album_track_count;
+    }
+    state.view.non_album_track_count_scope = scopeKey;
+    if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    return state.view.non_album_track_count;
+  }).finally(() => {
+    if (artistNonAlbumAvailabilityRequest === request) artistNonAlbumAvailabilityRequest = null;
+  });
+  artistNonAlbumAvailabilityRequest = request;
+  return request.promise;
 }
 
 function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
@@ -375,11 +427,13 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
   const request = { key: requestKey, promise: null };
   request.promise = (async () => {
     const probed = view.library_non_album_search_probe_scope === scopeKey;
-    let tracks = probed ? [] : libraryTracks(await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view)));
+    const payload = probed ? null : await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view));
+    let tracks = libraryTracks(payload);
     const searchMatched = searching && tracks.length > 0;
     if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
       return state.view?.library_non_album_tracks || [];
     }
+    if (payload?.non_album_tracks_deferred) return tracks;
     if (searching && !searchMatched) {
       state.view.library_non_album_search_probe_scope = scopeKey;
       if (!resolveLibrary) {
@@ -412,8 +466,12 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   }
   const view = state.view || {};
   const requestedArtist = String(view.selected_artist || '');
-  const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
-  requestUrl.searchParams.set('include_non_album', '1');
+  const familyOnly = Boolean(String(view.selected_artist || '').trim())
+    && !String(view.query || '').trim();
+  const requestUrl = familyOnly
+    ? buildArtistNonAlbumRequestUrl(view)
+    : new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
+  if (!familyOnly) requestUrl.searchParams.set('include_non_album', '1');
   const requestScopeKey = getDeferredNonAlbumScopeKey(requestUrl);
   if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
   if (deferredNonAlbumHydrationRequest?.key === requestScopeKey) {
@@ -423,11 +481,12 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   request.promise = (async () => {
     const payload = await fetchNonAlbumPayload(requestUrl);
     const currentView = state.view || {};
-    const currentScopeUrl = new URL(
-      buildApiUrl(currentView, { omitSidebar: true }),
-      'http://localhost',
-    );
-    currentScopeUrl.searchParams.set('include_non_album', '1');
+    const currentFamilyOnly = Boolean(String(currentView.selected_artist || '').trim())
+      && !String(currentView.query || '').trim();
+    const currentScopeUrl = currentFamilyOnly
+      ? buildArtistNonAlbumRequestUrl(currentView)
+      : new URL(buildApiUrl(currentView, { omitSidebar: true }), 'http://localhost');
+    if (!currentFamilyOnly) currentScopeUrl.searchParams.set('include_non_album', '1');
     const currentScopeKey = getDeferredNonAlbumScopeKey(currentScopeUrl);
     if (String(currentView.selected_artist || '') !== requestedArtist
         || currentScopeKey !== requestScopeKey) {

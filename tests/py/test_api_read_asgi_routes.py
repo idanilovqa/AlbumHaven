@@ -710,6 +710,48 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
     assert len(postgres_calls) == 1
 
 
+def test_asgi_loose_track_availability_forwards_artist_scope(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            assert config is app.config
+
+        def build_library_loose_tracks_payload(self, *, query_params=None):
+            assert query_params.get("artist") == "Karfagen"
+            assert query_params.get("availability") == "1"
+            assert query_params.get("category") == "main_library"
+            return {"non_album_track_count": 15}
+
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakePostgresBrowseRepository,
+    )
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "is_library_browse_postgres_available",
+        lambda _config: True,
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/library/loose-tracks",
+        query={"artist": "Karfagen", "availability": "1", "category": "main_library"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "non_album_track_count": 15,
+        "inventory_mutation_revision": 0,
+    }
+
+
 def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
     app,
     asgi_app,

@@ -462,7 +462,7 @@ function createStateForContract() {
   };
 }
 
-test('artist non-album tracks stay clickable while deferred without a second gallery request', () => {
+test('artist non-album tracks stay disabled until the family count is known', () => {
   const requested = [];
   const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
   const context = loadRuntime({
@@ -474,16 +474,31 @@ test('artist non-album tracks stay clickable while deferred without a second gal
       getElementById: () => null,
     },
     getVisibleNonAlbumTracks: () => [],
+    hydrateArtistNonAlbumAvailability: () => { requested.push('availability'); return new Promise(() => {}); },
     hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
+    hasHydratedArtistNonAlbumAvailability: () => Boolean(context.state.view.non_album_track_count_scope),
   });
   context.ensureGalleryMainState = () => ({ sources: {} });
   context.updateGalleryMainControls();
-  assert.equal(requested.length, 0, 'selecting an artist keeps its gallery to one view-data request');
+  assert.deepEqual(requested, ['availability']);
+  assert.equal(button.disabled, true);
+  assert.equal(button['aria-disabled'], 'true');
+  context.state.view.non_album_track_count = 1;
+  context.state.view.non_album_track_count_scope = 'artist-family:agalloch';
+  context.updateGalleryMainControls();
   assert.equal(button.disabled, false);
   assert.equal(button['aria-disabled'], 'false');
-  context.state.view.non_album_tracks_deferred = false;
+  context.state.view.non_album_track_count = 0;
   context.updateGalleryMainControls();
   assert.equal(button.disabled, true, 'a confirmed empty artist collection is disabled');
+  context.state.view = {
+    query: 'Release',
+    selected_artist: 'Agalloch',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-scoped search retains its deferred menu fetch');
   button.dataset.libraryWide = '1';
   context.hasHydratedLibraryNonAlbumTracks = () => false;
   context.updateGalleryMainControls();
@@ -564,7 +579,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /const scopePending = libraryWide\s*\? !hasHydratedLibraryNonAlbumTracks\(\)\s*: Boolean\(state\.view\?\.non_album_tracks_deferred\);\s*const enabled = scopePending \|\| getVisibleNonAlbumTracks\(\{ libraryWide \}\)\.length > 0;/,
+    /const artistFamily = !libraryWide && selectedArtist[\s\S]*?const familyCountReady = artistFamily[\s\S]*?hasHydratedArtistNonAlbumAvailability\(\);[\s\S]*?Number\(state\.view\.non_album_track_count\) > 0/,
   );
   assert.match(
     galleryMainInteractionsSource,

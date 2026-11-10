@@ -466,7 +466,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
     assert migration_names[-80:] == [
-        "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -546,6 +545,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0118_fold_accents_in_duplicate_identity.sql",
 "0119_create_cover_mutation_revisions.sql",
         "0120_create_deleted_loose_track_removal_function.sql",
+        "0121_create_non_album_track_snapshots.sql",
     ]
 
 
@@ -3357,6 +3357,24 @@ def test_cover_mutation_revisions_migration_starts_empty_and_leaves_the_library_
     assert "update library.libraries" not in sql
     assert "insert into" not in sql, "rows start when the first cover is saved; nothing is copied or inferred"
     assert "grant delete" not in sql and "select, insert, update on library.cover_mutation_revisions to album_haven_app" in sql
+
+
+def test_non_album_track_snapshot_migration_is_empty_and_library_scoped():
+    sql = _normalized_sql(
+        (
+            Path(__file__).parents[2]
+            / "migrations"
+            / "postgres"
+            / "0121_create_non_album_track_snapshots.sql"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists library.non_album_track_snapshots" in sql
+    assert "library_id bigint primary key references library.libraries(id) on delete cascade" in sql
+    assert "payload jsonb not null" in sql
+    assert "insert into" not in sql
+    assert "update library." not in sql
+    assert "select, insert, update, delete on library.non_album_track_snapshots" in sql
 
 
 def test_loose_track_removal_function_rechecks_deleted_files_and_root_health():

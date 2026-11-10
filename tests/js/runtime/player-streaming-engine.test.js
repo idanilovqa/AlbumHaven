@@ -6680,3 +6680,22 @@ test('a kept track starts mid-track from its seek table', async () => {
   assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
   assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
 });
+
+test('a successor prepared ahead is kept only once it is heard', async () => {
+  const harness = encodedHarness();
+  const kept = withTrackCache(harness);
+  harness.context.streamingEngineState().sampleRate = 48_000;
+  const wire = {
+    track: makeTrack('02.mp3'), quality: 'original', codec: 'mp3', streamStart: 0, serverless: false,
+    initialSkip: 0, initialTotal: 10_000, table: null, bytes: new Uint8Array(8), size: 8,
+  };
+  const eos = { authoritativeTotalFrames: 10_000 };
+
+  harness.context.keepStreamingWire(wire, eos, 'continuity');
+  assert.deepEqual(kept, [], 'a song only fetched ahead is not kept');
+
+  harness.context.keepHeardStreamingWire({ encoded: { wire } });
+  assert.deepEqual(kept.map(({ key }) => key), [`${makeTrack('02.mp3').path}|original`]);
+  harness.context.keepHeardStreamingWire({ encoded: { wire } });
+  assert.equal(kept.length, 1, 'it is kept once');
+});

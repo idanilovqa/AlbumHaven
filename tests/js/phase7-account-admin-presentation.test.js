@@ -86,7 +86,9 @@ test('disabled shared buttons are visibly inactive and pointer-hover checkbox ou
   const buttons = readProjectFile('music_app/static/css/button-component.css');
   assert.match(buttons, /\.ui-button:disabled,\s*\.ui-button\[aria-disabled='true'\],[^{]+\{[^}]*opacity:\s*0\.38;[^}]*cursor:\s*not-allowed;/s);
   const appearance = readProjectFile('music_app/static/css/appearance-backgrounds.css');
-  const checkboxHover = appearance.match(/:root :is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)\s*\{([^}]*)\}/)?.[1];
+  const checkboxHover = appearance.match(/:root input\[type='checkbox'\]:not\(\.global-player \*\):hover:not\(:disabled\)\s*\{([^}]*)\}/)?.[1];
+  // Owner (11-10, NEW-WRITE): radios take no hover outline.
+  assert.doesNotMatch(appearance, /input\[type='radio'\][^{,]*:hover/);
   assert.ok(checkboxHover);
   assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
   assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);

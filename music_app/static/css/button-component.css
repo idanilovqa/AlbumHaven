@@ -259,7 +259,13 @@ box-shadow: none !important;
 
 /* Shared radio option: a plain native radio and its label, like the tag-writing choices in Settings (no frame). */
 .ui-radio-option { display: flex; align-items: center; gap: 10px; width: fit-content; color: var(--appearance-ink, var(--text, var(--ink))); font-weight: 700; cursor: pointer; }
-.ui-radio-option input[type='radio'] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--appearance-control-selected, var(--appearance-accent, var(--accent))); cursor: pointer; }
+/* Owner (11-10): a selected radio shows a filled dot in the theme's play/accent color inside its ring, in light and
+   dark themes alike; the browser's native radio rendered only a ring in the neutral control color. */
+.ui-radio-option input[type='radio'] { --ui-radio-accent: var(--appearance-play, var(--appearance-accent, var(--accent, #34ca78))); flex: 0 0 auto; appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; width: 16px; height: 16px; margin: 0; border: 2px solid var(--appearance-muted, var(--muted, currentColor)); border-radius: 50%; background: transparent; cursor: pointer; }
+.ui-radio-option input[type='radio']::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--ui-radio-accent); transform: scale(0); transition: transform .12s ease-out; }
+.ui-radio-option input[type='radio']:checked { border-color: var(--ui-radio-accent); }
+.ui-radio-option input[type='radio']:checked::before { transform: scale(1); }
+@media (prefers-reduced-motion: reduce) { .ui-radio-option input[type='radio']::before { transition: none; } }
 .ui-radio-option input[type='radio']:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff)); outline-offset: 2px; }
 .ui-radio-option:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .ui-radio-option:has(input:disabled) input { cursor: not-allowed; }

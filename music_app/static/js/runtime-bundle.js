@@ -25382,7 +25382,7 @@ function buildLibraryDataCorrectionsSection(draft) {
   const disabled = librarySettingsReadOnlyClient() || actions['library.settings.manage'] !== true;
   // The app then edits tags for the user, so choosing it needs that permission.
   const writeDisabled = disabled || (actions['library.files.edit_tags'] !== true && draft.metadata_corrections !== 'write_tags');
-  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option">
+  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option ui-radio-option">
       <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
         ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${(mode.value === 'write_tags' ? writeDisabled : disabled) ? 'disabled' : ''}><span>${mode.label}</span>
     </label>`).join('');

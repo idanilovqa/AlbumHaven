@@ -6724,6 +6724,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/radioOptionDot.spec.js",
+    "case": "a selected shared radio shows a filled accent dot (dark theme)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected shared radio shows a filled accent dot (dark theme)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/radioOptionDot.spec.js",
+    "case": "a selected shared radio shows a filled accent dot (light theme)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected shared radio shows a filled accent dot (light theme)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
     "case": "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable",
     "profile": null,

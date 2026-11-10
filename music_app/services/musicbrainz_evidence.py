@@ -428,7 +428,7 @@ def name_relation(local_name: object, candidate: dict[str, object]) -> str:
 
 def album_rank(album: dict[str, object]) -> tuple[int, int, int]:
     """How strongly one album agrees: level, then how many signals, then track-level ones."""
-    signals = set(album.get("signals") or ())
+    signals = set(album.get("signals") or ()) & _EVIDENCE_SIGNALS
     return (_LEVEL_RANK.get(str(album.get("level")), 0), len(signals),
             len(signals & {"track_list", "durations"}))
 

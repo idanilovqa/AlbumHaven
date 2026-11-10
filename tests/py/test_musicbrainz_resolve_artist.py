@@ -466,3 +466,16 @@ def test_a_person_and_the_same_named_band_they_belong_to_are_one_artist():
         1: GERMAN, 2: GERMAN, 3: TRANCE}
     assert {artist["mbid"] for artist in outcome["artists"]} == {GERMAN, TRANCE}
     assert any("inc=artist-rels" in url for url in calls)
+
+
+def test_another_release_never_replaces_an_album_with_weaker_evidence():
+    """Waltari: a box set's title-only disc replaced the album's own agreeing release."""
+    from music_app.services.musicbrainz_enrichment import _better_than
+
+    agreeing = {"title": "exact", "level": "agree", "signals": {"year", "track_count", "tracks_differ"}}
+    assert not _better_than({"title": "exact", "level": "title", "signals": set()}, agreeing)
+    assert _better_than({"title": "exact", "level": "strong", "signals": {"year", "track_list"}}, agreeing)
+    # A disc titled exactly beats a partial title at the same level ("Contain Us 10"").
+    partial = {"title": "partial", "level": "strong", "signals": {"year", "track_count", "track_list"}}
+    assert _better_than({"title": "exact", "level": "strong", "signals": {"year", "track_count"}}, partial)
+    assert _better_than({"title": "exact", "level": "title", "signals": set()}, {"title": None, "level": None, "signals": set()})

@@ -734,7 +734,13 @@ def _improvable(evidence: dict[str, object]) -> bool:
 
 
 def _better_than(entry: dict[str, object], evidence: dict[str, object]) -> bool:
-    return _open_to_other_releases(evidence) or TITLE_RANK[entry["title"]] < TITLE_RANK[evidence["title"]]
+    """Another release replaces an album's evidence only at the same level or above, with
+    a better title or stronger signals: a title-only disc never replaces an agreeing album."""
+    if not evidence["level"]:
+        return True
+    if album_rank(entry)[0] < album_rank(evidence)[0]:
+        return False
+    return TITLE_RANK[entry["title"]] < TITLE_RANK[evidence["title"]] or album_rank(entry) > album_rank(evidence)
 
 
 def _as_group(release: dict[str, object]) -> dict[str, object]:
@@ -774,11 +780,13 @@ def _match_release_titles(candidate, albums, names, mirror) -> None:
         if not _improvable(evidence):
             continue
         ranked = ranked_title_matches(albums[index]["title"], keyed, names)
+        if not ranked:
+            continue
         # A release titled exactly like the album (an English pseudo-release of a
         # soundtrack) wins over a group that only contains its title.
-        if ranked and _better_than({"title": ranked[0][1]}, evidence):
-            release, title = ranked[0]
-            candidate["albums"][index] = {**_release_evidence(albums[index], release, title), "alternatives": [
+        entry = _release_evidence(albums[index], *ranked[0])
+        if _better_than(entry, evidence):
+            candidate["albums"][index] = {**entry, "alternatives": [
                 (_as_group(other), agreement) for other, agreement in ranked[1:1 + _MAX_ALTERNATIVE_GROUPS]]}
 
 
@@ -810,7 +818,7 @@ def _match_tracks_alone(candidate, albums, mirror) -> None:
             if fetched is None:
                 return
             compared += 1
-            if trial["level"]:
+            if trial["level"] and _better_than(trial, evidence):
                 candidate["albums"][index] = trial
                 break
 
@@ -821,33 +829,43 @@ def _fetch_tracks(evidence: dict[str, object], album: dict[str, object], mirror)
     if evidence.get("disc") or not evidence.get("group") or not evidence["group"].get("id") \
             or not album.get("tracks") or evidence["remote"].get("tracks"):
         return False
-    tried: list[str] = []
+    current, best, tried = evidence, None, []
     while True:
-        tracks = mirror.call("release_group_tracks", evidence["group"]["id"], track_count=len(album["tracks"]),
+        tracks = mirror.call("release_group_tracks", current["group"]["id"], track_count=len(album["tracks"]),
                              exclude=tuple(tried))
         if tracks is None:
-            return None
-        evidence["remote"]["tracks"] = tracks.get("tracks") or []
-        evidence["release_id"] = tracks.get("release_id") or evidence.get("release_id")
-        evidence["signals"] = album_signals(album, evidence["remote"])
-        evidence["level"] = album_level(evidence["title"], evidence["signals"])
-        if evidence["signals"] & {"track_list", "durations"} or mirror.remaining <= _RETRY_RESERVE:
+            break
+        if tracks.get("tracks"):
+            remote = {**current["remote"], "tracks": tracks["tracks"]}
+            signals = album_signals(album, remote)
+            trial = {**current, "remote": remote, "signals": signals, "level": album_level(current["title"], signals),
+                     "release_id": tracks.get("release_id") or current.get("release_id")}
+            # Every attempt is kept only if it agrees better: a later release whose tracks
+            # differ never replaces an earlier one's evidence.
+            if best is None or album_rank(trial) > album_rank(best):
+                best = trial
+            if signals & {"track_list", "durations"}:
+                break
+        if mirror.remaining <= _RETRY_RESERVE:
             # Retries never spend the budget other candidates and the final lookups need.
-            return True
+            break
         if tracks.get("release_id") and len(tried) < _MAX_OTHER_RELEASES and tracks.get("other_releases"):
             # The closest release may be another arrangement (Dessiderium's 9-track
             # edition, a remaster with swapped parts): the next ones are compared.
             tried.append(tracks["release_id"])
             continue
-        tried = []
         alternatives = evidence.get("alternatives") or []
         if not alternatives:
-            return True
+            break
         # Its tracks differ: the next group whose title agrees may be the album (a
         # compilation's group came first).
         group, title = alternatives.pop(0)
-        evidence.update({"title": title, "group": group, "remote": {"first_release_date": group.get("first_release_date")},
-                         "release_id": None})
+        current, tried = {**evidence, "title": title, "group": group, "release_id": None,
+                          "remote": {"first_release_date": group.get("first_release_date")}}, []
+    if best is None:
+        return None if tracks is None else True
+    evidence.update({key: best[key] for key in ("title", "group", "remote", "signals", "level", "release_id")})
+    return True
 
 
 def _match_box_set_discs(candidate, albums, local_name, mirror) -> None:

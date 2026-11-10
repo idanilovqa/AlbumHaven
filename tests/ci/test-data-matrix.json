@@ -129,6 +129,27 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryHomeFromSettings.functional.spec.js",
+    "case": "FTC-GALLERY-HOME-002 Home from the admin panel opens library Home, not the earlier search",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:artist-family-search"
+    ],
+    "filesystemScenarios": [
+      "media:artist-family-search"
+    ],
+    "expectedContracts": [
+      "admin-home-clears-search",
+      "admin-home-resets-artist-tree",
+      "admin-home-renders-library-home"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
     "profile": "functional-core",

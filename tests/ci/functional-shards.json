@@ -369,6 +369,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryHomeFromSettings.functional.spec.js",
+              "case": "FTC-GALLERY-HOME-002 Home from the admin panel opens library Home, not the earlier search",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
               "area": "gallery-search"

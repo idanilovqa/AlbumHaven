@@ -518,7 +518,7 @@ test('matrix validation accepts isolated database-only mutation ownership', () =
   assert.deepEqual(errors, []);
 });
 
-test('functional shard contract owns all 173 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 174 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -534,7 +534,7 @@ test('functional shard contract owns all 173 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 173);
+  assert.equal(expectedCases.size, 174);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 8);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -752,15 +752,15 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 173,
+    browserFunctional: 174,
     component: 251,
     mobile: 78,
     performance: 60,
-    total: 562,
+    total: 563,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 562,
-    functionalShards: 173,
+    testDataMatrix: 563,
+    functionalShards: 174,
     performanceTargets: 60,
   });
 });

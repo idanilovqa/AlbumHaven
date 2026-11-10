@@ -541,7 +541,7 @@ test('functional shard contract owns all 162 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 60 performance cases across 29 targets', () => {
+test('performance target contract owns all 62 performance cases across 29 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -586,7 +586,7 @@ test('performance target contract owns all 60 performance cases across 29 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 60);
+  assert.equal(expectedCases.size, 62);
   assert.deepEqual(errors, []);
   assert.equal(contract.targets.length, 29);
   assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
@@ -754,13 +754,13 @@ test('read-only inventory command reports complete discovery and ownership total
   assert.deepEqual(inventory.categories, {
     browserFunctional: 162,
     component: 245,
-    mobile: 78,
-    performance: 60,
-    total: 545,
+    mobile: 106,
+    performance: 62,
+    total: 575,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 545,
+    testDataMatrix: 575,
     functionalShards: 162,
-    performanceTargets: 60,
+    performanceTargets: 62,
   });
 });

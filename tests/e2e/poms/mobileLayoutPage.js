@@ -24,6 +24,8 @@ export class MobileLayoutPage {
     this.searchButton = page.locator('#mobile-search-button');
     this.libraryButton = page.locator('#mobile-library-button');
     this.artistRail = page.locator('#shell-navigation-rail');
+    this.artistBackdrop = page.getByRole('button', { name: 'Close artists drawer', exact: true });
+    this.artistList = page.locator('#sidebar-list');
     this.closeArtistRail = this.artistRail.locator('[data-close-artists-drawer]');
     this.artistPlaceholderTabs = page.locator('[data-mobile-library-mode]');
     this.galleryCards = page.locator('#artist-groups .album-card');
@@ -344,6 +346,43 @@ export class MobileLayoutPage {
   async librarySectionLabelsFit() {
     // parity-check: allow-read-only-measurement-evaluate -- measure the requested single drawer heading.
     return this.artistHeading.evaluate(heading => heading.scrollWidth <= heading.clientWidth);
+  }
+
+  async artistDrawerGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure the rendered drawer and its real scroll owner.
+    return this.artistRail.evaluate((rail) => {
+      const bounds = rail.getBoundingClientRect();
+      const list = rail.querySelector('#sidebar-list');
+      return {
+        x: bounds.x,
+        right: bounds.right,
+        width: bounds.width,
+        viewportWidth: window.innerWidth,
+        documentScrollWidth: document.documentElement.scrollWidth,
+        listClientWidth: list?.clientWidth || 0,
+        listScrollWidth: list?.scrollWidth || 0,
+        listScrollTop: list?.scrollTop || 0,
+        listScrollHeight: list?.scrollHeight || 0,
+        listClientHeight: list?.clientHeight || 0,
+      };
+    });
+  }
+
+  async dismissArtistDrawerThroughBackdrop() {
+    const [rail, backdrop] = await Promise.all([
+      this.artistRail.boundingBox(),
+      this.artistBackdrop.boundingBox(),
+    ]);
+    if (!rail || !backdrop) throw new Error('Artist drawer backdrop is not visible.');
+    const x = Math.min(backdrop.x + backdrop.width - 8, rail.x + rail.width + 24);
+    const y = Math.min(backdrop.y + backdrop.height - 8, rail.y + 48);
+    await this.page.mouse.click(x, y);
+  }
+
+  async scrollArtistTreeToEnd() {
+    await this.artistList.hover();
+    await this.page.mouse.wheel(0, 100_000);
+    await expect.poll(async () => (await this.artistDrawerGeometry()).listScrollTop).toBeGreaterThan(0);
   }
 
   async longPressAlbum() {

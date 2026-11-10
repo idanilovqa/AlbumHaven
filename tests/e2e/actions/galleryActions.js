@@ -778,6 +778,10 @@ export class GalleryActions {
       .filter(Boolean);
   }
 
+  readAlbumSubsectionTitle(artistName, albumName) {
+    return this.galleryPage.readAlbumSubsectionTitle(artistName, albumName);
+  }
+
   async waitForPositiveRenderedAlbumCardTrackCounts(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();
@@ -1524,6 +1528,10 @@ export class GalleryActions {
     return this.galleryPage.albumCard.coverImageByAlbumName(albumName);
   }
 
+  albumArtboxByName(albumName) {
+    return this.galleryPage.albumCard.artboxByAlbumName(albumName);
+  }
+
   async readAlbumKeyByName(albumName) {
     return String(
       await this.galleryPage.albumCard.visibleDetailsButtonByAlbumName(albumName).getAttribute('data-album-key')
@@ -2050,6 +2058,13 @@ export class GalleryActions {
       String(expected.artist || '').trim(),
       String(expected.album || '').trim(),
       String(expected.year || '').trim(),
+    ).count();
+  }
+
+  async readAlbumCardCount(expected) {
+    return this.galleryPage.albumCard.cardsByArtistAndAlbum(
+      String(expected.artist || '').trim(),
+      String(expected.album || '').trim(),
     ).count();
   }
 

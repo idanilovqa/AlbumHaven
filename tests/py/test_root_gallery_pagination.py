@@ -166,6 +166,21 @@ def test_root_page_revision_changes_when_artist_relationship_changes():
     assert owned_page[3]["revision"] != featured_page[3]["revision"]
 
 
+def test_root_gallery_sorts_by_artist_name_without_leading_punctuation():
+    rows = [
+        row("IZZ", "izz", artist_id=1),
+        row("'Til Tuesday", "til", artist_id=2),
+        row("I'm with Her", "im-with-her", artist_id=3),
+        row("!Air", "air", artist_id=4),
+    ]
+
+    page, sidebar, _, _ = _root_gallery_page_selection(rows, [], {}, {}, {})
+
+    expected = ["!Air", "I'm with Her", "IZZ", "'Til Tuesday"]
+    assert [item["artist"] for item in sidebar] == expected
+    assert [item["artist_name"] for item in page] == expected
+
+
 def test_anchored_root_page_keeps_leading_and_target_artist_discographies_complete():
     rows = [
         *[row("Above", f"above-{index}", artist_id=1) for index in range(18)],

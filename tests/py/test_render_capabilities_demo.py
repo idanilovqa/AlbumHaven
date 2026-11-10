@@ -131,6 +131,10 @@ class MigrationConnection:
 
     def execute(self, sql, parameters=None):
         query = " ".join(str(sql).split()).casefold()
+        if "album_haven_0083_pg_trgm_schema_v1" in query:
+            assert self.transaction_depth == 0
+            self.events.append("prepare-pg-trgm")
+            return Result([])
         if "to_regclass('ops.schema_migrations')" in query:
             return Result([("ops.schema_migrations",)])
         if query.startswith("select migration_name, checksum"):
@@ -191,6 +195,10 @@ def _write_migration_runner_fixture(tmp_path):
         / "verify_0083_album_raw_artist_index.sql"
     )
     verifier.parent.mkdir(parents=True)
+    (verifier.parent / "prepare_0083_pg_trgm_schema.sql").write_text(
+        "-- album_haven_0083_pg_trgm_schema_v1\nselect 1;\n",
+        encoding="utf-8",
+    )
     verifier.write_text(
         "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
         encoding="utf-8",
@@ -214,6 +222,7 @@ def test_capabilities_demo_runs_only_0083_outside_transaction_and_ledgers_after_
     assert connection.events.index("ordinary") < connection.events.index(
         "ledger:0082_preserve_relations_for_missing_album_removal.sql"
     )
+    assert connection.events.index("prepare-pg-trgm") < connection.events.index("concurrent")
     concurrent = connection.events.index("concurrent")
     postvalidation = connection.events.index("validate:ready", concurrent)
     assert concurrent < postvalidation

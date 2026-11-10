@@ -1333,6 +1333,107 @@ function compactCurrentViewForIdle() {
   return compactedView;
 }
 
+const RUNTIME_ALBUM_COVER_AUTHORITY_FIELDS = [
+  'cover_path',
+  'cover_preview_url',
+  'cover_revision',
+  'cover_selection_origin',
+  'cover_selection_provenance',
+  'remote_cover_url',
+  'remote_cover_thumbnail_url',
+  'remote_cover_source',
+  'remote_cover_source_label',
+  'remote_cover_album_url',
+  'remote_cover_width',
+  'remote_cover_height',
+];
+
+function preserveMissingRuntimeAlbumCoverFields(album, previousAlbum) {
+  if (!previousAlbum) return album;
+  const preservedAlbum = { ...album };
+  RUNTIME_ALBUM_COVER_AUTHORITY_FIELDS.forEach((field) => {
+    if (
+      (preservedAlbum[field] == null || preservedAlbum[field] === '')
+      && previousAlbum[field] != null
+      && previousAlbum[field] !== ''
+    ) {
+      preservedAlbum[field] = previousAlbum[field];
+    }
+  });
+  return preservedAlbum;
+}
+
+function runtimeAlbumCoverAuthorityByKey(view, previousAlbumsByKey = null) {
+  const albumsByKey = previousAlbumsByKey instanceof Map
+    ? new Map(previousAlbumsByKey)
+    : new Map();
+  ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].forEach((groupKey) => {
+    (view?.[groupKey] || []).forEach((group) => {
+      (group?.albums || []).forEach((album) => {
+        [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .forEach((key) => {
+            albumsByKey.set(
+              key,
+              preserveMissingRuntimeAlbumCoverFields(album, albumsByKey.get(key)),
+            );
+          });
+      });
+    });
+  });
+  return albumsByKey;
+}
+
+function preserveMissingRuntimeAlbumCoverAuthority(nextView, albumsByKey) {
+  if (!(albumsByKey instanceof Map) || !albumsByKey.size) return nextView;
+
+  ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].forEach((groupKey) => {
+    if (!Array.isArray(nextView?.[groupKey])) return;
+    nextView[groupKey] = nextView[groupKey].map((group) => ({
+      ...group,
+      albums: (group?.albums || []).map((album) => {
+        const previousAlbum = [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .map((key) => albumsByKey.get(key))
+          .find(Boolean);
+        return preserveMissingRuntimeAlbumCoverFields(album, previousAlbum);
+      }),
+    }));
+  });
+  return nextView;
+}
+
+function rememberCurrentRuntimeAlbumCoverAuthority(view = state.view) {
+  const coverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  state.ui.tagEditAlbumCoverAuthority = {
+    coverMutationRevision,
+    albumsByKey: runtimeAlbumCoverAuthorityByKey(
+      view,
+      retainedCoverAuthority?.coverMutationRevision === coverMutationRevision
+        ? retainedCoverAuthority.albumsByKey
+        : null,
+    ),
+  };
+  return state.ui.tagEditAlbumCoverAuthority;
+}
+
+function findRememberedRuntimeAlbumCoverAuthority(album) {
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (
+    !retainedCoverAuthority
+    || retainedCoverAuthority.coverMutationRevision
+      !== Number(state.ui.albumCoverMutationRevision || 0)
+  ) return null;
+  return [album?.key, album?.album_ref, album?.request_key, album?.identity_key]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .map((key) => retainedCoverAuthority.albumsByKey.get(key))
+    .find(Boolean) || null;
+}
+
 function applyViewPayload(payload, options = {}) {
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
@@ -1361,6 +1462,19 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  let retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (options.preserveMissingAlbumCoverAuthority === true) {
+    retainedCoverAuthority = rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
+  }
+  if (
+    retainedCoverAuthority
+    && retainedCoverAuthority.coverMutationRevision
+      === Number(state.ui.albumCoverMutationRevision || 0)
+  ) {
+    preserveMissingRuntimeAlbumCoverAuthority(nextView, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState

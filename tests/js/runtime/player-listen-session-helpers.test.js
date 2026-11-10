@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const test = require('node:test');
 
 const helperPath = path.join(
   __dirname,
@@ -15,8 +16,10 @@ const helperPath = path.join(
   'player-listen-session-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const ownershipHelperPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
+const ownershipHelperSource = fs.readFileSync(ownershipHelperPath, 'utf8');
 
-function loadHelper(overrides = {}) {
+function loadHelper(overrides = {}, prependSource = '') {
   const fetchCalls = [];
   const beaconCalls = [];
   const context = {
@@ -39,21 +42,373 @@ function loadHelper(overrides = {}) {
       },
     },
     Blob,
+    AbortController,
+    setTimeout,
+    clearTimeout,
     getPlayerPlaybackSnapshot: () => ({
       currentTime: 0,
       duration: 0,
     }),
     isoNow: () => '2026-05-14T00:00:00Z',
     unixNowSeconds: () => 1778716800,
+    performance,
     console,
   };
   Object.assign(context, overrides);
   vm.createContext(context);
+  if (prependSource) vm.runInContext(prependSource, context, { filename: ownershipHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, fetchCalls, beaconCalls };
 }
 
+test('audible measured frames qualify an open listen before pause or completion exactly once', async () => {
+  const track = { path: 'signal.flac', title: 'Signal', artist: 'Artist' };
+  const { context, fetchCalls } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 31, duration: 60 }),
+    canEmitPlaybackSessionSideEffects: () => true,
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  context.beginListenSegment(0);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 60;
+  const role = { role: 'current', track };
+  context.recordMeasuredStreamingFrames(role, { frames: 29 * 48000 }, 48000);
+  assert.equal(await context.maybeScrobbleListenSession(session), false);
+  context.recordMeasuredStreamingFrames(role, { frames: 2 * 48000 }, 48000);
+  assert.equal(session.segments.length, 0);
+  assert.equal(session.segmentActive, true);
+  assert.equal(await context.maybeScrobbleListenSession(session), true);
+  assert.equal(await context.maybeScrobbleListenSession(session), false);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0][0], '/playback/session/scrobble');
+  const payload = JSON.parse(fetchCalls[0][1].body);
+  assert.equal(payload.measured_listened_seconds, 31);
+  assert.equal(payload.max_measured_contiguous_seconds, 31);
+  assert.equal(payload.finalized, false);
+});
+
+test('measured eligibility cannot borrow unrendered legacy segment time', () => {
+  const { context } = loadHelper();
+  assert.equal(context.canScrobbleListenSession({
+    duration_seconds: 60,
+    measurement: { total: 1, longest: 1 },
+    segments: [{ start_seconds: 0, end_seconds: 60 }],
+  }), false);
+});
+
+for (const [duration, heard, recorded] of [[8, 8, true], [8, 7.75, true], [8, 7.5, false], [14, 14, true], [30, 30, true]]) {
+  test(`a ${duration} s track heard for ${heard} s is ${recorded ? 'recorded' : 'not recorded'} and never scrobbled`, async () => {
+    const track = { path: 'short.flac', title: 'Short', artist: 'Artist' };
+    const { context, fetchCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: duration, duration }),
+      canEmitPlaybackSessionSideEffects: () => true,
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    context.beginListenSegment(duration - heard);
+    const session = context.state.player.listenSession;
+    context.recordMeasuredStreamingFrames({ role: 'current', track }, { frames: heard * 48000 }, 48000);
+    assert.equal(await context.maybeScrobbleListenSession(session), false);
+    await context.finalizeListenSession('ended', { session, finishedFully: true, currentTime: duration, duration });
+
+    assert.deepEqual(fetchCalls.map(([url]) => url), recorded ? ['/playback/session/complete'] : []);
+    if (recorded) {
+      const completion = JSON.parse(fetchCalls[0][1].body);
+      assert.equal(completion.measured_listened_seconds, heard);
+      assert.equal(completion.scrobble_eligible, false);
+      assert.equal(completion.scrobbled, false);
+    }
+  });
+}
+
+for (const stalledStage of ['headers', 'body']) {
+  test(`listen request bounds a stalled ${stalledStage} and releases its claim drain`, async () => {
+    const timers = new Map();
+    const cleared = [];
+    let signal;
+    let bodyStarted = false;
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'stalled-claim' }),
+      setTimeout: (callback, delay) => { timers.set(1, { callback, delay }); return 1; },
+      clearTimeout: id => { cleared.push(id); timers.delete(id); },
+      fetch: (_url, options) => {
+        signal = options.signal;
+        const stalled = () => new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+        });
+        if (stalledStage === 'headers') return stalled();
+        return Promise.resolve({ ok: true, json: () => { bodyStarted = true; return stalled(); } });
+      },
+    });
+    let settled = false;
+    let failure;
+    const request = context.postPlaybackSession('/playback/session/complete', { title: 'Paused' })
+      .then(() => { settled = true; }, error => { settled = true; failure = error; });
+    let drained = false;
+    const drain = context.drainPlaybackSessionRequests('stalled-claim').then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(drained, false);
+    if (stalledStage === 'body') assert.equal(bodyStarted, true);
+    assert.equal(timers.size, 1, 'listen writes must have a deadline spanning headers and response body');
+    const deadline = timers.get(1);
+    assert.ok(deadline.delay > 0 && deadline.delay <= 10000, 'listen writes use the bounded ownership request budget');
+    deadline.callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, true, 'a stalled write must not hold Pause or a preview handoff indefinitely');
+    assert.ok(failure, 'timeout must reject rather than report a saved listen');
+    assert.equal(signal.aborted, true);
+    assert.equal(drained, true, 'claim release must be able to finish after the failed write');
+    assert.deepEqual(cleared, [1]);
+    assert.equal(timers.size, 0);
+    assert.equal(vm.runInContext('pendingPlaybackSessionRequests.size', context), 0);
+    await Promise.all([request, drain]);
+  });
+}
+
+test('successful listen request clears its deadline and pending claim entry', async () => {
+  const timers = new Map();
+  const cleared = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.set(1, { callback, delay }); return 1; },
+    clearTimeout: id => { cleared.push(id); timers.delete(id); },
+  });
+  await context.postPlaybackSession('/playback/session/complete', { title: 'Saved' });
+  assert.deepEqual(cleared, [1]);
+  assert.equal(timers.size, 0);
+  assert.equal(vm.runInContext('pendingPlaybackSessionRequests.size', context), 0);
+});
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+test('active short listen unload stages one reload handoff without separate completion or release', async () => {
+  const track = { path: 'C:/Music/short.flac', title: 'Short', artist: 'Artist', album: 'Album' };
+  const storedEnvelopes = [];
+  const state = {
+    player: {
+      current: track,
+      listenSession: null,
+      ownership: {
+        tabId: 'departing-client',
+        activeClaim: {
+          claimToken: 'departing-claim',
+          leaseDeadline: Infinity,
+          track: { playbackRef: 'short-ref' },
+        },
+        initialized: true,
+      },
+    },
+  };
+  const { context, fetchCalls, beaconCalls } = loadHelper({
+    state,
+    crypto: require('node:crypto').webcrypto,
+    window: {
+      crypto: require('node:crypto').webcrypto,
+      readSessionCsrfCookie: () => 'short-listen-csrf',
+    },
+    getLocalStorageItem: () => '',
+    setLocalStorageItem: () => true,
+    getSessionStorageItem: () => '',
+    setSessionStorageItem: (_key, value) => {
+      storedEnvelopes.push(JSON.parse(value));
+      return true;
+    },
+    removeSessionStorageItem: () => true,
+    canEmitPlaybackSessionSideEffects: () => true,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 8, duration: 240 }),
+  }, ownershipHelperSource);
+  context.startListenSession(track);
+  context.state.player.listenSession.segmentActive = true;
+  context.state.player.listenSession.activeSegmentStartSeconds = 0;
+
+  assert.equal(context.flushListenSessionOnUnload('pagehide'), true);
+  assert.equal(context.flushListenSessionOnUnload('beforeunload'), false);
+  assert.equal(beaconCalls.length, 1);
+  assert.equal(beaconCalls[0][0], '/playback/state/handoff');
+  const body = JSON.parse(await beaconCalls[0][1].text());
+  assert.equal(body.protocol, 1);
+  assert.equal(body.clientId, 'departing-client');
+  assert.equal(body.claimToken, 'departing-claim');
+  assert.equal(body.csrf_token, 'short-listen-csrf');
+  assert.equal(body.completion, null);
+  assert.equal(typeof body.handoff?.id, 'string');
+  assert.equal(typeof body.handoff?.token, 'string');
+  assert.equal(storedEnvelopes.length, 1);
+  assert.deepEqual(Object.keys(storedEnvelopes[0]).sort(), ['expiresAt', 'id', 'token']);
+  assert.equal(storedEnvelopes[0].id, body.handoff.id);
+  assert.equal(storedEnvelopes[0].token, body.handoff.token);
+  assert.equal(Number.isFinite(Date.parse(storedEnvelopes[0].expiresAt)), true);
+  assert.equal(JSON.stringify(storedEnvelopes[0]).includes('departing-claim'), false);
+  assert.equal(beaconCalls.some(([url]) => url === '/playback/session/complete'), false);
+  assert.equal(fetchCalls.some(([, options]) => options?.method === 'DELETE'), false);
+});
+
+test('authorized pause leaves a durable checkpoint when unowned unload discards local state', async () => {
+  let authorized = true;
+  const track = { path: 'C:/Music/closed.flac', title: 'Closed', artist: 'Artist', album: 'Album' };
+  const { context, fetchCalls, beaconCalls } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+    canEmitPlaybackSessionSideEffects: () => authorized,
+    getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 120;
+  session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+  Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+  context.markListenSessionPaused(30);
+  assert.equal(await context.persistPausedListenSession(session), true);
+  authorized = false;
+  assert.equal(context.flushListenSessionOnUnload('pagehide'), false);
+  assert.equal(context.state.player.listenSession, null);
+  assert.equal(beaconCalls.length, 0);
+  assert.equal(fetchCalls.length, 1);
+  const checkpoint = JSON.parse(fetchCalls[0][1].body);
+  assert.equal(checkpoint.finalized, true, 'closing a paused tab must not strand an invisible unfinished ledger row');
+  assert.equal(checkpoint.measured_listened_seconds, 30);
+});
+
+for (const heardBeforePause of [30, 70]) {
+  test(`same-track two-hour resume preserves one scrobble after ${heardBeforePause}s before pause`, async () => {
+    let now = Date.parse('2026-05-14T00:01:10Z');
+    let offset = heardBeforePause;
+    let authorized = true;
+    const track = { path: 'C:/Music/continued.flac', title: 'Continued', artist: 'Artist', album: 'Album' };
+    const { context, fetchCalls, beaconCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      Date: { now: () => now },
+      isoNow: () => new Date(now).toISOString(),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: offset, duration: 120 }),
+      canEmitPlaybackSessionSideEffects: () => authorized,
+      getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    session.segments = [{ start_seconds: 0, end_seconds: heardBeforePause }];
+    Object.assign(session.measurement, { total: heardBeforePause, contiguous: heardBeforePause, longest: heardBeforePause });
+    await context.maybeScrobbleListenSession(session);
+    context.markListenSessionPaused(offset);
+    assert.equal(await context.persistPausedListenSession(session), true);
+    authorized = false;
+    const writesAtPause = fetchCalls.length;
+    assert.equal(await context.maybeScrobbleListenSession(session), false);
+    assert.equal(fetchCalls.length, writesAtPause, 'released ownership cannot authorize another write');
+    assert.equal(beaconCalls.length, 0);
+    now += 2 * 60 * 60 * 1000;
+    authorized = true;
+    const resumed = await context.resumeListenSessionPlayback(track, offset);
+    assert.strictEqual(resumed, session, 'time-only pauses must preserve the measured and provider identity');
+    offset += 40;
+    context.closeListenSegment(offset);
+    Object.assign(session.measurement, { total: heardBeforePause + 40, contiguous: 0,
+      longest: Math.max(heardBeforePause, 40) });
+    await context.maybeScrobbleListenSession(session);
+    await context.maybeScrobbleListenSession(session);
+    context.markListenSessionPaused(offset);
+    await context.persistPausedListenSession(session);
+    assert.equal(fetchCalls.filter(([url]) => url === '/playback/session/scrobble').length, 1);
+    assert.equal(session.scrobbled, true);
+    const checkpoints = fetchCalls.filter(([url]) => url === '/playback/session/complete')
+      .map(([, options]) => JSON.parse(options.body));
+    assert.ok(checkpoints.every(payload => payload.finalized === true));
+    assert.ok(checkpoints.every(payload => payload.session_id === session.measurement.sessionId));
+  });
+}
+
+for (const change of ['session', 'claim']) {
+  test(`pause checkpoint does not borrow a new ${change} after its pending scrobble drains`, async () => {
+    const pending = deferred();
+    let claim = { clientId: 'client', claimToken: 'old-claim' };
+    const track = { path: 'old.flac', title: 'Old', artist: 'Artist', album: 'Album' };
+    const { context, fetchCalls } = loadHelper({
+      crypto: require('node:crypto'),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+      canEmitPlaybackSessionSideEffects: () => true,
+      getPlaybackClaimContext: () => claim,
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+    Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+    context.markListenSessionPaused(30);
+    session.scrobblePromise = pending.promise;
+    const checkpoint = context.persistPausedListenSession(session);
+    if (change === 'claim') claim = { clientId: 'client', claimToken: 'new-claim' };
+    else context.state.player.listenSession = { id: 'new-session', segmentActive: true };
+    pending.resolve(true);
+    assert.equal(await checkpoint, false);
+    assert.equal(fetchCalls.length, 0, 'the old paused payload cannot use a replacement playback authority');
+  });
+}
+
+test('pause checkpoint exposes a genuine persistence rejection instead of a benign no-op', async () => {
+  const track = { path: 'failed.flac', title: 'Failed', artist: 'Artist', album: 'Album' };
+  const { context } = loadHelper({
+    crypto: require('node:crypto'),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 30, duration: 120 }),
+    canEmitPlaybackSessionSideEffects: () => true,
+    getPlaybackClaimContext: () => ({ clientId: 'client', claimToken: 'claim' }),
+    fetch: async () => { throw new Error('checkpoint unavailable'); },
+  });
+  context.state.player.current = track;
+  context.startListenSession(track);
+  const session = context.state.player.listenSession;
+  session.duration_seconds = 120;
+  session.segments = [{ start_seconds: 0, end_seconds: 30 }];
+  Object.assign(session.measurement, { total: 30, contiguous: 30, longest: 30 });
+  context.markListenSessionPaused(30);
+  await assert.rejects(context.persistPausedListenSession(session), /checkpoint unavailable/);
+  assert.strictEqual(context.state.player.listenSession, session);
+});
+
 async function run() {
+  {
+    const pending = deferred();
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+      fetch: () => pending.promise,
+    });
+    const request = context.postPlaybackSession('/playback/session/now-playing', { title: 'Song' });
+    let drained = false;
+    const drain = context.drainPlaybackSessionRequests('claim-token').then(() => { drained = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(drained, false);
+
+    pending.resolve({ ok: true, json: async () => ({ ok: true }) });
+    await request;
+    await drain;
+    assert.equal(drained, true);
+  }
+  {
+    const pending = deferred();
+    const { context } = loadHelper({
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+      fetch: () => pending.promise,
+    });
+    const request = context.postPlaybackSession('/playback/session/complete', { title: 'Song' });
+    const drain = context.drainPlaybackSessionRequests('claim-token');
+    pending.reject(new Error('network unavailable'));
+
+    await assert.rejects(request, /network unavailable/);
+    await assert.doesNotReject(drain);
+  }
   {
     const rawTitle = 'Track Two (feat. Guest Singer)';
     const scrobbleSession = {
@@ -87,8 +442,12 @@ async function run() {
   {
     const { context } = loadHelper();
     assert.equal(context.getListenScrobbleThreshold(0), 0);
+    assert.equal(context.getListenScrobbleThreshold(30), Infinity);
+    assert.equal(context.getListenScrobbleThreshold(30.5), 15.25);
     assert.equal(context.getListenScrobbleThreshold(240), 120);
-    assert.equal(context.getListenScrobbleThreshold(1200), 300);
+    assert.equal(context.getListenScrobbleThreshold(479), 239.5);
+    assert.equal(context.getListenScrobbleThreshold(600), 240);
+    assert.equal(context.getListenScrobbleThreshold(1200), 240);
     assert.equal(context.canScrobbleListenSession({
       duration_seconds: 240,
       segments: [{ start_seconds: 0, end_seconds: 121 }],
@@ -369,23 +728,73 @@ async function run() {
       pause_offset_seconds: 0,
       scrobbled: false,
       completionState: '',
+      measurement: {
+        deviceId: 'browser-device',
+        sessionId: 'measured-session',
+        sequence: 4,
+        total: 120,
+        contiguous: 120,
+        longest: 120,
+        finalized: false,
+      },
     };
+    const storedEnvelopes = [];
     const { context, beaconCalls } = loadHelper({
+      crypto: require('node:crypto').webcrypto,
+      window: {
+        crypto: require('node:crypto').webcrypto,
+        readSessionCsrfCookie: () => 'measured-listen-csrf',
+      },
       state: {
         player: {
+          current: flushSession.track,
           listenSession: flushSession,
+          ownership: {
+            tabId: 'unload-client',
+            activeClaim: {
+              claimToken: 'unload-claim',
+              leaseDeadline: Infinity,
+              track: { playbackRef: 'unload-ref' },
+            },
+            initialized: true,
+          },
         },
       },
+      getSessionStorageItem: () => '',
+      setSessionStorageItem: (_key, value) => {
+        storedEnvelopes.push(JSON.parse(value));
+        return true;
+      },
+      removeSessionStorageItem: () => true,
       getPlayerPlaybackSnapshot: () => ({
         currentTime: 130,
         duration: 240,
       }),
-    });
+    }, ownershipHelperSource);
 
     assert.equal(context.flushListenSessionOnUnload('pagehide'), true);
-    assert.equal(beaconCalls.length, 2);
-    assert.equal(beaconCalls[0][0], '/playback/session/complete');
-    assert.equal(beaconCalls[1][0], '/playback/session/scrobble');
+    assert.equal(beaconCalls.length, 1);
+    assert.equal(beaconCalls[0][0], '/playback/state/handoff');
+    const payload = JSON.parse(await beaconCalls[0][1].text());
+    assert.equal(payload.clientId, 'unload-client');
+    assert.equal(payload.claimToken, 'unload-claim');
+    assert.equal(payload.csrf_token, 'measured-listen-csrf');
+    assert.equal(payload.completion.measurement_version, 'rendered-pcm-v1');
+    assert.equal(payload.completion.device_id, 'browser-device');
+    assert.equal(payload.completion.session_id, 'measured-session');
+    assert.equal(payload.completion.sequence, 5);
+    assert.equal(payload.completion.finalized, true);
+    assert.equal(payload.completion.measured_listened_seconds, 120);
+    assert.equal(payload.completion.max_measured_contiguous_seconds, 120);
+    assert.equal(payload.completion.duration_seconds, 240);
+    assert.equal(payload.completion.total_listened_seconds, 120);
+    assert.deepEqual(JSON.parse(JSON.stringify(payload.completion.segments)), [
+      { start_seconds: 10, end_seconds: 130 },
+    ]);
+    assert.equal(payload.completion.scrobbled, false);
+    assert.equal(storedEnvelopes.length, 1);
+    assert.equal(storedEnvelopes[0].id, payload.handoff.id);
+    assert.equal(storedEnvelopes[0].token, payload.handoff.token);
     assert.equal(context.state.player.listenSession, null);
   }
   {
@@ -546,6 +955,66 @@ async function run() {
     assert.equal(pausedPayload.ended_at, '2026-05-14T00:00:25Z');
   }
   {
+    let currentTime = 30;
+    const track = {
+      path: 'C:/Music/song.flac', title: 'Song', artist: 'Artist', album: 'Album',
+      coverPath: '', trackNumber: '1',
+    };
+    const session = {
+      track,
+      started_at: '2026-05-14T00:00:00Z',
+      started_at_unix: 1778716800,
+      ended_at: '',
+      duration_seconds: 120,
+      segments: [{ start_seconds: 0, end_seconds: 30 }],
+      segmentActive: false,
+      activeSegmentStartSeconds: 0,
+      paused_at: '2026-05-14T00:00:30Z',
+      paused_at_unix_ms: 1000,
+      pause_offset_seconds: 30,
+      scrobbled: false,
+      completionState: '',
+      measurement: {
+        deviceId: 'browser-device',
+        sessionId: 'measured-session',
+        sequence: 0,
+        total: 30,
+        contiguous: 30,
+        longest: 30,
+      },
+    };
+    const { context, fetchCalls } = loadHelper({
+      state: { player: { current: track, listenSession: session } },
+      Date: { now: () => 1001 },
+      getPlayerPlaybackSnapshot: () => ({ currentTime, duration: 120 }),
+      getPlaybackClaimContext: () => ({ clientId: 'browser-client', claimToken: 'claim-token' }),
+    });
+
+    assert.equal(await context.persistPausedListenSession(session), true);
+    const pausedPayload = JSON.parse(fetchCalls.at(-1)[1].body);
+    assert.equal(pausedPayload.session_id, 'measured-session');
+    assert.equal(pausedPayload.sequence, 1);
+    assert.equal(pausedPayload.finalized, true);
+
+    const resumed = await context.resumeListenSessionPlayback(track, 30);
+    assert.strictEqual(resumed, session, 'short pause resumes the same measured listen');
+    currentTime = 60;
+    session.measurement.total = 60;
+    session.measurement.contiguous = 60;
+    session.measurement.longest = 60;
+    await context.finalizeListenSession('ended', {
+      session,
+      currentTime,
+      duration: 120,
+      finishedFully: true,
+    });
+    const finalPayload = JSON.parse(fetchCalls.at(-1)[1].body);
+    assert.equal(finalPayload.session_id, pausedPayload.session_id);
+    assert.equal(finalPayload.sequence, 3);
+    assert.equal(finalPayload.finalized, true);
+    assert.equal(finalPayload.completion_reason, 'ended');
+  }
+  {
     let nowValue = 0;
     let isoIndex = 0;
     const isoValues = [
@@ -600,12 +1069,9 @@ async function run() {
     nowValue = (60 * 60 * 1000) + 1;
     const resumedSession = await context.resumeListenSessionPlayback(splitSession.track, 40);
 
-    assert.equal(fetchCalls[fetchCalls.length - 1][0], '/playback/session/complete');
-    const splitPayload = JSON.parse(fetchCalls[fetchCalls.length - 1][1].body);
-    assert.equal(splitPayload.completion_reason, 'long-pause-timeout');
-    assert.equal(splitPayload.ended_at, '2026-05-14T00:00:30Z');
-    assert.equal(splitPayload.max_contiguous_seconds, 30);
-    assert.equal(context.state.player.listenSession.started_at, '2026-05-14T02:00:00Z');
+    assert.equal(fetchCalls.length, 0, 'resuming the same track must not finalize a second logical listen');
+    assert.strictEqual(resumedSession, splitSession);
+    assert.equal(context.state.player.listenSession.started_at, '2026-05-14T00:00:00Z');
     assert.equal(context.state.player.listenSession.segmentActive, true);
     assert.equal(context.state.player.listenSession.activeSegmentStartSeconds, 40);
     assert.equal(resumedSession, context.state.player.listenSession);
@@ -654,7 +1120,7 @@ async function run() {
       fetch: async () => {
         rejectedAttempts += 1;
         if (rejectedAttempts === 1) {
-          return { ok: false, json: async () => ({ ok: false, error: 'temporary failure' }) };
+          return { ok: false, status: 503, json: async () => ({ ok: false, error: 'temporary failure' }) };
         }
         return { ok: true, json: async () => ({ ok: true }) };
       },
@@ -667,7 +1133,10 @@ async function run() {
     await retryContext.maybeSendNowPlaying(nextTrack, retrySession, {
       boundaryIdentity: '9:91:92',
     });
-    assert.equal(rejectedAttempts, 2, 'a rejected now-playing request remains eligible for one retry');
+    assert.equal(rejectedAttempts, 1, 'a transiently failed now-playing waits for its backoff');
+    retryContext.retryListenWritesNow(retrySession);
+    assert.equal(await retryContext.maybeSendNowPlaying(nextTrack, retrySession), true);
+    assert.equal(rejectedAttempts, 2, 'a start or resume retries the backed-off now-playing once');
   }
 }
 

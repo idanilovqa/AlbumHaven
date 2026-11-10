@@ -10,6 +10,7 @@ import pytest
 
 from music_app.services import cover_workflow
 from music_app.services import library_roots as library_roots_module
+from music_app.services.cover_state import serialize_cover_gallery_payload
 from music_app.services.cover_workflow import (
     delete_local_cover_and_choose_next,
     download_remote_cover_to_folder,
@@ -702,6 +703,37 @@ def test_resolve_album_root_rejects_same_root_mixed_album_folders(config, tmp_pa
     ) is None
 
 
+def test_resolve_album_root_rejects_nested_artist_common_ancestor_even_when_layout_depth_allows_it(
+    config,
+    tmp_path: Path,
+):
+    library_root = (tmp_path / "Library").resolve()
+    artist_root = (library_root / "Folk Metal" / "Аркона").resolve()
+    first_track = (artist_root / "Возрождение" / "one.mp3").resolve()
+    second_track = (artist_root / "Кобь" / "two.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    track_paths = {str(first_track), str(second_track)}
+    assert resolve_album_root_from_track_paths(config, track_paths) is None
+    assert resolve_album_context(
+        config,
+        {"tracks": [{"path": path} for path in track_paths]},
+    ) is None
+
+
 def test_resolve_album_root_keeps_multitrack_same_album_folder(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()
@@ -723,6 +755,75 @@ def test_resolve_album_root_keeps_multitrack_same_album_folder(config, tmp_path:
     )
 
     assert resolve_album_root_from_track_paths(config, {str(first_track), str(second_track)}) == album_root
+
+
+def test_resolve_album_context_keeps_missing_copy_when_same_album_copy_survives(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album").resolve()
+    deleted_track = album_root / "deleted.flac"
+    surviving_track = album_root / "surviving.mp3"
+    surviving_track.parent.mkdir(parents=True, exist_ok=True)
+    surviving_track.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {
+        "tracks": [{"path": str(deleted_track)}, {"path": str(surviving_track)}],
+    })
+
+    assert context is not None
+    assert context.album_root == album_root
+    assert context.track_paths == {str(deleted_track), str(surviving_track)}
+
+
+def test_resolve_album_context_rejects_album_when_no_track_copy_survives(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    deleted_track = library_root / "Artist" / "Album" / "deleted.flac"
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_context(config, {
+        "tracks": [{"path": str(deleted_track)}],
+    }) is None
+
+
+def test_resolve_album_context_rejects_existing_directory_as_missing_track(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album").resolve()
+    directory_path = album_root / "not-a-track"
+    surviving_track = album_root / "surviving.mp3"
+    directory_path.mkdir(parents=True)
+    surviving_track.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_context(config, {
+        "tracks": [{"path": str(directory_path)}, {"path": str(surviving_track)}],
+    }) is None
 
 
 def test_resolve_album_root_loads_library_roots_once_for_all_tracks(config, tmp_path: Path):
@@ -796,6 +897,194 @@ def test_resolve_album_root_accepts_album_at_root_direct_album_folder(config, tm
 
     assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
     assert resolve_album_context(config, {"tracks": [{"path": str(track_path)}]}).album_root == album_root
+
+
+def test_resolve_album_root_keeps_single_tagged_release_inside_cd_named_collection_folder(
+    config,
+    tmp_path: Path,
+):
+    library_root = (tmp_path / "Library").resolve()
+    collection_root = (library_root / "Astor Piazzolla").resolve()
+    album_root = (collection_root / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    sibling_cover = (collection_root / "CD02" / "cover.jpg").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    sibling_cover.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    sibling_cover.write_bytes(b"unrelated")
+
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
+
+
+def test_resolve_album_root_keeps_disc_folder_when_sibling_probe_fails(
+    config,
+    tmp_path: Path,
+    monkeypatch,
+):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Artist" / "Album" / "Disc 1").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    original_iterdir = Path.iterdir
+
+    def fail_for_album_root(path):
+        if path == album_root.parent:
+            raise OSError("drive unavailable")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_for_album_root)
+
+    assert resolve_album_root_from_track_paths(config, {str(track_path)}) == album_root
+
+
+def test_single_track_cd_album_gallery_excludes_sibling_album_cover(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Genre" / "Astor Piazzolla" / "Wallet Box" / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    album_cover = (album_root / "front.jpg").resolve()
+    sibling_cover = (album_root.parent / "CD02" / "front.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    album_cover.write_bytes(_image_bytes((220, 40, 40), image_format="JPEG"))
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "genre/artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    payload = serialize_cover_gallery_payload(
+        album_root=context.album_root,
+        track_paths=context.track_paths,
+        file_cache={},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+
+
+def test_single_track_cd_album_rejects_sibling_album_cover_selection(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Genre" / "Astor Piazzolla" / "Wallet Box" / "CD01").resolve()
+    track_path = (album_root / "01.mp3").resolve()
+    sibling_cover = (album_root.parent / "CD02" / "front.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "genre/artist",
+            }],
+        },
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, context.album_root, str(sibling_cover))
+
+
+def test_late_cd_sibling_is_excluded_when_gallery_serializes(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    track_root = (library_root / "Artist" / "Album" / "CD01").resolve()
+    track_path = (track_root / "01.mp3").resolve()
+    album_cover = (track_root / "front.jpg").resolve()
+    sibling_cover = (track_root.parent / "CD02" / "front.jpg").resolve()
+    track_root.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    album_cover.write_bytes(_image_bytes((220, 40, 40), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    assert context.album_root == track_root.parent
+    sibling_cover.parent.mkdir()
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=context.album_root,
+        track_paths=context.track_paths,
+        file_cache={},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+
+
+def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):
+    library_root = (tmp_path / "Library").resolve()
+    track_root = (library_root / "Artist" / "Album" / "CD01").resolve()
+    track_path = (track_root / "01.mp3").resolve()
+    sibling_cover = (track_root.parent / "CD02" / "front.jpg").resolve()
+    track_root.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+    assert context.album_root == track_root.parent
+    sibling_cover.parent.mkdir()
+    sibling_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(
+            config,
+            context.album_root,
+            str(sibling_cover),
+            track_paths=context.track_paths,
+        )
 
 
 def test_resolve_album_root_accepts_non_numeric_album_subfolders(config, tmp_path: Path):
@@ -1174,6 +1463,35 @@ def test_delete_local_cover_and_choose_next_promotes_best_remaining_square_cover
 
     assert not active_cover.exists()
     assert next_cover == better_cover
+
+
+def test_delete_local_cover_and_choose_next_skips_generated_preview_assets(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    active_cover = (album_root / "cover.jpg").resolve()
+    generated_preview = (album_root / "album-haven-preview.jpg").resolve()
+    generated_variant = (
+        album_root / ".album-haven" / "cover_variants" / "ab" / "generated.jpg"
+    ).resolve()
+    remaining_cover = (album_root / "folder.jpg").resolve()
+    _write_jpeg(active_cover, (220, 60, 60), size=(12, 12))
+    _write_jpeg(generated_preview, (30, 160, 220), size=(100, 100))
+    _write_jpeg(generated_variant, (160, 30, 220), size=(120, 120))
+    _write_jpeg(remaining_cover, (30, 220, 160), size=(40, 40))
+
+    next_cover = delete_local_cover_and_choose_next(
+        album_root=album_root,
+        source_path=active_cover,
+        active_cover_path=active_cover,
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
+        score_image=score_image,
+    )
+
+    assert not active_cover.exists()
+    assert generated_preview.exists()
+    assert generated_variant.exists()
+    assert next_cover == remaining_cover
 
 
 def test_delete_local_cover_and_choose_next_preserves_active_cover_when_non_active_image_is_deleted(tmp_path: Path):

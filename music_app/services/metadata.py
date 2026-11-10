@@ -27,10 +27,11 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 3
+FILE_METADATA_SCHEMA_VERSION = 6
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
+    EasyID3.RegisterTXXXKey("albumedition", "Album Edition")
 _FULL_TAG_TEXT_ALIASES = {
     "talb": "album",
     "tpe2": "albumartist",
@@ -41,7 +42,7 @@ _FULL_TAG_TEXT_ALIASES = {
     "tdor": "originaldate",
     "trck": "tracknumber",
     "tpos": "discnumber",
-    "tit3": "version",
+    "tit3": "subtitle",
     "tsst": "discsubtitle",
     "tso2": "albumartistsort",
     "\xa9alb": "album",
@@ -221,6 +222,29 @@ def first_tag(tags: dict[str, object], keys: list[str]) -> str | None:
     return None
 
 
+def artist_tag_values(tags: dict[str, object], keys: list[str]) -> list[str]:
+    for key in keys:
+        value = tags.get(key)
+        values = value if isinstance(value, (list, tuple)) else getattr(value, "text", None)
+        if not isinstance(values, (list, tuple)):
+            text = first_tag(tags, [key])
+            if text:
+                return [text]
+            continue
+        artists: list[str] = []
+        for item in values:
+            text = (
+                item.decode("utf-8", errors="ignore").strip()
+                if isinstance(item, bytes)
+                else str(item).strip()
+            )
+            if text and text not in artists:
+                artists.append(text)
+        if artists:
+            return artists
+    return []
+
+
 def first_custom_tag(tags: dict[str, object], logical_names: list[str]) -> str | None:
     wanted = {name.strip().lower() for name in logical_names if str(name).strip()}
     for key, value in tags.items():
@@ -392,16 +416,46 @@ def apply_text_repairs_to_file(path: Path, repairs: dict[str, str]) -> tuple[boo
         "genre": "genre",
         "year": "date",
         "track_number": "tracknumber",
-        "disc_number": "discnumber",
-        "edition": "version",
+        "edition": "albumedition",
         "album_rating": "albumrating",
+        "disc_subtitle": "discsubtitle",
+        "album_type": "musicbrainz_albumtype",
+        "label": "organization",
+        "catalog_number": "catalognumber",
+        "barcode": "barcode",
+        "musicbrainz_release_id": "musicbrainz_albumid",
+        "musicbrainz_release_group_id": "musicbrainz_releasegroupid",
+        "composer": "composer",
     }
 
     changed_fields: list[str] = []
     requested_standard_fields: list[str] = []
     standard_fields_changed = False
+    requested_disc_fields = [
+        field for field in ("disc_number", "total_discs") if field in repairs
+    ]
+    if requested_disc_fields:
+        existing_values = audio.get("discnumber", [])
+        existing_disc, _, existing_total = (
+            str(existing_values[0]).strip() if existing_values else ""
+        ).partition("/")
+        expected_disc = str(repairs.get("disc_number", existing_disc) or "").strip()
+        expected_total = str(repairs.get("total_discs", existing_total) or "").strip()
+        expected_value = (
+            f"{expected_disc}/{expected_total}" if expected_total else expected_disc
+        )
+        if (str(existing_values[0]).strip() if existing_values else "") != expected_value:
+            if expected_value:
+                audio["discnumber"] = [expected_value]
+            else:
+                try:
+                    del audio["discnumber"]
+                except KeyError:
+                    pass
+            standard_fields_changed = True
+        requested_standard_fields.extend(requested_disc_fields)
     for field, value in repairs.items():
-        if field == "exception_type":
+        if field == "exception_type" or field in requested_disc_fields:
             continue
         tag_name = tag_map.get(field)
         if not tag_name:
@@ -441,11 +495,19 @@ def apply_text_repairs_to_file(path: Path, repairs: dict[str, str]) -> tuple[boo
             raise RuntimeError(f"Could not reopen tags for {path}")
         mismatches: list[str] = []
         for field in requested_standard_fields:
-            tag_name = tag_map[field]
             expected_value = str(repairs.get(field) or "").strip()
             try:
-                actual = verified_audio.get(tag_name, [])
-                actual_value = str(actual[0]).strip() if actual else ""
+                if field in ("disc_number", "total_discs"):
+                    actual = verified_audio.get("discnumber", [])
+                    actual_disc, _, actual_total = (
+                        str(actual[0]).strip() if actual else ""
+                    ).partition("/")
+                    actual_value = (
+                        actual_disc if field == "disc_number" else actual_total
+                    )
+                else:
+                    actual = verified_audio.get(tag_map[field], [])
+                    actual_value = str(actual[0]).strip() if actual else ""
             except Exception as exc:
                 raise RuntimeError(
                     f"Could not read back {field} tag for {path}: {exc}"
@@ -525,12 +587,21 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
         "genre": "genre",
         "year": "date",
         "track_number": "tracknumber",
-        "disc_number": "discnumber",
-        "edition": "version",
+        "edition": "albumedition",
         "album_rating": "albumrating",
+        "disc_subtitle": "discsubtitle",
+        "album_type": "musicbrainz_albumtype",
+        "label": "organization",
+        "catalog_number": "catalognumber",
+        "barcode": "barcode",
+        "musicbrainz_release_id": "musicbrainz_albumid",
+        "musicbrainz_release_group_id": "musicbrainz_releasegroupid",
+        "composer": "composer",
     }
     requested_fields = {str(field) for field in fields}
-    unsupported = requested_fields.difference(tag_map)
+    unsupported = requested_fields.difference(tag_map).difference(
+        {"disc_number", "total_discs"}
+    )
     if unsupported:
         raise ValueError(
             "Unsupported editable physical fields: " + ", ".join(sorted(unsupported))
@@ -544,8 +615,17 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     for field in requested_fields:
         try:
-            raw_values = audio.get(tag_map[field], [])
-            values[field] = str(raw_values[0]).strip() if raw_values else ""
+            if field in ("disc_number", "total_discs"):
+                raw_values = audio.get("discnumber", [])
+                disc_number, _, total_discs = (
+                    str(raw_values[0]).strip() if raw_values else ""
+                ).partition("/")
+                values[field] = (
+                    disc_number if field == "disc_number" else total_discs
+                )
+            else:
+                raw_values = audio.get(tag_map[field], [])
+                values[field] = str(raw_values[0]).strip() if raw_values else ""
         except Exception as exc:
             raise RuntimeError(f"Could not read {field} tag for {path}: {exc}") from exc
     return values
@@ -554,26 +634,34 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
-    track_artist = first_tag(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
+    track_artists = artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
+    track_artist = " & ".join(track_artists) if track_artists else None
     album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist or "Unknown Artist"
     track_artist = track_artist or album_artist
+    track_artists = track_artists or [track_artist]
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
     disc_number_raw = first_tag(tags, ["discnumber", "disc number", "tpos"]) or first_custom_tag(tags, ["discnumber", "disc number", "tpos"])
-    disc_number = safe_int(disc_number_raw)
+    disc_value, _, total_discs_value = str(disc_number_raw or "").partition("/")
+    disc_number = safe_int(disc_value)
+    total_discs = safe_int(total_discs_value)
+    disc_subtitle = first_tag(tags, ["discsubtitle", "disc subtitle", "disctitle", "disc title", "tsst"]) or first_custom_tag(tags, ["discsubtitle", "disc subtitle", "disctitle", "disc title", "tsst"])
     duration_seconds = safe_int(tags.get("duration_seconds"))
     year = extract_year(tags)
     release_date = extract_release_date(tags)
     edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
+    album_type = first_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"]) or first_custom_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"])
     album_rating = extract_album_rating(tags)
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {
         "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
         "album": album_name, "album_artist": album_artist, "title": track_title,
         "genre": genre,
-        "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw, "artist": track_artist,
-        "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_rating": album_rating,
+        "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw,
+        "total_discs": total_discs, "disc_subtitle": disc_subtitle or None, "artist": track_artist,
+        "artists": track_artists,
+        "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }

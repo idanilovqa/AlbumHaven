@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
+    "music_app/services/app_copy.py",
+    "music_app/static/js/app-copy.js",
+    "music_app/static/js/app-copy-worker.js",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
@@ -74,6 +77,10 @@
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
     },
     {
+      "paths": ["music_app/services/app_copy.py", "music_app/static/js/app-copy.js", "music_app/static/js/app-copy-worker.js"],
+      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
+    },
+    {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
         "music_app/services/empty_local_album_retirement.py",
@@ -126,6 +133,12 @@
     },
     {
       "paths": [
+        "music_app/routes/playback_stream_asgi.py",
+        "music_app/services/mp3_stream_map.py",
+        "music_app/services/playback_encoded.py",
+        "music_app/static/js/runtime/player-streaming-decoders.js",
+        "music_app/static/vendor/wasm-audio-decoders/flac-decoder.min.js",
+        "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
         "music_app/static/js/runtime/track-modal-lightbox-helpers.js",

@@ -47,6 +47,10 @@ _PLAIN_FULL_WORD_FEATURED_CREDIT_RE = re.compile(
 _LOWERCASE_PLAIN_FULL_WORD_FEATURED_CREDIT_RE = re.compile(
     r"^(?P<primary>.+?)\s+(?:feature|featured|featuring)\s+(?P<featured>.+?)\s*$",
 )
+_LEADING_FEAT_CREDIT_RE = re.compile(
+    r"^feat\.?\s+(?P<featured>.+?)\s*$",
+    flags=re.IGNORECASE,
+)
 _STABLE_ARTIST_COMPOSITE_RE = re.compile(r"\s+/\s+")
 
 
@@ -100,6 +104,40 @@ def _stable_unique_artist_credits(values: Iterable[object]) -> list[str]:
     return credits
 
 
+def _format_secondary_artist_credit(
+    values: Iterable[object],
+    *,
+    featured_artist_keys: set[str] | None = None,
+    parse_leading_feat: bool = False,
+) -> str | None:
+    credits: dict[str, tuple[str, bool]] = {}
+    featured_keys = featured_artist_keys or set()
+    for value in values:
+        credit = " ".join(str(value or "").strip().split())
+        is_featured = False
+        if parse_leading_feat:
+            match = _LEADING_FEAT_CREDIT_RE.fullmatch(credit)
+            if match is not None:
+                credit = str(match.group("featured") or "").strip()
+                is_featured = True
+        normalized = _normalize_artist_key(credit)
+        if not normalized:
+            continue
+        is_featured = is_featured or normalized in featured_keys
+        if normalized in credits:
+            existing_credit, existing_featured = credits[normalized]
+            credits[normalized] = (existing_credit, existing_featured or is_featured)
+        else:
+            credits[normalized] = (credit, is_featured)
+
+    ordinary = [credit for credit, featured in credits.values() if not featured]
+    featured = [credit for credit, is_featured in credits.values() if is_featured]
+    segments = [*ordinary]
+    if featured:
+        segments.append(f"feat. {', '.join(featured)}")
+    return " / ".join(segments) or None
+
+
 def _track_row_display_values(track: object, *, album: object = None) -> tuple[object, str | None]:
     raw_title = _field(track, "title", None)
     track_artist = str(_field(track, "artist", "") or "").strip()
@@ -107,9 +145,21 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         (_field(album, "album_artist", "") if album is not None else _field(track, "album_artist", ""))
         or ""
     ).strip()
+    structured_album_owners = _stable_unique_artist_credits(
+        (_field(album, "artists", []) if album is not None else []) or []
+    )
+    joint_album_owners = (
+        structured_album_owners
+        if _field(album, "is_split_album", None) is False
+        and len(structured_album_owners) >= 2
+        else []
+    )
+    album_owner_members = joint_album_owners or _stable_artist_credit_members(
+        album_artist
+    )
     album_owner_keys = {
         _normalize_artist_key(member)
-        for member in _stable_artist_credit_members(album_artist)
+        for member in album_owner_members
     }
     track_members = _stable_artist_credit_members(track_artist)
     track_primary_keys = {
@@ -117,7 +167,14 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         for member in track_members
     }
     has_complete_album_ownership = bool(album_owner_keys) and album_owner_keys <= track_primary_keys
-    artist_credits: list[object] = []
+    has_partial_joint_ownership = bool(
+        joint_album_owners
+        and album_owner_keys & track_primary_keys
+        and not has_complete_album_ownership
+    )
+    artist_credits: list[object] = list(
+        joint_album_owners if has_partial_joint_ownership else []
+    )
     featured_artist_keys: set[str] = set()
     corroborating_artist_credits: list[object] = []
     if track_artist and _normalize_artist_key(track_artist) != _normalize_artist_key(album_artist):
@@ -127,10 +184,12 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
             )
             corroborating_artist_credits.append(primary_track_artist)
             primary_key = _normalize_artist_key(primary_track_artist)
-            is_album_owner = has_complete_album_ownership and primary_key in album_owner_keys
+            is_album_owner = (
+                has_complete_album_ownership or has_partial_joint_ownership
+            ) and primary_key in album_owner_keys
             if not is_album_owner and primary_key != _normalize_artist_key(album_artist):
                 artist_credits.append(primary_track_artist)
-                if has_complete_album_ownership:
+                if has_complete_album_ownership or has_partial_joint_ownership:
                     featured_artist_keys.add(primary_key)
             if track_featured_artist:
                 corroborating_artist_credits.append(track_featured_artist)
@@ -193,19 +252,19 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         }:
             artist_credits.append(title_featured_artist)
     secondary_artists = _stable_unique_artist_credits(artist_credits)
-    secondary_artist_labels = [
-        f"feat. {artist}"
-        if _normalize_artist_key(artist) in featured_artist_keys
-        else artist
-        for artist in secondary_artists
-    ]
     display_title = title if title else raw_title
     persisted_secondary_credit = " ".join(
         str(_field(track, "secondary_credit", "") or "").strip().split()
     )
     if persisted_secondary_credit:
-        return display_title, persisted_secondary_credit
-    return display_title, (" / ".join(secondary_artist_labels) if secondary_artist_labels else None)
+        return display_title, _format_secondary_artist_credit(
+            _stable_artist_credit_members(persisted_secondary_credit),
+            parse_leading_feat=True,
+        )
+    return display_title, _format_secondary_artist_credit(
+        secondary_artists,
+        featured_artist_keys=featured_artist_keys,
+    )
 
 
 def build_track_title_display_payload() -> dict[str, object]:
@@ -266,6 +325,8 @@ def build_track_row_payload(
         "track_number": safe_int(_field(track, "track_number", None)),
         "disc_number": safe_int(_field(track, "disc_number", None)),
         "disc_number_raw": _field(track, "disc_number_raw", None),
+        "total_discs": safe_int(_field(track, "total_discs", None)),
+        "disc_subtitle": _field(track, "disc_subtitle", None),
         "title": display_title,
         "secondary_artist": secondary_artist,
         "title_display": build_track_title_display_payload(),

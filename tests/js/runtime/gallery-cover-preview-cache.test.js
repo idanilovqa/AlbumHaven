@@ -3,6 +3,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const nodeCrypto = require('node:crypto');
+
+// Stored covers carry no file path (instant-return option D): the key is the app-copy worker's
+// opaque cover key and the version is the URL's `v`, which names a revision, never a file.
+const sha256Hex = text => nodeCrypto.createHash('sha256').update(text).digest('hex');
+const versionTag = productionUrl => new URL(productionUrl).searchParams.get('v') || '';
+function storeKey(productionUrl) {
+  const url = new URL(productionUrl);
+  url.searchParams.delete('v');
+  const source = `${url.pathname}${url.search}`;
+  return `${url.origin}/__album-haven-cover/${sha256Hex(source)}`;
+}
 
 test('distinct cover writes do not enumerate the entire persistent cache per entry', async () => {
   const { context } = createContext();
@@ -68,6 +80,8 @@ function createContext() {
     AbortController,
     Date,
     Map,
+    TextEncoder,
+    crypto: globalThis.crypto,
     Response: FakeCacheableResponse,
     setTimeout,
     URL,
@@ -99,7 +113,7 @@ function createResponse(id, productionUrl = '') {
       get(name) {
         const normalizedName = String(name).toLowerCase();
         if (normalizedName === 'content-type') return 'image/png';
-        if (normalizedName === 'x-album-haven-cover-production-url') return productionUrl || null;
+        if (normalizedName === 'x-album-haven-cover-version') return productionUrl ? versionTag(productionUrl) : null;
         return null;
       },
     },
@@ -193,7 +207,7 @@ test('gallery preview cache fetches each production URL once and restores evicte
     async keys() { return ['album-haven-gallery-previews-old', 'unrelated-cache']; },
     async delete(name) { deletedCaches.push(name); return true; },
     async open(name) {
-      assert.equal(name, 'album-haven-gallery-previews-v2');
+      assert.equal(name, 'album-haven-gallery-previews-v3');
       return cache;
     },
   };
@@ -343,7 +357,7 @@ test('gallery preview cache assigns a request ID header only to an actual same-o
   const cache = {
     async keys() { return []; },
     async match(key) {
-      const baseKey = cachedUrl.replace('&v=initial', '');
+      const baseKey = storeKey(cachedUrl);
       return String(key) === baseKey ? createResponse('cached', cachedUrl) : null;
     },
     async put() {},
@@ -782,8 +796,8 @@ test('gallery preview cache deletes an invalid cached response and refetches one
         status: 200,
         headers: {
           get(name) {
-            return String(name).toLowerCase() === 'x-album-haven-cover-production-url'
-              ? productionUrl
+            return String(name).toLowerCase() === 'x-album-haven-cover-version'
+              ? versionTag(productionUrl)
               : 'text/html';
           },
         },
@@ -804,13 +818,13 @@ test('gallery preview cache deletes an invalid cached response and refetches one
 
   assert.equal(result.displayUrl, 'blob:valid');
   assert.equal(fetchCount, 1);
-  assert.deepEqual(deleted, [productionUrl.replace('&v=epoch-1', '')]);
+  assert.deepEqual(deleted, [storeKey(productionUrl)]);
 });
 
 test('aborting a valid cached response during validation preserves it for the next resolve', async () => {
   const { context, warnings } = createContext();
   const productionUrl = 'http://127.0.0.1:4173/cover?path=cancelled-cache-read&size=480&v=epoch-1';
-  const baseKey = productionUrl.replace('&v=epoch-1', '');
+  const baseKey = storeKey(productionUrl);
   const validationGate = deferredHost();
   const controller = new AbortController();
   const stored = new Map();
@@ -822,8 +836,8 @@ test('aborting a valid cached response during validation preserves it for the ne
     status: 200,
     headers: {
       get(name) {
-        return String(name).toLowerCase() === 'x-album-haven-cover-production-url'
-          ? productionUrl
+        return String(name).toLowerCase() === 'x-album-haven-cover-version'
+          ? versionTag(productionUrl)
           : 'image/png';
       },
     },
@@ -879,8 +893,8 @@ test('a cached body AbortError without a caller signal remains a cancellation, n
     status: 200,
     headers: {
       get(name) {
-        return String(name).toLowerCase() === 'x-album-haven-cover-production-url'
-          ? productionUrl
+        return String(name).toLowerCase() === 'x-album-haven-cover-version'
+          ? versionTag(productionUrl)
           : 'image/png';
       },
     },
@@ -1051,7 +1065,7 @@ test('a newer cover revision replaces the stable persistent entry without enumer
   const { context } = createContext();
   const currentUrl = 'http://127.0.0.1:4173/cover?path=pinned&size=480&v=epoch-7';
   const staleUrl = 'http://127.0.0.1:4173/cover?path=pinned&size=480&v=epoch-6';
-  const baseKey = currentUrl.replace('&v=epoch-7', '');
+  const baseKey = storeKey(currentUrl);
   const stored = new Map([[baseKey, createResponse('stale', staleUrl)]]);
   let entryKeyScans = 0;
   let fetchCount = 0;
@@ -1074,14 +1088,14 @@ test('a newer cover revision replaces the stable persistent entry without enumer
   assert.equal(entryKeyScans, 0);
   assert.equal(fetchCount, 1);
   assert.equal(stored.size, 1);
-  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Production-Url'), currentUrl);
+  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Version'), versionTag(currentUrl));
 });
 
 test('concurrent cover epochs serialize replacement ownership by their unversioned base key', async () => {
   const { context } = createContext();
   const firstUrl = 'http://127.0.0.1:4173/cover?path=shared-epoch&size=480&v=epoch-1';
   const secondUrl = 'http://127.0.0.1:4173/cover?path=shared-epoch&size=480&v=epoch-2';
-  const baseKey = firstUrl.replace('&v=epoch-1', '');
+  const baseKey = storeKey(firstUrl);
   const firstPutGate = deferredHost();
   const stored = new Map();
   const events = [];
@@ -1138,7 +1152,7 @@ test('a delayed old epoch cannot overwrite a newer epoch whose response complete
   const { context } = createContext();
   const firstUrl = 'http://127.0.0.1:4173/cover?path=inverted-epoch&size=480&v=epoch-1';
   const secondUrl = 'http://127.0.0.1:4173/cover?path=inverted-epoch&size=480&v=epoch-2';
-  const baseKey = firstUrl.replace('&v=epoch-1', '');
+  const baseKey = storeKey(firstUrl);
   const firstResponseGate = deferredHost();
   const firstRequestStarted = deferredHost();
   const stored = new Map();
@@ -1187,7 +1201,7 @@ test('a delayed old epoch cannot overwrite a newer epoch whose response complete
   assert.equal(fetchCount, 2, 'the exact current epoch must resolve from its durable entry');
   assert.deepEqual(events, [`put:${baseKey}`]);
   assert.deepEqual([...stored.keys()], [baseKey]);
-  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Production-Url'), secondUrl);
+  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Version'), versionTag(secondUrl));
 });
 
 test('later cover epochs replace the same stable persistent entry', async () => {
@@ -1195,7 +1209,7 @@ test('later cover epochs replace the same stable persistent entry', async () => 
   const firstUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-1';
   const secondUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-2';
   const thirdUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-3';
-  const baseKey = firstUrl.replace('&v=epoch-1', '');
+  const baseKey = storeKey(firstUrl);
   const stored = new Map([[baseKey, createResponse('v1', firstUrl)]]);
   const deleted = [];
   const cache = {
@@ -1222,7 +1236,7 @@ test('later cover epochs replace the same stable persistent entry', async () => 
   assert.equal(thirdResult.cached, true);
   assert.deepEqual(deleted, []);
   assert.deepEqual([...stored.keys()], [baseKey]);
-  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Production-Url'), thirdUrl);
+  assert.equal(stored.get(baseKey).headers.get('X-Album-Haven-Cover-Version'), versionTag(thirdUrl));
 });
 
 test('foreground resolves before cache.put, then invalidation revokes it and deletes the late write before refetch', async () => {
@@ -1271,7 +1285,7 @@ test('foreground resolves before cache.put, then invalidation revokes it and del
   assert.equal(previewCache.hasActive(productionUrl), false);
   putGate.resolve();
   await lateDelete.promise;
-  assert.equal(stored.has(productionUrl), false, 'the post-put generation check must delete the resurrected stale entry');
+  assert.equal(stored.has(storeKey(productionUrl)), false, 'the post-put generation check must delete the resurrected stale entry');
 
   assert.equal((await previewCache.resolve(productionUrl)).displayUrl, 'blob:2');
   assert.equal(fetchCount, 2, 'absence of the stale persistent entry must force a fresh production request');
@@ -1367,11 +1381,12 @@ test('destroy during cache.put deletes the late persistent write', async () => {
   const { context } = createContext();
   const productionUrl = 'http://127.0.0.1:4173/cover?path=destroy-put&size=480&v=epoch-1';
   const putGate = deferredHost();
+  const putEntered = deferredHost();
   const stored = new Map();
   const cache = {
     async keys() { return []; },
     async match(key) { return stored.get(String(key)) || null; },
-    async put(key, response) { await putGate.promise; stored.set(String(key), response); },
+    async put(key, response) { putEntered.resolve(); await putGate.promise; stored.set(String(key), response); },
     async delete(key) { return stored.delete(String(key?.url || key)); },
   };
   const previewCache = new context.GalleryCoverPreviewCache({
@@ -1382,7 +1397,7 @@ test('destroy during cache.put deletes the late persistent write', async () => {
   });
 
   const pending = previewCache.resolve(productionUrl);
-  await new Promise((resolve) => setImmediate(resolve));
+  await putEntered.promise;
   previewCache.destroy();
   previewCache.destroy();
   previewCache.abortInFlight();
@@ -1390,7 +1405,7 @@ test('destroy during cache.put deletes the late persistent write', async () => {
   await pending;
   await Promise.all([...previewCache.writeChains.values()]);
 
-  assert.equal(stored.has(productionUrl), false);
+  assert.equal(stored.has(storeKey(productionUrl)), false);
   assert.equal(previewCache.activeObjectUrls.size, 0);
 });
 
@@ -1423,13 +1438,13 @@ test('abort during cache.put releases the prefetch caller immediately and cleans
   putGate.resolve();
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(stored.has(productionUrl), false, 'the late completed write must be removed after cancellation');
+  assert.equal(stored.has(storeKey(productionUrl)), false, 'the late completed write must be removed after cancellation');
 });
 
 test('same-key cache writes wait for stale cleanup before the resumed durable write begins', async () => {
   const { context } = createContext();
   const productionUrl = 'http://127.0.0.1:4173/cover?path=same-key-owner&size=480&v=epoch-1';
-  const baseKey = productionUrl.replace('&v=epoch-1', '');
+  const baseKey = storeKey(productionUrl);
   const oldPutGate = deferredHost();
   const newPutGate = deferredHost();
   const oldController = new AbortController();
@@ -1507,8 +1522,8 @@ test('different-key cache writes retain parallel ownership', async () => {
   const { context } = createContext();
   const firstUrl = 'http://127.0.0.1:4173/cover?path=parallel-a&size=480&v=epoch-1';
   const secondUrl = 'http://127.0.0.1:4173/cover?path=parallel-b&size=480&v=epoch-1';
-  const firstBaseKey = firstUrl.replace('&v=epoch-1', '');
-  const secondBaseKey = secondUrl.replace('&v=epoch-1', '');
+  const firstBaseKey = storeKey(firstUrl);
+  const secondBaseKey = storeKey(secondUrl);
   const gates = new Map([
     [firstBaseKey, deferredHost()],
     [secondBaseKey, deferredHost()],
@@ -1593,7 +1608,7 @@ test('a same-key write cancelled before its ownership turn skips cache.put', asy
   await waitUntil(() => previewCache.writeChains.has(baseKey) === false);
 
   assert.deepEqual(putIds, ['old'], 'the cancelled queued owner must be rejected before cache.put');
-  assert.equal(stored.has(productionUrl), false, 'the old cancelled owner must still clean its late write');
+  assert.equal(stored.has(storeKey(productionUrl)), false, 'the old cancelled owner must still clean its late write');
 });
 
 function deferredHost() {
@@ -1605,3 +1620,178 @@ function deferredHost() {
 async function waitUntil(predicate) {
   while (!predicate()) await new Promise((resolve) => setImmediate(resolve));
 }
+
+test('stored gallery covers name no file path and the old path-keyed cache is deleted', async () => {
+  const { context } = createContext();
+  const stored = new Map();
+  const deletedCaches = [];
+  const cache = {
+    async match(key) { return stored.get(String(key)) || null; },
+    async put(key, response) { stored.set(String(key), response); },
+    async delete(key) { return stored.delete(String(key)); },
+  };
+  const previewCache = new context.GalleryCoverPreviewCache({
+    cacheStorage: {
+      async keys() { return ['album-haven-gallery-previews-v2', 'album-haven-app-copy-v1:acct']; },
+      async delete(name) { deletedCaches.push(name); return true; },
+      async open() { return cache; },
+    },
+    fetchImpl: async () => createResponse('cover'),
+    urlApi: { createObjectURL() { return 'blob:cover'; } },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  const productionUrl = `http://127.0.0.1:4173/cover?path=${encodeURIComponent('C:/Music/Broadcast/cover.jpg')}&size=480&v=epoch-1`;
+
+  await previewCache.prefetch(productionUrl);
+
+  assert.deepEqual(deletedCaches, ['album-haven-gallery-previews-v2']);
+  assert.deepEqual([...stored.keys()], [storeKey(productionUrl)]);
+  const response = stored.get(storeKey(productionUrl));
+  assert.equal(response.headers.get('X-Album-Haven-Cover-Version'), versionTag(productionUrl));
+  for (const text of [...stored.keys(), response.headers.get('X-Album-Haven-Cover-Version')]) {
+    assert.doesNotMatch(decodeURIComponent(text), /Music|cover\?path=|(?<![A-Za-z])[A-Za-z]:\//);
+  }
+});
+
+test('the gallery cache and the app-copy worker key a cover identically', async () => {
+  const { context } = createContext();
+  const { createAppCopyWorker, COPY_HEADER } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js'));
+  const origin = 'http://127.0.0.1:4173';
+  const coverUrl = `/cover?path=${encodeURIComponent('C:/Music/Mono/cover.jpg')}&size=480&v=process-1`;
+  const pages = new Map();
+  const caches = {
+    async keys() { return [...pages.keys()]; },
+    async open(name) {
+      if (!pages.has(name)) {
+        const entries = new Map();
+        pages.set(name, {
+          entries,
+          async match(key) { return entries.get(String(key?.url || key))?.clone(); },
+          async put(key, response) { entries.set(String(key?.url || key), response); },
+          async delete(key) { return entries.delete(String(key?.url || key)); },
+          async keys() { return [...entries.keys()].map(url => ({ url })); },
+        });
+      }
+      return pages.get(name);
+    },
+    async delete(name) { return pages.delete(name); },
+  };
+  const worker = createAppCopyWorker({
+    caches,
+    origin,
+    fetch: async () => new Response(`<meta name="album-haven-app-copy" content="network"><img src="${coverUrl.replaceAll('&', '&amp;')}">`, {
+      headers: { 'Content-Type': 'text/html', [COPY_HEADER]: 'acct' },
+    }),
+  });
+  await worker.handle('page', { url: `${origin}/`, method: 'GET', mode: 'navigate' });
+  const kept = await (await [...pages.values()][0].entries.get(`${origin}/`)).text();
+  const workerKey = kept.match(/\/__album-haven-cover\/[0-9a-f]{64}/)[0];
+
+  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: origin });
+
+  assert.equal(new URL(await previewCache.storedCoverKey(`${origin}${coverUrl}`)).pathname, workerKey);
+});
+
+test('a cover key is computed synchronously, so a cover load waits on nothing new', () => {
+  const { context } = createContext();
+  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
+  const productionUrl = `http://127.0.0.1:4173/cover?path=${encodeURIComponent('C:/Music/БИ-2/cover.jpg')}&size=480&v=epoch-9`;
+
+  const key = previewCache.storedCoverKey(productionUrl);
+
+  assert.equal(typeof key, 'string');
+  assert.equal(key, storeKey(productionUrl));
+  assert.equal(previewCache.storedCoverKey(productionUrl.replace('epoch-9', 'epoch-10')), key);
+  assert.equal(previewCache.coverVersionTag(productionUrl), 'epoch-9');
+});
+
+function countCoverHashes(context) {
+  const original = context.galleryCoverSha256Hex;
+  const counter = { count: 0 };
+  context.galleryCoverSha256Hex = (text) => { counter.count += 1; return original(text); };
+  return counter;
+}
+
+test('a new version of a cover reuses its key without hashing again', () => {
+  const { context } = createContext();
+  const hashes = countCoverHashes(context);
+  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
+  const urls = Array.from({ length: 50 }, (_, index) => `http://127.0.0.1:4173/cover?path=album-${index}&size=480&v=epoch-1`);
+
+  const keys = urls.map(url => previewCache.storedCoverKey(url));
+  assert.equal(hashes.count, 50);
+  // A save or a gallery-wide revision bump changes every URL's version.
+  const bumped = urls.map(url => previewCache.storedCoverKey(url.replace('epoch-1', 'epoch-2')));
+
+  assert.equal(hashes.count, 50);
+  assert.deepEqual(bumped, keys);
+});
+
+test('a burst of new covers hashes outside the task that started it', async () => {
+  const { context } = createContext();
+  const hashes = countCoverHashes(context);
+  const cache = { async match() { return null; }, async put() {}, async delete() { return true; } };
+  const previewCache = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => createResponse(String(url)),
+    urlApi: { createObjectURL(blob) { return `blob:${blob.id}`; } },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  const urls = Array.from({ length: 40 }, (_, index) => `http://127.0.0.1:4173/cover?path=burst-${index}&size=480&v=1`);
+
+  const loads = urls.map(url => previewCache.resolve(url));
+  // Every microtask of the starting task has run: no cover was hashed inside it.
+  await Promise.resolve();
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  assert.equal(hashes.count, 0);
+
+  const results = await Promise.all(loads);
+  assert.equal(hashes.count, 40);
+  assert.deepEqual(results.map(result => result.cached), urls.map(() => true));
+});
+
+test('a saved cover shows its new version and never the stale one', async () => {
+  const { context } = createContext();
+  const stored = new Map();
+  const cache = {
+    async match(key) { return stored.get(String(key)) || null; },
+    async put(key, response) { stored.set(String(key), response); },
+    async delete(key) { return stored.delete(String(key)); },
+  };
+  const fetched = [];
+  let objectUrls = 0;
+  const previewCache = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => { fetched.push(String(url)); return createResponse(new URL(String(url)).searchParams.get('v')); },
+    urlApi: { createObjectURL(blob) { objectUrls += 1; return `blob:${blob.id}-${objectUrls}`; }, revokeObjectURL() {} },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  const before = 'http://127.0.0.1:4173/cover?path=saved-album&size=480&v=rev-1';
+  const after = before.replace('rev-1', 'rev-2');
+
+  const first = await previewCache.prefetch(before);
+  assert.equal(first.cached, true);
+  // The gallery card swaps to the saved cover's URL and invalidates the old one.
+  await previewCache.invalidate(before);
+  const saved = await previewCache.resolve(after);
+  await Promise.all([...previewCache.writeChains.values()]);
+
+  assert.match(saved.displayUrl, /^blob:rev-2-/);
+  assert.deepEqual(fetched, [before, after]);
+  assert.equal(stored.get(storeKey(after)).headers.get('X-Album-Haven-Cover-Version'), 'rev-2');
+
+  // Shown again from Cache Storage: the new version, without another request.
+  previewCache.destroy();
+  const reopened = new context.GalleryCoverPreviewCache({
+    cacheStorage: { async keys() { return []; }, async open() { return cache; } },
+    fetchImpl: async (url) => { fetched.push(String(url)); return createResponse('unexpected'); },
+    urlApi: { createObjectURL(blob) { return `blob:${blob.id}-again`; } },
+    locationOrigin: 'http://127.0.0.1:4173',
+  });
+  assert.equal((await reopened.resolve(after)).displayUrl, 'blob:rev-2-again');
+  assert.deepEqual(fetched, [before, after]);
+  // The old version is never served from the entry the save replaced.
+  const stale = await reopened.resolve(before);
+  assert.equal(stale.displayUrl, 'blob:unexpected-again');
+  assert.equal(fetched.at(-1), before);
+});

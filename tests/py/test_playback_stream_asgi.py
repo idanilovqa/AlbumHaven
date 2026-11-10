@@ -1065,15 +1065,21 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         }
         request_task = asyncio.create_task(playback_app(scope, receive, send))
         try:
-            # Setup only; the behavior under test is the 0.1 s response bound below.
-            await asyncio.wait_for(monitor_started.wait(), timeout=10)
+            # An instant failure may finish before the monitor's first receive.
+            monitor_wait = asyncio.create_task(monitor_started.wait())
             response_wait = asyncio.create_task(response_started.wait())
+            await asyncio.wait(
+                {monitor_wait, response_wait},
+                timeout=10,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            monitor_wait.cancel()
             completed, _pending = await asyncio.wait({response_wait}, timeout=0.1)
             assert response_wait in completed, (
                 "the 429 response was held behind disconnect-monitor cancellation"
             )
-            await asyncio.sleep(0)
-            assert monitor_cancelled.is_set() is True
+            if monitor_started.is_set():
+                await asyncio.wait_for(monitor_cancelled.wait(), timeout=1)
             status = next(
                 int(message["status"])
                 for message in messages
@@ -1477,9 +1483,174 @@ def test_pcm_socket_rejects_credit_beyond_per_message_capacity_with_4408(
         async with websocket_session(playback_app, "/playback/pcm") as socket:
             await open_stream(socket, media_path)
             await socket.send_json(
-                {"type": "credit", "generation": 1, "streamId": 1, "frames": 48_001}
+                {
+                    "type": "credit",
+                    "generation": 1,
+                    "streamId": 1,
+                    "frames": playback_stream_asgi.MAX_CREDIT_FRAMES_PER_MESSAGE + 1,
+                }
             )
             assert await socket.receive_close() == 4408
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_reports_the_native_sample_rate_of_a_probed_track(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "music_app.routes.playback_stream_asgi.read_native_sample_rate",
+        lambda path: 44_100 if path == media_path else 0,
+    )
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 7, "path": str(media_path)}
+            )
+            assert await socket.receive_json() == {
+                "type": "probe-result",
+                "requestId": 7,
+                "sampleRate": 44_100,
+                "fallbackSampleRate": 44_100,
+                "sizeBytes": media_path.stat().st_size,
+            }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("codecs", [[["mp3"]], ["ogg"], "mp3", [{}]])
+def test_pcm_socket_rejects_malformed_codec_lists_with_4400(
+    playback_app,
+    media_path,
+    decoder_factory,
+    codecs,
+):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "open",
+                    "generation": 1,
+                    "streamId": 1,
+                    "role": "current",
+                    "path": str(media_path),
+                    "startFrame": 0,
+                    "sampleRate": 48_000,
+                    "durationSeconds": 1,
+                    "codecs": codecs,
+                }
+            )
+            assert await socket.receive_close() == 4400
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_refuses_a_wrong_rate_without_closing_the_connection(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    async def refuse(_command):
+        raise playback_stream_asgi.SampleRateMismatch(96_000)
+
+    monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", refuse)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "open",
+                    "generation": 1,
+                    "streamId": 1,
+                    "role": "continuity",
+                    "path": str(media_path),
+                    "startFrame": 0,
+                    "sampleRate": 44_100,
+                    "durationSeconds": 1,
+                }
+            )
+            assert await socket.receive_json() == {
+                "type": "rate-mismatch",
+                "generation": 1,
+                "streamId": 1,
+                "sampleRate": 96_000,
+                "fallbackSampleRate": 48_000,
+            }
+            await socket.send_json({"type": "probe", "requestId": 1, "path": ""})
+            assert await socket.receive_close() == 4404
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_logs_audio_output_report(playback_app, caplog):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            with caplog.at_level("WARNING", logger="music_app.routes.playback_stream_asgi"):
+                await socket.send_json(
+                    {
+                        "type": "output-report",
+                        "sampleRate": 44_100,
+                        "baseLatencyMs": 50,
+                        "outputLatencyMs": 120,
+                        "underruns": 3,
+                        "underrunMs": 90,
+                        "statsAvailable": True,
+                    }
+                )
+                await socket.send_json({"type": "output-report"})
+                assert await socket.receive_close() == 4400
+
+    asyncio.run(scenario())
+
+    assert "underruns=3 underrun_ms=90" in caplog.text
+
+
+def test_pcm_socket_logs_client_stall_report_without_closing_the_stream(
+    playback_app,
+    media_path,
+    decoder_factory,
+    caplog,
+):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            with caplog.at_level("WARNING", logger="music_app.routes.playback_stream_asgi"):
+                await socket.send_json(
+                    {
+                        "type": "stall-report",
+                        "generation": 1,
+                        "streamId": 1,
+                        "durationMs": 3600,
+                        "targetBufferFrames": 576_000,
+                        "pageVisible": False,
+                    }
+                )
+                await socket.send_json({"type": "credit", "generation": 1, "streamId": 1, "frames": 2})
+                assert (await socket.receive_bytes())[:4] == b"AHPC"
+
+    asyncio.run(scenario())
+
+    assert "Playback client stall 3.60s generation=1 stream=1" in caplog.text
+    assert "target_buffer_frames=576000 page_visible=False" in caplog.text
+
+
+def test_pcm_socket_rejects_malformed_client_stall_report_with_4400(playback_app):
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {
+                    "type": "stall-report",
+                    "generation": 1,
+                    "streamId": 1,
+                    "durationMs": "3600\nforged log line",
+                    "targetBufferFrames": 0,
+                    "pageVisible": True,
+                }
+            )
+            assert await socket.receive_close() == 4400
 
     asyncio.run(scenario())
 
@@ -2946,7 +3117,8 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
     asyncio.run(scenario())
 
 
-def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources():
+@pytest.mark.parametrize("private_detail", ["", r"C:\private\music\track.flac Bearer secret-playback-token"])
+def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources(private_detail, caplog):
     class ShutdownWebSocketDouble:
         async def close(self, *, code: int) -> None:
             assert code == 1001
@@ -2960,7 +3132,7 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
         async def cancel(self) -> None:
             self.cancel_calls += 1
             if self.cancel_error:
-                raise RuntimeError("decoder cancel failed")
+                raise RuntimeError("decoder cancel failed " + private_detail)
 
     async def scenario() -> None:
         registry = playback_stream_asgi.PlaybackPcmRegistry()
@@ -2989,8 +3161,14 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
             "continuity": continuity,
         }
 
-        with pytest.raises(RuntimeError, match="decoder cancel failed"):
+        with pytest.raises(RuntimeError, match="decoder cancel failed") as failure:
             await registry.shutdown()
+
+        assert "RuntimeError" in str(failure.value)
+        if private_detail:
+            for secret in (r"C:\private\music\track.flac", "secret-playback-token"):
+                assert secret not in str(failure.value)
+                assert secret not in caplog.text
 
         assert failing_decoder.cancel_calls == 1
         assert healthy_decoder.cancel_calls == 1
@@ -3094,3 +3272,81 @@ def _authorize_loop_fixture(monkeypatch):
         library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
     async def resolve_actor(_request): return actor
     monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)
+
+
+def _generated_mp3(playback_app, seconds: int = 4) -> Path:
+    import shutil
+    import subprocess
+
+    from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
+
+    ffmpeg = resolve_ffmpeg_executable() or shutil.which("ffmpeg")
+    assert ffmpeg, "the seek-table socket tests generate an MP3 with ffmpeg"
+    path = Path(playback_app.state.config["MUSIC_DIR"]) / "Artist" / "Album" / "seekable.mp3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"sine=frequency=440:duration={seconds}:sample_rate=44100", "-ac", "2",
+         "-c:a", "libmp3lame", "-b:a", "128k", str(path)],
+        check=True,
+    )
+    return path.resolve()
+
+
+async def _texts_until_eos(socket) -> list[dict[str, object]]:
+    texts = []
+    while True:
+        message = await socket.receive_message()
+        if "text" in message:
+            texts.append(json.loads(message["text"]))
+            if texts[-1]["type"] == "eos":
+                return texts
+        else:
+            # Each encoded frame is credited again so the whole short track arrives.
+            await socket.send_json({"type": "credit", "generation": 1, "streamId": 1, "frames": 65_536})
+
+
+@pytest.mark.parametrize("asked", [True, False])
+def test_an_encoded_stream_carries_its_seek_table_only_when_the_client_asks(playback_app, asked):
+    path = _generated_mp3(playback_app)
+
+    async def scenario() -> list[dict[str, object]]:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(
+                path, sampleRate=44_100, durationSeconds=4, codecs=["mp3"],
+                **({"seekTable": True} if asked else {}),
+            ))
+            return await _texts_until_eos(socket)
+
+    texts = asyncio.run(scenario())
+    assert texts[0]["type"] == "metadata" and texts[0]["codec"] == "mp3"
+    tables = [text for text in texts if text["type"] == "seek-table"]
+    if not asked:
+        assert tables == []
+        return
+    (table,) = tables
+    assert (table["generation"], table["streamId"], table["prefixBytes"]) == (1, 1, 0)
+    assert table["prerollFrames"] == 8 * 1152
+    assert table["offsets"][0] == 0 and table["samples"][0] == 0
+    assert len(table["offsets"]) == len(table["samples"]) > 100
+
+
+def test_a_keepalive_keeps_the_socket_and_any_other_field_is_refused(playback_app, media_path):
+    async def scenario() -> int:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json({"type": "keepalive"})
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            assert (await socket.receive_json())["type"] == "probe-result"
+            await socket.send_json({"type": "keepalive", "path": "C:/x"})
+            return await socket.receive_close()
+
+    assert asyncio.run(scenario()) == 4400
+
+
+def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decoder_factory):
+    async def scenario() -> int:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(media_path, seekTable="yes"))
+            return await socket.receive_close()
+
+    assert asyncio.run(scenario()) == 4400

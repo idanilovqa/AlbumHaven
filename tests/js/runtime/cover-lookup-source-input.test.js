@@ -7,6 +7,14 @@ const vm = require('node:vm');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const sourcePath = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'cover-lookup-modal-and-drawer.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const coreState = fs.readFileSync(
+  path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'core-state-and-helpers.js'),
+  'utf8',
+);
+const template = fs.readFileSync(
+  path.join(repoRoot, 'music_app', 'templates', 'partials', 'primary-modals.html'),
+  'utf8',
+);
 const css = fs.readFileSync(
   path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'),
   'utf8',
@@ -17,17 +25,59 @@ function cssRule(selector, stylesheet = css) {
   return stylesheet.match(new RegExp(`${escaped.replace(/\r?\n/g, '\\r?\\n')}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
 }
 
+test('desktop Cover Lookup keeps stable shell geometry while body content changes', () => {
+  const dialogRule = cssRule('.cover-lookup-modal-dialog');
+  const bodyRule = cssRule('.cover-lookup-modal-body');
+
+  assert.match(dialogRule, /(?:^|;)\s*height\s*:\s*min\(90vh,\s*940px\)/);
+  assert.match(dialogRule, /max-height\s*:\s*min\(90vh,\s*940px\)/);
+  assert.match(bodyRule, /flex\s*:\s*1\s+1\s+auto/);
+  assert.match(bodyRule, /min-height\s*:\s*0/);
+});
+
+test('Cover Lookup header uses the shared fixed-size close action', () => {
+  const modal = template.split('<div class="cover-lookup-modal"')[1]
+    .split('<div class="non-album-modal"')[0];
+  assert.match(modal, /{% call action_button\('Close cover art look up gallery'[^]*?data-close-cover-lookup-modal[^]*?{% endcall %}/);
+  assert.doesNotMatch(modal, /<button class="icon-button"[^>]*data-close-cover-lookup-modal/);
+  assert.match(cssRule('.cover-lookup-modal-header > div'), /min-width:\s*0/);
+});
+
+test('Cover Lookup links only the album name while artist and year remain plain', () => {
+  assert.match(source, /function buildCoverLookupAlbumSubtitleHtml/);
+  assert.match(source, /cover-lookup-modal-subtitle-meta/);
+  assert.match(source, /cover-lookup-modal-album-link/);
+  assert.match(source, /data-open-cover-lookup-album-details="1"/);
+  assert.match(source, /els\.subtitle\.innerHTML\s*=\s*buildCoverLookupAlbumSubtitleHtml\(album\)/);
+
+  const link = cssRule('.cover-lookup-modal-album-link');
+  assert.match(link, /background:\s*transparent/);
+  assert.match(link, /text-decoration-line:\s*underline/);
+  assert.match(link, /text-underline-offset:/);
+});
+
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {
   assert.match(source, /data-cover-lookup-file-input/);
   assert.match(source, /accept="image\/\*"[^>]*multiple/);
   assert.match(source, /data-cover-lookup-drop-zone/);
   assert.match(source, /rows="1"/);
   assert.doesNotMatch(source, /Find Better Art will also use anything pasted here/);
+  assert.doesNotMatch(source, /Image ready to extract\.|Image extracted\.|images extracted\./);
+  assert.doesNotMatch(template, /cover-lookup-search-hint|Runs a full cover art search/);
 });
 
 test('cover picker can select the same file again after staged-file removal', () => {
   const handlers = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
   assert.match(handlers, /addCoverLookupFiles\(coverLookupFiles\.files \|\| \[\]\)[^]*\.finally\(\(\) => \{ coverLookupFiles\.value = ''; \}\)/);
+});
+
+test('cover picker handles a file choice after gallery hydration replaces the input', () => {
+  const handlers = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(
+    handlers,
+    /bindCoverLookupFileInput\(coverLookupFileInput\)[^]*coverLookupFileInput\?\.click\?\.\(\)/,
+  );
+  assert.match(handlers, /function bindCoverLookupFileInput[^]*addEventListener\('change'[^]*stopPropagation\(\)[^]*stageCoverLookupFiles/);
 });
 
 test('manual search keeps opened images in the composer until extraction', () => {
@@ -36,7 +86,12 @@ test('manual search keeps opened images in the composer until extraction', () =>
   assert.match(source, /data-cover-lookup-pending-attachment/);
   assert.match(source, /manualImageAttachments/);
   assert.doesNotMatch(source, />Choose images</);
-  assert.match(source, /Extract images<\/button>/);
+  assert.match(
+    source,
+    /ButtonComponent\.renderButton\(\{\s*label:\s*'Extract images',\s*variant:\s*'secondary',\s*className:\s*'cover-lookup-manual-submit'/,
+  );
+  const submit = cssRule('.cover-lookup-manual-submit');
+  assert.doesNotMatch(submit, /min-(?:width|height):/);
   assert.doesNotMatch(source, /state\.coverLookup\.modal\.pendingPastedImageId\s*=\s*nextItem\.id/);
 });
 
@@ -60,7 +115,8 @@ test('clipboard images stage only when pasted into the manual composer', () => {
 
 test('cover source validation is bounded and removable previews revoke their object URLs', () => {
   assert.match(source, /MAX_COVER_LOOKUP_STAGED_IMAGES\s*=\s*8/);
-  assert.match(source, /MAX_COVER_LOOKUP_IMAGE_BYTES\s*=\s*10 \* 1024 \* 1024/);
+  assert.match(source, /MAX_COVER_LOOKUP_IMAGE_BYTES\s*=\s*32 \* 1024 \* 1024/);
+  assert.match(source, /Images must be 32 MB or smaller\./);
   assert.match(source, /function removePastedImageFromCoverLookup/);
 
   const revoked = [];
@@ -80,6 +136,25 @@ test('cover source validation is bounded and removable previews revoke their obj
   assert.deepEqual(revoked, ['blob:first']);
   assert.deepEqual(context.state.coverLookup.modal.pastedImages.map(item => item.id), ['second']);
   assert.equal(context.state.coverLookup.modal.pendingPastedImageId, '');
+});
+
+test('manual link extraction renders request-owned loading and feedback beside its action', () => {
+  assert.match(coreState, /manualPendingCount:\s*0/);
+  assert.match(coreState, /manualStatusText:\s*''/);
+  assert.match(coreState, /manualStatusTone:\s*'neutral'/);
+  assert.match(source, /buildCoverLookupGalleryLoadingCards\('pasted',\s*manualPendingCount\)/);
+  assert.match(source, /class="cover-lookup-manual-status/);
+  assert.match(source, /manualStatusText/);
+  assert.match(source, /manualPendingCount\s*=\s*[\s\S]*manualPendingCount[^]*\+\s*1/);
+  assert.match(source, /manualPendingCount\s*=\s*Math\.max\([^]*manualPendingCount[^]*-\s*1/);
+  assert.doesNotMatch(source, /showToast\([\s\S]*?Extracted \$\{extractedImageCount\}/);
+
+  const actions = cssRule('.cover-lookup-manual-actions');
+  const status = cssRule('.cover-lookup-manual-status');
+  assert.match(actions, /align-items:\s*center/);
+  assert.match(actions, /flex-wrap:\s*wrap/);
+  assert.match(status, /white-space:\s*normal/);
+  assert.match(status, /overflow-wrap:\s*anywhere/);
 });
 
 test('gallery sections expose live image counts and omit empty remote and match sections', () => {
@@ -162,11 +237,16 @@ test('Find Better Art retains its theme-aware static halo and stronger hover wit
   assert.match(hover, /background:\s*var\(--appearance-item-action-hover-background\)/);
   assert.match(hover, /box-shadow:\s*0 0 18px[^;]*48%[^;]*inset 0 0 0 1px[^;]*30%/);
   assert.doesNotMatch(button + hover, /(?:^|;)\s*(?:width|height|padding|transform|animation)\s*:/);
-  assert.match(cssRule(':root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"])'), /box-shadow:\s*none/);
+  const disabled = cssRule(':root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"])');
+  assert.match(disabled, /background:\s*var\(--appearance-control/);
+  assert.match(disabled, /border-color:\s*var\(--appearance-line/);
+  assert.match(disabled, /color:\s*var\(--appearance-muted/);
+  assert.match(disabled, /box-shadow:\s*none/);
+  assert.match(disabled, /cursor:\s*not-allowed/);
 });
 
 test('failed lookup Retry uses the shared Button family', () => {
-  assert.match(source, /class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry"/);
+  assert.match(source, /ButtonComponent\.renderActionButton\(\{\s*icon: 'refresh',[^]*?ariaLabel: 'Retry lookup'[^]*?'data-retry-cover-lookup-task': task\.id/);
 });
 
 

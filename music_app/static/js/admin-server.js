@@ -1,6 +1,11 @@
 (() => {
   const ACTIVE_STATES = new Set(['queued', 'running', 'cancel_requested']);
 
+  const configurationLocked = operationState => {
+    const value = String(operationState || 'idle');
+    return ACTIVE_STATES.has(value) || value === 'canceled';
+  };
+
   const messageTarget = alert => alert?.querySelector?.('.on-page-alert__message') || alert;
 
   const showAlert = (alert, message = '') => {
@@ -49,9 +54,8 @@
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
     const syncPathControl = () => {
-      const active = state && ACTIVE_STATES.has(String(state.operation_state || 'idle'));
-      const unresolved = active || Boolean(state?.requested_mode);
-      pathInput.disabled = selectedMode() !== 'custom' || unresolved;
+      const locked = configurationLocked(state?.operation_state);
+      pathInput.disabled = selectedMode() !== 'custom' || locked;
       pathInput.required = selectedMode() === 'custom';
       if (selectedMode() === 'album_folders') {
         pathInput.value = '';
@@ -75,9 +79,9 @@
       custom.checked = mode === 'custom';
       pathInput.value = String(next.requested_root || next.active_root || '');
       const active = ACTIVE_STATES.has(String(next.operation_state || 'idle'));
-      const unresolved = active || Boolean(next.requested_mode);
-      modes.forEach(control => { control.disabled = unresolved; });
-      save.disabled = unresolved;
+      const locked = configurationLocked(next.operation_state);
+      modes.forEach(control => { control.disabled = locked; });
+      save.disabled = locked;
       cancel.hidden = !active;
       const canceled = String(next.operation_state || 'idle') === 'canceled';
       retry.hidden = !((Number(next.failed_count || 0) > 0 || canceled) && !active);

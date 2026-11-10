@@ -192,6 +192,17 @@ test('playing spectra share the exact row outline path at opposite offsets and f
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
 
+test('collapsing any loose-track section also collapses the aggregate length', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  assert.match(
+    css,
+    /\.album-track-table:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\) \.album-track-table__total\s*\{[^}]*display:\s*none/s,
+  );
+});
+
 test('the final table right outline fades into the footer without a corner glow layer', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
@@ -222,6 +233,19 @@ test('AlbumTrackTable uses theme text tokens, plain durations, and a subtly diss
   assert.match(css, /\.album-track-table \[role="columnheader"\][^}]*color:\s*var\(--appearance-muted,\s*var\(--muted\)\)/s);
   assert.match(css, /\.album-track-table \.track-duration\s*\{[^}]*margin-left:\s*0[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
   assert.match(css, /album-track-table__row--animated::after\s*\{[^}]*opacity:\s*\.84/s);
+});
+
+test('a paused current track keeps a dim, still highlight and its play button', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  const paused = css.match(/\.album-track-table__row--current:not\(\.album-track-table__row--playing\)\s*\{([^}]*)\}/s);
+  assert.ok(paused, 'the paused current row has its own highlight');
+  assert.match(paused[1], /outline:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 50%/);
+  assert.match(paused[1], /background:\s*color-mix\(in srgb, var\(--album-track-accent\) 8%/);
+  assert.doesNotMatch(paused[1], /animation|box-shadow/, 'only the playing row glows and moves');
+  assert.match(css, /:is\([^)]*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
 });
 
 test('play activation is transient and live playback refresh can own the component state classes', () => {

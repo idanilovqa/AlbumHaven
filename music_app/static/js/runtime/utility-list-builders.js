@@ -626,11 +626,19 @@ function findVisibleAlbumByTrackPaths(trackPaths) {
       && Object.values(preference).some((value) => value != null && value !== ''),
     );
   });
-  return preferenceRatingMatch
+  const selectedMatch = preferenceRatingMatch
     || legacyRatingMatch
     || preferenceDataMatch
     || matches[0]
     || null;
+  if (!selectedMatch) return null;
+  const coveredMatch = matches.reduce(
+    (album, fallbackAlbum) => preserveMissingAlbumCoverFields(album, fallbackAlbum),
+    selectedMatch,
+  );
+  return VISIBLE_ALBUM_COVER_FIELDS.some((field) => (
+    coveredMatch[field] !== selectedMatch[field]
+  )) ? coveredMatch : selectedMatch;
 }
 
 function findVisibleAlbumByTrackPath(trackPath) {
@@ -648,10 +656,16 @@ function resolveActiveQueueAlbumSnapshot(trackPath) {
   if (!targetPath || !albumSnapshot || typeof albumSnapshot !== 'object') return null;
 
   const queueAlbumRef = String(queue.albumRef || '').trim();
-  const snapshotAlbumRef = typeof getAlbumIdentity === 'function'
+  const snapshotRequestKey = typeof getAlbumRequestKey === 'function'
+    ? String(getAlbumRequestKey(albumSnapshot) || '').trim()
+    : '';
+  const snapshotLegacyIdentity = typeof getAlbumIdentity === 'function'
     ? String(getAlbumIdentity(albumSnapshot) || '').trim()
     : '';
-  if (!queueAlbumRef || snapshotAlbumRef !== queueAlbumRef) return null;
+  if (
+    !queueAlbumRef
+    || (queueAlbumRef !== snapshotRequestKey && queueAlbumRef !== snapshotLegacyIdentity)
+  ) return null;
 
   const queueHasTrack = Array.isArray(queue.tracks)
     && queue.tracks.some((track) => String(track?.path || '') === targetPath);
@@ -696,6 +710,36 @@ function resolveAlbumForPlayerTrack(track) {
   return null;
 }
 
+// The player's album opens on the first tap: from the albums this page already holds, else from
+// the server by the playing file. A miss says why instead of doing nothing.
+async function openPlayerTrackAlbum(track, modalOptions = {}) {
+  const local = resolveAlbumForPlayerTrack(track);
+  if (local) {
+    openTrackModal(local, modalOptions);
+    return true;
+  }
+  const path = String(track?.path || '');
+  if (!path) return false;
+  let message = "The playing album couldn't be opened. Try again.";
+  try {
+    const response = await fetch(`/album-details?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.ok && payload.album) {
+      // A track that changed meanwhile opens nothing rather than the previous album.
+      if (String(state.player.current?.path || '') !== path) return false;
+      openTrackModal(payload.album, modalOptions);
+      return true;
+    }
+    if (payload?.error) message = payload.error;
+  } catch (_error) {
+    // The fallback message covers a failed request.
+  }
+  showToast(message, 'error', 3600);
+  return false;
+}
+
 function getUpdatedAlbumForTrackPaths(updatedAlbums, trackPaths) {
   const candidates = Array.isArray(updatedAlbums) ? updatedAlbums : [];
   return findAlbumByTrackPaths(candidates, trackPaths);
@@ -705,20 +749,49 @@ function getAlbumPathSignature(album) {
   return Array.from(getAlbumTrackPaths(album)).sort().join('|');
 }
 
+const VISIBLE_ALBUM_COVER_FIELDS = [
+  'cover_path',
+  'cover_preview_url',
+  'remote_cover_url',
+  'remote_cover_thumbnail_url',
+  'remote_cover_source',
+  'remote_cover_source_label',
+  'remote_cover_album_url',
+  'remote_cover_width',
+  'remote_cover_height',
+];
+
+function preserveMissingAlbumCoverFields(album, fallbackAlbum) {
+  const preservedAlbum = { ...album };
+  VISIBLE_ALBUM_COVER_FIELDS.forEach((field) => {
+    if ((album?.[field] == null || album[field] === '') && fallbackAlbum?.[field] != null) {
+      preservedAlbum[field] = fallbackAlbum[field];
+    }
+  });
+  return preservedAlbum;
+}
+
 function collectVisibleAlbumsUnique() {
   const sources = [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups];
-  const seen = new Set();
-  const seenRuntimeAliases = new Set();
+  const albumIndexBySignature = new Map();
+  const albumIndexByRuntimeAlias = new Map();
   const albums = [];
   sources.forEach((groups) => {
     (groups || []).forEach((group) => {
       (group.albums || []).forEach((album) => {
         const runtimeAliases = getAlbumRuntimeIdentityAliases(album);
-        if (Array.from(runtimeAliases).some((alias) => seenRuntimeAliases.has(alias))) return;
         const signature = getAlbumPathSignature(album) || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
-        if (!signature || seen.has(signature)) return;
-        seen.add(signature);
-        runtimeAliases.forEach((alias) => seenRuntimeAliases.add(alias));
+        const duplicateIndex = Array.from(runtimeAliases)
+          .map((alias) => albumIndexByRuntimeAlias.get(alias))
+          .find((index) => index != null) ?? albumIndexBySignature.get(signature);
+        if (duplicateIndex != null) {
+          albums[duplicateIndex] = preserveMissingAlbumCoverFields(albums[duplicateIndex], album);
+          return;
+        }
+        if (!signature) return;
+        const albumIndex = albums.length;
+        albumIndexBySignature.set(signature, albumIndex);
+        runtimeAliases.forEach((alias) => albumIndexByRuntimeAlias.set(alias, albumIndex));
         albums.push(album);
       });
     });
@@ -997,7 +1070,7 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
 }
 
 function preserveVisibleAlbumRuntimeIdentity(visibleAlbum, candidate) {
-  const reconciledAlbum = {
+  let reconciledAlbum = {
     ...visibleAlbum,
     ...candidate,
   };
@@ -1005,6 +1078,7 @@ function preserveVisibleAlbumRuntimeIdentity(visibleAlbum, candidate) {
     const stableValue = String(visibleAlbum?.[field] || '').trim();
     if (stableValue) reconciledAlbum[field] = visibleAlbum[field];
   });
+  reconciledAlbum = preserveMissingAlbumCoverFields(reconciledAlbum, visibleAlbum);
   return reconciledAlbum;
 }
 
@@ -2361,12 +2435,14 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
                   preserveMountedGalleryChildren: true,
+                  preserveMissingAlbumCoverAuthority: true,
                   ...(!structuralTagEditRequiresCanonicalView
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
@@ -3770,7 +3846,7 @@ function getDraggableProblemSuggestions() {
 }
 
 function formatProblemSuggestionLabel(proposal) {
-  const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc' }[proposal.field] || proposal.field;
+  const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc', album_edition: 'Album / edition' }[proposal.field] || proposal.field;
   const original = proposal.original === null || proposal.original === undefined || proposal.original === '' ? 'missing' : String(proposal.original);
   return `${label}: ${original} → ${String(proposal.corrected ?? '')}`;
 }

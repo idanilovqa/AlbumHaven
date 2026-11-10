@@ -96,10 +96,10 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     for files in physical_folders.values():
         album_names = {_text(entry.get("album")) for entry in files} - {""}
         if len(album_names) > 1 and any(str(entry["path"]) in rejected for entry in files):
-            rejected.update(
-                (str(entry["path"]), "Mixed album metadata in one folder")
-                for entry in files
-            )
+            for entry in files:
+                path = str(entry["path"])
+                if path in rejected:
+                    rejected[path] = "Mixed album metadata in one folder"
     return rejected
 
 

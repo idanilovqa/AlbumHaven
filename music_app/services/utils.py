@@ -3,6 +3,14 @@ from functools import lru_cache
 import re
 import unicodedata
 
+
+def artist_collation_key(value: object) -> tuple[str, str]:
+    folded = str(value or "").strip().casefold()
+    text = folded
+    while text and unicodedata.category(text[0]).startswith("P"):
+        text = text[1:].lstrip()
+    return text, folded
+
 _QUESTIONABLE_MARKERS = {"??", "�"}
 _SUSPICIOUS_MOJIBAKE_SEQUENCES = (
     "Ð", "Ñ", "Ã", "Â", "ÄÄ", "ÄÅ", "ÄÆ", "ÄÇ", "ÄÈ", "ÄÉ", "ÄÊ", "ÄË", "ÄÌ", "ÄÍ", "ÄÎ", "ÄÏ", "ÄÒ", "ÄÓ",
@@ -136,6 +144,8 @@ def _is_plausible_utf16_swap_repair(
 ) -> bool:
     if not candidate or candidate == original:
         return False
+    if not candidate.isprintable():
+        return False
     original_ascii_letters = _count_ascii_letters(original) if original_ascii_letters is None else original_ascii_letters
     original_cjk = _count_cjk_chars(original) if original_cjk is None else original_cjk
     candidate_ascii_letters = _count_ascii_letters(candidate)
@@ -186,7 +196,12 @@ def _repair_text_candidates(text: str) -> list[str]:
             repaired = text.encode(source_encoding).decode(target_encoding)
         except Exception:
             continue
-        if repaired and repaired != text and repaired not in candidates:
+        if (
+            repaired
+            and repaired != text
+            and repaired not in candidates
+            and _is_plausible_utf16_swap_repair(text, repaired)
+        ):
             candidates.append(repaired)
     return candidates
 

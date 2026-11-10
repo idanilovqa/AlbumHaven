@@ -7,6 +7,8 @@ const REQUIRED_JOBS = [
   'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review',
 ];
 const REVIEW_JOBS = new Set(['pr_agent_review', 'codex_review']);
+// Android jobs run only when the pull request changes Android paths; they need no secrets.
+const ANDROID_JOBS = ['test_android', 'test_android_instrumentation'];
 const PORTABLE_FORK_JOBS = new Set([
   'test_js', 'test_components', 'e2e_production_parity', 'review_scope', 'review_prerequisites',
 ]);
@@ -36,8 +38,16 @@ function validateReviewPrerequisites(input) {
   return { conclusion: errors.length ? 'failure' : 'success', errors };
 }
 
+function validateAndroid(input) {
+  if (typeof input.runAndroid !== 'boolean') return ['runAndroid must be a boolean'];
+  const expected = input.runAndroid ? 'success' : 'skipped';
+  return ANDROID_JOBS
+    .filter((job) => input.jobResults?.[job] !== expected)
+    .map((job) => `android job ${job} must be ${expected}`);
+}
+
 function validateFork(input) {
-  const errors = [];
+  const errors = validateAndroid(input);
   if (!Object.hasOwn(REVIEW_EXPECTATIONS, input.reviewMode)) {
     errors.push(`invalid review mode: ${String(input.reviewMode)}`);
   }
@@ -53,7 +63,7 @@ function validateFork(input) {
 }
 
 function validateTrusted(input) {
-  const errors = [];
+  const errors = validateAndroid(input);
   const reviewExpectations = Object.hasOwn(REVIEW_EXPECTATIONS, input.reviewMode)
     ? REVIEW_EXPECTATIONS[input.reviewMode] : undefined;
   if (input.isDraft === true) errors.push('draft pull requests cannot authorize full verification');
@@ -101,4 +111,4 @@ function cli() {
 
 if (require.main === module) cli();
 
-module.exports = { REQUIRED_JOBS, REVIEW_EXPECTATIONS, validateReviewPrerequisites, validateCloudVerificationGate };
+module.exports = { ANDROID_JOBS, REQUIRED_JOBS, REVIEW_EXPECTATIONS, validateReviewPrerequisites, validateCloudVerificationGate };

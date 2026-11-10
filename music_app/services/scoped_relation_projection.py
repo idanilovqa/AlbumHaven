@@ -409,6 +409,106 @@ def _validate_pending_scan_receipt(connection, context, state, metadata, retaine
         raise RuntimeError('Retained legacy relations differ from the pending scan baseline.')
 
 
+def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
+    album_ids = sorted({int(value) for value in album_ids if value and int(value) > 0})
+    if not album_ids:
+        return set()
+    rows = connection.execute("""
+        with seed_albums as materialized (
+          select albums.id, library.duplicate_identity_text(albums.title) as title_identity
+          from library.local_albums albums
+          where albums.library_id=%(library_id)s
+            and (
+              albums.id=any(%(album_ids)s::bigint[])
+              or albums.metadata #>> '{stray_duplicate_of,album_id}'
+                   = any(%(album_id_texts)s::text[])
+            )
+        ), title_identities as materialized (
+          select distinct title_identity from seed_albums where title_identity <> ''
+        ), scoped_albums as materialized (
+          select albums.id, albums.album_key, albums.title, albums.release_year,
+            library.duplicate_identity_text(albums.title) as title_identity
+          from library.local_albums albums
+          join title_identities
+            on title_identities.title_identity=library.duplicate_identity_text(albums.title)
+          where albums.library_id=%(library_id)s
+        ), active_tracks as materialized (
+          select tracks.id, tracks.album_id,
+            library.duplicate_identity_text(tracks.title) as title_identity,
+            tracks.duration_seconds
+          from library.local_tracks tracks
+          join scoped_albums on scoped_albums.id=tracks.album_id
+          where tracks.library_id=%(library_id)s
+            and exists (
+              select 1 from library.local_track_files files
+              where files.track_id=tracks.id and files.scan_cache_stale is false
+            )
+        ), album_sizes as materialized (
+          select album_id, count(*) as track_count
+          from active_tracks group by album_id
+        ), candidate_sources as materialized (
+          select small.id as stray_album_id, source.id as source_album_id,
+            source.album_key as source_album_key, source_sizes.track_count
+          from scoped_albums small
+          join album_sizes small_sizes on small_sizes.album_id=small.id
+            and small_sizes.track_count <= 2
+          join scoped_albums source on source.id <> small.id
+            and source.title_identity=small.title_identity
+          join album_sizes source_sizes on source_sizes.album_id=source.id
+            and source_sizes.track_count > small_sizes.track_count
+          where not exists (
+            select 1 from active_tracks stray_track
+            where stray_track.album_id=small.id
+              and not exists (
+                select 1 from active_tracks source_track
+                where source_track.album_id=source.id
+                  and stray_track.title_identity <> ''
+                  and source_track.title_identity=stray_track.title_identity
+                  and stray_track.duration_seconds > 0
+                  and source_track.duration_seconds > 0
+                  and abs(source_track.duration_seconds-stray_track.duration_seconds) <= 2
+              )
+          )
+        ), chosen_sources as materialized (
+          select distinct on (stray_album_id)
+            stray_album_id, source_album_id, source_album_key
+          from candidate_sources
+          order by stray_album_id, track_count desc, source_album_id
+        ), desired as materialized (
+          select scoped_albums.id,
+            case when chosen_sources.source_album_id is null then null
+              else jsonb_build_object(
+                'album_id', chosen_sources.source_album_id,
+                'album_key', chosen_sources.source_album_key
+              )
+            end as ownership
+          from scoped_albums
+          left join chosen_sources
+            on chosen_sources.stray_album_id=scoped_albums.id
+        ), changed as (
+          update library.local_albums albums
+          set metadata=case when desired.ownership is null
+            then coalesce(albums.metadata, '{}'::jsonb)-'stray_duplicate_of'
+            else jsonb_set(
+              coalesce(albums.metadata, '{}'::jsonb),
+              '{stray_duplicate_of}', desired.ownership, true
+            ) end
+          from desired
+          where albums.id=desired.id
+            and albums.library_id=%(library_id)s
+            and albums.metadata -> 'stray_duplicate_of' is distinct from desired.ownership
+          returning albums.id
+        )
+        select id from scoped_albums
+        union select id from changed
+    """, {
+        'library_id': library_id,
+        'album_ids': album_ids,
+        'album_id_texts': [str(value) for value in album_ids],
+    }).fetchall()
+    return {int(row['id']) for row in rows}
+
+
 def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False):
     from music_app.services import relation_projection_postgres as relations
     context = _first_row(connection.execute(_CONTEXT))
@@ -488,6 +588,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
             and files.private_path=any(%(paths)s::text[]))""",
         {'library_id': library_id, 'album_ids': sorted(ids), 'album_keys': sorted(keys), 'paths': sorted({variant for path in track_paths for variant in (str(path), str(Path(path)))})}).fetchall()
     ids.update(row['id'] for row in current_albums)
+    ids.update(_refresh_stray_duplicate_ownership(connection, library_id, ids))
     old = connection.execute("""select * from library.local_relation_album_facts
         where library_id=%s and (album_id=any(%s::bigint[]) or album_key=any(%s::text[]))""",
         (library_id, sorted(ids), sorted(keys))).fetchall()

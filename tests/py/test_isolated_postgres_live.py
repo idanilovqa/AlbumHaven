@@ -600,6 +600,179 @@ def test_live_duplicate_sources_only_projection_matches_complete_candidate_rows(
             assert _duplicate_sources_from_rows(slim) == _duplicate_sources_from_rows(full)
 
 
+def test_live_stray_soundtrack_copy_is_duplicate_not_gallery_album(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _duplicate_candidate_album_ids_for_keys_sql,
+        _duplicate_source_rows_for_album_ids_sql,
+        _duplicate_sources_from_rows,
+        _root_gallery_membership_sql,
+    )
+
+    fixture = watcher_repair_inventory
+
+    def track(path, *, album, album_artist, title, number, duration, year=2026):
+        entry = fixture.entry(path, album=album, artist=album_artist)
+        entry.update(
+            album_artist=album_artist,
+            title=title,
+            track_number=number,
+            duration_seconds=duration,
+            year=year,
+        )
+        return entry
+
+    fixture.seed(
+        track(
+            "Various Artists/The Prince Of Egypt/01.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="Deliver Us",
+            number=1,
+            duration=240,
+        ),
+        track(
+            "Various Artists/The Prince Of Egypt/02.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="The Reprimand",
+            number=2,
+            duration=125,
+        ),
+        track(
+            "Various Artists/The Prince Of Egypt/03.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="Following Tzipporah",
+            number=3,
+            duration=110,
+        ),
+        track(
+            "Guest Copies/Ofra Haza & Eden Riegel - Deliver Us.flac",
+            album="The Prince Of Égypt",
+            album_artist="Ofra Haza & Eden Riegel",
+            title="Deliver Ús",
+            number=1,
+            duration=242,
+            year=2025,
+        ),
+        track(
+            "Singles/Genuine Artist/Only Song.flac",
+            album="Only Song",
+            album_artist="Genuine Artist",
+            title="Only Song",
+            number=1,
+            duration=180,
+        ),
+        track(
+            "Other/Different Song.flac",
+            album="The Prince Of Egypt",
+            album_artist="Different Artist",
+            title="Not Deliver Us",
+            number=1,
+            duration=242,
+        ),
+    )
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        albums = {
+            row["album_key"]: row
+            for row in connection.execute(
+                """
+                select id, album_key,
+                  metadata -> 'stray_duplicate_of' as stray_duplicate_of
+                from library.local_albums
+                """
+            ).fetchall()
+        }
+        stray_key = next(
+            key for key in albums if key.startswith("ofra haza & eden riegel::")
+        )
+        source_key = next(key for key in albums if key.startswith("various artists::"))
+        assert albums[stray_key]["stray_duplicate_of"]["album_key"] == source_key
+        assert all(
+            row["stray_duplicate_of"] is None
+            for key, row in albums.items()
+            if key != stray_key
+        )
+        gallery_keys = {
+            row["album_key"]
+            for row in connection.execute(
+                _root_gallery_membership_sql(),
+                {"category_count": 0, "visible_categories": []},
+            ).fetchall()
+        }
+        candidate_ids = {
+            row["album_id"]
+            for row in connection.execute(
+                _duplicate_candidate_album_ids_for_keys_sql(),
+                {"album_keys": [source_key]},
+            ).fetchall()
+        }
+        duplicate_rows = connection.execute(
+            _duplicate_source_rows_for_album_ids_sql(),
+            {"album_ids": sorted(candidate_ids)},
+        ).fetchall()
+        duplicate_projection = _duplicate_sources_from_rows(duplicate_rows)
+        assert {albums[source_key]["id"], albums[stray_key]["id"]} <= candidate_ids
+        assert duplicate_projection[source_key]["has_duplicate_files"], {
+            "candidate_ids": candidate_ids,
+            "projection_keys": sorted(duplicate_projection),
+        }
+    assert stray_key not in gallery_keys
+    assert source_key in gallery_keys
+    assert any(key.startswith("genuine artist::") for key in gallery_keys)
+    assert any(key.startswith("different artist::") for key in gallery_keys)
+
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+    source = repository.build_problematic_file_detail_payload(source_key)
+    stray = repository.build_problematic_file_detail_payload(stray_key)
+    assert "Duplicate files" in source["problem_reasons"], source.get("duplicate_sources")
+    assert "Duplicate files" in stray["problem_reasons"], stray.get("duplicate_sources")
+    assert any(
+        "Ofra Haza & Eden Riegel - Deliver Us.flac" in track["path"]
+        for duplicate_source in source["duplicate_sources"]
+        for track in duplicate_source["tracks"]
+    )
+
+    from music_app.services.scoped_relation_projection import (
+        _refresh_stray_duplicate_ownership,
+    )
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        connection.execute(
+            """
+            update library.local_track_files files
+            set metadata=jsonb_set(files.metadata, '{scan_cache,stale}', 'true'::jsonb)
+            from library.local_tracks tracks
+            where tracks.id=files.track_id and tracks.album_id=%s
+            """,
+            (albums[source_key]["id"],),
+        )
+        _refresh_stray_duplicate_ownership(
+            connection,
+            connection.execute(
+                "select library_id from library.local_albums where id=%s",
+                (albums[stray_key]["id"],),
+            ).fetchone()["library_id"],
+            {albums[source_key]["id"]},
+        )
+        connection.commit()
+        assert connection.execute(
+            "select metadata -> 'stray_duplicate_of' as ownership from library.local_albums where id=%s",
+            (albums[stray_key]["id"],),
+        ).fetchone()["ownership"] is None
+        gallery_keys = {
+            row["album_key"]
+            for row in connection.execute(
+                _root_gallery_membership_sql(),
+                {"category_count": 0, "visible_categories": []},
+            ).fetchall()
+        }
+    assert stray_key in gallery_keys
+
+
 @pytest.mark.parametrize("exception_source", ["stored", "path_override", "track_override", "clear_override"])
 def test_live_missing_album_projection_respects_effective_rarity(watcher_repair_inventory, exception_source):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository

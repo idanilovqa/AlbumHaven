@@ -684,34 +684,43 @@ class PostgresLibraryBrowseRepository:
             support_state = self._inventory_repository.load_support_state(
                 connection=connection,
             )
-            raw_rows, raw_preview_rows = self._load_root_startup_rows(
-                view_state,
-                root_alias_to_canonical,
-                connection=connection,
-            )
-            rows = _canonicalize_artist_rows(
-                raw_rows,
-                root_alias_to_canonical,
-            )
-            preview_rows = _canonicalize_artist_rows(
-                raw_preview_rows,
-                root_alias_to_canonical,
-            )
-            non_album_entries = self._load_non_album_entries(
-                view_state=view_state,
-                alias_to_canonical=relation_alias_maps["alias_to_canonical"],
-                canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
-                connection=connection,
-            )
-            configured_root_paths = (
-                configured_library_root_paths_snapshot(
-                    self._config,
+            # Owner REC-007: recounting every file's albums took 4-6 s on a 160k-file
+            # library each time a search was cleared. A ready gallery projection holds
+            # the same complete tree, as the page load uses it.
+            projected_sidebar = None
+            if not gallery_offset:
+                from music_app.services.gallery_projection_postgres import load_gallery_projection_sidebar
+
+                projected_sidebar = load_gallery_projection_sidebar(connection, view_state)
+            if projected_sidebar is not None:
+                rows = None
+                preview_rows = _canonicalize_artist_rows(
+                    self._load_root_startup_preview_rows(
+                        view_state,
+                        candidate_artists=_expanded_artist_name_list(
+                            [item["artist"] for item in projected_sidebar[0][:_STARTUP_PREVIEW_ARTIST_LIMIT]],
+                            root_alias_to_canonical,
+                            relation_alias_maps["canonical_to_aliases"] if root_alias_to_canonical else {},
+                        ),
+                        connection=connection,
+                    ),
+                    root_alias_to_canonical,
+                )
+            else:
+                raw_rows, raw_preview_rows = self._load_root_startup_rows(
+                    view_state,
+                    root_alias_to_canonical,
                     connection=connection,
                 )
-                if non_album_entries
-                else ()
-            )
-            preview_artist_groups = _root_album_browse_artist_groups(preview_rows)
+                rows = _canonicalize_artist_rows(
+                    raw_rows,
+                    root_alias_to_canonical,
+                )
+                preview_rows = _canonicalize_artist_rows(
+                    raw_preview_rows,
+                    root_alias_to_canonical,
+                )
+            preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[:_STARTUP_PREVIEW_ARTIST_LIMIT]
             missing_albums = _missing_album_projection_payloads(
                 self._load_missing_album_rows(connection=connection),
                 view_state=view_state,
@@ -740,43 +749,14 @@ class PostgresLibraryBrowseRepository:
                 close = getattr(connection, "close", None)
                 if callable(close):
                     close()
-        non_album_tracks = build_non_album_track_list(
-            non_album_entries,
-            config=self._config,
-            configured_root_paths=configured_root_paths,
-        )
-        artist_displays, artist_sort_values, artist_counts, album_count = (
-            _root_sidebar_aggregate(rows)
-        )
-        live_artist_count = len(artist_counts)
-        album_count += len(missing_albums)
-        for album in missing_albums:
-            artist = _canonical_artist_name(
-                album.get("album_artist") or "Unknown Artist", root_alias_to_canonical,
+        if projected_sidebar is not None:
+            # The projection already counts missing albums under their artists.
+            artists_sidebar, album_count = projected_sidebar
+            live_artist_count = len(artists_sidebar)
+        else:
+            artists_sidebar, album_count, live_artist_count = _root_sidebar_from_rows(
+                rows, missing_albums, root_alias_to_canonical,
             )
-            artist_key = _row_artist_identity({"artist_name": artist})
-            artist_displays.setdefault(artist_key, artist)
-            artist_sort_values.setdefault(artist_key, artist)
-            artist_counts[artist_key] = int(artist_counts.get(artist_key, 0)) + 1
-        ordered_artist_keys = sorted(
-            artist_counts,
-            key=lambda key: (
-                artist_collation_key(
-                    artist_sort_values.get(key, artist_displays.get(key, key))
-                ),
-                artist_collation_key(artist_displays.get(key, key)),
-            ),
-        )
-        artists_sidebar = [
-            {
-                "artist": artist_displays.get(artist_key, artist_key),
-                "artist_display": _artist_tree_display_value(
-                    artist_displays.get(artist_key, artist_key)
-                ),
-                "count": int(artist_counts[artist_key]),
-            }
-            for artist_key in ordered_artist_keys
-        ]
         payload = {
             "surface": _build_view_surface_payload("albums"),
             "shell_layout": _build_shell_layout_payload(
@@ -811,7 +791,10 @@ class PostgresLibraryBrowseRepository:
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
             "manual_version_links": support_state["manual_version_links"],
-            "non_album_tracks": non_album_tracks,
+            # As on the paged root gallery, Loose Tracks load on request (about a
+            # second on a large library), not with every tree.
+            "non_album_tracks": [],
+            "non_album_tracks_deferred": True,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "viewer_opinion_preferences": build_viewer_opinion_preferences_payload({}),
             "popularity_browse": build_popularity_browse_payload(viewer_opinion_preferences={}),
@@ -4748,6 +4731,39 @@ def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: M
     return page, snapshot["sidebar"], snapshot["album_count"], metadata
 
 
+def _root_sidebar_from_rows(
+    rows: list[object],
+    missing_albums: list[dict[str, object]],
+    alias_to_canonical: Mapping[str, object],
+) -> tuple[list[dict[str, object]], int, int]:
+    """The complete artist tree from recounted album rows, when no projection is ready."""
+    artist_displays, artist_sort_values, artist_counts, album_count = _root_sidebar_aggregate(rows)
+    live_artist_count = len(artist_counts)
+    album_count += len(missing_albums)
+    for album in missing_albums:
+        artist = _canonical_artist_name(album.get("album_artist") or "Unknown Artist", alias_to_canonical)
+        artist_key = _row_artist_identity({"artist_name": artist})
+        artist_displays.setdefault(artist_key, artist)
+        artist_sort_values.setdefault(artist_key, artist)
+        artist_counts[artist_key] = int(artist_counts.get(artist_key, 0)) + 1
+    ordered_artist_keys = sorted(
+        artist_counts,
+        key=lambda key: (
+            artist_collation_key(artist_sort_values.get(key, artist_displays.get(key, key))),
+            artist_collation_key(artist_displays.get(key, key)),
+        ),
+    )
+    artists_sidebar = [
+        {
+            "artist": artist_displays.get(artist_key, artist_key),
+            "artist_display": _artist_tree_display_value(artist_displays.get(artist_key, artist_key)),
+            "count": int(artist_counts[artist_key]),
+        }
+        for artist_key in ordered_artist_keys
+    ]
+    return artists_sidebar, album_count, live_artist_count
+
+
 def _root_sidebar_aggregate(
     rows: Iterable[object],
 ) -> tuple[dict[str, str], dict[str, str], dict[str, int], int]:
@@ -5097,7 +5113,7 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
           where owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ), requested_albums as materialized (
-          select albums.library_id, albums.id as album_id
+          select albums.library_id, albums.id as album_id, albums.metadata
           from target_library
           join library.local_albums albums
             on albums.library_id = target_library.library_id
@@ -5162,6 +5178,20 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
           join duplicate_identities using (
             album_artist_identity, album_identity, album_year
           )
+          union
+          select linked.id
+          from requested_albums
+          join library.local_albums linked
+            on linked.library_id=requested_albums.library_id
+           and linked.id::text=requested_albums.metadata
+                #>> '{{stray_duplicate_of,album_id}}'
+          union
+          select stray.id
+          from requested_albums
+          join library.local_albums stray
+            on stray.library_id=requested_albums.library_id
+           and stray.metadata #>> '{{stray_duplicate_of,album_id}}'
+                = requested_albums.album_id::text
         )
         select candidate_album_ids.album_id
         from candidate_album_ids
@@ -5240,6 +5270,18 @@ def _duplicate_sources_from_rows(
         str(payload.get("file_private_path") or ""),
         str(payload.get("album_key") or ""),
     ))
+    source_identities = {}
+    for payload in payloads:
+        file_entry = _row_json_mapping(payload.get("file_entry"))
+        album_id = _coerce_int(payload.get("album_id"))
+        if album_id and album_id not in source_identities:
+            source_identities[album_id] = {
+                "album": file_entry.get("album") or payload.get("album_title"),
+                "album_artist": (
+                    file_entry.get("album_artist") or payload.get("artist_name")
+                ),
+                "year": file_entry.get("year") or payload.get("album_release_year"),
+            }
     prepared_entries = []
     for payload in payloads:
         file_entry = _row_json_mapping(payload.get("file_entry"))
@@ -5248,6 +5290,18 @@ def _duplicate_sources_from_rows(
             entry = _problematic_file_entry_from_row(payload)
         else:
             entry = dict(entry)
+        ownership = _row_json_mapping(payload.get("stray_duplicate_of"))
+        if not ownership:
+            ownership = _row_json_mapping(
+                _row_json_mapping(payload.get("album_metadata")).get(
+                    "stray_duplicate_of"
+                )
+            )
+        source_identity = source_identities.get(
+            _coerce_int(ownership.get("album_id"))
+        )
+        if source_identity:
+            entry.update(source_identity)
         if payload.get("file_entry_is_object") is not True and not file_entry:
             entry.update(album=None, album_artist=None, year=None)
         entry["duration_seconds"] = _coerce_duration_seconds(payload.get("duration_seconds"))
@@ -8768,6 +8822,8 @@ def _build_artist_page_gallery_payload(artist_ref: str) -> dict[str, object]:
 
 def _visible_album_clause(album_ref: str) -> str:
     return f"""
+             not ({album_ref}.metadata ? 'stray_duplicate_of')
+             and (
              %(category_count)s = 0
              or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any(%(visible_categories)s::text[])
              or exists (
@@ -8792,6 +8848,7 @@ def _visible_album_clause(album_ref: str) -> str:
                  ),
                  0
                ) = 0
+             )
              )
     """.strip()
 
@@ -11357,6 +11414,7 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             albums.title as album_title,
             albums.release_year as album_release_year,
             albums.cover_path as album_cover_path,
+            albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             coalesce(
                 nullif(albums.metadata ->> 'album_artist', ''),
                 artists.name
@@ -11746,6 +11804,13 @@ def _problematic_files_sql(
               )
             )
             or active_album_rollup.track_problem
+            or library.local_albums.metadata ? 'stray_duplicate_of'
+            or exists (
+              select 1 from library.local_albums stray_album
+              where stray_album.library_id=library.local_albums.library_id
+                and stray_album.metadata #>> '{stray_duplicate_of,album_id}'
+                    = library.local_albums.id::text
+            )
             or library.local_artists.scan_name_problem_candidate is true
             or active_album_rollup.file_problem
              or library.local_albums.id in (
@@ -11911,9 +11976,10 @@ def _problematic_files_sql(
             library.local_albums.title,
             library.local_albums.release_year,
             library.local_albums.cover_path,
+            library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist
         """
-        album_result_projection = ""
+        album_result_projection = "selected_albums.stray_duplicate_of,"
         file_result_projection = "active_track_files.file_entry,"
         album_artist_result_expression = "selected_albums.album_artist"
     elif candidate_summary:
@@ -11925,6 +11991,7 @@ def _problematic_files_sql(
             library.local_albums.title,
             library.local_albums.release_year,
             library.local_albums.cover_path,
+            library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist,
             library.local_albums.metadata ->> 'artists' as album_artists,
             coalesce((library.local_albums.metadata ->> 'is_compilation')::boolean, false) as album_is_compilation,
@@ -11969,6 +12036,7 @@ def _problematic_files_sql(
         """
         album_result_projection = """
           selected_albums.album_artist,
+          selected_albums.stray_duplicate_of,
           selected_albums.album_artists,
           selected_albums.album_is_compilation,
           selected_albums.album_cover_revision,

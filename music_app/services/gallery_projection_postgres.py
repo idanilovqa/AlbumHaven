@@ -620,10 +620,17 @@ def initialize_gallery_membership(config, *, connect=None):
 def finish_full_relation_publication(connection, config, relation_views):
     """Refresh existing gallery scopes before clearing a full writer's journal."""
     from music_app.services import library_browse_postgres as browse
+    from music_app.services.scoped_relation_projection import _refresh_stray_duplicate_ownership
 
     context = gallery_projection_context(connection)
     if not context or not _membership_installed(connection):
         return
+    album_ids = connection.execute(
+        "select id from library.local_albums where library_id=%s", (context["library_id"],)
+    ).fetchall()
+    _refresh_stray_duplicate_ownership(
+        connection, context["library_id"], (row["id"] for row in album_ids)
+    )
     headers = connection.execute("""select scope_key,view_state,source_generation
         from library.gallery_membership_headers where library_id=%s""",
         (context['library_id'],)).fetchall()

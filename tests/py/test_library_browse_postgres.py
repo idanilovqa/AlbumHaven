@@ -5716,7 +5716,7 @@ def test_search_preview_sql_scopes_missing_candidates_to_bootstrap_library():
     )
 
 
-def test_search_preview_sql_matches_disc_subtitles_outside_the_file_path_prefilter():
+def test_search_preview_sql_matches_disc_subtitles_through_their_own_index():
     from music_app.services.library_browse_postgres import _search_preview_sql
 
     for use_utf8_prefilter in (False, True):
@@ -5724,16 +5724,17 @@ def test_search_preview_sql_matches_disc_subtitles_outside_the_file_path_prefilt
         file_matches = sql.split("file_name_matches as materialized (", 1)[1].split(
             "matched_track_album_ids as materialized (", 1
         )[0]
-        # A disc subtitle (CD name) finds every track on that disc, even when
-        # the UTF-8 prefilter narrows the file-path predicates.
-        path_clause, subtitle_clause = file_matches.split(
-            ")) or lower(btrim(coalesce( library.local_track_files.metadata #>> '{scan_cache,file_entry,disc_subtitle}'",
-            1,
-        )
-
-        assert path_clause.startswith(" select library.local_track_files.track_id")
+        # A disc subtitle (CD name) finds every track on that disc. It is its own
+        # branch so the file-path prefilter never hides it and it never reads every
+        # file's metadata: the partial index from migration 0118 serves it.
+        path_clause, subtitle_clause = file_matches.split(" union ", 1)
+        assert "disc_subtitle" not in path_clause
+        assert (
+            "where btrim(library.local_track_files.metadata #>> "
+            "'{scan_cache,file_entry,disc_subtitle}') <> ''"
+        ) in subtitle_clause
         assert "like lower(%(query_like)s)" in subtitle_clause
-        assert "search_utf8_hex" not in subtitle_clause
+        assert ("search_utf8_hex" in subtitle_clause) is use_utf8_prefilter
 
 
 def test_search_preview_sql_separates_active_and_stale_filename_matches():
@@ -10693,7 +10694,8 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
         "lower(btrim(coalesce(library.local_tracks.title, ''))) "
         "like lower(%(query_like)s)"
     ) in sql
-    assert sql.count("from library.local_track_files where") == 1
+    # File names, then CD names through their own partial index.
+    assert sql.count("from library.local_track_files where") == 2
     assert "matched_track_album_ids as materialized (" in sql
     assert "search_candidate_album_ids as materialized (" in sql
     assert "eligible_matched_track_album_ids as materialized (" in sql

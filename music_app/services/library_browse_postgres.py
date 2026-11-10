@@ -10210,6 +10210,14 @@ def _search_preview_sql(
         if use_utf8_prefilter
         else ""
     )
+    disc_subtitle_prefilter_sql = (
+        "library.search_utf8_hex(lower(btrim("
+        "library.local_track_files.metadata #>> '{scan_cache,file_entry,disc_subtitle}'"
+        "))) like '%%' || "
+        "library.search_utf8_hex(lower(%(query_utf8_prefilter)s)) || '%%' and "
+        if use_utf8_prefilter
+        else ""
+    )
     preview_eligibility_sql = (
         f"""
         track_override_defaults as materialized (
@@ -10352,10 +10360,16 @@ def _search_preview_sql(
                   )
                 )) like lower(%(query_like)s) escape ''
               ))
-              or lower(btrim(coalesce(
-                library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}',
-                ''
-              ))) like lower(%(query_like)s) escape ''
+            union
+            -- A CD name match uses its own partial index (migration 0118).
+            select
+              library.local_track_files.track_id,
+              library.local_track_files.scan_cache_stale
+            from library.local_track_files
+            where btrim(library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}') <> ''
+              and {disc_subtitle_prefilter_sql}lower(btrim(
+                library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}'
+              )) like lower(%(query_like)s) escape ''
         ),
         matched_track_album_ids as materialized (
           select

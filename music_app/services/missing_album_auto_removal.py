@@ -10,36 +10,47 @@ added by mistake and deleted again leave no trace. Both conditions must hold:
    version/split/merge marking, Problematic Files ignore, or "Keep as missing". A cover whose
    origin is unknown counts as chosen (AGENTS.md: ambiguous provenance is never "untouched").
 
-Albums are removed through library.confirm_missing_album_removal, as a confirmed removal is.
+Albums are removed through library.confirm_missing_album_removal, as a confirmed removal is;
+loose tracks through library.remove_deleted_loose_track (migration 0120). Both functions
+re-check under row locks that every file is deleted and no root is unhealthy.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, NamedTuple
 
 
-def remove_untouched_deleted(connection: Any, file_ids: Iterable[int]) -> list[str]:
-    """Remove the albums of these missing files that qualify; returns the removed album keys.
+class AutoRemoval(NamedTuple):
+    album_keys: list[str]
+    loose_track_ids: list[int]
 
-    Loose tracks are not removed yet: the app role may delete tracks only through a
-    security-definer function, which needs a migration of its own.
-    """
+    def __bool__(self) -> bool:
+        return bool(self.album_keys or self.loose_track_ids)
+
+
+def remove_untouched_deleted(connection: Any, file_ids: Iterable[int]) -> AutoRemoval:
+    """Remove the albums and loose tracks of these missing files that qualify."""
     ids = sorted({int(file_id) for file_id in file_ids})
     if not ids:
-        return []
-    album_keys = [
-        str(_value(row, "album_key"))
-        for row in connection.execute(_UNTOUCHED_DELETED_ALBUMS_SQL, {"file_ids": ids}).fetchall()
-    ]
-    removed = []
-    for album_key in album_keys:
-        row = connection.execute(
+        return AutoRemoval([], [])
+    album_keys = []
+    for row in connection.execute(_UNTOUCHED_DELETED_ALBUMS_SQL, {"file_ids": ids}).fetchall():
+        album_key = str(_value(row, "album_key"))
+        removed = connection.execute(
             "select * from library.confirm_missing_album_removal(%(album_key)s)", {"album_key": album_key},
         ).fetchone()
-        if int(_value(row, "removed_album_count") or 0) == 1:
-            removed.append(album_key)
-    return removed
+        if int(_value(removed, "removed_album_count") or 0) == 1:
+            album_keys.append(album_key)
+    track_ids = []
+    for row in connection.execute(_UNTOUCHED_DELETED_LOOSE_TRACKS_SQL, {"file_ids": ids}).fetchall():
+        track_id = int(_value(row, "track_id"))
+        removed = connection.execute(
+            "select * from library.remove_deleted_loose_track(%(track_id)s)", {"track_id": track_id},
+        ).fetchone()
+        if int(_value(removed, "removed_track_count") or 0) == 1:
+            track_ids.append(track_id)
+    return AutoRemoval(album_keys, track_ids)
 
 
 def _value(row: object, key: str) -> object:
@@ -119,4 +130,17 @@ _UNTOUCHED_DELETED_ALBUMS_SQL = f"""
                and nullif(albums.metadata ->> 'remote_cover_url', '') is null
                and nullif(albums.metadata ->> 'cover_selection_provenance', '') is null))
     order by albums.album_key
+"""
+
+# A loose track has no album-level marks; its own touches are the album's per-track ones.
+_UNTOUCHED_DELETED_LOOSE_TRACKS_SQL = f"""
+    select distinct candidate.track_id
+    from (
+      select tracks.id as track_id
+      from library.local_track_files files
+      join library.local_tracks tracks on tracks.id = files.track_id
+      where files.id = any(%(file_ids)s::bigint[]) and tracks.album_id is null
+    ) candidate
+    where not ({_TRACK_TOUCH_CONDITION})
+    order by candidate.track_id
 """

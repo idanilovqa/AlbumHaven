@@ -746,7 +746,7 @@ class PostgresScanCacheAdapter:
                     ).strip()
                 )
             auto_removed = remove_untouched_deleted(connection, missing_file_ids)
-            affected_album_keys.update(auto_removed)
+            affected_album_keys.update(auto_removed.album_keys)
             inventory_changed = inventory_changed or bool(auto_removed)
             retired = connection.execute(
                 _retire_placeholder_albums_sql(), {"album_ids": sorted(prior_album_ids - {0})},

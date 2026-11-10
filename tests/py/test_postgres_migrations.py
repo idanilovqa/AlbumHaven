@@ -465,7 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-78:] == [
+    assert migration_names[-80:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -544,9 +544,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0116_add_problematic_text_corrections.sql",
         "0117_create_problematic_files_snapshots.sql",
         "0118_fold_accents_in_duplicate_identity.sql",
-
-
-        "0119_create_cover_mutation_revisions.sql",
+"0119_create_cover_mutation_revisions.sql",
+        "0120_create_deleted_loose_track_removal_function.sql",
     ]
 
 
@@ -3358,6 +3357,18 @@ def test_cover_mutation_revisions_migration_starts_empty_and_leaves_the_library_
     assert "update library.libraries" not in sql
     assert "insert into" not in sql, "rows start when the first cover is saved; nothing is copied or inferred"
     assert "grant delete" not in sql and "select, insert, update on library.cover_mutation_revisions to album_haven_app" in sql
+
+
+def test_loose_track_removal_function_rechecks_deleted_files_and_root_health():
+    # Owner 2026-11-08: only untouched files that were truly deleted leave no trace.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0120_create_deleted_loose_track_removal_function.sql").read_text(encoding="utf-8"))
+    assert "create or replace function library.remove_deleted_loose_track(target_track_id bigint)" in sql
+    assert "security definer" in sql and "set search_path = pg_catalog" in sql
+    assert "library.local_tracks.album_id is null" in sql, "albums go through confirm_missing_album_removal"
+    assert "missing_reason is distinct from 'deleted'" in sql, "an unreachable file never removes a track"
+    assert "root_unhealthy" in sql and "pg_advisory_xact_lock" in sql
+    assert "revoke all on function library.remove_deleted_loose_track(bigint) from public" in sql
+    assert "grant execute on function library.remove_deleted_loose_track(bigint) to album_haven_app" in sql
 
 
 def test_text_corrections_migration_never_rewrites_local_track_files():

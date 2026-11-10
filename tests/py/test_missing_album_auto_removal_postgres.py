@@ -186,6 +186,77 @@ def test_live_an_unreachable_untouched_album_stays_missing(watcher_repair_invent
     assert _files(fixture)[album.path][:2] == (True, "unreachable")
 
 
+def _loose_track(fixture, name):
+    """Seed one file with no Album tag (a Loose Track), then return its ids and path."""
+    entry = fixture.entry(f"Owner/Loose/{name}.flac", album="")
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        row = connection.execute(
+            """select tracks.id as track_id, tracks.album_id, tracks.library_id, files.id as file_id,
+                      owners.account_id
+               from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               join library.libraries libraries on libraries.id = tracks.library_id
+               join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+               where files.private_path = %s""",
+            (entry["path"],),
+        ).fetchone()
+    assert row["album_id"] is None, "fixture must be a loose track"
+    return SimpleNamespace(**row, path=entry["path"], folder=Path(entry["path"]).parent)
+
+
+def _track_exists(fixture, track_id):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return connection.execute("select 1 from library.local_tracks where id = %s", (track_id,)).fetchone() is not None
+
+
+def _delete_loose_by_watcher(fixture, track):
+    Path(track.path).unlink()
+    _reconcile(fixture, {})(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
+    ))
+
+
+def test_live_untouched_loose_track_whose_file_was_deleted_is_removed(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    track = _loose_track(fixture, "Added By Mistake")
+
+    _delete_loose_by_watcher(fixture, track)
+
+    assert not _track_exists(fixture, track.track_id)
+    assert track.path not in _files(fixture)
+
+
+def test_live_a_loose_track_the_user_rated_stays_missing(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    track = _loose_track(fixture, "Rated")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        _track_preference(connection, track)
+
+    _delete_loose_by_watcher(fixture, track)
+
+    assert _track_exists(fixture, track.track_id)
+    assert _files(fixture)[track.path][:2] == (True, "deleted")
+
+
+def test_live_an_unreachable_loose_track_stays_missing(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    track = _loose_track(fixture, "On A Dropped Drive")
+    root = Path(fixture.roots[0]["path"])
+
+    offline = root.with_name(root.name + "-offline")
+    root.rename(offline)
+    try:
+        _reconcile(fixture, {})(SimpleNamespace(
+            root_id="repair-main", paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
+        ))
+    finally:
+        offline.rename(root)
+
+    assert _track_exists(fixture, track.track_id)
+    assert _files(fixture)[track.path][:2] == (True, "unreachable")
+
+
 def test_live_keep_as_missing_is_recorded_and_keeps_the_album(watcher_repair_inventory):
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 

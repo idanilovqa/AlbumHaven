@@ -10088,5 +10088,73 @@
     },
     "globalMutationReason": "The case changes the server-wide generated-preview policy and files only in its isolated database, app process, and owned media copy, then verifies reverse relocation and cleans that owned state during teardown.",
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres and links",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:matched-and-credited-artist"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-header-pills",
+      "mbid-panel-links",
+      "mbid-credited-name"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-matched-artist"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:split-and-person-with-band"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-split-identities",
+      "mbid-album-details-identity",
+      "mbid-person-with-band"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-split-artist"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:unconfirmed-match"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-filter-first-page",
+      "mbid-suggested-artist"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-unconfirmed-artist"
+    },
+    "ownerApproval": "approved"
   }
 ]

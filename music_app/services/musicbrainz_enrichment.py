@@ -11,8 +11,8 @@ from music_app.services.musicbrainz_evidence import (
     SPECIAL_PURPOSE_ARTISTS,
     album_level,
     album_rank,
+    TITLE_RANK,
     album_signals,
-    best_title_match,
     group_title_keys,
     ranked_title_matches,
     candidate_name_keys,
@@ -292,7 +292,6 @@ _MAX_BROWSE_PAGES = 5
 _NAME_ONLY_BROWSE_PAGES = 2
 _MAX_ALBUM_SEARCHES = 6
 _MAX_TRACKLISTS_PER_CANDIDATE = 8
-_TITLE_ORDER = {"exact": 0, "fuzzy": 1, "typo": 2, "partial": 3, "tracks": 4}
 # Other release groups whose title agrees, tried when the first one's tracks differ.
 _MAX_ALTERNATIVE_GROUPS = 2
 # Other releases of one group compared when the closest one's tracks differ.
@@ -449,8 +448,7 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         else:
             owners = [decision["selected"]]
         checked = [candidate for candidate in owners if not candidate.get("discs_checked")
-                   and any(_open_to_other_releases(evidence) or evidence["title"] == "partial"
-                           for evidence in candidate["albums"])]
+                   and any(map(_improvable, candidate["albums"]))]
         for candidate in checked:
             candidate["discs_checked"] = True
             # Undecided: every release's own title, then the tracks alone for the artist
@@ -661,7 +659,7 @@ def _gather_album_evidence(candidate, albums, local_name, mirror, *, pages: int 
         release = candidate["releases"].get(index) or {}
         release_title = title_agreement(album["title"], release.get("release_group_title") or release.get("title"),
                                         names) if release.get("release_group_id") else None
-        if release_title and (not best or _TITLE_ORDER[release_title] < _TITLE_ORDER[best_title]):
+        if release_title and (not best or TITLE_RANK[release_title] < TITLE_RANK[best_title]):
             # The searched release agrees better than any group title (an English
             # pseudo-release of a soundtrack beside a single "from" it).
             best, best_title = {"id": release["release_group_id"],
@@ -669,15 +667,14 @@ def _gather_album_evidence(candidate, albums, local_name, mirror, *, pages: int 
                                 "first_release_date": release.get("date")}, release_title
         if not best or release.get("release_group_id") != best.get("id"):
             release = {}
-        else:
-            ranked = [match for match in ranked if match[0].get("id") != best.get("id")]
         remote = {"first_release_date": (best or {}).get("first_release_date") or release.get("date"),
                   "track_count": release.get("track_count")}
         signals = album_signals(album, remote) if best_title else set()
         candidate["albums"].append({"title": best_title, "group": best, "remote": remote, "signals": signals,
                                     "level": album_level(best_title, signals), "release_id": release.get("id"),
-                                    "disc": None,
-                                    "alternatives": [match for match in ranked if match[0] is not best][:_MAX_ALTERNATIVE_GROUPS]})
+                                    "disc": None, "alternatives": [
+                                        match for match in ranked if match[0].get("id") != (best or {}).get("id")
+                                    ][:_MAX_ALTERNATIVE_GROUPS]})
     _compare_tracks(candidate, albums, mirror)
 
 
@@ -701,6 +698,21 @@ def _open_to_other_releases(evidence: dict[str, object]) -> bool:
     return not evidence["level"] or (evidence["level"] != "strong" and "tracks_differ" in evidence["signals"])
 
 
+def _improvable(evidence: dict[str, object]) -> bool:
+    """Open to other releases, or held only by a partial title another release may beat
+    ("Contain Us 10"" is a disc, not the whole "Contain Us")."""
+    return _open_to_other_releases(evidence) or evidence["title"] == "partial"
+
+
+def _better_than(entry: dict[str, object], evidence: dict[str, object]) -> bool:
+    return _open_to_other_releases(evidence) or TITLE_RANK[entry["title"]] < TITLE_RANK[evidence["title"]]
+
+
+def _as_group(release: dict[str, object]) -> dict[str, object]:
+    return {"id": release.get("release_group_id"), "title": release.get("title"),
+            "first_release_date": release.get("date")}
+
+
 def _artist_releases(candidate, mirror) -> list[dict[str, object]] | None:
     """The candidate's releases with their discs, fetched once for release titles,
     tracklist comparisons and box sets. None when the budget is spent."""
@@ -716,9 +728,7 @@ def _release_evidence(album, release, title) -> dict[str, object]:
     remote = {"first_release_date": release.get("date"),
               "track_count": sum(int(disc.get("track_count") or 0) for disc in release.get("discs") or []) or None}
     signals = album_signals(album, remote)
-    return {"title": title, "group": {"id": release.get("release_group_id"), "title": release.get("title"),
-                                      "first_release_date": release.get("date")},
-            "remote": remote, "signals": signals, "level": album_level(title, signals),
+    return {"title": title, "group": _as_group(release), "remote": remote, "signals": signals, "level": album_level(title, signals),
             "release_id": release.get("id"), "disc": None, "alternatives": []}
 
 
@@ -732,16 +742,15 @@ def _match_release_titles(candidate, albums, names, mirror) -> None:
     keyed = [(release, title_keys(release.get("title"), names)) for release in releases
              if release.get("release_group_id")]
     for index, evidence in enumerate(candidate["albums"]):
-        loose = evidence["title"] in {"typo", "partial"}
-        if not _open_to_other_releases(evidence) and not loose:
+        if not _improvable(evidence):
             continue
         ranked = ranked_title_matches(albums[index]["title"], keyed, names)
-        if ranked and (not loose or _TITLE_ORDER[ranked[0][1]] < _TITLE_ORDER[evidence["title"]]):
-            # A release titled exactly like the album (an English pseudo-release of a
-            # soundtrack) wins over a group that only contains its title.
+        # A release titled exactly like the album (an English pseudo-release of a
+        # soundtrack) wins over a group that only contains its title.
+        if ranked and _better_than({"title": ranked[0][1]}, evidence):
             release, title = ranked[0]
-            candidate["albums"][index] = {**_release_evidence(albums[index], release, title),
-                                          "alternatives": [(r, t) for r, t in ranked[1:1 + _MAX_ALTERNATIVE_GROUPS]]}
+            candidate["albums"][index] = {**_release_evidence(albums[index], release, title), "alternatives": [
+                (_as_group(other), agreement) for other, agreement in ranked[1:1 + _MAX_ALTERNATIVE_GROUPS]]}
 
 
 def _match_tracks_alone(candidate, albums, mirror) -> None:
@@ -808,10 +817,7 @@ def _fetch_tracks(evidence: dict[str, object], album: dict[str, object], mirror)
         # Its tracks differ: the next group whose title agrees may be the album (a
         # compilation's group came first).
         group, title = alternatives.pop(0)
-        evidence.update({"title": title, "group": {"id": group.get("release_group_id") or group.get("id"),
-                                                   "title": group.get("title"),
-                                                   "first_release_date": group.get("first_release_date") or group.get("date")},
-                         "remote": {"first_release_date": group.get("first_release_date") or group.get("date")},
+        evidence.update({"title": title, "group": group, "remote": {"first_release_date": group.get("first_release_date")},
                          "release_id": None})
 
 
@@ -826,9 +832,7 @@ def _match_box_set_discs(candidate, albums, local_name, mirror) -> None:
         return
     names = tuple(name for name in (local_name, candidate.get("canonical_name")) if name)
     for index, evidence in enumerate(candidate["albums"]):
-        # A partial title ("Contain Us 10"" holds "Contain Us"), or one whose tracks
-        # differ, may still be one disc of a box set.
-        if not _open_to_other_releases(evidence) and evidence["title"] != "partial":
+        if not _improvable(evidence):
             continue
         album = albums[index]
         local_count = len(album.get("tracks") or [])
@@ -860,7 +864,7 @@ def _match_box_set_discs(candidate, albums, local_name, mirror) -> None:
                         generic and int(disc.get("position") or 0) > 1)
                 if best is None or rank > best_rank:
                     best, best_rank = entry, rank
-        if best and (evidence["title"] != "partial" or best["title"] == "exact"):
+        if best and _better_than(best, evidence):
             candidate["albums"][index] = best
 
 

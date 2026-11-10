@@ -19491,6 +19491,34 @@
 }
 ]
 },
+"/release/2b16dad5-bcd7-42e5-9df6-c4d4eb904771?inc=recordings&fmt=json": {
+"media": [
+{
+"tracks": [
+{
+"length": 181056,
+"title": "I’m Eighteen"
+},
+{
+"length": 210391,
+"title": "School’s Out"
+},
+{
+"length": 171853,
+"title": "Under My Wheels"
+},
+{
+"length": 187070,
+"title": "No More Mr. Nice Guy"
+},
+{
+"length": 223254,
+"title": "Billion Dollar Babies"
+}
+]
+}
+]
+},
 "/release/2c518a0c-46f0-4df7-abc3-3c99c86111d2?inc=recordings&fmt=json": {
 "media": [
 {
@@ -47188,6 +47216,19 @@
 "media": [
 {
 "track-count": 9
+}
+]
+}
+]
+},
+"/release?release-group=a180cb75-1b9b-4bb1-83be-a90ac5f3ab8a&inc=media&fmt=json&limit=25": {
+"releases": [
+{
+"date": "2005-05-24",
+"id": "2b16dad5-bcd7-42e5-9df6-c4d4eb904771",
+"media": [
+{
+"track-count": 5
 }
 ]
 }

@@ -84,8 +84,8 @@ def _numbers_as_digits(text: str) -> str:
     out: list[str] = []
     for word in text.split():
         value = _NUMBER_WORDS.get(word)
-        if value is not None and value < 10 and out and out[-1].isdigit() and out[-1].endswith("0") \
-                and int(out[-1]) >= 20 and out[-1] != "0":
+        if value is not None and 0 < value < 10 and out and out[-1].isdigit() \
+                and int(out[-1]) >= 20 and int(out[-1]) % 10 == 0:
             out[-1] = str(int(out[-1]) + value)
         else:
             out.append(str(value) if value is not None else word)
@@ -236,7 +236,8 @@ def _contained(a: str, b: str) -> bool:
     script written without spaces: "차연" in "차연 差延"), or most words shared with a
     distinctive one among them ("Keys to the Paradise" and "Keys to the Palace")."""
     small, large = sorted((set(a.split()), set(b.split())), key=len)
-    if small < large and (len(small) >= 2 or _DENSE_SCRIPT.search(next(iter(small), "")) and len(a) > 1 < len(b)):
+    dense_word = len(small) == 1 and len(next(iter(small))) >= 2 and _DENSE_SCRIPT.search(next(iter(small)))
+    if small < large and (len(small) >= 2 or dense_word):
         return True
     shared = small & large
     return len(shared) >= 2 and len(shared) / len(small | large) >= 0.5 and any(len(word) >= 4 for word in shared)
@@ -260,33 +261,25 @@ def _key_agreement(local: set[str], remote: set[str]) -> str | None:
     return None
 
 
-def _partial_agreement(local: set[str], remote: set[str]) -> bool:
-    local = {key for key in local if not key.startswith(_SPACELESS)}
-    return any(_contained(a, b) for a in local for b in remote)
+def _agreement(local: set[str], local_title: object, remote: set[str], remote_title: object) -> str | None:
+    agreement = _key_agreement(local, remote)
+    if agreement:
+        return agreement
+    local = {key for key in local | _subtitle_keys(local_title) if not key.startswith(_SPACELESS)}
+    remote = remote | _subtitle_keys(remote_title)
+    return "partial" if local & remote or any(_contained(a, b) for a in local for b in remote) else None
 
 
 def title_agreement(local_title: object, remote_title: object, artist_names: tuple[str, ...] = ()) -> str | None:
     """"exact" when keys agree; "fuzzy" for a near spelling of a title of 8+ characters;
     "typo" within a bounded edit distance; "partial" when one title holds the other's
     words or subtitle. Typo and partial titles count only with a matching tracklist."""
-    local, remote = title_keys(local_title, artist_names), title_keys(remote_title, artist_names)
-    agreement = _key_agreement(local, remote)
-    if agreement:
-        return agreement
-    local |= _subtitle_keys(local_title)
-    remote |= _subtitle_keys(remote_title)
-    return "partial" if local & remote or _partial_agreement(local, remote) else None
+    return _agreement(title_keys(local_title, artist_names), local_title,
+                      title_keys(remote_title, artist_names), remote_title)
 
 
-def best_title_match(local_title: object, groups: list[tuple[dict, set[str]]],
-                     artist_names: tuple[str, ...] = ()) -> tuple[dict | None, str | None]:
-    """The release group agreeing best with a local album, from groups whose title
-    keys were computed once: an exact title wins over a near spelling."""
-    ranked = ranked_title_matches(local_title, groups, artist_names)
-    return ranked[0] if ranked else (None, None)
-
-
-_TITLE_RANK = {"exact": 0, "fuzzy": 1, "typo": 2, "partial": 3}
+# Best first; "tracks" is a release matched by its tracklist alone, with no title.
+TITLE_RANK = {"exact": 0, "fuzzy": 1, "typo": 2, "partial": 3, "tracks": 4}
 
 
 def ranked_title_matches(local_title: object, groups: list[tuple[dict, set[str]]],
@@ -296,15 +289,9 @@ def ranked_title_matches(local_title: object, groups: list[tuple[dict, set[str]]
     before one that only contains it (a "Workin', Relaxin', Steamin'" compilation)."""
     local = title_keys(local_title, artist_names)
     local_folded = fold(local_title)
-    matches = []
-    for group, keys in groups:
-        agreement = "exact" if local & keys else _key_agreement(local, keys)
-        if not agreement:
-            agreement = "partial" if (local | _subtitle_keys(local_title)) & (keys | _subtitle_keys(group.get("title"))) \
-                or _partial_agreement(local, keys) else None
-        if agreement:
-            matches.append((group, agreement))
-    return sorted(matches, key=lambda item: (_TITLE_RANK[item[1]], fold(item[0].get("title")) != local_folded))
+    matches = [(group, agreement) for group, keys in groups
+               if (agreement := _agreement(local, local_title, keys, group.get("title")))]
+    return sorted(matches, key=lambda item: (TITLE_RANK[item[1]], fold(item[0].get("title")) != local_folded))
 
 
 def _year(value: object) -> int | None:
@@ -388,8 +375,7 @@ def album_level(title: str | None, signals: set[str]) -> str | None:
     evidence = signals & _EVIDENCE_SIGNALS
     if title in {"typo", "partial", "tracks"} and "track_list" not in evidence:
         return None
-    if title == "tracks" and not signals & {"durations", "lengths_unknown"} or (
-            title == "tracks" and "track_count" not in evidence):
+    if title == "tracks" and ("track_count" not in evidence or not signals & {"durations", "lengths_unknown"}):
         # Tracks alone, with no title to agree, need their count and lengths too.
         return None
     if len(evidence) >= 2 and "tracks_differ" not in signals:

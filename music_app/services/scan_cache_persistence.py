@@ -4747,9 +4747,12 @@ def _load_cover_mutation_revision_sql() -> str:
         select coalesce(
           nullif(library.libraries.metadata ->> 'cover_mutation_revision', '')::bigint,
           0
-        ) as cover_mutation_revision
+        ) + coalesce(library.cover_mutation_revisions.cover_mutation_revision, 0)
+          as cover_mutation_revision
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
+        left join library.cover_mutation_revisions
+          on library.cover_mutation_revisions.library_id = library.libraries.id
         limit 1;
     """
 
@@ -4766,18 +4769,10 @@ def _increment_cover_mutation_revision_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         )
-        update library.libraries
-           set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
-             || jsonb_build_object(
-                  'cover_mutation_revision',
-                  coalesce(
-                    nullif(library.libraries.metadata ->> 'cover_mutation_revision', '')::bigint,
-                    0
-                  ) + 1
-                ),
-               updated_at = now()
-        from bootstrap_context
-        where library.libraries.id = bootstrap_context.library_id;
+        insert into library.cover_mutation_revisions as revisions (library_id, cover_mutation_revision)
+        select library_id, 1 from bootstrap_context
+        on conflict (library_id) do update
+          set cover_mutation_revision = revisions.cover_mutation_revision + 1;
     """
 
 

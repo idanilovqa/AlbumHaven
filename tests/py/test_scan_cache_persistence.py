@@ -1521,7 +1521,10 @@ def test_postgres_cover_selection_updates_only_targeted_inventory_rows_transacti
         "local_cover_width": 2000, "local_cover_height": 2000,
     }
     assert connection.exit_exc_type is None
-    assert all("insert into library." not in _normalized_sql(sql) for sql, _params in connection.executed)
+    inserts = [_normalized_sql(sql) for sql, _params in connection.executed if "insert into library." in _normalized_sql(sql)]
+    assert len(inserts) == 1 and "insert into library.cover_mutation_revisions" in inserts[0], (
+        "only the cover counter may be inserted; inventory rows are only updated"
+    )
 
 
 @pytest.mark.parametrize("cover_selection_origin", ["user", "automatic"])
@@ -1708,7 +1711,7 @@ def test_automatic_cover_persistence_reports_concurrent_user_selection_without_w
     }
     normalized_calls = [_normalized_sql(sql) for sql, _params in connection.executed]
     assert not any(
-        "cover_mutation_revision" in sql and "update library.libraries" in sql
+        "insert into library.cover_mutation_revisions" in sql
         for sql in normalized_calls
     )
     assert [
@@ -1814,7 +1817,7 @@ def test_explicit_expected_cover_state_guards_partial_and_null_baselines(monkeyp
     assert "blocked_by_expected_cover_state" in sql
     assert "%(expected_cover_selection_origin)s" in sql
     assert "%(expected_cover_revision)s" in sql
-    revision_writes = [sql for sql, _ in connection.executed if "cover_mutation_revision" in sql and "update library.libraries" in _normalized_sql(sql)]
+    revision_writes = [sql for sql, _ in connection.executed if "insert into library.cover_mutation_revisions" in _normalized_sql(sql)]
     assert len(revision_writes) == (0 if blocked else 1)
     assert guards == ([] if blocked else [True])
     assert result == ({"album_rows_updated": 0, "track_file_rows_updated": 0, "blocked_by_expected_cover_state": True} if blocked else {"album_rows_updated": 1, "track_file_rows_updated": 1})
@@ -1927,8 +1930,7 @@ def test_postgres_cover_selection_rejects_stale_inventory_revision_after_lock_be
                 events.append("inventory-revision-read")
                 return FakeCursor([{"inventory_mutation_revision": 12}])
             elif (
-                "cover_mutation_revision" in normalized_sql
-                and "update library.libraries" in normalized_sql
+                "insert into library.cover_mutation_revisions" in normalized_sql
             ):
                 events.append("cover-revision-increment")
             elif "updated_albums" in normalized_sql:
@@ -1993,7 +1995,7 @@ def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exi
             normalized_sql = _normalized_sql(sql)
             if "local-inventory-publication" in normalized_sql:
                 events.append("publication-lock")
-            if "cover_mutation_revision" in normalized_sql and "update library.libraries" in normalized_sql:
+            if "insert into library.cover_mutation_revisions" in normalized_sql:
                 events.append("revision-increment")
             cursor = super().execute(sql, params)
             if "updated_albums" in normalized_sql:

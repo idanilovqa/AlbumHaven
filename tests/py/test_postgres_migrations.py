@@ -544,6 +544,9 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0116_add_problematic_text_corrections.sql",
         "0117_create_problematic_files_snapshots.sql",
         "0118_fold_accents_in_duplicate_identity.sql",
+
+
+        "0119_create_cover_mutation_revisions.sql",
     ]
 
 
@@ -3346,6 +3349,15 @@ def test_relation_compatibility_migration_is_additive_and_has_no_backfill():
     assert 'update library.' not in ddl
     assert 'delete from' not in ddl
     assert 'drop table' not in sql
+
+
+def test_cover_mutation_revisions_migration_starts_empty_and_leaves_the_library_row_alone():
+    # Owner UI-14: the counter's own table keeps cover saves from rewriting the library row.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0119_create_cover_mutation_revisions.sql").read_text(encoding="utf-8"))
+    assert "create table if not exists library.cover_mutation_revisions" in sql
+    assert "update library.libraries" not in sql
+    assert "insert into" not in sql, "rows start when the first cover is saved; nothing is copied or inferred"
+    assert "grant delete" not in sql and "select, insert, update on library.cover_mutation_revisions to album_haven_app" in sql
 
 
 def test_text_corrections_migration_never_rewrites_local_track_files():

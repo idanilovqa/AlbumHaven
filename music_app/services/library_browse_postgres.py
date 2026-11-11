@@ -548,6 +548,7 @@ class PostgresLibraryBrowseRepository:
         self,
         *,
         query_params: Mapping[str, object] | None = None,
+        rebuild_missing_snapshot: bool = False,
     ) -> dict[str, object]:
         """Loose Tracks alone: no gallery is built or sent (owner PERF-1)."""
         params = query_params or {}
@@ -557,24 +558,30 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as connection:
             tracks = self._load_non_album_track_snapshot(connection)
             relation_alias_maps = None
-            if tracks is None and selected_artist:
-                if not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
-                    cache_key = self._utility_projection_cache_key("loose-tracks")
-                    with _UTILITY_PROJECTION_CACHE_LOCK:
-                        snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
-                    if snapshot_marked_ready:
-                        invalidate_postgres_utility_projection_cache(
-                            database_url=self._database_url,
-                            kinds=("loose-tracks",),
-                        )
-                    self.queue_utility_projection_prewarm("loose-tracks")
+            if (
+                tracks is None
+                and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                and not rebuild_missing_snapshot
+            ):
+                cache_key = self._utility_projection_cache_key("loose-tracks")
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
+                if snapshot_marked_ready:
+                    invalidate_postgres_utility_projection_cache(
+                        database_url=self._database_url,
+                        kinds=("loose-tracks",),
+                    )
+                self.queue_utility_projection_prewarm("loose-tracks")
                 if _request_flag(params.get("availability")):
                     return {
                         "non_album_track_count": 0,
                         "non_album_tracks_deferred": True,
                     }
+                deferred_key = (
+                    "non_album_tracks" if selected_artist else "library_non_album_tracks"
+                )
                 return {
-                    "non_album_tracks": [],
+                    deferred_key: [],
                     "non_album_tracks_deferred": True,
                     "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
                 }
@@ -4485,7 +4492,7 @@ class PostgresLibraryBrowseRepository:
             elif kind == "rules":
                 self.build_utility_rules_payload()
             elif kind == "loose-tracks":
-                self.build_library_loose_tracks_payload()
+                self.build_library_loose_tracks_payload(rebuild_missing_snapshot=True)
                 self._set_cached_utility_projection(
                     kind,
                     {"ready": True},

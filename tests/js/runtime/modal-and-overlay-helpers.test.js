@@ -381,15 +381,20 @@ test('artist loose-track availability automatically retries a deferred snapshot 
   assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
 });
 
-test('library loose tracks retry a deferred snapshot and follow inventory revision', async () => {
+test('library loose tracks automatically retry a deferred snapshot and follow inventory revision', async () => {
   const { context } = loadHelper();
   const requested = [];
+  const timers = [];
   const responses = [
     { library_non_album_tracks: [], non_album_tracks_deferred: true },
     { library_non_album_tracks: [{ path: '/music/loose.flac', title: 'Loose' }] },
   ];
   context.URL = URL;
   context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
   context.state.status = { inventory_mutation_revision: 7 };
   context.state.view = { visible_library_categories: ['main_library'] };
   context.fetch = async (url) => {
@@ -399,7 +404,10 @@ test('library loose tracks retry a deferred snapshot and follow inventory revisi
 
   assert.deepEqual(await context.hydrateLibraryNonAlbumTracks(), []);
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
-  assert.equal((await context.hydrateLibraryNonAlbumTracks())[0].title, 'Loose');
+  assert.equal(requested.length, 1);
+  assert.equal(timers.length, 1);
+  await timers[0].callback();
+  assert.equal(context.state.view.library_non_album_tracks[0].title, 'Loose');
   assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('inventory_revision'), '7');
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
   context.state.status.inventory_mutation_revision = 8;

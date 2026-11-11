@@ -1848,10 +1848,45 @@ def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
         lambda _connection, tracks, fingerprint: stored.append((tracks, fingerprint)),
     )
 
-    repository.build_library_loose_tracks_payload(query_params={"q": "Family"})
+    repository.build_library_loose_tracks_payload(
+        query_params={"q": "Family"},
+        rebuild_missing_snapshot=True,
+    )
 
     assert loaded_queries == [""]
     assert stored == [([], "fingerprint-before-build")]
+
+
+def test_global_loose_tracks_defer_missing_snapshot_to_background_prewarm(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    queued = []
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("the request must not rebuild the global snapshot"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "queue_utility_projection_prewarm",
+        lambda kind: queued.append(kind),
+    )
+
+    payload = repository.build_library_loose_tracks_payload()
+
+    assert payload["library_non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
+    assert queued == ["loose-tracks"]
 
 
 def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
@@ -16861,7 +16896,7 @@ def test_non_album_snapshot_prewarm_builds_and_registers_invalidation_refresh(mo
     monkeypatch.setattr(
         repository,
         "build_library_loose_tracks_payload",
-        lambda: builds.append("built") or {"library_non_album_tracks": []},
+        lambda **kwargs: builds.append(kwargs) or {"library_non_album_tracks": []},
     )
     monkeypatch.setattr(
         module,
@@ -16884,7 +16919,7 @@ def test_non_album_snapshot_prewarm_builds_and_registers_invalidation_refresh(mo
             kinds=("loose-tracks",),
         )
 
-        assert builds == ["built"]
+        assert builds == [{"rebuild_missing_snapshot": True}]
         assert len(timers) == 1
         assert timers[0][0] == module._UTILITY_PROJECTION_REWARM_DELAY_SECONDS
     finally:

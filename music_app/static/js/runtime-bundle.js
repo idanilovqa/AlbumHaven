@@ -15331,7 +15331,10 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
       return state.view?.library_non_album_tracks || [];
     }
-    if (payload?.non_album_tracks_deferred) return tracks;
+    if (payload?.non_album_tracks_deferred) {
+      request.deferred = true;
+      return tracks;
+    }
     if (searching && !searchMatched) {
       state.view.library_non_album_search_probe_scope = scopeKey;
       if (!resolveLibrary) {
@@ -15352,7 +15355,16 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })().finally(() => {
-    if (libraryNonAlbumHydrationRequest === request) libraryNonAlbumHydrationRequest = null;
+    if (libraryNonAlbumHydrationRequest !== request) return;
+    libraryNonAlbumHydrationRequest = null;
+    if (request.deferred) {
+      scheduleBrowserTimeout(() => {
+        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
+        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
+          if (typeof warn === 'function') warn(error);
+        });
+      }, 250);
+    }
   });
   libraryNonAlbumHydrationRequest = request;
   return request.promise;

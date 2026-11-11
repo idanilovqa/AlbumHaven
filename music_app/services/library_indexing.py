@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
@@ -23,7 +24,7 @@ from music_app.services.metadata import (
     schema_upgrade_requires_file_read,
     upgrade_stored_file_entry,
 )
-from music_app.services.cue_program import CueProgram, parse_cue_program
+from music_app.services.cue_program import CueProgram, parse_cue_program, resolve_cue_timeline
 
 
 _REMOTE_COVER_KEYS = (
@@ -57,6 +58,7 @@ class CueSourceCandidate:
     revision_sha256: str
     media_paths: tuple[Path, ...]
     program: CueProgram
+    root_id: str = ""
 
 
 def _cue_text(source_bytes: bytes) -> str:
@@ -104,6 +106,7 @@ def discover_cue_sources(
     metadata_by_path: Mapping[str, Mapping[str, object]] | None = None,
     supported_extensions: set[str] | None = None,
     max_bytes: int = 1024 * 1024,
+    root_id: str = "",
 ) -> tuple[CueSourceCandidate, ...]:
     """Discover private external and embedded CUE programs under one root."""
     resolved_root = Path(root).resolve(strict=False)
@@ -156,6 +159,21 @@ def discover_cue_sources(
                     root=resolved_root,
                     supported_extensions=supported,
                 )
+                media_frames: dict[str, int] = {}
+                for source_ref in program.files:
+                    normalized_ref = source_ref.replace("\\", "/").casefold().lstrip("/")
+                    matching_paths = [
+                        media_path for media_path in media_paths
+                        if str(media_path).replace("\\", "/").casefold().endswith(f"/{normalized_ref}")
+                    ]
+                    if len(matching_paths) != 1:
+                        continue
+                    media_entry = metadata.get(str(matching_paths[0])) or {}
+                    duration = media_entry.get("duration_seconds") if isinstance(media_entry, Mapping) else None
+                    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration):
+                        media_frames[source_ref] = max(0, round(float(duration) * 75))
+                if media_frames:
+                    program = resolve_cue_timeline(program, media_frames=media_frames)
             candidates.append(CueSourceCandidate(
                 source_kind=source_kind,
                 source_identity=source_identity,
@@ -163,6 +181,7 @@ def discover_cue_sources(
                 revision_sha256=program.revision_sha256,
                 media_paths=media_paths,
                 program=program,
+                root_id=str(root_id or ""),
             ))
     return tuple(sorted(candidates, key=lambda candidate: (candidate.source_identity.casefold(), candidate.source_kind)))
 _SCAN_PARTIAL_ALBUM_PUBLISH_INTERVAL_FILES = 1000
@@ -981,6 +1000,8 @@ def scan_library_file_cache(
     cue_candidates: list[CueSourceCandidate] = []
     for root in roots:
         resolved_root = root.resolve(strict=False)
+        matched_root = root_definition_for_path(configured_root_definitions, resolved_root)
+        root_id = str(matched_root.get("id") or "") if isinstance(matched_root, dict) else ""
 
         def belongs_to_root(candidate: Path) -> bool:
             try:
@@ -998,6 +1019,7 @@ def scan_library_file_cache(
             root_paths,
             metadata_by_path=updated_file_cache,
             supported_extensions=supported_extensions,
+            root_id=root_id,
         ))
     library_state["_cue_source_candidates"] = tuple(cue_candidates)
     publication_target["_cue_source_candidates"] = tuple(cue_candidates)

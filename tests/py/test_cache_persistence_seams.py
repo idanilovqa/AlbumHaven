@@ -235,6 +235,32 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
     assert not cache_path.exists()
 
 
+def test_runtime_cache_save_reconciles_full_scan_cue_candidates_after_inventory(monkeypatch, tmp_path):
+    calls = []
+
+    class Candidate:
+        root_id = "main"
+
+    class Adapter:
+        def save_snapshot(self, *_args, **_kwargs):
+            calls.append("snapshot")
+            return {"ready": True}
+
+        def reconcile_cue_sources(self, **kwargs):
+            calls.append((kwargs["root_id"], kwargs["candidates"]))
+
+    monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: Adapter())
+
+    candidate = Candidate()
+    result = cache_module.save_cache_to_disk_for_config(
+        {}, tmp_path / "unused.json", {}, "root", 1.0,
+        cue_candidates=(candidate,),
+    )
+
+    assert result == {"ready": True}
+    assert calls == ["snapshot", ("main", (candidate,))]
+
+
 def test_runtime_cache_save_propagates_postgres_adapter_selection_failure(
     tmp_path,
     monkeypatch,

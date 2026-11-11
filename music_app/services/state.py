@@ -900,6 +900,9 @@ def refresh_relation_views_for_state(
                 commit_action,
             )
         )
+        snapshot_options["cue_candidates"] = tuple(
+            target_state.get("_cue_source_candidates") or ()
+        )
     elif guarded_live_repair:
         snapshot_options["publication_commit_guard"] = (
             lambda commit_action: _run_snapshot_commit_for_current_generation(

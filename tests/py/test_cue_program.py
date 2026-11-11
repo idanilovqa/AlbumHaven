@@ -64,6 +64,21 @@ FILE image.flac WAVE
     assert audio.postgap_frames == 75
 
 
+def test_parse_keeps_musicbrainz_identity_with_the_track():
+    program = parse_cue_program(
+        'FILE "image.flac" WAVE\n'
+        '  TRACK 01 AUDIO\n'
+        '    REM MUSICBRAINZ_TRACKID 12345678-1234-1234-1234-123456789abc\n'
+        '    INDEX 01 00:00:00\n',
+        source_name="album.cue",
+    )
+
+    assert program.tracks[0].provenance == (
+        ("REM", "MUSICBRAINZ_TRACKID", "12345678-1234-1234-1234-123456789abc"),
+    )
+    assert program.provenance == ()
+
+
 def test_resolve_uses_next_index01_and_decoded_final_duration():
     parsed = parse_cue_program(
         """TITLE "Album"

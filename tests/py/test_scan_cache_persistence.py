@@ -175,6 +175,149 @@ def test_cue_track_rows_disambiguate_duplicate_evidence_and_reject_unresolved_tr
         _cue_track_rows(unresolved)
 
 
+def test_cue_track_rows_use_musicbrainz_identity_before_mutable_metadata():
+    from music_app.services.cue_program import CueProgram, CueTrack
+    from music_app.services.scan_cache_persistence import _cue_track_rows
+
+    provenance = (("REM", "MUSICBRAINZ_TRACKID", "12345678-1234-1234-1234-123456789ABC"),)
+    original = CueProgram("Old Album", "Old Artist", ("image.flac",), (
+        CueTrack(1, "AUDIO", "Old Title", "Old Artist", "image.flac", (),
+                 start_frame=0, end_frame=75, provenance=provenance),
+    ), "a" * 64, ())
+    corrected = CueProgram("New Album", "New Artist", ("renamed.flac",), (
+        CueTrack(8, "AUDIO", "New Title", "New Artist", "renamed.flac", (),
+                 start_frame=100, end_frame=175, provenance=provenance),
+    ), "b" * 64, ())
+
+    original_row = _cue_track_rows(original)[0]
+    assert original_row["track_key"] == _cue_track_rows(corrected)[0]["track_key"]
+    assert original_row["provenance"] == provenance
+
+
+def test_persist_cue_program_revision_replaces_segments_in_one_commit(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cue_program import CueProgram, CueTrack
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    tracks = (
+        CueTrack(1, "AUDIO", "First", "Artist", "image.flac", (), start_frame=0, end_frame=75),
+        CueTrack(2, "AUDIO", "Second", "Artist", "image.flac", (), start_frame=75, end_frame=225),
+    )
+    program = CueProgram("Album", "Artist", ("image.flac",), tracks, "d" * 64, ())
+    candidate = SimpleNamespace(
+        source_kind="external",
+        source_identity="Artist/Album/album.cue",
+        source_bytes=b"cue bytes",
+        revision_sha256=program.revision_sha256,
+        media_paths=(Path("C:/Music/Artist/Album/image.flac"),),
+        program=program,
+    )
+    track_rows = persistence._cue_track_rows(program)
+
+    class CueConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            normalized = _normalized_sql(sql)
+            if "cue_persistence_context" in normalized:
+                return FakeCursor([{"library_id": 1, "library_root_id": 2, "album_id": 3, "artist_id": 4}])
+            if "cue_existing_tracks" in normalized:
+                return FakeCursor([{"id": 10, "track_key": track_rows[0]["track_key"]}])
+            if "cue_previous_program" in normalized:
+                return FakeCursor([{"id": 5, "revision_sha256": "c" * 64}])
+            if "insert into library.cue_programs" in normalized:
+                return FakeCursor([{"id": 6}])
+            if "insert into library.cue_media_sources" in normalized:
+                return FakeCursor([{"id": 20, "private_path": params["private_path"]}])
+            if "insert into library.local_tracks" in normalized:
+                return FakeCursor([{
+                    "id": 10 if params["track_key"] == track_rows[0]["track_key"] else 11,
+                    "track_key": params["track_key"],
+                }])
+            if "cue_retired_tracks" in normalized:
+                return FakeCursor([{"track_id": 99}])
+            return cursor
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    connection = CueConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    )
+
+    result = adapter.persist_cue_program_revision(root_id="main", candidate=candidate)
+
+    assert result.preserved_track_ids == (10,)
+    assert result.new_track_ids == (11,)
+    assert result.retired_track_ids == (99,)
+    assert result.active_revision_sha256 == "d" * 64
+    assert connection.commit_calls == 1
+    normalized_calls = [_normalized_sql(sql) for sql, _params in connection.executed]
+    previous_program_sql = next(sql for sql in normalized_calls if "cue_previous_program" in sql)
+    assert previous_program_sql.count("cardinality(%(track_keys)s::text[])") == 3
+    segment_indexes = [index for index, sql in enumerate(normalized_calls) if "insert into library.cue_track_segments" in sql]
+    deactivate_index = next(index for index, sql in enumerate(normalized_calls) if "cue_deactivate_program" in sql)
+    activate_index = next(index for index, sql in enumerate(normalized_calls) if "cue_activate_program" in sql)
+    assert len(segment_indexes) == 2
+    assert max(segment_indexes) < deactivate_index < activate_index
+
+
+def test_persist_invalid_cue_revision_retains_previous_active_revision(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cue_program import CueProgram
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    program = CueProgram("Album", "Artist", (), (), "e" * 64, ("Malformed CUE.",))
+    candidate = SimpleNamespace(
+        source_kind="external", source_identity="album.cue", source_bytes=b"bad",
+        revision_sha256=program.revision_sha256, media_paths=(), program=program,
+    )
+
+    class InvalidConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            normalized = _normalized_sql(sql)
+            if "cue_persistence_context" in normalized:
+                return FakeCursor([{"library_id": 1, "library_root_id": 2, "album_id": None, "artist_id": None}])
+            if "cue_previous_program" in normalized:
+                return FakeCursor([{"id": 5, "revision_sha256": "f" * 64}])
+            if "insert into library.cue_programs" in normalized:
+                return FakeCursor([{"id": 6}])
+            return cursor
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    connection = InvalidConnection()
+    result = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    ).persist_cue_program_revision(root_id="main", candidate=candidate)
+
+    assert result.active_revision_sha256 == "f" * 64
+    assert result.preserved_track_ids == result.new_track_ids == result.retired_track_ids == ()
+    assert connection.commit_calls == 1
+    assert not any(
+        "insert into library.cue_track_segments" in _normalized_sql(sql)
+        for sql, _params in connection.executed
+    )
+
+
+def test_persist_cue_program_revision_rejects_mismatched_parsed_revision():
+    from music_app.services.cue_program import CueProgram
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    candidate = SimpleNamespace(
+        source_kind="external", source_identity="album.cue", source_bytes=b"source",
+        revision_sha256="0" * 64, media_paths=(),
+        program=CueProgram("Album", "Artist", (), (), "1" * 64, ("Malformed CUE.",)),
+    )
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: pytest.fail("mismatched revision must fail before connecting"),
+    )
+
+    with pytest.raises(ValueError, match="parsed revision"):
+        adapter.persist_cue_program_revision(root_id="main", candidate=candidate)
+
+
 def test_structural_album_tag_edit_promotes_renamed_file_path_to_private_path():
     from music_app.services import scan_cache_persistence
 

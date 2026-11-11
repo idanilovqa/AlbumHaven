@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import unicodedata
 import logging
 from pathlib import Path
 from time import perf_counter
@@ -130,24 +132,49 @@ _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class CueReconciliationResult:
+    preserved_track_ids: tuple[int, ...]
+    new_track_ids: tuple[int, ...]
+    retired_track_ids: tuple[int, ...]
+    active_revision_sha256: str | None
+
+
+def _cue_identity_text(value: object) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
+
+
 def _cue_track_rows(program: CueProgram) -> list[dict[str, object]]:
     """Build stable logical identities without physical paths or positions."""
     rows: list[dict[str, object]] = []
     duplicate_counts: dict[tuple[object, ...], int] = {}
+    seen_musicbrainz_ids: set[str] = set()
     for program_ordinal, track in enumerate(program.tracks):
         if track.mode != "AUDIO":
             continue
         if track.start_frame is None or track.end_frame is None:
             raise ValueError("CUE tracks must have a resolved timeline before persistence.")
-        evidence = (
-            " ".join(str(program.album_title or "").split()).casefold(),
-            " ".join(str(track.performer or program.performer or "").split()).casefold(),
-            " ".join(str(track.title or "").split()).casefold(),
-            track.end_frame - track.start_frame,
-        )
-        duplicate_ordinal = duplicate_counts.get(evidence, 0)
-        duplicate_counts[evidence] = duplicate_ordinal + 1
-        identity = json.dumps([*evidence, duplicate_ordinal], ensure_ascii=False, separators=(",", ":"))
+        musicbrainz_id = next((
+            item[2].strip().casefold()
+            for item in track.provenance
+            if len(item) >= 3 and item[:2] == ("REM", "MUSICBRAINZ_TRACKID") and item[2].strip()
+        ), None)
+        if musicbrainz_id:
+            if musicbrainz_id in seen_musicbrainz_ids:
+                raise ValueError("CUE tracks must not reuse one MusicBrainz track identity.")
+            seen_musicbrainz_ids.add(musicbrainz_id)
+            identity_values: list[object] = ["musicbrainz", musicbrainz_id]
+        else:
+            evidence = (
+                _cue_identity_text(program.album_title),
+                _cue_identity_text(track.performer or program.performer),
+                _cue_identity_text(track.title),
+                track.end_frame - track.start_frame,
+            )
+            duplicate_ordinal = duplicate_counts.get(evidence, 0)
+            duplicate_counts[evidence] = duplicate_ordinal + 1
+            identity_values = [*evidence, duplicate_ordinal]
+        identity = json.dumps(identity_values, ensure_ascii=False, separators=(",", ":"))
         rows.append({
             "track_key": f"cue:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}",
             "title": str(track.title or f"Track {track.number:02d}"),
@@ -160,6 +187,7 @@ def _cue_track_rows(program: CueProgram) -> list[dict[str, object]]:
             "end_frame": track.end_frame,
             "pregap_frames": track.pregap_frames or 0,
             "postgap_frames": track.postgap_frames or 0,
+            "provenance": track.provenance,
             "internal_indexes": [
                 {"number": index.number, "frame": index.frame}
                 for index in track.indexes
@@ -167,6 +195,18 @@ def _cue_track_rows(program: CueProgram) -> list[dict[str, object]]:
             ],
         })
     return rows
+
+
+def _cue_media_path_for_ref(source_ref: object, media_paths: tuple[Path, ...]) -> str:
+    normalized_ref = str(source_ref or "").replace("\\", "/").casefold().lstrip("/")
+    matches = [
+        path for path in media_paths
+        if str(path).replace("\\", "/").casefold().endswith(f"/{normalized_ref}")
+        or str(path).replace("\\", "/").casefold() == normalized_ref
+    ]
+    if len(matches) != 1:
+        raise ValueError("CUE track source must resolve to exactly one contained media file.")
+    return str(matches[0])
 
 
 class ScanCachePublicationSuperseded(RuntimeError):
@@ -206,6 +246,11 @@ class ScanCacheAdapter(Protocol):
         ...
 
     def load_inventory_mutation_revision(self) -> int:
+        ...
+
+    def persist_cue_program_revision(
+        self, *, root_id: str, candidate: object,
+    ) -> CueReconciliationResult:
         ...
 
     def persist_targeted_inventory_mutation(
@@ -385,6 +430,235 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def persist_cue_program_revision(
+        self, *, root_id: str, candidate: object,
+    ) -> CueReconciliationResult:
+        normalized_root_id = str(root_id or "").strip()
+        if not normalized_root_id:
+            raise ValueError("CUE persistence requires a root id.")
+        program = getattr(candidate, "program", None)
+        if not isinstance(program, CueProgram):
+            raise ValueError("CUE persistence requires a parsed program.")
+        source_kind = str(getattr(candidate, "source_kind", "") or "").strip()
+        source_identity = str(getattr(candidate, "source_identity", "") or "").strip()
+        source_bytes = getattr(candidate, "source_bytes", None)
+        revision = str(getattr(candidate, "revision_sha256", "") or "").strip().casefold()
+        media_paths = tuple(Path(path) for path in (getattr(candidate, "media_paths", ()) or ()))
+        if source_kind not in {"external", "embedded"} or not source_identity:
+            raise ValueError("CUE persistence requires a valid private source identity.")
+        if not isinstance(source_bytes, bytes) or len(revision) != 64:
+            raise ValueError("CUE persistence requires bounded source bytes and a SHA-256 revision.")
+        if revision != program.revision_sha256.casefold():
+            raise ValueError("CUE persistence parsed revision does not match the source candidate.")
+
+        track_rows = [] if program.problems else _cue_track_rows(program)
+        for row in track_rows:
+            row["media_path"] = _cue_media_path_for_ref(row["source_ref"], media_paths)
+        track_keys = [str(row["track_key"]) for row in track_rows]
+
+        with self._connect_to_database() as connection:
+            context = _row_mapping(_first_row(connection.execute("""
+                /* cue_persistence_context */
+                select lib.id as library_id, root.id as library_root_id,
+                       physical.album_id, physical.artist_id
+                from app.bootstrap_owners owner
+                join library.libraries lib
+                  on lib.owner_account_id = owner.account_id
+                 and lib.name = 'Local Library' and lib.library_kind = 'local'
+                join library.library_roots root
+                  on root.library_id = lib.id and root.is_active is true
+                 and coalesce(nullif(root.metadata ->> 'root_id', ''), root.id::text) = %(root_id)s
+                left join lateral (
+                  select track.album_id, track.artist_id
+                  from library.local_track_files file
+                  join library.local_tracks track on track.id = file.track_id
+                  where track.library_id = lib.id
+                    and file.private_path = any(%(media_paths)s::text[])
+                  order by file.id limit 1
+                ) physical on true
+                where owner.owner_key = 'local-bootstrap-owner'
+                limit 1;
+            """, {"root_id": normalized_root_id, "media_paths": [str(path) for path in media_paths]})))
+            if not context:
+                raise ValueError("CUE persistence could not resolve the active library root.")
+
+            previous = _row_mapping(_first_row(connection.execute("""
+                /* cue_previous_program */
+                select program.id, program.revision_sha256
+                from library.cue_programs program
+                where program.library_id = %(library_id)s
+                  and program.library_root_id = %(library_root_id)s
+                  and program.is_active is true
+                  and (
+                    (program.source_kind = %(source_kind)s and program.source_identity = %(source_identity)s)
+                    or (
+                      cardinality(%(track_keys)s::text[]) > 0
+                      and cardinality(%(track_keys)s::text[]) = (
+                        select count(*) from library.cue_track_segments segment
+                        join library.local_tracks track on track.id = segment.track_id
+                        where segment.program_id = program.id
+                          and track.track_key = any(%(track_keys)s::text[])
+                      )
+                      and cardinality(%(track_keys)s::text[]) = (
+                        select count(*) from library.cue_track_segments segment
+                        where segment.program_id = program.id
+                      )
+                    )
+                  )
+                order by (program.source_kind = %(source_kind)s and program.source_identity = %(source_identity)s) desc,
+                         program.updated_at desc
+                limit 1;
+            """, {**context, "source_kind": source_kind, "source_identity": source_identity, "track_keys": track_keys})))
+
+            existing_rows = connection.execute("""
+                /* cue_existing_tracks */
+                select id, track_key from library.local_tracks
+                where library_id = %(library_id)s and track_key = any(%(track_keys)s::text[]);
+            """, {"library_id": context["library_id"], "track_keys": track_keys}).fetchall()
+            existing_by_key = {
+                str(payload["track_key"]): int(payload["id"])
+                for row in existing_rows if (payload := _row_mapping(row))
+            }
+
+            program_row = _row_mapping(_first_row(connection.execute("""
+                insert into library.cue_programs (
+                  library_id, library_root_id, source_kind, source_identity, source_bytes,
+                  revision_sha256, is_valid, is_active, problems, last_valid_program_id
+                ) values (
+                  %(library_id)s, %(library_root_id)s, %(source_kind)s, %(source_identity)s,
+                  %(source_bytes)s, %(revision)s, %(is_valid)s, false, %(problems)s::jsonb,
+                  %(last_valid_program_id)s
+                )
+                on conflict (library_id, library_root_id, source_kind, source_identity, revision_sha256)
+                do update set source_bytes = excluded.source_bytes, is_valid = excluded.is_valid,
+                              problems = excluded.problems,
+                              last_valid_program_id = excluded.last_valid_program_id,
+                              updated_at = now()
+                returning id;
+            """, {
+                **context, "source_kind": source_kind, "source_identity": source_identity,
+                "source_bytes": source_bytes, "revision": revision, "is_valid": not program.problems,
+                "problems": json.dumps(list(program.problems)),
+                "last_valid_program_id": previous.get("id"),
+            })))
+            program_id = int(program_row["id"])
+            if program.problems:
+                connection.commit()
+                return CueReconciliationResult((), (), (), str(previous.get("revision_sha256") or "") or None)
+            if context.get("album_id") is None:
+                raise ValueError("Valid CUE persistence requires an indexed physical source.")
+
+            media_ids: dict[str, int] = {}
+            for private_path in dict.fromkeys(str(path) for path in media_paths):
+                media = _row_mapping(_first_row(connection.execute("""
+                    insert into library.cue_media_sources (
+                      library_id, library_root_id, private_path, last_seen_at
+                    ) values (%(library_id)s, %(library_root_id)s, %(private_path)s, now())
+                    on conflict (library_id, private_path)
+                    do update set library_root_id = excluded.library_root_id, last_seen_at = now()
+                    returning id, private_path;
+                """, {**context, "private_path": private_path})))
+                media_ids[str(media["private_path"])] = int(media["id"])
+
+            persisted_ids: list[int] = []
+            for row in track_rows:
+                persisted = _row_mapping(_first_row(connection.execute("""
+                    insert into library.local_tracks (
+                      library_id, album_id, artist_id, track_key, title, track_number,
+                      duration_seconds, evidence_source, first_seen_at, last_seen_at, metadata
+                    ) values (
+                      %(library_id)s, %(album_id)s, %(artist_id)s, %(track_key)s, %(title)s,
+                      %(track_number)s, %(duration_seconds)s, 'cue_program', now(), now(),
+                      jsonb_build_object('cue_source_kind', %(source_kind)s)
+                    )
+                    on conflict (library_id, track_key)
+                    do update set album_id = excluded.album_id, artist_id = excluded.artist_id,
+                                  title = excluded.title, track_number = excluded.track_number,
+                                  duration_seconds = excluded.duration_seconds,
+                                  evidence_source = excluded.evidence_source,
+                                  last_seen_at = now(), metadata = library.local_tracks.metadata || excluded.metadata
+                    returning id, track_key;
+                """, {
+                    **context, **row, "duration_seconds": row["duration_frames"] / 75,
+                    "source_kind": source_kind,
+                })))
+                track_id = int(persisted["id"])
+                persisted_ids.append(track_id)
+                connection.execute("""
+                    insert into library.cue_track_segments (
+                      track_id, program_id, media_source_id, program_ordinal, start_frame,
+                      end_frame, pregap_frames, postgap_frames, internal_indexes,
+                      source_revision_sha256, provenance, updated_at
+                    ) values (
+                      %(track_id)s, %(program_id)s, %(media_source_id)s, %(program_ordinal)s,
+                      %(start_frame)s, %(end_frame)s, %(pregap_frames)s, %(postgap_frames)s,
+                      %(internal_indexes)s::jsonb, %(revision)s, %(provenance)s::jsonb, now()
+                    )
+                    on conflict (track_id) do update set
+                      program_id = excluded.program_id, media_source_id = excluded.media_source_id,
+                      program_ordinal = excluded.program_ordinal, start_frame = excluded.start_frame,
+                      end_frame = excluded.end_frame, pregap_frames = excluded.pregap_frames,
+                      postgap_frames = excluded.postgap_frames,
+                      internal_indexes = excluded.internal_indexes,
+                      source_revision_sha256 = excluded.source_revision_sha256,
+                      provenance = excluded.provenance, updated_at = now();
+                """, {
+                    **row, "track_id": track_id, "program_id": program_id,
+                    "media_source_id": media_ids[str(row["media_path"])], "revision": revision,
+                    "internal_indexes": json.dumps(row["internal_indexes"]),
+                    "provenance": json.dumps([
+                        list(item) for item in (*program.provenance, *row["provenance"])
+                    ]),
+                })
+
+            retired_rows = connection.execute("""
+                /* cue_retired_tracks */
+                with retired as (
+                  delete from library.cue_track_segments
+                  where program_id = %(previous_program_id)s
+                    and track_id <> all(%(active_track_ids)s::bigint[])
+                  returning track_id
+                ) select track_id from retired order by track_id;
+            """, {
+                "previous_program_id": previous.get("id") or program_id,
+                "active_track_ids": persisted_ids,
+            }).fetchall()
+            retired_ids = tuple(int(_row_mapping(row)["track_id"]) for row in retired_rows)
+            connection.execute("""
+                /* cue_deactivate_program */
+                update library.cue_programs
+                   set is_active = false, updated_at = now()
+                 where id = %(previous_program_id)s and id <> %(program_id)s;
+            """, {
+                "previous_program_id": previous.get("id") or program_id,
+                "program_id": program_id,
+            })
+            connection.execute("""
+                /* cue_activate_program */
+                update library.cue_programs
+                   set is_active = true, is_valid = true,
+                       last_valid_program_id = %(last_valid_program_id)s, updated_at = now()
+                 where id = %(program_id)s;
+            """, {
+                "previous_program_id": previous.get("id") or program_id,
+                "program_id": program_id,
+                "last_valid_program_id": previous.get("id") if previous.get("id") != program_id else None,
+            })
+            connection.commit()
+
+        preserved = tuple(track_id for key, track_id in existing_by_key.items() if key in track_keys)
+        new = tuple(track_id for track_id in persisted_ids if track_id not in set(preserved))
+        return CueReconciliationResult(tuple(sorted(preserved)), tuple(sorted(new)), retired_ids, revision)
+
+    def reconcile_cue_sources(
+        self, *, root_id: str, candidates: tuple[object, ...], changed_paths: tuple[str, ...] = (),
+    ) -> tuple[CueReconciliationResult, ...]:
+        del changed_paths
+        return tuple(
+            self.persist_cue_program_revision(root_id=root_id, candidate=candidate)
+            for candidate in candidates
+        )
 
     def load_targeted_subtree_track_paths(
         self, subtrees_by_root: dict[str, set[str]],

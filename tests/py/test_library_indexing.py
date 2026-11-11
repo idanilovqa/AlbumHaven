@@ -1986,6 +1986,7 @@ def test_full_scan_discovers_cue_without_projecting_it_as_playable_media(tmp_pat
         "album_artist": "Artist", "release_date": None, "compilation_tag": None,
         "embedded_cue": None, "mtime": path.stat().st_mtime, "size": path.stat().st_size,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "cover_path": None,
+        "duration_seconds": 2.0,
     })
 
     state = {"file_cache": {}}
@@ -1995,12 +1996,15 @@ def test_full_scan_discovers_cue_without_projecting_it_as_playable_media(tmp_pat
         supported_extensions={".flac"},
         image_extensions={".jpg"},
         exception_overrides={},
+        root_definitions=[{"id": "main", "path": str(tmp_path), "category": "main_library_roots"}],
     )
 
     assert set(file_cache) == {str(audio)}
     [candidate] = state["_cue_source_candidates"]
+    assert candidate.root_id == "main"
     assert candidate.source_identity == "Artist/Album/album.cue"
     assert candidate.media_paths == (audio.resolve(),)
+    assert candidate.program.tracks[0].end_frame == 150
 
 
 def test_scan_rereads_unchanged_files_from_a_historical_reader_version(tmp_path: Path, monkeypatch):

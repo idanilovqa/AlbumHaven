@@ -186,6 +186,44 @@ def test_targeted_reconciler_rebuilds_cue_for_changed_program_or_media(tmp_path,
     assert candidate.media_paths == (audio.resolve(),)
 
 
+def test_targeted_reconciler_persists_cue_candidates_under_their_own_roots(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    source_root = tmp_path / "main"
+    destination_root = tmp_path / "archive"
+    source = source_root / "Artist" / "Old Album"
+    destination = destination_root / "Artist" / "Album"
+    destination.mkdir(parents=True)
+    (destination / "image.flac").write_bytes(b"synthetic audio")
+    (destination / "album.cue").write_text(
+        'FILE "image.flac" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n',
+        encoding="utf-8",
+    )
+
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "CUE_EXTENSIONS": {".cue"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[
+            {"id": "main", "path": source_root, "category": "main_library_roots"},
+            {"id": "archive", "path": destination_root, "category": "hoarding_library_roots"},
+        ],
+        metadata_reader=lambda path: {
+            "path": str(path), "title": "Image", "album": "Album", "artist": "Artist",
+            "album_artist": "Artist", "embedded_cue": None,
+        },
+        wait=lambda _seconds: None,
+    )
+
+    reconciler.reconcile(_request(moves=(SimpleNamespace(
+        source=source, destination=destination, source_root_id="main",
+        destination_root_id="archive", is_directory=True,
+    ),)))
+
+    assert [call["root_id"] for call in repository.cue_calls] == ["archive"]
+    assert len(repository.cue_calls[0]["candidates"]) == 1
+
+
 def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
     tmp_path,
 ):

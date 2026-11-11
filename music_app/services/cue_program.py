@@ -26,6 +26,7 @@ class CueTrack:
     postgap_frames: int | None = None
     start_frame: int | None = None
     end_frame: int | None = None
+    provenance: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +91,13 @@ def parse_cue_program(text: str, *, source_name: str) -> CueProgram:
 
         if command == "REM":
             if len(parts) >= 2:
-                provenance.append(("REM", parts[1].upper(), " ".join(parts[2:])))
+                item = ("REM", parts[1].upper(), " ".join(parts[2:]))
+                if current_track is None:
+                    provenance.append(item)
+                else:
+                    track_provenance = current_track["provenance"]
+                    assert isinstance(track_provenance, list)
+                    track_provenance.append(item)
             continue
         if command == "FILE":
             if len(parts) < 3:
@@ -123,6 +130,7 @@ def parse_cue_program(text: str, *, source_name: str) -> CueProgram:
                 "indexes": [],
                 "pregap_frames": None,
                 "postgap_frames": None,
+                "provenance": [],
             }
             tracks.append(current_track)
             if current_source is None:
@@ -210,6 +218,7 @@ def parse_cue_program(text: str, *, source_name: str) -> CueProgram:
             pregap_frames=index_pregap if index_pregap is not None else explicit_pregap,
             postgap_frames=values["postgap_frames"] if isinstance(values["postgap_frames"], int) else None,
             start_frame=index01,
+            provenance=tuple(values["provenance"]),
         ))
 
     return CueProgram(

@@ -364,8 +364,9 @@ class TargetedLibraryReconciler:
                     else {}
                 ),
             )
-            cue_candidates = []
+            cue_candidates_by_root: dict[str, list[object]] = {}
             for candidate_root in root_definitions:
+                candidate_root_id = str(candidate_root.get("id") or "")
                 root_path = Path(str(candidate_root.get("path") or "")).resolve(strict=False)
                 discovery_paths = [
                     *(
@@ -379,20 +380,30 @@ class TargetedLibraryReconciler:
                         if self._belongs_to_root(Path(path), candidate_root)
                     ),
                 ]
-                cue_candidates.extend(discover_cue_sources(
+                candidates = discover_cue_sources(
                     root_path,
                     discovery_paths,
                     metadata_by_path=active_entries,
                     supported_extensions=supported_extensions,
                     max_bytes=int(self._config.get("CUE_MAX_BYTES", 1024 * 1024)),
-                ))
+                    root_id=candidate_root_id,
+                )
+                if candidates:
+                    cue_candidates_by_root.setdefault(candidate_root_id, []).extend(candidates)
             reconcile_cue_sources = getattr(self._repository, "reconcile_cue_sources", None)
             if callable(reconcile_cue_sources):
-                reconcile_cue_sources(
-                    root_id=root_id,
-                    candidates=tuple(cue_candidates),
-                    changed_paths=tuple(sorted(cue_paths)),
-                )
+                for candidate_root_id, candidates in cue_candidates_by_root.items():
+                    reconcile_cue_sources(
+                        root_id=candidate_root_id,
+                        candidates=tuple(candidates),
+                        changed_paths=tuple(
+                            sorted(
+                                str(path)
+                                for path, matched_root in cue_paths.values()
+                                if str(matched_root.get("id") or "") == candidate_root_id
+                            )
+                        ),
+                    )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
                 tuple(

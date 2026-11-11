@@ -307,6 +307,7 @@ def save_cache_to_disk_for_config(
     expected_inventory_mutation_revision: int | None = None,
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
+    cue_candidates: tuple[object, ...] = (),
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -344,6 +345,19 @@ def save_cache_to_disk_for_config(
         last_scan,
         **snapshot_options,
     )
+    reconcile_cue_sources = getattr(adapter, "reconcile_cue_sources", None)
+    if cue_candidates and callable(reconcile_cue_sources):
+        candidates_by_root: dict[str, list[object]] = {}
+        for candidate in cue_candidates:
+            candidate_root_id = str(getattr(candidate, "root_id", "") or "").strip()
+            if not candidate_root_id:
+                raise ValueError("Full-scan CUE persistence requires a root id.")
+            candidates_by_root.setdefault(candidate_root_id, []).append(candidate)
+        for candidate_root_id, root_candidates in candidates_by_root.items():
+            reconcile_cue_sources(
+                root_id=candidate_root_id,
+                candidates=tuple(root_candidates),
+            )
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     if isinstance(adapter, PostgresScanCacheAdapter):
         from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh

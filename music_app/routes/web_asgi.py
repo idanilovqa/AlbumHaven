@@ -737,6 +737,7 @@ def _build_bootstrap_payload(
     selected_artist: str,
     refreshed: bool,
     request_started_epoch_ms: int,
+    defer_selected_artist_startup: bool = False,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
     library_browse_uses_postgres = library_browse_postgres_is_effective(config)
@@ -766,7 +767,7 @@ def _build_bootstrap_payload(
             else:
                 preview_mode = "fresh_preview" if bool(initial_view.get("initial_view_partial")) else "full_view"
         else:
-            if selected_artist:
+            if selected_artist and not defer_selected_artist_startup:
                 initial_view, payload_elapsed_ms = _build_postgres_selected_artist_startup_view(
                     config=config,
                     query_args=query_args,
@@ -1027,6 +1028,7 @@ async def index(request: Request) -> Response:
         selected_artist=selected_artist,
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
+        defer_selected_artist_startup=True,
     )
     bootstrap_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
     initial_view = bootstrap_payload.get("initial_view") or {}

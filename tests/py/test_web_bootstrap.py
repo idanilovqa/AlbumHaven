@@ -688,7 +688,7 @@ def test_bootstrap_data_preserves_startup_hydration_query_contract(asgi_app, mon
     )
 
 
-def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypatch):
+def test_index_selected_artist_defers_gallery_until_runtime_hydration(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
     class FakePostgresLibraryBrowseRepository:
@@ -766,12 +766,14 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
     status, _headers, body = run_asgi_request(asgi_app, "GET", "/", query={"artist": "Broadcast"})
 
     assert status == 200
+    assert b'data-startup-progress="50"' in body
+    assert b"data-startup-preview-card" not in body
     payload = _extract_bootstrap_payload_from_shell(body)
-    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "empty_shell"
     assert payload["initial_view"]["selected_artist"] == "Broadcast"
-    assert [group["artist"] for group in payload["initial_view"]["family_artist_groups"]] == ["Stereolab"]
+    assert payload["initial_view"]["family_artist_groups"] == []
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
-        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
+        "/view-data?surface=albums&artist=Broadcast"
     )
 def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app, monkeypatch):
     from music_app.routes import web_asgi

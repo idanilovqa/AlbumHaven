@@ -446,6 +446,39 @@ def test_selected_artist_search_reload_requests_lightweight_summary(monkeypatch)
     assert captured[0].get("root_sidebar") is None
 
 
+def test_index_bootstrap_defers_selected_artist_gallery_until_runtime_hydration(monkeypatch):
+    from starlette.datastructures import QueryParams
+
+    from music_app.routes import web_asgi
+
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(web_asgi, "get_primary_music_root", lambda _config: "C:/Music")
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_selected_artist_startup_view",
+        lambda **_kwargs: pytest.fail("index bootstrap must not build the selected-artist gallery"),
+    )
+
+    payload, _, startup_preview = web_asgi._build_bootstrap_payload(
+        query_args=QueryParams("surface=albums&artist=Broadcast"),
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state={},
+        query_raw="",
+        selected_artist="Broadcast",
+        refreshed=False,
+        request_started_epoch_ms=1,
+        defer_selected_artist_startup=True,
+    )
+
+    assert payload["initial_view"]["selected_artist"] == "Broadcast"
+    assert payload["initial_view"]["artist_groups"] == []
+    assert payload["bootstrap"]["startupHydration"]["required"] is True
+    assert "artist=Broadcast" in payload["bootstrap"]["startupHydration"]["endpoint"]
+    assert payload["bootstrap"]["startupPreview"]["renderedGalleryMarkup"] is False
+    assert startup_preview["gallery_html"] == ""
+
+
 @pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
 def test_selected_artist_startup_requests_summary_without_losing_repeated_filters(monkeypatch, requested_tier, expected_tier):
     from starlette.datastructures import QueryParams

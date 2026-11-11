@@ -5245,6 +5245,53 @@ test('cover lookup decode readiness wakes on image load without polling delay', 
   }
 });
 
+test('cover lookup decode readiness waits for a deferred image source', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
+  const { waitForDisplayedImageDecode } = await import(moduleUrl);
+  const originalImageElement = globalThis.HTMLImageElement;
+  class FakeImageElement extends EventTarget {
+    constructor() {
+      super();
+      this.complete = true;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.currentSrc = '';
+      this.attributes = new Map([['data-cover-lookup-deferred-src', '/cover.jpg']]);
+    }
+
+    async decode() {}
+
+    getAttribute(name) {
+      return this.attributes.get(name) || '';
+    }
+
+    hasAttribute(name) {
+      return this.attributes.has(name);
+    }
+
+    getBoundingClientRect() {
+      return { width: 240, height: 240 };
+    }
+  }
+  globalThis.HTMLImageElement = FakeImageElement;
+  try {
+    const image = new FakeImageElement();
+    const readiness = waitForDisplayedImageDecode(image);
+    image.attributes.delete('data-cover-lookup-deferred-src');
+    image.currentSrc = 'http://127.0.0.1:4173/cover.jpg';
+    image.naturalWidth = 480;
+    image.naturalHeight = 480;
+    image.dispatchEvent(new Event('load'));
+
+    const state = await readiness;
+    assert.equal(state.currentSrc, image.currentSrc);
+    assert.equal(state.naturalWidth, 480);
+  } finally {
+    if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
+    else globalThis.HTMLImageElement = originalImageElement;
+  }
+});
+
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
   const { isDisplayedImageEvidenceReady } = await import(moduleUrl);

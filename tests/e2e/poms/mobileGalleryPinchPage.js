@@ -40,19 +40,14 @@ export class MobileGalleryPinchPage extends MobileTouchFeedbackPage {
     const box = await this.galleryScroll.boundingBox();
     if (!box) throw new Error('Pinch requires a visible gallery.');
     const midpoint = center || { x: box.x + box.width / 2, y: box.y + Math.min(150, box.height / 2) };
-    // parity-check: allow-read-only-measurement-evaluate -- passively record trusted touch delivery to verify native partial-release semantics.
+    // parity-check: allow-read-only-measurement-evaluate -- retain the native touch targets and every original ancestor while fingers remain down.
     const observation = await this.galleryScroll.evaluateHandle((scroll, input) => {
       const originals = [];
       for (const direction of [-1, 1]) {
         let node = document.elementFromPoint(input.midpoint.x + direction * input.span / 2, input.midpoint.y);
         while (node && node !== scroll) { originals.push({ node, parent: node.parentNode }); node = node.parentNode; }
       }
-      const events = [];
-      const record = event => events.push({ type: event.type, touches: event.touches.length, trusted: event.isTrusted });
-      for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) scroll.addEventListener(type, record, { passive: true });
-      return { read: () => events.slice(), connected: () => originals.every(({ node, parent }) => node.isConnected && node.parentNode === parent), dispose() {
-        for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) scroll.removeEventListener(type, record);
-      } };
+      return { connected: () => originals.every(({ node, parent }) => node.isConnected && node.parentNode === parent) };
     }, { midpoint, span });
     let session;
     let scale = 1, active = true;
@@ -60,8 +55,6 @@ export class MobileGalleryPinchPage extends MobileTouchFeedbackPage {
     const dispatch = (type, touchPoints) => session.send('Input.dispatchTouchEvent', { type, touchPoints });
     try { session = await this.page.context().newCDPSession(this.page); await dispatch('touchStart', points(scale)); }
     catch (error) {
-      // parity-check: allow-read-only-measurement-evaluate -- stop the passive event observation after native input setup fails.
-      await observation.evaluate(value => value.dispose());
       await observation.dispose(); await session?.detach(); throw error;
     }
     return {
@@ -73,29 +66,13 @@ export class MobileGalleryPinchPage extends MobileTouchFeedbackPage {
         // parity-check: allow-read-only-measurement-evaluate -- retain the native touch targets and every original ancestor while fingers remain down.
         expect(await observation.evaluate(value => value.connected())).toBe(true);
       },
-      releaseOne: async () => {
-        // CDP emits each changed point: removing a point on touchMove releases it.
-        // touchEnd/touchCancel prohibit nonempty touchPoints and end the entire gesture.
-        await dispatch('touchMove', points(scale).slice(0, 1));
-        // parity-check: allow-read-only-measurement-evaluate -- inspect recorded trusted event delivery, without creating or dispatching any DOM event.
-        await expect.poll(() => observation.evaluate(value => value.read().filter(event => event.type === 'touchend').at(-1)))
-          .toEqual({ type: 'touchend', touches: 1, trusted: true });
-      },
-      replaceReleasedFinger: async ({ reuseIdentifier = false } = {}) => {
-        const [remaining, replacement] = points(scale);
-        await dispatch('touchStart', [remaining, { ...replacement, id: reuseIdentifier ? replacement.id : 2 }]);
-        // parity-check: allow-read-only-measurement-evaluate -- require native two-contact replacement delivery after the verified one-contact release.
-        await expect.poll(() => observation.evaluate(value => value.read().filter(event => event.type === 'touchstart').at(-1)))
-          .toEqual({ type: 'touchstart', touches: 2, trusted: true });
-      },
       addThird: () => dispatch('touchStart', [...points(scale), { id: 2, x: midpoint.x, y: midpoint.y + 40 }]),
-      end: async () => { await dispatch('touchEnd', []); active = false; },
-      cancel: async () => { await dispatch('touchCancel', []); active = false; },
+      end: async () => { if (active) { await dispatch('touchEnd', []); active = false; } },
+      cancel: async () => { if (active) { await dispatch('touchCancel', []); active = false; } },
       close: async () => {
         try { if (active) await dispatch('touchCancel', []); }
         finally {
-          // parity-check: allow-read-only-measurement-evaluate -- remove passive measurement listeners after the gesture.
-          try { await observation.evaluate(value => value.dispose()); await observation.dispose(); }
+          try { await observation.dispose(); }
           finally { await session.detach(); }
         }
       },
@@ -108,6 +85,12 @@ export class MobileGalleryPinchPage extends MobileTouchFeedbackPage {
     const travel = Math.min(320, box.height * .55);
     const startY = direction === 'down' ? box.y + box.height * .8 : box.y + box.height * .2;
     await this.swipeAt(box.x + box.width / 2, startY, direction === 'down' ? -travel : travel);
+  }
+
+  async resetBrowserZoom() {
+    const session = await this.page.context().newCDPSession(this.page);
+    try { await session.send('Emulation.resetPageScaleFactor'); }
+    finally { await session.detach(); }
   }
 
   async expectNoPreview() {

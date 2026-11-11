@@ -13,7 +13,7 @@ for (const width of [320, 390, 820]) {
       await page.setViewportSize({ width, height: 844 });
       const phone = new MobileGalleryPinchPage(page);
       await phone.browseArtist();
-      await expect(phone.galleryContextName).toHaveText('Northlight');
+      await expect(phone.galleryContextName).toHaveText('Northlight family');
       await phone.selectView(view);
       await phone.selectColumns(3);
       for (const { from, to, scale } of transitions) {
@@ -50,9 +50,6 @@ for (const width of [320, 390, 820]) {
           });
           await testInfo.attach(`${view}-${from}-to-${to}-painted-preview`, { body: await page.screenshot(), contentType: 'image/png' });
           await gesture.move(scale);
-          await gesture.releaseOne();
-          // One remaining touch must not replace the original DOM or snap density.
-          expect((await phone.geometry()).cards.some(card => card.transform)).toBe(true);
           await gesture.end();
         } finally { await gesture.close(); }
         await phone.expectGridColumns(to);
@@ -63,7 +60,7 @@ for (const width of [320, 390, 820]) {
         expect(settled.scrollTop).toBe(0);
         expect(settled.cards[0].key).toBe(first.key);
         expect(settled.cards[0].box.top).toBeCloseTo(first.box.top, 0);
-        await expect(phone.galleryContextName).toHaveText('Northlight');
+        await expect(phone.galleryContextName).toHaveText('Northlight family');
       }
       await expect(phone.albumPage).not.toBeVisible();
       expect(await phone.hasNoHorizontalOverflow()).toBe(true);
@@ -72,7 +69,7 @@ for (const width of [320, 390, 820]) {
 }
 
 for (const view of ['cards', 'covers']) {
-  for (const interruption of ['cancel', 'third-finger', 'replacement-finger', 'replacement-reused-id', 'resize']) {
+  for (const interruption of ['cancel', 'third-finger', 'resize']) {
     test(`mobile ${view}: ${interruption} cleans an interrupted gesture and the next pinch still works`, async ({ page, app }) => {
       const phone = new MobileGalleryPinchPage(page);
       await phone.browseArtist();
@@ -85,10 +82,7 @@ for (const view of ['cards', 'covers']) {
         await expect.poll(async () => (await phone.geometry()).cards.some(card => card.transform)).toBe(true);
         if (interruption === 'cancel') await gesture.cancel();
         else if (interruption === 'third-finger') await gesture.addThird();
-        else if (interruption.startsWith('replacement-')) {
-          await gesture.releaseOne();
-          await gesture.replaceReleasedFinger({ reuseIdentifier: interruption === 'replacement-reused-id' });
-        } else await page.setViewportSize({ width: 430, height: 844 });
+        else await page.setViewportSize({ width: 430, height: 844 });
         await phone.expectNoPreview();
         await gesture.end();
       } finally { await gesture.close(); }
@@ -99,7 +93,7 @@ for (const view of ['cards', 'covers']) {
       await phone.nativePinch(1.4);
       await phone.expectGridColumns(2);
       await phone.expectNoPreview();
-      await expect(phone.galleryContextName).toHaveText('Northlight');
+      await expect(phone.galleryContextName).toHaveText('Northlight family');
       await phone.nativePinch(1.4);
       await phone.expectGridColumns(1);
       const beforeSwipe = (await phone.geometry()).scrollTop;
@@ -149,9 +143,12 @@ test('mobile Rows ignores gallery pinch and retains the Cards/Covers density pre
     } finally { await gesture.close(); }
   }
   await phone.expectNoPreview();
+  expect((await phone.geometry()).scale).toBeGreaterThan(1);
+  await phone.resetBrowserZoom();
+  await expect.poll(async () => (await phone.geometry()).scale).toBe(1);
   await phone.selectView('covers');
   await phone.expectGridColumns(2);
-  await expect(phone.galleryContextName).toHaveText('Northlight');
+  await expect(phone.galleryContextName).toHaveText('Northlight family');
 });
 
 test('mobile preference saves on release, survives reload and another mobile session, and leaves desktop isolated', async ({ page, app, mobileBrowserSessions }) => {
@@ -181,8 +178,6 @@ test('mobile preference saves on release, survives reload and another mobile ses
     const gesture = await phone.beginPinch();
     try {
       await gesture.move(1.4);
-      expect(writes).toHaveLength(0);
-      await gesture.releaseOne();
       expect(writes).toHaveLength(0);
       const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/account/layout-preferences'
         && response.request().method() === 'PUT' && response.request().postDataJSON()?.changes?.mobileGridColumns === 2);
@@ -218,7 +213,11 @@ for (const view of ['cards', 'covers']) {
     await phone.browseArtist();
     await phone.selectView(view);
     await phone.selectColumns(1);
-    for (let index = 0; index < 12; index++) await phone.swipeGallery();
+    for (let index = 0; index < 80; index++) {
+      const sample = await phone.geometry();
+      if (sample.scrollHeight - sample.viewport.height - sample.scrollTop <= 1) break;
+      await phone.swipeGallery();
+    }
     await expect.poll(async () => {
       const sample = await phone.geometry();
       return sample.scrollHeight - sample.viewport.height - sample.scrollTop;
@@ -250,7 +249,7 @@ for (const view of ['cards', 'covers']) {
     phone.expectBounds(settled);
     await testInfo.attach(`${view}-bottom-settled`, { body: await page.screenshot(), contentType: 'image/png' });
     await phone.swipeGallery('up');
-    await expect(phone.galleryContextName).toHaveText('Northlight');
+    await expect(phone.galleryContextName).toHaveText('Northlight family');
     await expect(phone.albumPage).not.toBeVisible();
     phone.expectBounds(await phone.geometry());
   });

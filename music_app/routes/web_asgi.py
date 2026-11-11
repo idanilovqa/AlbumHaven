@@ -1123,6 +1123,11 @@ async def index(request: Request) -> Response:
     return response
 
 
+@router.get("/loose-tracks", response_class=HTMLResponse)
+async def loose_tracks_page(request: Request) -> Response:
+    return await index(request)
+
+
 @router.get("/news", response_class=HTMLResponse)
 async def news_center(request: Request) -> Response:
     query_args = request.query_params

@@ -825,7 +825,7 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
 });
 
-test('desktop Loose Tracks uses existing page history for Back and Forward', () => {
+test('desktop Loose Tracks owns a reloadable URL with Back and Forward history', () => {
   const location = { href: 'https://example.test/?surface=albums' };
   let pushedUrl = '';
   const history = {
@@ -860,7 +860,7 @@ test('desktop Loose Tracks uses existing page history for Back and Forward', () 
   assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: true }), true);
   assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), 'non-album');
   assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), 'library');
-  assert.equal(new URL(pushedUrl).pathname, '/');
+  assert.equal(new URL(pushedUrl).pathname, '/loose-tracks');
   const forwardState = history.state;
 
   history.state = {};

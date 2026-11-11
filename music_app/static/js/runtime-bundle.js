@@ -53326,6 +53326,8 @@ function setMobilePagePresentation(kind, mobile) {
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
+  if (active?.kind === 'non-album' && active.libraryWide) url.pathname = '/loose-tracks';
+  else if (url.pathname === '/loose-tracks') url.pathname = '/';
   ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'loose_tracks'].forEach(key => url.searchParams.delete(key));
   if (active) {
     url.searchParams.set('mobile_page', active.kind);

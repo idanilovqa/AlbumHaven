@@ -325,7 +325,8 @@ def test_favicon_route_returns_cacheable_empty_response(asgi_app):
     assert body == b""
 
 
-def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch):
+@pytest.mark.parametrize("path", ["/", "/loose-tracks"])
+def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch, path):
     from music_app.routes import web_asgi
 
     def fake_build_postgres_root_startup_view(*, config, query_args, library_state):
@@ -392,7 +393,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
 
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", fake_build_postgres_root_startup_view)
-    status, headers, body = run_asgi_request(asgi_app, "GET", "/")
+    status, headers, body = run_asgi_request(asgi_app, "GET", path)
 
     assert status == 200
     assert headers["cache-control"] == "no-store, max-age=0"

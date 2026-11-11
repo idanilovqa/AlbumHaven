@@ -6821,6 +6821,34 @@ require('node:test')('initial cover gallery load finishes before task polling st
   assert.deepEqual(order, ['gallery']);
 });
 
+require('node:test')('optimistic cover changes keep cached LOCAL cards for immediate notification reopen', () => {
+  const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
+  const context = loadHelper({
+    getAlbumPathSignature: () => 'fleet-foxes',
+    buildCoverUrl: () => '/cover/local',
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal.localCovers = [{ path: 'N:/Fleet Foxes/front.jpg' }];
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    local_covers: context.state.coverLookup.modal.localCovers,
+    other_art: [{ path: 'N:/Fleet Foxes/back.jpg' }],
+  });
+
+  context.applyOptimisticLocalCoverSelection(album, 'N:/Fleet Foxes/front.jpg');
+
+  const cached = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(cached.local_covers.length, 1);
+  assert.equal(cached.other_art.length, 1);
+
+  for (const functionName of ['applyOptimisticRemoteCoverSelection', 'applyOptimisticPastedCoverSelection']) {
+    const start = helperSource.indexOf(`function ${functionName}`);
+    const body = helperSource.slice(start, helperSource.indexOf('\nfunction ', start + 1));
+    assert.doesNotMatch(body, /invalidateCoverLookupGalleryCache/);
+  }
+});
+
 require('node:test')('reopening Cover Lookup renders its cached gallery before refreshing', async () => {
   class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };

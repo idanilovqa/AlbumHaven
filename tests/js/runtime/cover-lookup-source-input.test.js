@@ -171,6 +171,15 @@ test('ADD COVER ART keeps its divider attached to the heading', () => {
   assert.match(source, /cover-lookup-section-heading[^]*cover-lookup-manual-add[^]*cover-lookup-manual-divider/);
 });
 
+test('LOCAL warning expands horizontally without changing height or wrapping', () => {
+  const alertRule = cssRule('.cover-lookup-local-alert:is(:hover, :focus-visible)');
+  const textRule = cssRule('.cover-lookup-section-heading .cover-lookup-local-alert:is(:hover, :focus-visible) .small-alert__text');
+  assert.match(alertRule, /height:\s*30px/);
+  assert.match(alertRule, /min-height:\s*30px/);
+  assert.match(textRule, /padding-block:\s*0/);
+  assert.match(textRule, /white-space:\s*nowrap/);
+});
+
 test('provider rows include readable labels, Deezer heart, CAA, and external markers', () => {
   for (const label of ['Apple Music', 'SPOTIFY', 'Deezer', 'Bandcamp', 'Discogs', 'Cover Art Archive', 'YouTube Music']) {
     assert.match(source, new RegExp(`['\"]${label}['\"]`));

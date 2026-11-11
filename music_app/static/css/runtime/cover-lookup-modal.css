@@ -203,6 +203,15 @@
   justify-content: flex-start;
   gap: 10px;
 }
+.cover-lookup-local-alert:is(:hover, :focus-visible) {
+  height: 30px;
+  min-height: 30px;
+  border-radius: 15px;
+}
+.cover-lookup-section-heading .cover-lookup-local-alert:is(:hover, :focus-visible) .small-alert__text {
+  padding-block: 0;
+  white-space: nowrap;
+}
 .cover-lookup-section-title,
 .cover-lookup-subsection-title {
   margin: 0;

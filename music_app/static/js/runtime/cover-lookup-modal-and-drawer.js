@@ -1267,7 +1267,6 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
   if (!album) return;
   const normalizedSourcePath = String(sourcePath || '').trim();
   if (!normalizedSourcePath) return;
-  invalidateCoverLookupGalleryCache(album);
   const selectedCandidate = (state.coverLookup.modal.localCovers || []).find((candidate) => (
     String(candidate?.path || '').trim() === normalizedSourcePath
   ));
@@ -1406,7 +1405,6 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
   const previewImageUrl = String(selectedMatch?.thumbnail_url || imageUrl || '').trim();
   const previewKey = String(selectedMatch?.id || selectedMatch?.url || '').trim();
   const nextCoverPath = String(coverPath || '').trim();
-  invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
     cover_path: null,
@@ -1448,7 +1446,6 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
   if (!album || !pastedItem) return;
   const imageUrl = String(pastedItem?.data_url || pastedItem?.preview_url || '').trim();
   if (!imageUrl) return;
-  invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
     cover_path: String(album?.cover_path || '').trim() || null,

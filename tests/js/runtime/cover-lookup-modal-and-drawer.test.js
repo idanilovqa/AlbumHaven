@@ -414,10 +414,15 @@ require('node:test')('completed lookup counts every selectable artwork candidate
   }
 });
 
-require('node:test')('notification thumbnails defer loading and decoding', () => {
+require('node:test')('notification thumbnails use the shared cover preview cache', () => {
+  const loaded = [];
   const { context, bodyElement } = createDrawerHarness({
     buildAlbumDisplayCoverUrl: () => '/images/notification-cover.jpg',
+    loadGalleryCoverPreviewImage: (_image, source) => loaded.push(source),
   });
+  bodyElement.querySelectorAll = () => [{
+    getAttribute: () => '/images/notification-cover.jpg',
+  }];
   context.state.coverLookup.tasks = [{
     id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album',
     current_user_cover_preview_url: '/images/notification-cover.jpg',
@@ -427,8 +432,10 @@ require('node:test')('notification thumbnails defer loading and decoding', () =>
 
   assert.match(
     bodyElement.innerHTML,
-    /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
+    /class="cover-lookup-task-cover"[^>]*data-gallery-cover-src="\/images\/notification-cover\.jpg"[^>]*decoding="async"/,
   );
+  assert.doesNotMatch(bodyElement.innerHTML, /class="cover-lookup-task-cover"[^>]*\ssrc=/);
+  assert.deepEqual(loaded, ['/images/notification-cover.jpg']);
 });
 
 require('node:test')('notification rerenders keep unchanged card nodes mounted', () => {

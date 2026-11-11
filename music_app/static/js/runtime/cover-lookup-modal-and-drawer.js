@@ -2061,7 +2061,7 @@ function renderCoverLookupDrawer({
       || bestCandidateCoverUrl
       || String(task?.current_cover_preview_url || '').trim();
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
+      ? `<img class="cover-lookup-task-cover" data-gallery-cover-src="${escapeHtml(coverUrl)}" data-production-cover-src="${escapeHtml(coverUrl)}" alt="" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
       <div class="cover-lookup-task-card ${taskStateClass}">
@@ -2118,6 +2118,12 @@ function renderCoverLookupDrawer({
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `, taskIds);
+    body.querySelectorAll?.('img[data-gallery-cover-src]').forEach((image) => {
+      const source = image.getAttribute('data-gallery-cover-src');
+      if (source && typeof loadGalleryCoverPreviewImage === 'function') {
+        void loadGalleryCoverPreviewImage(image, source);
+      }
+    });
     if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
       body.scrollTop = Math.max(0, restoreScrollTop);
     }

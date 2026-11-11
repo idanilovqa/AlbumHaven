@@ -189,6 +189,11 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   initializeRepairSelections(selectedAlbum);
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
+  const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
+  const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
+  if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
+    void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+  }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);
     const scrollFocusedRowsIntoView = () => {

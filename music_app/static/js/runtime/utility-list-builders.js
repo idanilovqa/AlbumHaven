@@ -521,7 +521,12 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
+  const cover = buildUtilityAlbumArtbox(album, {
+    label: `Album cover for ${displayName}`,
+    interactive: true,
+    source: coverSrc,
+    deferPreview: true,
+  });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>

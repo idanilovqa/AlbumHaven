@@ -39176,28 +39176,6 @@ function closeTagEditor() {
   }
 }
 
-function restoreTagEditorDraftAfterFailedSave(tagEditor) {
-  if (
-    !tagEditor
-    || state.tagEditor !== tagEditor
-    || typeof getTagEditorElements !== 'function'
-  ) return;
-  const els = getTagEditorElements();
-  if (!els.overlay) return;
-  settleTagEditorSessionMutationClaim(tagEditor);
-  tagEditor.sessionMutationClaim = claimTagEditViewMutation(tagEditor.album);
-  state.tagEditor = tagEditor;
-  if (els.list) els.list.hidden = true;
-  if (els.form) els.form.hidden = true;
-  if (els.applyButton) els.applyButton.disabled = true;
-  els.overlay.setAttribute?.('aria-busy', 'true');
-  els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
-  if (typeof renderTagEditor === 'function') {
-    scheduleTagEditorRenderAfterPaint(tagEditor, els);
-  }
-}
-
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
@@ -39667,7 +39645,6 @@ async function confirmManualTagEdit() {
   );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
-  let failedSavePreservesDraft = false;
   let failedSaveKeptNewTags = false;
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
@@ -39704,8 +39681,6 @@ async function confirmManualTagEdit() {
           console.warn('[AlbumHaven][Utilities] Could not persist the failed tag edit in browser history.', historyError);
         }
       }
-      failedSavePreservesDraft = data.failure_stage === 'persistence'
-        && data.edit_outcome === 'failed_rolled_back';
       failedSaveKeptNewTags = data.edit_outcome === 'recovery_pending';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
@@ -39861,12 +39836,6 @@ async function confirmManualTagEdit() {
       }
       updateOpenTrackModalAfterTagEdit(album, restoredAlbums);
       renderView(renderOptions);
-      if (
-        !failedLogHistoryEntryId
-        || failedSavePreservesDraft
-      ) {
-        restoreTagEditorDraftAfterFailedSave(tagEditorDraft);
-      }
     }
     showRepairAlert(
       failedSaveKeptNewTags

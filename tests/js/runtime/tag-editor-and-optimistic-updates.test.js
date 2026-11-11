@@ -2937,7 +2937,6 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   const persistedEntries = [];
   const mutationClaim = { id: 'failed-tag-edit-claim' };
   const releasedClaims = [];
-  const restoredDrafts = [];
   const logEntry = {
     id: 'tag-edit-failure-42',
     action: 'Tag edit failed',
@@ -2964,7 +2963,6 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     showRepairAlert(...args) { alerts.push(args); },
     claimTagEditViewMutation() { return mutationClaim; },
     releaseFailedTagEditViewMutation(claim) { releasedClaims.push(claim); },
-    restoreTagEditorDraftAfterFailedSave(draft) { restoredDrafts.push(draft); },
     async prependUtilityLogHistoryEntry(entry) { persistedEntries.push(entry); },
     async fetch() {
       return {
@@ -3001,10 +2999,9 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     [mutationClaim],
     'a failed POST must release its optimistic mutation claim even after navigation',
   );
-  assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
-test('manual tag edit preserves the editor draft for retry after an immediate failed POST', async () => {
+test('manual tag edit keeps the editor closed after an immediate rolled-back persistence failure', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {
     key: 'axxis::kingdom::black',
@@ -3067,7 +3064,7 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
 
   assert.strictEqual(context.state.tagEditor, originalDraft);
   assert.strictEqual(context.state.tagEditor.values, values);
-  assert.equal(closedModal.hidden, false);
+  assert.equal(closedModal.hidden, true);
   assert.equal(
     alerts.at(-1)[0],
     'Source changed during the tag edit. Retry with the preserved values.',
@@ -3223,26 +3220,6 @@ for (const [name, fetchResult] of [
     assert.deepEqual(restored, []);
   });
 }
-
-test('failed tag save does not replace a newer tag editor session', () => {
-  const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
-  const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };
-  const overlay = { hidden: true, setAttribute() {} };
-  const context = loadHelper([], {
-    document: {
-      body: { classList: { add() {} } },
-    },
-    getTagEditorElements() { return { overlay }; },
-    claimTagEditViewMutation() { return { id: 'stale-claim' }; },
-    scheduleBrowserAnimationFrame() {},
-  });
-  context.state.tagEditor = newerDraft;
-
-  context.restoreTagEditorDraftAfterFailedSave(originalDraft);
-
-  assert.strictEqual(context.state.tagEditor, newerDraft);
-  assert.equal(overlay.hidden, true);
-});
 
 test('repair POST does not apply origin albums after navigation and passes its revision to the save task', async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';

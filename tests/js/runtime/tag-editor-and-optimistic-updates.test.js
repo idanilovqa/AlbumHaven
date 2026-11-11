@@ -188,6 +188,7 @@ function loadHelper(albums, overrides = {}) {
 test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
   let resolveRefresh;
   let refreshStarted = 0;
+  let refreshOptions = null;
   const context = loadHelper([], {
     state: {
       modalReleases: [],
@@ -205,8 +206,9 @@ test('marking an album version completes without waiting for the canonical galle
       context.state.view = { ...context.state.view, ...patch };
     },
     buildApiUrl: () => '/api/library',
-    fetchAndRender() {
+    fetchAndRender(_url, _push, options) {
       refreshStarted += 1;
+      refreshOptions = options;
       return new Promise((resolve) => { resolveRefresh = resolve; });
     },
     scheduleBrowserAnimationFrame(callback) { callback(); },
@@ -220,6 +222,8 @@ test('marking an album version completes without waiting for the canonical galle
 
   assert.equal(saved, true);
   assert.equal(refreshStarted, 1);
+  // UI-11 (owner): the gallery updates in the background (mounted, same scroll), never behind the Loading page.
+  assert.equal(refreshOptions?.preserveScroll, true);
   assert.equal(context.state.view.manual_version_links.child, 'parent');
   resolveRefresh(true);
   await marking;
@@ -232,7 +236,6 @@ test('album editions render the same keyboard tab component as Home', () => {
     { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
   ];
   context.state.modalReleaseIndex = 1;
-  context.renderVersionContextMenu = () => {};
   const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
   context.renderTrackModalTabs({ tabs });
   assert.equal(tabs.hidden, false);
@@ -288,6 +291,40 @@ test('version tabs are the sole edition indicator while standalone editions reta
     standalone.elements.header.innerHTML,
     /album-details-header__tag">Special Edition<\/span>/,
   );
+});
+
+test('re-rendering an unchanged album keeps its header (and Close) in place', () => {
+  // The summary render and the hydrated details usually build the same header;
+  // rewriting it replaced Close under the pointer and a close click waited ~500 ms.
+  const album = {
+    key: 'stable', name: 'Stable Album', album_artist: 'Stable Artist', year: 2001,
+    release_type: 'ALBUM', cover_path: 'C:\\Music\\Stable\\cover.png', tracks: [],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:stable-cover', cached: true }),
+  });
+  let html = '';
+  let writes = 0;
+  Object.defineProperty(elements.header, 'innerHTML', {
+    configurable: true,
+    get: () => html,
+    set: (value) => { writes += 1; html = value; },
+  });
+
+  context.renderTrackModalRelease(album);
+  context.renderTrackModalRelease({ ...album, tracks: [] });
+  assert.equal(writes, 1);
+
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 2, 'a changed header still re-renders');
+  assert.match(html, /2002/);
+
+  // Closing clears the title in place; reopening the same album must restore it.
+  html = '<div class="album-details-header"></div>';
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 3, 'a header edited by another owner is rewritten');
+  assert.match(html, /Stable Album/);
 });
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
@@ -1600,6 +1637,8 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
   const scheduledTimers = [];
   const mutationClaim = { id: 'tag-edit-claim-1' };
   const claimCalls = [];
+  const optimisticSplitCalls = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -1626,6 +1665,10 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     },
     applyUpdatedAlbumsToCurrentView(albums, options) {
       applyCalls.push({ albums, options });
+    },
+    recordCoverLookupOptimisticSplit(...args) {
+      optimisticSplitCalls.push(args);
+      return optimisticSplit;
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView(options) {
@@ -1674,6 +1717,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     'an empty queued response must retain the already-rendered optimistic state without another apply',
   );
   assert.strictEqual(applyCalls[0].albums, optimisticAlbums);
+  assert.deepEqual(optimisticSplitCalls, [[album, optimisticAlbums]]);
   assert.equal(
     renderCalls.length,
     1,
@@ -1697,6 +1741,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     mutationClaim,
     'the queued save-task watcher must receive the optimistic mutation ownership claim',
   );
+  assert.strictEqual(watchedTasks[0].options.coverLookupOptimisticSplit, optimisticSplit);
   assert.strictEqual(claimCalls[0][0], album);
   assert.deepEqual(Array.from(claimCalls[0][1]), [trackPath]);
   assert.deepEqual(
@@ -2974,6 +3019,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     },
   };
   const alerts = [];
+  const clearedOptimisticSplits = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2986,6 +3033,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
       return { [trackPath]: { album: values[trackPath].album, edition: values[trackPath].edition } };
     },
     buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    recordCoverLookupOptimisticSplit() { return optimisticSplit; },
+    clearCoverLookupOptimisticSplit(split) { clearedOptimisticSplits.push(split); },
     deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
@@ -3023,6 +3072,7 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     alerts.at(-1)[0],
     'Source changed during the tag edit. Retry with the preserved values.',
   );
+  assert.deepEqual(clearedOptimisticSplits, [optimisticSplit]);
 });
 
 test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
@@ -5094,6 +5144,43 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   assert.equal(config.bonusLength, '');
 });
 
+test('every version tab after the original offers Separate release through the shared album menu', async () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const calls = [];
+  const context = loadHelper([], {
+    escapeHtml: value => String(value),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    ensureAlbumCardContextMenu: () => menu,
+    hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
+  });
+  const buttons = [{ dataset: {} }, { dataset: {} }, { dataset: {} }];
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original' },
+    { key: 'remaster', tabLabel: 'Remastered' },
+    { key: 'duplicate', tabLabel: 'Duplicate' },
+  ];
+  context.state.modalReleaseIndex = 0;
+  const tablist = { querySelectorAll: () => buttons, querySelector: () => null, addEventListener() {} };
+  context.mountInPageTabs = () => {};
+  context.renderTrackModalTabs({ tabs: { hidden: true, innerHTML: '', querySelector: () => tablist } });
+  assert.deepEqual(buttons.map((button) => button.dataset.versionContextKey), [undefined, 'remaster', 'duplicate']);
+
+  context.showVersionContextMenu('remaster', 40, 60);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.albumKey, 'remaster');
+  assert.match(menu.innerHTML, /class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="remaster">Separate release</);
+  context.hideVersionContextMenu();
+  assert.equal(menu.hidden, true);
+
+  context.ignoreAlbumVersion = async (key) => calls.push(['ignore', key]);
+  context.unmarkAlbumVersion = async (key) => calls.push(['unmark', key]);
+  context.state.view.manual_version_links = { linked: 'original' };
+  await context.separateAlbumRelease('remaster');
+  await context.separateAlbumRelease('linked');
+  assert.deepEqual(calls, [['ignore', 'remaster'], ['unmark', 'linked']], 'automatic versions become a version rule; manual links are unmarked');
+});
 
 test('release candidates remain symmetric when the gallery only contains Helloween 1985', () => {
   const ep = { key: 'helloween::helloween::year::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, preview_only: true };
@@ -5145,4 +5232,32 @@ test('details rule snapshot covers empty-shell opening until current rules arriv
   context.state.view.ignored_version_keys = [];
   context.state.view.manual_version_links = {};
   assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
+});
+
+test('Album Details names a tracklist section from album.track_sections on its first track (MusicBrainz contract)', () => {
+  // Contract with MusicBrainz Delivery 3: album.track_sections = [{ first_track_path, title }].
+  const { context } = createTrackModalCoverContext();
+  const track = (number, title) => ({ path: `C:/Music/Wallet Box/CD6/${number}.flac`, title, disc_number: 6, track_number: number });
+  const markup = context.buildTrackListHtml([track(1, 'Introducción'), track(2, 'Tema'), track(11, 'Libertango')], {
+    track_sections: [
+      { first_track_path: 'C:/Music/Wallet Box/CD6/1.flac', title: 'Suite Punta Del Este' },
+      { first_track_path: '', title: 'Ignored without a first track' },
+    ],
+  });
+  assert.equal((markup.match(/album-track-table__section-title">Suite Punta Del Este</g) || []).length, 1);
+  assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
+  assert.doesNotMatch(markup, /Ignored without a first track/);
+});
+
+require('node:test')('same-name albums are versions only when the server found shared tracks (Helloween 1985 vs 2021)', () => {
+  const candidates = [
+    { key: 'helloween::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, shares_tracks: true },
+    { key: 'helloween::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, shares_tracks: false },
+    { key: 'helloween::2006', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: 2006, shares_tracks: true },
+  ];
+  const album = { ...candidates[0], release_candidates: candidates };
+  const context = loadHelper(candidates);
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key), ['helloween::1985', 'helloween::2006']);
+  context.state.view.manual_version_links = { 'helloween::2021': 'helloween::1985' };
+  assert.ok(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key).includes('helloween::2021'), 'a manual link still groups');
 });

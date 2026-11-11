@@ -50,6 +50,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
               "case": "FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing",
               "area": "settings"
@@ -315,6 +322,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/responsiveGallery.spec.js",
               "case": "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale",
+              "area": "responsive-visual"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/responsiveGallery.spec.js",
+              "case": "FTC-MOBILE-WEB-008 switching Chrome device emulation from phone back to web restores the full web layout and mouse input",
               "area": "responsive-visual"
             },
             {
@@ -765,6 +779,27 @@
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-COVERS-034 watcher prefers front-named local art over a larger booklet image",
               "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception",
+              "area": "album-details"
             },
             {
               "config": "playwright.config.js",

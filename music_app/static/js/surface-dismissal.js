@@ -52,7 +52,9 @@
             && !inside(started.active, event.target)) {
           consume(event); return;
         }
-        const active = resolve();
+        // The pointerdown of this gesture already resolved the foreground
+        // surface; resolving again forced a second full style pass per click.
+        const active = started ? started.active : resolve();
         if (refocusPending) {
           refocusPending = false;
           if (active && !inside(active, event.target) && backdrop(active, event.target)) {

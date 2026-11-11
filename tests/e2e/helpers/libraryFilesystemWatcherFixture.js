@@ -272,6 +272,10 @@ async function buildWatchedAlbumFixture({
     albumArtist: albumOwner = albumArtist,
     discNumbers: albumDiscNumbers = discNumbers,
     discSubtitles: albumDiscSubtitles = discSubtitles,
+    // Per-track album tags: a disc folder can belong to another album (an album holding only some discs).
+    trackAlbums: albumTrackAlbums = null,
+    // Disc folders are "CD1", "CD2"... unless an album names them otherwise ("Часть 1", "Part 2").
+    discFolderPrefix = 'CD',
     isCompilation: albumCompilation = false,
   }) => {
     const directory = assertOwnedPath(
@@ -299,7 +303,7 @@ async function buildWatchedAlbumFixture({
             const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
             const relativePath = discTotal > 1
-              ? path.join(`CD${discNumber}`, filename)
+              ? path.join(`${discFolderPrefix}${discNumber}`, filename)
               : filename;
             const destination = assertOwnedPath(
               mediaRoot,
@@ -314,7 +318,7 @@ async function buildWatchedAlbumFixture({
               metadata: {
                 trackArtist: albumTrackArtists?.[index] || defaultTrackArtist,
                 albumArtist: albumOwner,
-                album: albumName,
+                album: albumTrackAlbums?.[index] || albumName,
                 year: albumYear,
                 title,
                 trackNumber: index + 1,
@@ -365,6 +369,16 @@ async function buildWatchedAlbumFixture({
         isCompilation,
       });
       track.title = title;
+    },
+    // Moves one track into another album on disk (the watcher then reports the album as split).
+    async retagTrackAlbum(index, albumName) {
+      const track = tracks[index];
+      await retag(track.path, {
+        trackArtist, albumArtist, album: albumName, year, title: track.title, trackNumber: index + 1,
+        discTag: `${track.discNumber}/${track.discTotal}`,
+        removeEmbeddedArtwork,
+        isCompilation,
+      });
     },
     createSiblingAlbum(options) {
       return createAlbum(options);

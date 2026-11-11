@@ -46,7 +46,7 @@ async function mount(page, {
   }));
   await page.goto(url);
   // Keep application stylesheet order, including the persistent shell and late Appearance overrides.
-  for (const file of ['runtime/base-layout.css', 'runtime/non-album-and-player.css',
+  for (const file of ['runtime/base-layout.css', 'runtime/running-line.css', 'runtime/non-album-and-player.css',
     'runtime/shell-persistent-player.css', 'app-chrome.css', 'appearance-backgrounds.css',
     'button-component.css']) {
     await page.addStyleTag({ content: fs.readFileSync(path.join(root, 'music_app/static/css', file), 'utf8').replace(/^\uFEFF/, '') });
@@ -77,7 +77,7 @@ async function mount(page, {
     });
     await page.evaluate(() => { window.state.player.current.coverPath = 'component-artwork'; });
   }
-  for (const file of ['client-preferences-helpers.js', 'compact-player-helpers.js', 'playback-control-cluster.js',
+  for (const file of ['client-preferences-helpers.js', 'running-line.js', 'compact-player-helpers.js', 'playback-control-cluster.js',
     'compact-player-controller.js', 'shell-navigation-drawer.js']) {
     await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime', file) });
   }
@@ -610,18 +610,18 @@ test('docked title and artist pan independently and recalculate after track and 
   await expect(title).toHaveClass(/is-overflowing/);
   await expect(artist).toHaveClass(/is-overflowing/);
   const motion = await Promise.all([title, artist].map(row => row.evaluate(element => ({
-    distance: parseFloat(getComputedStyle(element).getPropertyValue('--compact-player-row-pan-distance')),
+    distance: parseFloat(getComputedStyle(element).getPropertyValue('--running-line-distance')),
     animation: getComputedStyle(element.firstElementChild).animationName,
   }))));
   expect(motion[0].distance).toBeGreaterThan(0);
   expect(motion[1].distance).toBeGreaterThan(0);
   expect(motion[0].distance).not.toBe(motion[1].distance);
-  expect(motion.every(item => item.animation === 'compact-player-metadata-pan')).toBe(true);
+  expect(motion.every(item => item.animation === 'running-line-pan')).toBe(true);
   await expect(title).toHaveCSS('overflow', 'hidden');
   await expect(title).toHaveCSS('white-space', 'nowrap');
   const keyframes = await title.locator('[data-compact-player-title-text]').evaluate(element =>
     element.getAnimations()[0].effect.getKeyframes().map(frame => ({ offset: frame.offset, transform: frame.transform })));
-  expect(keyframes.map(frame => frame.offset)).toEqual([0, 0.16, 0.84, 1]);
+  expect(keyframes.map(frame => frame.offset)).toEqual([0, 0.15, 0.85, 1]);
   expect(keyframes[0].transform).toBe(keyframes[1].transform);
   expect(keyframes[2].transform).toBe(keyframes[3].transform);
 

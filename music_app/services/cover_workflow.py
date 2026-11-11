@@ -212,6 +212,14 @@ def resolve_album_write_root_from_track_paths(
     album_root = resolve_album_root_from_track_paths(config, track_paths)
     if album_root is not None or len(track_paths) < 2:
         return album_root
+    # Owner (11-09): part folders with any name ("Часть 1".."Часть 4") under one album folder: that shared folder
+    # is the album folder, as Cover Look Up already lists it, so the art beside the parts can be saved.
+    folders = {Path(str(path)).resolve(strict=False).parent for path in track_paths}
+    parents = {folder.parent for folder in folders}
+    if len(folders) > 1 and len(parents) == 1:
+        shared = next(iter(parents))
+        if _is_valid_album_root(config, shared, enforce_layout_depth=True):
+            return shared
     contexts = [
         resolve_album_context(config, {"tracks": [{"path": path}]})
         for path in sorted(track_paths)
@@ -281,6 +289,39 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
+def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_root: Path) -> bool:
+    """UI-2 (owner): art beside the disc folders (Album/cover.jpg next to CD1..CD4) belongs to every disc.
+
+    Cover Look Up lists it for an album that holds only some of those discs, so Save accepts it too. Only
+    images directly in that shared album folder qualify (at album depth for its library layout), never a
+    sibling disc's art or an artist folder's."""
+    shared = disc_root.parent
+    return (
+        is_disc_like_folder(disc_root)
+        and image.parent == shared
+        and _is_valid_album_root(config, shared, enforce_layout_depth=True)
+    )
+
+
+def _is_in_album_track_folder(config: dict[str, object], image: Path, track_paths: set[str]) -> bool:
+    """Owner (11-09): an image Cover Look Up shows for the album can be used. An album whose tracks span several
+    folders (two editions grouped as one album) lists the art of each, so art in any folder holding the album's
+    own tracks qualifies, as does art beside its disc folders; always inside the configured library roots."""
+    library_roots = tuple(iter_library_root_paths(config))
+    for raw_path in track_paths:
+        if not str(raw_path or "").strip():
+            continue
+        folder = Path(str(raw_path)).resolve(strict=False).parent
+        if not any(_is_path_within(folder, root) for root in library_roots):
+            continue
+        if is_disc_like_folder(folder):
+            if _is_path_within(image, folder) or _is_shared_disc_parent_image(config, image, folder):
+                return True
+        elif _is_path_within(image, folder) and _is_valid_album_root(config, folder, enforce_layout_depth=True):
+            return True
+    return False
+
+
 def validate_local_cover_source(
     config: dict[str, object],
     album_root: Path,
@@ -296,10 +337,10 @@ def validate_local_cover_source(
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(resolved_album_root)
-    except Exception as exc:
-        raise ValueError("Selected image is outside the album folder") from exc
+    if not (_is_path_within(resolved, resolved_album_root)
+            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)
+            or _is_in_album_track_folder(config, resolved, track_paths or set())):
+        raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
     if is_managed_preview_path(resolved):

@@ -60,6 +60,8 @@ import { createAppearancePreferenceIsolation } from '../helpers/appearancePrefer
 import { withArtistTreePreference } from './artistTreeStorageState.js';
 import { createLayoutPreferenceIsolation, restoreLayoutPreferencesAfterTest } from '../helpers/layoutPreferenceIsolation.js';
 
+export const PHONE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
+
 const ANSI = {
   cyan: '\u001b[36m',
   dim: '\u001b[2m',
@@ -371,12 +373,14 @@ export const test = base.extend({
     const sessions = [];
     try {
       await use({
-        async create({ userAgent } = {}) {
+        // `phone` emulates a real phone browser: phone user agent, touch and a phone-sized screen.
+        async create({ userAgent, phone = false } = {}) {
           const configuredBaseUrl = String(testInfo.project.use?.baseURL || '');
           const context = await browser.newContext({
             baseURL: configuredBaseUrl,
             ...(userAgent ? { userAgent } : {}),
-            viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
+            ...(phone ? { userAgent: PHONE_USER_AGENT, isMobile: true, hasTouch: true, deviceScaleFactor: 3 } : {}),
+            viewport: phone ? { width: 390, height: 844 } : testInfo.project.use?.viewport || { width: 1440, height: 960 },
             storageState: authenticateFreshBrowserSession ? storageState : withArtistTreePreference(
               { cookies: [], origins: [] }, configuredBaseUrl, initialArtistTreeFolded,
             ),

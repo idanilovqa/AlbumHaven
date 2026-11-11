@@ -25,9 +25,15 @@
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
+  // Refusals read as sentences, never as a silent no-op (owner, 11-10).
+  const REFUSALS = {
+    'CSRF validation failed.': 'Your session changed. Reload the page and try again.',
+    'Action not permitted.': 'Preview storage can be changed only by the server owner on a computer.',
+  };
+
   async function readJson(response) {
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.detail || 'The request could not be completed.');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(REFUSALS[data?.detail] || data?.detail || 'The request could not be completed.');
     return data;
   }
 
@@ -56,28 +62,41 @@
     }).then(Boolean));
     const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
     const canBrowse = Boolean(browse?.hasAttribute?.('data-path-input-browsable'));
+    const setButtonDisabled = (button, disabled) => window.ButtonComponent.setDisabled(button, disabled);
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
+    let retryClicked = false;
     let pollTimer = null;
     let disposed = false;
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
+    // Owner (11-10): "if specific folder or vice versa fails don't reselect the other option after reload". The
+    // requested option stays chosen, marked not finished until the move switches to it.
     const savedMode = () => String(state?.requested_mode || state?.mode || 'album_folders');
     const savedPath = () => String(state?.requested_root || state?.active_root || '');
+    const markUnfinished = (requestedMode) => modes.forEach((control) => {
+      const label = control.parentElement?.querySelector?.('span');
+      if (!label) return;
+      if (!label.dataset.label) label.dataset.label = label.textContent;
+      label.textContent = control.getAttribute('data-preview-mode') === requestedMode
+        ? `${label.dataset.label} (not finished)` : label.dataset.label;
+    });
     // Save is available only for a valid, unsaved choice: a special path always needs a folder.
     const syncControls = () => {
       const locked = !state || configurationLocked(state.operation_state);
       const special = selectedMode() === 'custom';
       const path = pathInput.value.trim();
       pathInput.disabled = !special || locked;
-      if (browse) browse.disabled = !special || locked || !canBrowse;
+      // The buttons render disabled with aria-disabled; the shared Button keeps both in step (UI-7).
+      if (browse) setButtonDisabled(browse, !special || locked || !canBrowse);
       const changed = selectedMode() !== savedMode() || (special && path !== savedPath());
-      save.disabled = locked || !changed || (special && !path);
+      setButtonDisabled(save, locked || !changed || (special && !path));
     };
     const syncPathControl = () => {
+      // Owner (11-09, UI-8): the proposed folder is the field's value, ready to save or edit.
       if (selectedMode() === 'album_folders') pathInput.value = '';
-      pathInput.placeholder = String(state?.suggested_path || '');
+      else if (!pathInput.value.trim()) pathInput.value = String(state?.suggested_path || '');
       syncControls();
     };
 
@@ -105,10 +124,41 @@
       const inventoryCount = Number(next.inventory_count ?? next.total_count ?? 0);
       const inventoryBytes = Number(next.inventory_bytes ?? next.total_bytes ?? 0);
       const totalCount = Number(next.total_count || 0);
-      const movement = totalCount > 0 && (active || canceled || Number(next.failed_count || 0) > 0)
-        ? ` · ${Number(next.completed_count || 0)} of ${totalCount} moved · ${Number(next.failed_count || 0)} failed`
+      // UI-8 (owner, 11-09): the summary separates previews moved with a fresh checksum and previews left to be
+      // regenerated from real failures; it stays after the move finishes.
+      const regenerateLater = Number(next.regenerate_later_count || 0);
+      const rechecked = Number(next.rechecked_count || 0);
+      const movement = totalCount > 0 && String(next.operation_state || 'idle') !== 'idle'
+        ? [` · ${Number(next.completed_count || 0) - regenerateLater} of ${totalCount} moved`,
+          rechecked ? ` · ${rechecked} re-checked` : '',
+          regenerateLater ? ` · ${regenerateLater} to be regenerated` : '',
+          ` · ${Number(next.failed_count || 0)} failed`].join('')
         : '';
-      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}`;
+      // Owner (11-09): the move cleans the album folders' leftover .album-haven folders and says what it left.
+      const cleanup = next.cache_cleanup || {};
+      const cleaned = [
+        Number(cleanup.cleaned_count || 0) ? ` · cleaned up ${Number(cleanup.cleaned_count)} cache folders` : '',
+        Number(cleanup.kept_count || 0) ? ` · ${Number(cleanup.kept_count)} kept (they hold other files)` : '',
+        Number(cleanup.left_count || 0) ? ` · ${Number(cleanup.left_count)} left for later (drive unavailable)` : '',
+      ].join('');
+      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}${cleaned}`;
+      // Owner (11-10): an unfinished move says so plainly instead of looking like the new folder is in use.
+      const destination = next.requested_mode === 'custom' ? String(next.requested_root || 'the special path') : 'album folders';
+      const failedCount = Number(next.failed_count || 0);
+      // Owner (11-10): "I don't think I need a separate info message. We already print into there in the line. Maybe
+      // show it when it tells user to click retry - but after retry is clicked remove it." The summary line carries
+      // progress and results; the note shows only while the move waits for Retry or Resume.
+      markUnfinished(next.requested_mode || null);
+      showAlert(status, next.requested_mode && !active && !retryClicked
+        ? (canceled
+          ? `Moving to ${destination} was canceled. Previews stay where they are until the move is resumed.`
+          : failedCount
+            ? `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`
+            : '')
+        : '');
+      if (!active) retryClicked = false;
+      window.ButtonComponent.setBusy(retry, false);
+      window.ButtonComponent.setBusy(cancel, false);
       counts.hidden = false;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);
@@ -167,7 +217,7 @@
       if (save.disabled) return;
       const mode = selectedMode();
       if (!(await confirmChange('Move generated album previews to the selected location? Covers stay available while the move runs.'))) return;
-      save.disabled = true;
+      setButtonDisabled(save, true);
       try {
         const next = await mutate('/admin/server/preview-storage', {
           mode,
@@ -190,15 +240,21 @@
       }
     });
     retry.addEventListener('click', async () => {
+      if (retry.disabled) return;
+      // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once.
+      window.ButtonComponent.setBusy(retry, true);
+      retryClicked = true;
+      showAlert(status);
       try {
         await mutate('/admin/server/preview-storage/retry', {});
-        showAlert(status, 'Failed preview files were queued again.');
       } catch (failure) {
+        window.ButtonComponent.setBusy(retry, false);
+        retryClicked = false;
         showAlert(error, failure.message);
       }
     });
 
-    save.disabled = true;
+    setButtonDisabled(save, true);
     void load();
     return () => {
       disposed = true;

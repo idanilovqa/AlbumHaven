@@ -290,7 +290,7 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
 
 for (const [name, controlClass, stylesheet, shadow] of [
   ['calendar', 'date-range-picker__control', 'date-range-picker.css', false],
-  ['library path', 'library-settings-path-control', 'runtime/utilities.css', false],
+  ['library path', 'ui-path-input', 'button-component.css', false],
   ['account password', 'password-control', 'account.css', true],
   ['admin password', 'password-control', 'admin-members.css', true],
 ]) {

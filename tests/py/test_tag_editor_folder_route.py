@@ -49,7 +49,7 @@ def test_folder_files_route_validates_source_and_returns_service_payload(monkeyp
     monkeypatch.setattr(
         routes,
         "load_tag_editor_folder_files",
-        lambda _config, path, *, indexed_paths: {
+        lambda _config, path, *, indexed_paths, paths_only=False: {
             "folder_path": "C:/Music/Album",
             "tracks": [{"path": path, "title": "One"}],
         },

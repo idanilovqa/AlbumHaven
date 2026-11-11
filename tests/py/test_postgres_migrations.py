@@ -543,7 +543,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0116_add_problematic_text_corrections.sql",
         "0117_create_problematic_files_snapshots.sql",
         "0118_fold_accents_in_duplicate_identity.sql",
-"0119_create_cover_mutation_revisions.sql",
+        "0119_create_cover_mutation_revisions.sql",
         "0120_create_deleted_loose_track_removal_function.sql",
         "0121_create_non_album_track_snapshots.sql",
     ]

@@ -29,6 +29,7 @@ EXTENDED_DEFAULTS = {
     "alert_family": "ember",
     "loop_control_style": "capsule",
     "library_source_indicators": {"card_colors": False, "hover_outline_colors": False, "icons": True},
+    "album_art_quality_alert": "enabled",
 }
 AGGREGATE_DEFAULTS = {
     "revision": 0,
@@ -400,7 +401,7 @@ def test_repository_load_returns_the_complete_authoritative_snapshot_for_one_own
 
     result = _repository(connection).load_preferences(account_id=41, client_profile="desktop")
 
-    assert result == {**AGGREGATE_APPEARANCE, "loop_control_style": "capsule", "library_source_indicators": EXTENDED_DEFAULTS["library_source_indicators"]}
+    assert result == {**AGGREGATE_APPEARANCE, "loop_control_style": "capsule", "library_source_indicators": EXTENDED_DEFAULTS["library_source_indicators"], "album_art_quality_alert": "enabled"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     for column in (
@@ -427,7 +428,7 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
         expected_revision=7,
     )
 
-    assert result == {**saved, "loop_control_style": "capsule", "library_source_indicators": EXTENDED_DEFAULTS["library_source_indicators"]}
+    assert result == {**saved, "loop_control_style": "capsule", "library_source_indicators": EXTENDED_DEFAULTS["library_source_indicators"], "album_art_quality_alert": "enabled"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert sql.count("%s") == len(params)

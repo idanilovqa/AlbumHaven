@@ -31,6 +31,5 @@ test('Cancel actions use the shared hollow Button presentation', () => {
 
   assert.ok((primaryModals.match(quietClass) || []).length >= 2);
   assert.equal((confirmModals.match(quietClass) || []).length, 6);
-  assert.match(versionPicker, /ui-button--quiet[^"']*["'][^>]*>Cancel<\/button>/);
   assert.match(selectionAccent, /ui-button--quiet[^"']*["'][^>]*>Cancel<\/button>/);
 });

@@ -158,7 +158,6 @@ function loadHelper() {
         focusGlowKey: '',
         focusGlowVisible: false,
       },
-      versionPicker: {},
       ui: {},
       lightbox: {},
       coverLookup: {
@@ -947,18 +946,20 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /<div class="album-track-table" data-track-path-column /);
+  assert.match(markup, /--cdt-columns: var\(--album-track-table-columns\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
-  assert.match(markup, /data-cdt-column="problem"/);
+  assert.doesNotMatch(markup, /data-cdt-column="problem"/, 'no loose track is problematic, so the slot is removed');
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__title" data-title-prefix="Main Artist feat\. Guest \/ ">Rare Song</);
+  assert.match(markup, /album-track-table__disc-title">Non-album rarity<\/span><span class="album-track-table__disc-count">1 track<\/span><span class="album-track-table__disc-length">4:05</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
   assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
@@ -974,6 +975,9 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     exception_type: 'Non-album rarity',
   }]);
   assert.match(rarityOnly, />Non-album rarity</);
+  assert.doesNotMatch(rarityOnly, /data-track-path-column/, 'without a display path the File path column is absent');
+  const withYear = context.buildNonAlbumTrackSectionsMarkup([{ path: 'C:/Music/A.mp3', title: 'Song', artist: 'Band', year_label: '2024', exception_type: 'Interview' }]);
+  assert.match(withYear, /album-track-table__secondary" title="2024"><span>2024</);
   assert.doesNotMatch(rarityOnly, />Interviews</);
 
   const otherOnly = context.buildNonAlbumTrackSectionsMarkup([{
@@ -2220,4 +2224,215 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
     non_album_tracks: [track],
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
+});
+
+test('gallery album menu offers Separate release for versions, not for unversioned albums', () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const context = vm.createContext({
+    console,
+    state: { view: { manual_version_links: {} } },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null), createElement: () => menu, body: { appendChild() {} } },
+    escapeHtml: (value) => String(value ?? ''),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    getAlbumIdentity: (album) => album.key,
+    getAvailableAlbumMoveActions: () => [],
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const sets = {
+    original: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    remaster: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    single: [{ key: 'single' }],
+  };
+  context.getAlbumReleaseSet = (album) => ({ releases: sets[album.key] });
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'original' });
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release: Remastered</);
+  assert.match(menu.innerHTML, /data-separate-release-key="live">Separate release: Live</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'remaster' });
+  assert.equal((menu.innerHTML.match(/separate-release"/g) || []).length, 1);
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'single' });
+  assert.doesNotMatch(menu.innerHTML, /Separate release/);
+});
+
+function loadVersionPicker({ details, view = {}, visible = [], releaseSet }) {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
+  const calls = [];
+  const context = vm.createContext({
+    state: { view },
+    escapeHtml: (value) => String(value ?? ''),
+    compareAlbumVariants: () => 0,
+    flattenVisibleAlbums: () => visible,
+    fetchTrackModalAlbumDetails: async (key) => { calls.push(['details', key]); return details; },
+    getAlbumReleaseSet: releaseSet,
+    getManualVersionFamilyKeys: (key, links) => {
+      const family = new Set([key]);
+      Object.entries(links).forEach(([child, parent]) => { if (child === key || parent === key) { family.add(child); family.add(parent); } });
+      return family;
+    },
+    markAlbumVersion: async (...args) => { calls.push(['mark', ...args]); },
+    unmarkAlbumVersion: async (key) => { calls.push(['unmark', key]); },
+    ignoreAlbumVersion: async (key) => { calls.push(['separate', key]); },
+    scheduleVersionGalleryRefresh: () => calls.push(['refresh']),
+    showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
+  });
+  useNavigationTree(context);
+  vm.runInContext(source, context);
+  return { context, calls };
+}
+
+async function mountVersionPicker(context, calls, album) {
+  await context.openVersionPickerModal(album);
+  const options = calls.find(([kind]) => kind === 'dialog')[1];
+  let enabled = null;
+  const listeners = {};
+  const list = { innerHTML: '', removeAttribute() {} };
+  const nodes = new Map();
+  const content = {
+    addEventListener: (name, handler) => { listeners[name] = handler; },
+    removeEventListener() {},
+    querySelector: () => list,
+  };
+  context.window.NavigationTree.setItemSelected = (node, value) => { node.selected = value; };
+  options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const click = (key) => {
+    const node = nodes.get(key) || { key, getAttribute: () => key };
+    nodes.set(key, node);
+    listeners.click({ target: { closest: () => node } });
+    return node;
+  };
+  return { options, list, click, enabled: () => enabled };
+}
+
+test('Mark As A Version lists the album details candidates that share tracks, with every current version selected', async () => {
+  // Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): an album that already is a version (linked or automatic)
+  // showed unselected. The gallery loads version rules lazily and folds versions into one card, so the picker reads
+  // the album's own details.
+  const album = { key: 'ayreon::electric castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const remix = { key: 'ayreon::electric castle remix', name: 'Into The Electric Castle (Remix)', album_artist: 'Ayreon', shares_tracks: true };
+  const live = { key: 'ayreon::electric castle live', name: 'Into The Electric Castle (Live)', album_artist: 'Ayreon', shares_tracks: true };
+  const other = { key: 'ayreon::electric castle other', name: 'Into The Electric Castle', album_artist: 'Ayreon', shares_tracks: false };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, remix, live, other], release_candidate_rules: { manual_version_links: { [album.key]: remix.key } } },
+    // The automatic version (live) groups with it; the remix is linked in the album's own rules only.
+    releaseSet: (value) => ({ releases: [value, live] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.equal(picker.options.description, 'Select the albums that are versions of Into The Electric Castle.');
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle remix"/);
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle live"/);
+  assert.doesNotMatch(picker.list.innerHTML, /electric castle other/, 'same name, different songs');
+  for (const key of [remix.key, live.key]) {
+    assert.match(picker.list.innerHTML, new RegExp(`class="[^"]* is-selected[^"]*"[^>]*data-version-picker-target="${key}" aria-current="true"`), key);
+  }
+  assert.equal(picker.enabled(), null, 'nothing changed yet');
+});
+
+test('Mark As A Version shows each album cover, taken from the gallery copy of the album', async () => {
+  // Owner (11-09): the selected 20th Anniversary Edition showed an empty artbox. Release candidates are headers only,
+  // so the gallery's copy of the same album supplies the artwork.
+  const album = { key: 'ayreon::castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const edition = { key: 'ayreon::castle 20th', name: 'Into The Electric Castle (20th Anniversary Edition)', album_artist: 'Ayreon', shares_tracks: true };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, edition], release_candidate_rules: {} },
+    visible: [{ key: edition.key, name: edition.name, cover_path: 'N:/Ayreon/2018/cover.jpg' }],
+    releaseSet: (value) => ({ releases: [value, edition] }),
+  });
+  context.buildUtilityAlbumArtbox = (item) => `<img data-cover="${item.cover_path || ''}">`;
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.match(picker.list.innerHTML, /<img data-cover="N:\/Ayreon\/2018\/cover\.jpg">/);
+  assert.match(picker.list.innerHTML, /20th Anniversary Edition/);
+});
+
+test('Mark As A Version saves the changed selection in the background: link, unlink, or separate', async () => {
+  const album = { key: 'a', name: 'Album', album_artist: 'Artist' };
+  const candidates = ['linked', 'automatic', 'new'].map((key) => ({ key, name: 'Album', album_artist: 'Artist', shares_tracks: true }));
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, ...candidates], release_candidate_rules: { manual_version_links: { linked: 'a' } } },
+    releaseSet: (value) => ({ releases: [value, candidates[1]] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  picker.click('linked');
+  picker.click('automatic');
+  picker.click('new');
+  assert.equal(picker.enabled(), true);
+  // UI-11 (owner): Save closes at once; nothing waits for the server.
+  assert.equal(picker.options.onSubmit(), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.filter(([kind]) => ['mark', 'unmark', 'separate'].includes(kind)))).sort(), [
+    ['mark', 'new', 'a'],
+    ['separate', 'automatic'],
+    ['unmark', 'linked'],
+  ]);
+});
+
+test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {
+  const { context } = loadHelper();
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  [heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => (selector === '[data-navigation-mode]' ? [artistsMode, collectionsMode] : []);
+
+  context.syncLibraryNavigationMode('collections');
+  assert.equal(heading.textContent, 'Custom Collections');
+  assert.equal(collections.hidden, false);
+  assert.equal(artists.hidden, true);
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', true]);
+
+  context.syncLibraryNavigationMode('artists');
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});
+
+// Mark As A Version renders the real NavigationTree wide item from its template.
+function useNavigationTree(context) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..', '..', '..');
+  const template = fs.readFileSync(path.join(root, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
+  const treeContext = { document: { getElementById: (id) => (id === 'navigation-tree-item-template' ? { textContent: template } : null) } };
+  treeContext.window = treeContext;
+  vm.createContext(treeContext);
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/navigation-tree.js'), 'utf8'), treeContext);
+  context.window = { ...(context.window || {}), NavigationTree: treeContext.NavigationTree };
+  context.buildUtilityAlbumArtbox = () => '<span class="utility-detail-cover"></span>';
+  return context;
+}
+
+test('INT-007: an album already marked as a version is selected in Mark As A Version', () => {
+  const { context } = loadHelper();
+  useNavigationTree(context);
+  context.state.view.manual_version_links = { 'helloween::remaster': 'helloween::original', 'other::x': 'other::y' };
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::original')], ['helloween::remaster']);
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::remaster')], ['helloween::original']);
+  const html = context.buildVersionPickerListHtml(
+    [{ key: 'helloween::remaster', name: 'Helloween' }, { key: 'helloween::live', name: 'Helloween' }],
+    context.getLinkedVersionKeys('helloween::original'),
+  );
+  // The owner asked for the split-release choice's element: the wide navigation-tree item.
+  const items = html.split('</button>').filter((part) => part.includes('data-version-picker-target'));
+  assert.equal(items.length, 2);
+  assert.match(items[0], /navigation-tree-item--wide[^"]*is-selected is-active"[^>]*data-navigation-tree-item="wide"[^>]*data-version-picker-target="helloween::remaster"/);
+  assert.match(items[0], /aria-current="true"/);
+  assert.doesNotMatch(items[1], /is-selected|aria-current/);
+  assert.match(items[1], /data-version-picker-target="helloween::live"/);
+  const template = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../music_app/templates/partials/app-form-modal.html'), 'utf8');
+  assert.match(template, /action_button\('Close', class_name='app-form-close', id='app-form-close'/);
 });

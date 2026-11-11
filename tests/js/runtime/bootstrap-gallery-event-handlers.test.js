@@ -3785,7 +3785,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     view: 'covers',
     familyArtists: [],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
   });
 });
 
@@ -5958,3 +5958,19 @@ for (const query of ['Devin', '']) {
     assert.equal(context.state.ui.artistsDrawerOpen, false);
   });
 }
+
+test('a new search leaves an open Loose Tracks page for the artist tree (owner: never sits on old matches)', () => {
+  const { context } = createContext({ fetchAndRenderResult: Promise.resolve(true) });
+  const page = { hidden: false };
+  const originalGet = context.document.getElementById;
+  context.document.getElementById = (id) => (id === 'non-album-modal' ? page : originalGet(id));
+  let closed = 0;
+  context.closeNonAlbumModal = () => { closed += 1; page.hidden = true; };
+  context.state.view.query = 'Anything Goes';
+  context.commitGallerySearchQuery('Devin');
+  assert.equal(closed, 1, 'a different query closes Loose Tracks');
+  page.hidden = false;
+  context.state.view.query = 'Devin';
+  context.commitGallerySearchQuery('Devin');
+  assert.equal(closed, 1, 'resubmitting the same query keeps the page the user opened');
+});

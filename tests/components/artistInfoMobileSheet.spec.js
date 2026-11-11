@@ -18,6 +18,12 @@ test('mobile artist info sits at the bottom without an anchored trigger outline'
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('heading', { name: 'Northlight' })).toBeVisible();
   await expect(sheet.getByRole('button', { name: 'Close artist information' })).toBeVisible();
+  // INT-023: the sheet slides up from the bottom edge, quickly, then rests at the bottom.
+  const slide = await sheet.evaluate((node) => node.getAnimations().map((animation) => ({
+    name: animation.animationName, duration: animation.effect.getTiming().duration,
+  })));
+  expect(slide).toEqual([{ name: 'bottom-sheet-enter', duration: 320 }]);
+  await sheet.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
   const box = await sheet.boundingBox();
   expect(box).not.toBeNull();
   expect(box.x).toBeCloseTo(0, 0);

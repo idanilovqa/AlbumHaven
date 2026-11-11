@@ -2364,6 +2364,9 @@ def test_scan_cancelled_during_postgres_publication_rolls_back_before_rating_see
                 return CursorStub([{"bootstrap_context_ready": 1}])
             if "metadata -> 'scan_cache'" in sql:
                 return CursorStub()
+            if "as normalized_builder_version" in sql:
+                # Scoped relation publication resolves the library first.
+                return CursorStub([{"library_id": 1}])
             if (
                 "jsonb_build_object('scan_cache'" in sql
                 and not self.cancelled_during_publication

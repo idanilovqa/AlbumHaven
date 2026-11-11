@@ -942,6 +942,8 @@ function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
   owner.summary = null;
+  owner.rememberedTotal = null;
+  owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   return owner;
@@ -972,6 +974,54 @@ function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
   };
 }
 
+const LASTFM_TOTAL_STORAGE_PREFIX = 'albumHaven.lastfmTotal.';
+
+function readRememberedLastfmTotal(username) {
+  try {
+    const stored = localStorage.getItem(LASTFM_TOTAL_STORAGE_PREFIX + username);
+    const total = stored === null ? NaN : Number(stored);
+    return Number.isInteger(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastfmTotal(username, total) {
+  if (total == null) return;
+  try {
+    localStorage.setItem(LASTFM_TOTAL_STORAGE_PREFIX + username, String(total));
+  } catch {
+    // Remembering is a convenience; the next refresh shows the total anyway.
+  }
+}
+
+function paintLastfmTotal(owner) {
+  const node = document.querySelector('#utility-modal [data-lastfm-total]');
+  if (node) node.textContent = `LastFM Total: ${formatLastfmTotal(owner)}`;
+}
+
+// Asking Last.fm takes seconds: the page shows the last known total at once
+// and this replaces only that number when the fresh one arrives.
+async function refreshLastfmTotal(owner, requestGeneration, username) {
+  const isCurrent = () => state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration;
+  owner.refreshingTotal = true;
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles?refresh_total=1', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    const total = data.lastfm_total == null ? NaN : Number(data.lastfm_total);
+    if (!response.ok || !data.ok || !Number.isInteger(total) || total < 0 || !isCurrent() || !owner.summary) return;
+    owner.summary = { ...owner.summary, lastfm_total: total };
+    rememberLastfmTotal(username, total);
+  } catch (error) {
+    console.warn('[AlbumHaven][Integrations] Failed to refresh the Last.fm total.', error);
+  } finally {
+    if (isCurrent()) {
+      owner.refreshingTotal = false;
+      paintLastfmTotal(owner);
+    }
+  }
+}
+
 async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
   const owner = ensureLastfmScrobbleState();
   if (!lastfm?.connected) {
@@ -980,6 +1030,9 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
   }
   if (owner.loading && !replace) return owner.loadPromise;
   const requestGeneration = ++owner.requestGeneration;
+  const username = String(lastfm.username || '');
+  owner.rememberedTotal = readRememberedLastfmTotal(username);
+  owner.refreshingTotal = false;
   owner.loading = true;
   renderUtilityModalContent();
   const loadPromise = (async () => {
@@ -988,7 +1041,11 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
-        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        const summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
+        else rememberLastfmTotal(username, summary.lastfm_total);
+        owner.summary = summary;
+        if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
       }
       return owner.summary;
     } catch (error) {
@@ -2593,7 +2650,65 @@ function renderTagEditorArtwork(selectedPaths) {
   const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+  const canOpenFolder = Boolean(folderPath) && !(typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location'));
+  // Same ActionButton and open-location route as the Album Details folder action.
+  // UI-6 (owner, 11-08 evening): right-aligned, and not shown at all when this client cannot open folders.
+  const openFolderButton = canOpenFolder ? ButtonComponent.renderActionButton({
+    ariaLabel: 'Open this folder in File Explorer',
+    title: 'Open this folder in File Explorer',
+    // UI-6 (owner): no outline; the bare action, like the Album Details header folder button.
+    presentation: 'bare',
+    className: 'tag-editor-open-folder',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
+    attributes: { 'data-open-tag-editor-folder': focusedPath },
+  }) : '';
+  const loadFolderButton = state.tagEditor?.folderHasUnloadedTracks === true ? ButtonComponent.renderButton({
+    label: 'Load all tracks from the folder',
+    variant: 'secondary',
+    size: 'small',
+    className: 'tag-editor-folder-load',
+    disabled: Boolean(state.tagEditor.folderLoading),
+    attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-copy"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${loadFolderButton}</div>${openFolderButton}</div>`;
+}
+
+function tagEditorFolderRequestBody(tagEditor, sourcePath, extra = {}) {
+  return JSON.stringify({
+    source_path: sourcePath,
+    album: {
+      key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+      tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+    },
+    ...extra,
+  });
+}
+
+// Shows "Load all tracks from the folder" only when the album folder (every disc) has files not in the editor.
+async function refreshTagEditorFolderCompleteness(tagEditor) {
+  const sourcePath = String(tagEditor?.tracks?.[0]?.path || '');
+  if (!sourcePath) return;
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath, { paths_only: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.tagEditor !== tagEditor || !response.ok || !data.ok) return;
+    const loaded = new Set((tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)));
+    tagEditor.folderHasUnloadedTracks = (Array.isArray(data.paths) ? data.paths : [])
+      .some((path) => !loaded.has(normalizeTagEditorPathKey(path)));
+    if (getTagEditorElements().overlay?.hidden !== true) renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
+  } catch {
+    // Without a folder listing the action stays hidden; editing the loaded tracks is unaffected.
+  }
+}
+
+function getTagEditorTrackFolderName(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 2] : '';
 }
 
 function getTagEditorFocusedPath() {
@@ -2614,25 +2729,15 @@ function normalizeTagEditorPathKey(path) {
 async function loadTagEditorFolderFiles() {
   const tagEditor = state.tagEditor;
   const sourcePath = getTagEditorFocusedPath();
-  const button = document.getElementById('tag-editor-folder-load');
   if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
 
   tagEditor.folderLoading = true;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  }
+  renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
   try {
     const response = await fetch('/utilities/tag-editor/folder-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        source_path: sourcePath,
-        album: {
-          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
-          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
-        },
-      }),
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
@@ -2651,21 +2756,25 @@ async function loadTagEditorFolderFiles() {
       tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
     });
 
+    tagEditor.folderHasUnloadedTracks = false;
     if (!addedTracks.length) {
       showRepairAlert('All supported files from this folder are already loaded.', 'success');
       return;
     }
-    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
-    renderTagEditor();
+    // The folder listing is in disc order (CD1 files, then CD2, ...): keep the editor in that order.
+    const folderOrder = new Map((Array.isArray(data.tracks) ? data.tracks : [])
+      .map((track, index) => [normalizeTagEditorPathKey(track?.path), index]));
+    const position = (track) => folderOrder.get(normalizeTagEditorPathKey(track.path)) ?? Number.MAX_SAFE_INTEGER;
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks]
+      .map((track, index) => ({ track, index }))
+      .sort((a, b) => (position(a.track) - position(b.track)) || (a.index - b.index))
+      .map(({ track }) => track);
   } catch (error) {
     showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
   } finally {
     if (state.tagEditor === tagEditor) {
       tagEditor.folderLoading = false;
-    }
-    if (button && state.tagEditor === tagEditor) {
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      renderTagEditor();
     }
   }
 }
@@ -2756,16 +2865,20 @@ function renderTagEditor(options = {}) {
         ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
+    const showFolderNames = new Set(tracks.map((track) => getTagEditorTrackFolderName(track.path))).size > 1;
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
+      // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
+      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
-            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            <span class="tag-editor-track-name"><span class="tag-editor-track-title">${escapeHtml(filename)}</span>${folderName ? `<span class="tag-editor-track-folder">${escapeHtml(folderName)}</span>` : ''}</span>
             ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
           </button>
         </div>

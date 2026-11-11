@@ -39,28 +39,33 @@ test('Album Details headers never render library source markers', () => {
   assert.match(html, /album-details-header__actions/);
 });
 
-test('Album Details renders the backend poor-art classification as a focusable SmallAlert beside the title', () => {
+test('UI-ARTQ: the poor-art warning leaves the header and sits on the album art', () => {
   const context = loadComponents();
-  const html = context.buildAlbumDetailsHeaderHtml({
-    layout: 'classic_bar',
-    artist: 'Sandy Alex G',
-    album: 'Rocket',
-    year: '2017',
-    poorArtQuality: true,
-  });
+  const header = context.buildAlbumDetailsHeaderHtml({ layout: 'classic_bar', artist: 'Sandy Alex G', album: 'Rocket', year: '2017', poorArtQuality: true });
+  assert.doesNotMatch(header, /Poor art quality|quality-alert/, 'never in the header');
 
-  assert.match(html, /album-details-header__primary-row/);
-  assert.match(html, /small-alert small-alert--warning album-details-header__quality-alert/);
-  assert.match(html, /aria-label="Poor art quality"/);
-  assert.match(html, /tabindex="0"/);
-  assert.match(html, /small-alert__text">Poor art quality</);
-  assert.doesNotMatch(
-    context.buildAlbumDetailsHeaderHtml({ album: 'Rocket', poorArtQuality: false }),
-    /Poor art quality|album-details-header__quality-alert/,
-  );
+  const inserted = [];
+  const shell = { insertAdjacentHTML: (_where, html) => inserted.push(['art', html]) };
+  const body = { insertAdjacentHTML: (_where, html) => inserted.push(['body', html]) };
+  const removed = [];
+  const page = { classList: { contains: () => false }, querySelectorAll: () => [{ remove: () => removed.push(1) }] };
+  const cover = { closest: (selector) => (selector === '#track-modal' ? page : body), querySelector: () => shell };
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: true });
+  assert.equal(removed.length, 1, 'a re-render replaces the previous alert');
+  assert.equal(inserted[0][0], 'art');
+  assert.match(inserted[0][1], /small-alert small-alert--warning album-details-art-quality-alert" role="status" aria-label="Poor art quality"[^>]*tabindex="0"/);
+  assert.match(inserted[0][1], /small-alert__text">Poor art quality</);
+
+  context.usesMobilePageLayout = () => true;
+  page.classList.contains = (name) => name === 'is-mobile-page';
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: true });
+  assert.equal(inserted[1][0], 'body', 'mobile places it on the page body, not the header');
+
+  context.renderAlbumArtQualityAlert(cover, { poor_art_quality: false });
+  assert.equal(inserted.length, 2, 'albums without the classification show nothing');
 });
 
-test('Album Details renders readable noninteractive source labels', () => {
+test('Album Details renders library sources as focusable compact alerts in the source color', () => {
   const context = loadComponents();
   const html = context.buildAlbumCoverSourceMarkersHtml({
     root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
@@ -69,6 +74,10 @@ test('Album Details renders readable noninteractive source labels', () => {
   assert.match(html, /album-details-cover-source-markers/);
   assert.match(html, /aria-label="Hoard"/);
   assert.match(html, /aria-label="New Arrivals"/);
+  assert.match(html, /small-alert small-alert--info small-alert--tone-hoard album-details-source-marker album-details-source-marker--hoard"[^>]*tabindex="0"/);
+  assert.match(html, /small-alert--tone-new_arrivals[^"]*album-details-source-marker--new_arrivals"[^>]*tabindex="0"/);
+  assert.match(html, /small-alert__icon"><svg viewBox="0 0 48 48"/, 'the alert shows the source glyph, not a generic info icon');
+  assert.match(html, /small-alert__text">Hoard</);
   assert.doesNotMatch(html, /<button|data-open-tracklist/);
   assert.equal(context.buildAlbumCoverSourceMarkersHtml({ source: 'main_library' }), '');
 });
@@ -86,6 +95,9 @@ test('Album Details source markers reuse the gallery source glyphs and obey the 
   );
   assert.match(css, /\.album-details-source-markers\s*\{[^}]*display:\s*inline-flex/s);
   assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
+  const alertCss = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'), 'utf8');
+  assert.match(alertCss, /\.small-alert--tone-hoard\s*\{\s*--alert-edge:\s*var\(--library-source-hoard/);
+  assert.match(alertCss, /\.small-alert--tone-new_arrivals\s*\{\s*--alert-edge:\s*var\(--library-source-arrivals/);
 });
 
 test('Album Details places source labels in the header and never under artwork', () => {
@@ -94,13 +106,13 @@ test('Album Details places source labels in the header and never under artwork',
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
     const html = context.buildAlbumDetailsHeaderHtml({layout, album: 'G_d’s Pee AT STATE’S END!', releaseType: 'ALBUM', sourceMarkersHtml: labels});
     assert.match(html, /album-details-header__release-type[^>]*>ALBUM/);
-    assert.match(html, /album-details-header__tag album-details-source-marker/);
+    assert.match(html, /small-alert[^"]*album-details-source-marker/);
     assert.ok(html.includes('>Hoard</span>'));
     assert.ok(html.includes('>New Arrivals</span>'));
     assert.ok(html.indexOf('>ALBUM<') < html.indexOf('>Hoard<'));
   }
   const source = fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8');
-  assert.match(source, /sourceMarkersHtml: coverSourceMarkersHtml/);
+  assert.match(source, /sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml\(album\)/);
   assert.equal(source.includes('$' + '{coverSourceMarkersHtml}'), false);
 });
 
@@ -205,10 +217,8 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /id="non-album-modal-edit-tags"/);
   assert.match(html, /data-open-non-album-tag-editor="1"/);
   assert.match(html, /album-details-header__action-icon--edit/);
-  assert.match(html, /id="non-album-modal-close"/);
-  assert.match(html, /data-close-non-album-modal="1"/);
-  assert.match(html, /album-details-header__action-icon--close/);
-  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
+  assert.doesNotMatch(html, /non-album-modal-close|data-close-non-album-modal|album-details-header__action-icon--close/, 'Loose Tracks is a page without a close button');
+  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 1);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
 });
 

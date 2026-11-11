@@ -39,7 +39,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4333,
     targets: ['gallery-artwork-diversity'],
     generatorRepository: 'idanilovqa/album-haven-test-data',
-    generatorCommit: '35c374fcbcbadf703849d2581e2303e293c87a76',
+    generatorCommit: '38aa02ef034c6235362950946fdf15a4a9a65dc4',
     variantCount: 512,
     sourceMaxEdge: 960,
   });

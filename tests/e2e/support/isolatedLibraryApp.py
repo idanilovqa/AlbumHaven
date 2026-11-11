@@ -4180,6 +4180,16 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "automatic-candidate",
         })
+        # FTC-COVERS-046: a candidate for the watched album that is split while its search is held.
+        self.cover_lookup_split_chooser_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-split-chooser-candidate",
+            "artist": "Watcher Split Chooser Artist",
+            "album": "Watcher Split Chooser Album",
+            "year": 2009,
+            "width": 2000,
+            "height": 2000,
+        })
         self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
             **dict(cover_specs[0]),
             "cover_id": "watcher-automatic-candidate",
@@ -4327,6 +4337,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
             self.cover_lookup_watcher_candidate_spec,
+            self.cover_lookup_split_chooser_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
             self.cover_lookup_same_art_improvement_spec,
@@ -4489,6 +4500,13 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.cover_lookup_later_provider_gate.set()
 
     def hold_cover_lookup_candidate_images(self) -> None:
+        # A held provider is a slow provider: images the app's remote-image cache kept from earlier views would
+        # otherwise never reach the gate. The app runs in this process, so its cache starts empty for the hold.
+        from music_app.services import cover_lookup_runtime
+
+        with cover_lookup_runtime._REMOTE_IMAGE_CACHE_LOCK:
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE.clear()
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE_BYTES = 0
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence["candidate_image_requests"] = 0
         self.cover_lookup_candidate_image_gate.clear()
@@ -4529,6 +4547,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "service-deadline",
             "artist-conjunction",
             "split-identity",
+            "watcher-split-chooser",
             "automatic-coverless",
             "automatic-scan",
             "same-art-improvement",
@@ -4934,6 +4953,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
         if mode == "split-identity":
             return [dict(self.server.cover_lookup_split_identity_spec)]
+        if mode == "watcher-split-chooser":
+            return [dict(self.server.cover_lookup_split_chooser_spec)]
         if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
             index = 0 if mode.endswith("-a") else 1
             if _normalize_provider_query("E2E Rarity Artist Queued Album Rename Fixture") in normalized_query:

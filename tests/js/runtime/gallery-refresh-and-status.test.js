@@ -3969,6 +3969,43 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
+for (const [label, scanPhase, lastRefreshAgoMs, refreshes] of [
+  ['shows albums a reading scan has published', 'indexing', 60_000, true],
+  ['waits a few seconds between live scan refreshes', 'indexing', 1_000, false],
+  ['leaves a finalizing scan to its completion refresh', 'finalizing', 60_000, false],
+]) {
+  test(`pollStatus ${label}`, async () => {
+    const { context, pendingRequests } = createContext();
+    context.scheduleBrowserTimeout = () => {};
+    context.buildApiUrl = () => '/view-data?surface=albums';
+    context.state.ui.lastLiveScanRefreshAt = Date.now() - lastRefreshAgoMs;
+    // Already finalizing: entering that phase has its own completion refresh.
+    context.state.wasScanFinalizing = scanPhase === 'finalizing';
+    const scanning = {
+      scan_in_progress: true,
+      scan_phase: scanPhase,
+      relations_in_progress: false,
+      covers_in_progress: false,
+    };
+    context.state.status = { ...scanning, inventory_mutation_revision: 12 };
+
+    const statusPromise = context.pollStatus();
+    pendingRequests[0].resolveWith({ ...scanning, inventory_mutation_revision: 13 });
+    for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+      await flushMicrotasks();
+    }
+
+    assert.equal(pendingRequests.length, refreshes ? 2 : 1, pendingRequests.map((request) => request.url).join(' '));
+    if (refreshes) {
+      assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+      pendingRequests[1].resolveWith({ artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'new' }] }], album_count: 1 });
+    }
+    await statusPromise;
+    await flushMicrotasks();
+    assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, !refreshes);
+  });
+}
+
 test('pollStatus does not reload a foreground view already read at the advanced inventory revision', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

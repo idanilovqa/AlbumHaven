@@ -30,7 +30,7 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
 test('shared page headers keep Back before the title on desktop', () => {
   assert.match(
     mobileLayoutCss,
-    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
+    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1 \/ span 2;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
   );
 });
 
@@ -87,6 +87,8 @@ test('disabled shared buttons are visibly inactive and pointer-hover checkbox ou
   assert.match(buttons, /\.ui-button:disabled,\s*\.ui-button\[aria-disabled='true'\],[^{]+\{[^}]*opacity:\s*0\.38;[^}]*cursor:\s*not-allowed;/s);
   const appearance = readProjectFile('music_app/static/css/appearance-backgrounds.css');
   const checkboxHover = appearance.match(/:root input\[type='checkbox'\]:not\(\.global-player \*\):hover:not\(:disabled\)\s*\{([^}]*)\}/)?.[1];
+  // Owner (11-10, NEW-WRITE): radios take no hover outline.
+  assert.doesNotMatch(appearance, /input\[type='radio'\][^{,]*:hover/);
   assert.ok(checkboxHover);
   assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
   assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);

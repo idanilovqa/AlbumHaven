@@ -1488,35 +1488,6 @@
   gap: 4px;
   padding: 10px;
 }
-.tag-editor-track-footer {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
-}
-.tag-editor-folder-load {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255,255,255,0.03);
-  color: var(--muted);
-  cursor: pointer;
-}
-.tag-editor-folder-load:is(:hover, :focus-visible) { color: var(--text); }
-.tag-editor-folder-load:disabled { cursor: wait; opacity: 0.5; }
-.tag-editor-folder-load svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 .tag-editor-track {
   position: relative;
   width: 100%;
@@ -1634,6 +1605,12 @@
   gap: 10px;
   min-height: 58px;
 }
+.tag-editor-folder-location { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tag-editor-folder-location > .tag-editor-open-folder { flex: none; margin-left: auto; }
+/* "Load all tracks from the folder" sits right after the folder path, wrapping under it only when narrow. */
+.tag-editor-folder-copy { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0; }
+.tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-editor-folder-path {
   min-width: 0;
   max-width: 100%;
@@ -1990,6 +1967,9 @@
 .utility-rule-target > .album-artbox { width: 44px; height: 44px; flex: 0 0 44px; }
 .utility-rule-target .utility-rule-album-title,
 .utility-rule-target .utility-rule-album-meta { display: block; }
+/* Owner (11-09): a long album name is cut with an ellipsis inside its column (the full name is its tooltip). */
+.utility-rule-target > span:not(.album-artbox) { min-width: 0; overflow: hidden; }
+.utility-rule-target :is(.utility-rule-album-title, .utility-rule-album-meta) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #repair-confirm-text { white-space: pre-line; }
 
 /* Approved Settings integrations compose existing Input, ActionButton and Modal. */

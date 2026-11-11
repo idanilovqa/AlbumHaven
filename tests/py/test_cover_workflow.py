@@ -1090,6 +1090,31 @@ def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):
         )
 
 
+def test_album_spanning_two_edition_folders_accepts_art_from_either(config, tmp_path: Path):
+    """Owner (11-09): Holy War groups the 2002 and 2014 editions as one album; Cover Look Up shows the art of
+    both folders, so Save accepts it. Art in the artist folder stays outside the album."""
+    library_root = (tmp_path / "Library").resolve()
+    first = (library_root / "Dragonland" / "2002 - Holy War" / "01.mp3").resolve()
+    second = (library_root / "Dragonland" / "2014 - Holy War (Deluxe Edition)" / "01.mp3").resolve()
+    edition_art = (first.parent / "Covers" / "Front.jpg").resolve()
+    artist_art = (library_root / "Dragonland" / "artist.jpg").resolve()
+    for track in (first, second):
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"track")
+    edition_art.parent.mkdir(parents=True)
+    edition_art.write_bytes(_image_bytes((200, 40, 40), image_format="JPEG"))
+    artist_art.write_bytes(_image_bytes((40, 200, 40), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    track_paths = {str(first), str(second)}
+
+    assert validate_local_cover_source(config, second.parent, str(edition_art), track_paths=track_paths) == edition_art
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, second.parent, str(artist_art), track_paths=track_paths)
+
+
 def test_resolve_album_root_accepts_non_numeric_album_subfolders(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()
@@ -1577,3 +1602,61 @@ def test_remote_progress_gallery_does_not_read_local_inventory(tmp_path, monkeyp
     assert "local_covers" not in payload
     assert "other_art" not in payload
     assert payload["candidate_snapshot"]["candidates"] == [{"id": "saved"}]
+
+
+def test_disc_album_accepts_the_shared_album_folder_cover_but_not_a_sibling_disc(config, tmp_path: Path):
+    # UI-2 (owner): Album/cover.jpg beside CD1..CD4 is listed by Cover Look Up for an album holding one disc,
+    # so Save must accept it; another disc's art stays out.
+    library_root = (tmp_path / "Library").resolve()
+    album_folder = (library_root / "Artist" / "Box Set").resolve()
+    track_path = (album_folder / "CD1" / "01.mp3").resolve()
+    shared_cover = (album_folder / "cover.jpg").resolve()
+    sibling_cover = (album_folder / "CD2" / "front.jpg").resolve()
+    artist_cover = (library_root / "Artist" / "artist.jpg").resolve()
+    track_path.parent.mkdir(parents=True)
+    sibling_cover.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    (album_folder / "CD2" / "01.mp3").write_bytes(b"track")
+    for image in (shared_cover, sibling_cover, artist_cover):
+        image.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    assert validate_local_cover_source(
+        config, context.album_root, str(shared_cover), track_paths=context.track_paths,
+    ) == shared_cover
+    for outside in (sibling_cover, artist_cover):
+        with pytest.raises(ValueError, match="outside the album folder"):
+            validate_local_cover_source(config, context.album_root, str(outside), track_paths=context.track_paths)
+
+
+def test_part_folders_with_any_name_save_the_album_folder_cover(config, tmp_path: Path):
+    # Owner (11-09): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4" and cover.jpg in the album folder.
+    # Cover Look Up listed that cover, but saving it said it was outside the album folder.
+    from music_app.services.cover_workflow import resolve_album_write_root_from_track_paths
+
+    library_root = (tmp_path / "Library").resolve()
+    album_folder = (library_root / "Artist" / "2009 - Album").resolve()
+    tracks = [(album_folder / f"Часть {part}" / f"0{part} - Song.mp3").resolve() for part in (1, 2)]
+    cover = (album_folder / "cover.jpg").resolve()
+    for track in tracks:
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"track")
+    cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    artist_cover = (library_root / "Artist" / "artist.jpg").resolve()
+    artist_cover.write_bytes(_image_bytes((40, 40, 220), image_format="JPEG"))
+    save_library_root_settings(
+        config,
+        {"main_library_roots": [{"id": "main-1", "path": str(library_root), "layout_mode": "artist"}]},
+    )
+    track_paths = {str(track) for track in tracks}
+
+    album_root = resolve_album_write_root_from_track_paths(config, track_paths)
+
+    assert album_root == album_folder
+    assert validate_local_cover_source(config, album_root, str(cover), track_paths=track_paths) == cover
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(config, album_root, str(artist_cover), track_paths=track_paths)

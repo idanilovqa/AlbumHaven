@@ -190,6 +190,28 @@ def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render
     assert not any("Open New Arrivals" in switch.text for switch in menu.find_all())
 
 
+def test_loose_tracks_is_a_side_panel_mode_with_its_own_collections_tree(render):
+    shell = render().one(id="app-shell")
+    toolbar = render().one(**{"class": "toolbar-right"})
+    assert toolbar.find_all(**{"data-open-non-album-tracks": None}) == []
+    modes = shell.one(**{"class": "mobile-artists-mode"}).find_all(**{"data-navigation-mode": None})
+    assert [mode.attrs["data-navigation-mode"] for mode in modes] == ["artists", "collections"]
+    assert [mode.attrs["aria-pressed"] for mode in modes] == ["true", "false"]
+    artists = shell.one(id="sidebar-list")
+    assert artists.find_all(**{"data-open-non-album-tracks": None}) == []
+    collections = shell.one(id="sidebar-collections")
+    assert collections.attrs["data-navigation-tree"] == "collections"
+    assert collections.attrs["aria-label"] == "Custom Collections"
+    assert "hidden" in collections.attrs
+    item = collections.one(**{"data-navigation-tree-key": "collection:loose-tracks"})
+    assert item.attrs["data-library-wide"] == "1"
+    compact = shell.one(id="shell-navigation-compact")
+    buttons = compact.find_all("button")
+    assert buttons[0].attrs["id"] == "artist-tree-navigation-button"
+    assert buttons[1].attrs["data-open-non-album-tracks"] == "1"
+    assert "disabled" not in buttons[1].attrs
+
+
 def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     shell = render().one(id="app-shell")
     gallery_bar = shell.one(**{"data-gallery-bar-instance": "gallery"})
@@ -212,8 +234,10 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
     split_albums = album_types.one("button", **{"data-gallery-split-albums": "1"})
-    assert split_albums.attrs["aria-pressed"] == "true"
-    assert split_albums.text.strip().endswith("Show Split Albums")
+    assert "gallery-switch--tri" in split_albums.attrs["class"]
+    assert split_albums.attrs["role"] == "slider"
+    assert split_albums.attrs["aria-valuenow"] == "2"
+    assert split_albums.attrs["aria-valuetext"] == "Show Split Albums"
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
     customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
     assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"
@@ -401,6 +425,34 @@ def test_server_settings_compose_shared_radio_path_and_button_components(render)
     save = form.one("button", **{"data-preview-save": None})
     assert {"ui-button", "ui-button--primary"} <= set(save.attrs["class"].split())
     assert "disabled" in save.attrs
+    # Owner (11-10): "I clicked Retry failed files - but saw no reaction". The alerts kept no hook, so every message
+    # was dropped; they carry their data attributes and sit right before the buttons that cause them.
+    status = form.one("section", **{"data-preview-status": None})
+    error = form.one("section", **{"data-preview-error": None})
+    assert (status.attrs["role"], error.attrs["role"]) == ("status", "alert")
+    siblings = status.parent.children
+    actions = next(child for child in siblings if child.find_all("button", **{"data-preview-retry": None}))
+    assert siblings.index(status) < siblings.index(error) < siblings.index(actions)
     assert not form.find_all("progress"), "Relocation uses concise text, not a progress bar"
     assert "Loading" not in form.text
     assert len(document.find_all(id="app-form-modal")) == 1, "The folder picker dialog is available on direct loads"
+
+
+def test_page_header_hamburger_buttons_have_no_outline(render):
+    # Owner (11-09): "loose outline on this hamburger button everywhere it is used" - the Settings sections and
+    # library navigation hamburgers are bare, like Back and the admin Account navigation hamburger.
+    document = render()
+    for button_id in ("mobile-settings-button", "mobile-library-button"):
+        classes = document.one(id=button_id).attrs["class"].split()
+        assert "action-button--bare" in classes, button_id
+
+
+def test_notification_panel_has_a_preview_move_slot_only_for_preview_storage_readers(render):
+    """Owner (11-10): a preview move that needs the server owner shows in the notification panel."""
+    owner = render("index.html", extra_actions=("system.preview_storage.read",))
+    drawer = owner.one("aside", id="cover-lookup-drawer")
+    slot = drawer.one("div", id="preview-move-attention")
+    assert "hidden" in slot.attrs
+    assert drawer.children.index(slot) < drawer.children.index(drawer.one("div", id="cover-lookup-drawer-body"))
+    listener = render("index.html")
+    assert not listener.find_all(id="preview-move-attention")

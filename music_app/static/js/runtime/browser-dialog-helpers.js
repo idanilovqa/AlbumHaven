@@ -49,6 +49,8 @@ function showAppFormDialog(options = {}) {
     finally { submitting = false; syncSubmit(); }
   };
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  const description = get('description');
+  if (description) { description.textContent = options.description || ''; description.hidden = !options.description; }
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = options.mode === 'reading'; cancel.hidden = false;
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
@@ -94,6 +96,8 @@ function showAppFormDialog(options = {}) {
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
   listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  const closeButton = get('close');
+  if (closeButton) listen(closeButton, 'click', () => finish(null));
   listen(modal, 'keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
     if (event.key !== 'Tab') return;

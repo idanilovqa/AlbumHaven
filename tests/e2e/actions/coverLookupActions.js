@@ -1192,9 +1192,10 @@ export class CoverLookupActions {
   }
 
   async waitForCurrentReleaseChoices(albumNames) {
-    await expect(this.coverLookup.modal.getByRole('heading', {
-      name: 'This album was split—choose the current release', exact: true,
+    await expect(this.coverLookup.splitChoiceDialog.getByRole('heading', {
+      name: 'Choose the current release', exact: true,
     })).toBeVisible();
+    await expect(this.coverLookup.openChosenReleaseButton).toBeDisabled();
     await expect(this.coverLookup.currentReleaseChoices).toHaveCount(albumNames.length);
     for (const album of albumNames) {
       await expect(this.coverLookup.currentReleaseChoices.filter({ hasText: album })).toHaveCount(1);
@@ -1205,6 +1206,9 @@ export class CoverLookupActions {
     const choice = this.coverLookup.currentReleaseChoices.filter({ hasText: albumName });
     await expect(choice).toHaveCount(1);
     await choice.click();
+    await expect(this.coverLookup.openChosenReleaseButton).toBeEnabled();
+    await this.coverLookup.openChosenReleaseButton.click();
+    await expect(this.coverLookup.splitChoiceDialog).toBeHidden();
     await this.waitForModalResultsReady();
   }
 
@@ -1233,8 +1237,9 @@ export class CoverLookupActions {
     await expect(this.coverLookup.mobileSheet).toBeVisible();
     await expect(this.coverLookup.mobilePage).toHaveCount(0);
     await expect(this.coverLookup.drawer).toBeVisible();
+    // INT-023: the sheet slides up over 320 ms; measure where it settles.
+    await expect.poll(async () => (await this.coverLookup.readMobileSheetStacking()).bottomGap).toBeLessThanOrEqual(1);
     const stacking = await this.coverLookup.readMobileSheetStacking();
-    expect(stacking.bottomGap).toBeLessThanOrEqual(1);
     expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
   }
 

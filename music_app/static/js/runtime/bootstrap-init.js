@@ -9,6 +9,7 @@ document.querySelectorAll('[data-account-menu-component]').forEach((component) =
 }));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof startPreviewMoveAttention === 'function') startPreviewMoveAttention();
 if (typeof loadCoverLookupNotificationCounts === 'function') {
   void loadCoverLookupNotificationCounts({ toast: false });
 }
@@ -336,6 +337,11 @@ document.addEventListener('contextmenu', (event) => {
       event.clientY,
       sidebarArtist.getAttribute('data-sidebar-artist') || '',
     );
+    return;
+  }
+  const artboxShell = event.target.closest('#track-modal-cover .track-modal-cover-shell');
+  if (artboxShell && showAlbumArtboxContextMenu(event.clientX, event.clientY, Number(artboxShell.dataset.artboxSlot || 0))) {
+    event.preventDefault();
     return;
   }
   const versionTab = event.target.closest('[data-version-context-key]');

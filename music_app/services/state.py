@@ -1112,6 +1112,7 @@ def scan_music_incremental(
     expected_scan_generation: int | None = None,
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
+    on_entries_ready: Callable[..., None] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
@@ -1185,6 +1186,7 @@ def scan_music_incremental(
         publication_state=publication_state,
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
+        on_entries_ready=on_entries_ready,
     )
     if publication_state is not None:
         _mark_empty_walk_roots_unreachable(cfg, logger, publication_state, result[0], traversal_failed_root_ids)

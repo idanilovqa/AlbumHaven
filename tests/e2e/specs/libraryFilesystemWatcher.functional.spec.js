@@ -87,6 +87,444 @@ test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet
     else if (originalFailure) throw originalFailure;
   }
 });
+const DISC_FOLDER_TARGET = Object.freeze({
+  artist: 'Watcher Disc Folder Artist',
+  album: 'Watcher Disc Folder Album',
+  bonusAlbum: 'Watcher Disc Folder Bonus',
+  partsAlbum: 'Watcher Named Parts Album',
+  year: 2008,
+});
+
+test('FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection', {
+  tag: '@area:cover-providers',
+}, async ({
+  context,
+  coverLookupActions,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  stepLogger,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const lookup = coverLookupActions.coverLookup;
+  const mainShell = page.locator('#track-modal-cover .track-modal-cover-shell:not(.track-modal-additional-artbox)');
+  const secondShell = page.locator('#track-modal-cover .track-modal-additional-artbox');
+  const artboxMenu = page.locator('#album-card-context-menu');
+  // Every LOCAL card, including the dimmed ones another artbox holds (those lose their select attribute).
+  const localCard = (name) => lookup.modalBody.locator('.cover-lookup-art-card')
+    .filter({ has: page.getByText(name, { exact: true }) });
+  const openMainLookup = async () => {
+    await mainShell.locator('.album-artbox').hover();
+    await mainShell.locator('[data-open-track-modal-cover-lookup="1"]').click();
+    await coverLookupActions.waitForModalResultsReady();
+  };
+  const openSecondLookup = async () => {
+    await secondShell.locator('.album-artbox').hover();
+    await secondShell.locator('[data-open-additional-artbox="1"]').click();
+    await coverLookupActions.waitForModalResultsReady();
+  };
+  const addSecondArtbox = async () => {
+    await mainShell.click({ button: 'right' });
+    await artboxMenu.getByRole('button', { name: 'Add another artbox', exact: true }).click();
+    await secondShell.locator('[data-open-additional-artbox="1"]').click();
+    await coverLookupActions.waitForModalResultsReady();
+  };
+  const saveLookup = async (pathname) => {
+    const response = page.waitForResponse((candidate) => candidate.request().method() === 'POST'
+      && new URL(candidate.url()).pathname === pathname);
+    await lookup.saveRemoteButton.click();
+    const saved = await response;
+    expect(saved.status(), `${pathname} answered ${saved.status()}`).toBe(200);
+    await expect(lookup.modal).toBeHidden();
+  };
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add an album holding CD1 whose art sits in the album folder beside CD1 and CD2', async () => {
+      await coverLookupActions.setProviderFixtureMode('no-results');
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      fixture = await createWatchedAlbumFixture({
+        artist: DISC_FOLDER_TARGET.artist,
+        album: DISC_FOLDER_TARGET.album,
+        year: DISC_FOLDER_TARGET.year,
+        trackTitles: ['Disc Folder One', 'Disc Folder Two', 'Disc Folder Bonus'],
+        discNumbers: [1, 1, 2],
+        trackAlbums: [null, null, DISC_FOLDER_TARGET.bonusAlbum],
+        createLocalArt: true,
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      // Owner (11-09): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4" and cover.jpg above them.
+      const partsStatus = await libraryFilesystemWatcherActions.readStatus();
+      await fixture.createSiblingAlbum({
+        album: DISC_FOLDER_TARGET.partsAlbum,
+        year: DISC_FOLDER_TARGET.year,
+        trackTitles: ['Named Part One', 'Named Part Two'],
+        discNumbers: [1, 2],
+        discFolderPrefix: 'Часть ',
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(partsStatus.inventory_mutation_revision);
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(DISC_FOLDER_TARGET.album)}`);
+        await galleryActions.waitForGalleryReady();
+        await galleryActions.selectAlbumDetailsByIdentityAndReadPayload({
+          artist: DISC_FOLDER_TARGET.artist, album: DISC_FOLDER_TARGET.album, year: String(DISC_FOLDER_TARGET.year),
+        }, 60000);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+    });
+
+    // UI-2 (owner, 11-08 evening): the cover outside CD1..CD4 was listed, but saving it said it was outside the
+    // album folder and it never became selected.
+    await stepLogger.step('UI-2: save the booklet image beside the disc folders; reopening shows it selected, no alert', async () => {
+      await openMainLookup();
+      await expect(localCard('booklet-page.jpg')).toBeVisible();
+      await localCard('booklet-page.jpg').click();
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
+      await saveLookup('/utilities/cover-lookup/local-select');
+      await expect(page.getByText(/outside the album folder/i)).toHaveCount(0);
+      await openMainLookup();
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
+      await expect(localCard('booklet-page.jpg')).toHaveAttribute('data-cover-lookup-local-active', '1');
+      await expect(lookup.modal.getByText(/outside the album folder/i)).toHaveCount(0);
+      await coverLookupActions.closeModal();
+    });
+
+    // UI-14 (owner, 11-08 evening): the second artbox's own lookup frames its saved art in blue, deselecting it and
+    // saving empties the box, and the album cover's lookup greys that art with the hover text.
+    await stepLogger.step('UI-14: give the second artbox the front image through its own lookup', async () => {
+      await addSecondArtbox();
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-disabled\b/);
+      await localCard('front-scan.jpg').click();
+      await expect(localCard('front-scan.jpg')).toHaveClass(/\bis-active\b/);
+      await saveLookup('/utilities/cover-lookup/additional-artwork');
+      await expect(secondShell.locator('.track-modal-cover-button')).toBeVisible();
+    });
+
+    await stepLogger.step('UI-14: the second artbox lookup frames its saved art; deselect and Save empties the box', async () => {
+      await openSecondLookup();
+      const saved = localCard('front-scan.jpg');
+      await expect(saved).toHaveClass(/\bis-active\b/);
+      await expect(saved.locator('.cover-lookup-art-check')).toBeVisible();
+      await saved.click();
+      await expect(saved).not.toHaveClass(/\bis-active\b/);
+      await expect(lookup.saveRemoteButton).toBeEnabled();
+      await saveLookup('/utilities/cover-lookup/additional-artwork/remove');
+      await expect(secondShell).toHaveCount(0);
+    });
+
+    await stepLogger.step('UI-14: art in the second artbox is greyed in the album cover lookup with its hover text', async () => {
+      await addSecondArtbox();
+      await localCard('front-scan.jpg').click();
+      await saveLookup('/utilities/cover-lookup/additional-artwork');
+      await openMainLookup();
+      const held = localCard('front-scan.jpg');
+      await expect(held).toHaveClass(/\bis-disabled\b/);
+      await expect(held).toHaveAttribute('aria-disabled', 'true');
+      await expect(held).toHaveAttribute('title', 'Deselect cover in the second artbox first');
+      await held.click({ force: true });
+      await expect(held).not.toHaveClass(/\bis-active\b/);
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
+      await coverLookupActions.closeModal();
+    });
+
+    // Owner (11-09): with part folders named "Часть N" the save failed as outside the album folder, and the open
+    // Album Details never showed the cover the gallery had already taken.
+    await stepLogger.step('Named part folders: the cover above them saves and the open Album Details shows it', async () => {
+      await page.keyboard.press('Escape');
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(DISC_FOLDER_TARGET.partsAlbum)}`);
+        await galleryActions.waitForGalleryReady();
+        await galleryActions.selectAlbumDetailsByIdentityAndReadPayload({
+          artist: DISC_FOLDER_TARGET.artist, album: DISC_FOLDER_TARGET.partsAlbum, year: String(DISC_FOLDER_TARGET.year),
+        }, 60000);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+      await openMainLookup();
+      await localCard('booklet-page.jpg').click();
+      await saveLookup('/utilities/cover-lookup/local-select');
+      await expect(page.getByText(/outside the album folder/i)).toHaveCount(0);
+      const detailsCover = mainShell.locator('img').first();
+      await expect(detailsCover).toBeVisible();
+      // booklet-page.jpg is solid red and front-scan.jpg solid navy: the decoded Album Details art must be the red one.
+      // parity-check: allow-read-only-measurement-evaluate -- sample the decoded Album Details artwork's color
+      await expect.poll(() => detailsCover.evaluate((image) => {
+        if (!image.complete || !image.naturalWidth) return 'loading';
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 4;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0, 4, 4);
+        const [red, green, blue] = context.getImageData(1, 1, 1, 1).data;
+        return red > 180 && green < 80 && blue < 80 ? 'booklet' : `other:${red},${green},${blue}`;
+      }), { timeout: 15000 }).toBe('booklet');
+      await openMainLookup();
+      await expect(localCard('booklet-page.jpg')).toHaveClass(/\bis-active\b/);
+      await coverLookupActions.closeModal();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+const SPLIT_CHOOSER_TARGET = Object.freeze({
+  artist: 'Watcher Split Chooser Artist',
+  album: 'Watcher Split Chooser Album',
+  splitAlbum: 'Watcher Split Chooser Part Two',
+  year: 2009,
+});
+
+test('FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release', {
+  tag: '@area:cover-providers',
+}, async ({
+  context,
+  coverLookupActions,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const lookup = coverLookupActions.coverLookup;
+  const identity = {
+    artist: SPLIT_CHOOSER_TARGET.artist, album: SPLIT_CHOOSER_TARGET.album, year: String(SPLIT_CHOOSER_TARGET.year),
+  };
+  let fixture;
+  let originalFailure;
+  let taskStarted = false;
+  try {
+    await stepLogger.step('Start a cover search for a watched album and hold its later provider', async () => {
+      await coverLookupActions.setProviderFixtureMode('watcher-split-chooser');
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      fixture = await createWatchedAlbumFixture({
+        ...SPLIT_CHOOSER_TARGET,
+        trackTitles: ['Split Chooser One', 'Split Chooser Two', 'Split Chooser Three', 'Split Chooser Four'],
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      await expect(async () => {
+        await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(SPLIT_CHOOSER_TARGET.album)}`);
+        await galleryActions.waitForGalleryReady();
+        await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(identity, 60000);
+      }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
+      await trackModalActions.waitForLoadedSummary();
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalResultsReady();
+      await coverLookupActions.holdLaterProviderFixture();
+      await coverLookupActions.startSearch();
+      taskStarted = true;
+      await coverLookupActions.waitForRemoteCandidateCountAtLeast(1, { timeout: 120_000 });
+      await coverLookupActions.closeModal();
+      await trackModalActions.closeIfOpen();
+    });
+
+    await stepLogger.step('Split the album on disk while the search is still running', async () => {
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      await fixture.retagTrackAlbum(2, SPLIT_CHOOSER_TARGET.splitAlbum);
+      await fixture.retagTrackAlbum(3, SPLIT_CHOOSER_TARGET.splitAlbum);
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      const evidence = await coverLookupActions.readProviderFixtureEvidence();
+      expect(evidence.later_provider_completed, 'the search is still running').toBe(0);
+    });
+
+    // UI-5 point 1 (owner, 11-08 evening): the chooser must show while the search runs, not when it ends.
+    await stepLogger.step('UI-5: the notification opens the split chooser while the search is still running', async () => {
+      await coverLookupActions.openDrawer();
+      // Owner (11-09): Cover Look Up must not show for a moment before the chooser.
+      // parity-check: allow-read-only-measurement-evaluate -- record, on every frame, whether the lookup is visible
+      await lookup.page.evaluate(() => {
+        window.__lookupFlashFrames = [];
+        const read = () => {
+          const modal = document.getElementById('cover-lookup-modal');
+          const chooser = [...document.querySelectorAll('[role="dialog"]')].some((node) => /Choose the current release/.test(node.textContent || '') && node.checkVisibility());
+          window.__lookupFlashFrames.push({ lookup: Boolean(modal?.checkVisibility?.({ visibilityProperty: true })), chooser });
+          if (!chooser) requestAnimationFrame(read);
+        };
+        requestAnimationFrame(read);
+      });
+      await coverLookupActions.openTask(SPLIT_CHOOSER_TARGET.album);
+      await expect(lookup.splitReleaseChooser).toBeVisible({ timeout: 10_000 });
+      await expect(lookup.splitReleaseChoices).toHaveCount(2);
+      const frames = await lookup.page.evaluate(() => window.__lookupFlashFrames);
+      expect(frames.filter((frame) => frame.lookup), JSON.stringify(frames.slice(-20))).toEqual([]);
+      const evidence = await coverLookupActions.readProviderFixtureEvidence();
+      expect(evidence.later_provider_completed, 'the chooser came before the search finished').toBe(0);
+    });
+
+    // UI-5 point 2: once a release is chosen, that's it; Cover Look Up never switches back to the chooser.
+    await stepLogger.step('UI-5: the chosen release stays open through search updates, completion and a reopen', async () => {
+      await lookup.splitReleaseChoiceByTitle(SPLIT_CHOOSER_TARGET.splitAlbum).click();
+      await lookup.splitReleaseOpenButton.click();
+      await expect(lookup.modal).toBeVisible();
+      await expect(lookup.modalSubtitle).toContainText(SPLIT_CHOOSER_TARGET.splitAlbum);
+      const stays = async (milliseconds) => {
+        const until = Date.now() + milliseconds;
+        while (Date.now() < until) {
+          await expect(lookup.splitReleaseChooser).toHaveCount(0);
+          await expect(lookup.modal).toBeVisible();
+          await expect(lookup.modalSubtitle).toContainText(SPLIT_CHOOSER_TARGET.splitAlbum);
+          await lookup.page.waitForTimeout(500);
+        }
+      };
+      await stays(6000);
+      await coverLookupActions.releaseLaterProviderFixture();
+      await expect.poll(async () => (await coverLookupActions.readProviderFixtureEvidence()).later_provider_completed,
+        { timeout: 60_000 }).toBeGreaterThan(0);
+      await stays(6000);
+      await coverLookupActions.closeModal();
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.openTask(SPLIT_CHOOSER_TARGET.album);
+      await expect(lookup.modal).toBeVisible();
+      await expect(lookup.modalSubtitle).toContainText(SPLIT_CHOOSER_TARGET.splitAlbum);
+      await expect(lookup.splitReleaseChooser).toHaveCount(0);
+      await coverLookupActions.closeModal();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    try {
+      await coverLookupActions.releaseLaterProviderFixture();
+      if (taskStarted) {
+        await coverLookupActions.openDrawer();
+        await coverLookupActions.clearTask(SPLIT_CHOOSER_TARGET.album);
+        await coverLookupActions.closeDrawer();
+      }
+    } catch (cleanupError) {
+      originalFailure = originalFailure || cleanupError;
+    }
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+// Version exceptions outlive the media folders, so each run owns uniquely named albums.
+const VERSION_RULE_RUN = Date.now().toString(36);
+const VERSION_RULE_TARGET = Object.freeze({
+  artist: `Watcher Version Rule Artist ${VERSION_RULE_RUN}`,
+  album: `Watcher Version Rule Album With A Very Long Twentieth Anniversary Edition Remix Title ${VERSION_RULE_RUN}`,
+  year: 2001,
+  remasterFolder: 'Watcher Version Rule Remaster',
+  remasterYear: 2011,
+});
+
+test('FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception', {
+  tag: '@area:album-details',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  settingsModalAppBarActions,
+  stepLogger,
+  utilityRulesActions,
+  utilityTabBarActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const rules = utilityRulesActions.utilityRulesTab;
+  const menu = galleryActions.galleryPage.albumCard.contextMenu;
+  const exceptionsTable = rules.ruleDetail.getByRole('table', { name: 'Version exceptions', exact: true });
+  const exceptionRow = exceptionsTable.locator('[role="row"]').filter({ hasText: VERSION_RULE_TARGET.album });
+  const openVersionExceptions = async () => {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('rules');
+    await utilityRulesActions.waitForReady();
+    await rules.listItems.filter({ hasText: 'Version exceptions' }).first().click();
+    await rules.ruleTitle.filter({ hasText: 'Version exceptions' }).waitFor({ state: 'visible', timeout: 60000 });
+  };
+  const showAlbum = async () => {
+    await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(VERSION_RULE_TARGET.artist)}`);
+    await galleryActions.waitForGalleryReady();
+  };
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add two same-name releases that share their tracks, so they group as versions', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      fixture = await createWatchedAlbumFixture({
+        artist: VERSION_RULE_TARGET.artist,
+        album: VERSION_RULE_TARGET.album,
+        year: VERSION_RULE_TARGET.year,
+        trackTitles: ['Version Rule One', 'Version Rule Two'],
+        removeEmbeddedArtwork: true,
+        context,
+        managedAppLifecycle,
+      });
+      await fixture.createSiblingAlbum({
+        album: VERSION_RULE_TARGET.album,
+        folderName: VERSION_RULE_TARGET.remasterFolder,
+        year: VERSION_RULE_TARGET.remasterYear,
+        trackTitles: ['Version Rule One', 'Version Rule Two'],
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      await expect(async () => {
+        await showAlbum();
+        // Both releases show as cards; the card's menu offers Separate release once they group as versions.
+        await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(2);
+        await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+        await expect(menu).toContainText('Separate release', { timeout: 1000 });
+      }).toPass({ timeout: 60000, intervals: [500, 1000, 2000] });
+    });
+
+    await stepLogger.step('Separate release creates a version exception listed in Rules, truncated in its column', async () => {
+      await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+      await menu.getByRole('button', { name: /^Separate release/ }).first().click();
+      await expect(page.getByText('Release separated. The rule is listed in Settings › Rules.')).toBeVisible();
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(VERSION_RULE_TARGET.album)).toHaveCount(2);
+      await openVersionExceptions();
+      await expect(exceptionRow).toHaveCount(1);
+      // Owner (11-09): a long name is cut with an ellipsis inside its column instead of running under the Rule text.
+      const title = exceptionRow.locator('.utility-rule-album-title');
+      const ruleCell = exceptionRow.getByText('Excluded from album version tabs', { exact: true });
+      const [titleBox, ruleBox] = await Promise.all([title.boundingBox(), ruleCell.boundingBox()]);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(ruleBox.x);
+      // parity-check: allow-read-only-measurement-evaluate -- the long title is clipped with an ellipsis
+      expect(await title.evaluate((node) => node.scrollWidth > node.clientWidth
+        && getComputedStyle(node).textOverflow === 'ellipsis')).toBe(true);
+      await expect(title).toHaveAttribute('title', VERSION_RULE_TARGET.album);
+      await settingsModalAppBarActions.closeSettings();
+    });
+
+    // Owner (11-09): "I already returned them to be a version, so this rule should have been reverted and removed."
+    await stepLogger.step('Mark as a version again removes the exception from Rules', async () => {
+      await showAlbum();
+      await galleryActions.openAlbumContextMenu(VERSION_RULE_TARGET.album);
+      await menu.getByRole('button', { name: 'Mark as a version', exact: true }).click();
+      const dialog = page.locator('#app-form-modal');
+      await expect(dialog).toBeVisible();
+      const other = dialog.locator('[data-version-picker-target]').first();
+      await expect(other).toBeVisible();
+      await other.click();
+      await dialog.locator('#app-form-submit').click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText('Album marked as a version.')).toBeVisible();
+      await openVersionExceptions();
+      await expect(exceptionRow).toHaveCount(0);
+      await settingsModalAppBarActions.closeSettings();
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
 const PUNCTUATION_BAND_TARGET = Object.freeze({
   artist: 'Fire',
   trackArtist: 'Fire & Ash',

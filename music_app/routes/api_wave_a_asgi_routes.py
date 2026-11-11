@@ -104,6 +104,7 @@ from music_app.services.state import (
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.utility_rule_mutations import (
     create_version_exception,
+    clear_version_exceptions,
     mark_manual_version_link,
     revert_rule_key,
     unmark_manual_version_link,
@@ -606,11 +607,10 @@ async def library_settings_read(request: Request) -> JSONResponse:
 
 @router.get("/library-settings/browse")
 async def library_settings_browse(request: Request, path: str = "") -> JSONResponse:
-    from music_app.services.policy_asgi import allowed_actions_for_request
+    from music_app.services.policy_asgi import can_browse_server_folders
     await root_request_scope(request)
     config = _app_config(request)
-    actions = allowed_actions_for_request(request, ("library.filesystem.browse", "library.paths.read")).as_payload()
-    if config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted" or not all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read")):
+    if not can_browse_server_folders(request):
         from fastapi import HTTPException
         raise HTTPException(403, "Directory browsing is unavailable")
     return JSONResponse({"ok": True, **await run_in_threadpool(bounded_directories, config, path)})
@@ -1641,6 +1641,13 @@ async def mark_album_version(request: Request) -> JSONResponse:
     )
     if mutation_error:
         return _json_response(({"ok": False, "error": mutation_error}, 400))
+    ignored_version_keys = clear_version_exceptions(
+        config,
+        [album_key, parent_album_key],
+        load_keys=load_ignored_version_keys,
+        save_keys=save_ignored_version_keys,
+    )
+    invalidate_utility_rules_payload_cache(library_state)
     log_app_event(
         config,
         logger,
@@ -1649,7 +1656,11 @@ async def mark_album_version(request: Request) -> JSONResponse:
         album_key=album_key,
         parent_album_key=parent_album_key,
      history_scope=history_scope)
-    return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
+    return JSONResponse({
+        "ok": True,
+        "manual_version_links": manual_version_links,
+        "ignored_version_keys": sorted(ignored_version_keys),
+    })
 
 
 @router.post("/versions/unmark")
@@ -1810,6 +1821,7 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
             _app_config(request),
             source_path,
             indexed_paths=authoritative_track_paths,
+            paths_only=bool(payload.get("paths_only")),
         )
     except (FileNotFoundError, OSError, ValueError):
         return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)

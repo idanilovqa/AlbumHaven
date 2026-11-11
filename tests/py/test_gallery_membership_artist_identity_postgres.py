@@ -56,10 +56,11 @@ def _seed_artist_with_two_albums():
             _CommitSuppressingConnection(connection), config, reason='test_fixture')
         connection.commit()
     gallery.initialize_gallery_membership(config)
-    return database_url, library_id, str(artist_id), album_keys
+    return database_url, library_id, album_keys
 
 
-def _patch_arguments(connection, library_id, artist_id, album_key, artist_sort):
+def _patch_arguments(connection, library_id, album_key, artist_sort):
+    """A patch of one album, its artist's sort changed; returns (scope, membership artist id, args)."""
     header = connection.execute("""select headers.scope_key, headers.source_generation, headers.builder_version,
             headers.view_state, state.generation
         from library.gallery_membership_headers headers
@@ -67,8 +68,8 @@ def _patch_arguments(connection, library_id, artist_id, album_key, artist_sort):
         where headers.library_id=%s and exists (
           select 1 from library.gallery_membership_entries entry
           where entry.library_id=headers.library_id and entry.scope_key=headers.scope_key
-            and entry.artist_id=%s and entry.album_key=%s)
-        order by headers.scope_key limit 1""", (library_id, artist_id, album_key)).fetchone()
+            and entry.album_key=%s)
+        order by headers.scope_key limit 1""", (library_id, album_key)).fetchone()
     assert header is not None, 'the seeded album must have gallery membership'
     scope_key, source_generation, builder_version, view_state, generation = header
     rows = [{
@@ -78,7 +79,8 @@ def _patch_arguments(connection, library_id, artist_id, album_key, artist_sort):
         from library.gallery_membership_entries
         where library_id=%s and scope_key=%s and album_key=%s order by artist_id""",
         (library_id, scope_key, album_key)).fetchall()]
-    return scope_key, (
+    assert len({row['artist_id'] for row in rows}) == 1, 'the seeded album has one owning artist'
+    return scope_key, rows[0]['artist_id'], (
         library_id, scope_key, source_generation, generation, builder_version, uuid4().hex * 2,
         json.dumps(view_state), [album_key], json.dumps(rows),
     )
@@ -99,9 +101,9 @@ def _artist_rows(connection, library_id, scope_key, artist_id):
 def test_patch_with_a_changed_artist_sort_keeps_one_artist_row():
     import psycopg
 
-    database_url, library_id, artist_id, album_keys = _seed_artist_with_two_albums()
+    database_url, library_id, album_keys = _seed_artist_with_two_albums()
     with psycopg.connect(database_url) as connection:
-        scope_key, arguments = _patch_arguments(connection, library_id, artist_id, album_keys[0], ['renamed sort'])
+        scope_key, artist_id, arguments = _patch_arguments(connection, library_id, album_keys[0], ['renamed sort'])
         assert _patch(connection, arguments) is True
         rows = _artist_rows(connection, library_id, scope_key, artist_id)
         connection.rollback()
@@ -112,12 +114,13 @@ def test_patch_with_a_changed_artist_sort_keeps_one_artist_row():
 def test_two_overlapping_patches_of_one_artist_never_violate_its_key():
     import psycopg
 
-    database_url, library_id, artist_id, album_keys = _seed_artist_with_two_albums()
+    database_url, library_id, album_keys = _seed_artist_with_two_albums()
     first = psycopg.connect(database_url)
     second = psycopg.connect(database_url)
     try:
-        scope_key, first_arguments = _patch_arguments(first, library_id, artist_id, album_keys[0], ['first sort'])
-        _, second_arguments = _patch_arguments(second, library_id, artist_id, album_keys[1], ['second sort'])
+        scope_key, artist_id, first_arguments = _patch_arguments(first, library_id, album_keys[0], ['first sort'])
+        _, second_artist_id, second_arguments = _patch_arguments(second, library_id, album_keys[1], ['second sort'])
+        assert second_artist_id == artist_id
         assert _patch(first, first_arguments) is True
         outcome = {}
 

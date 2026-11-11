@@ -163,6 +163,14 @@ test('gallery sections expose live image counts and omit empty remote and match 
   assert.doesNotMatch(source, /No remote matches yet/);
 });
 
+test('ADD COVER ART keeps its divider attached to the heading', () => {
+  const attachedComposer = cssRule('.cover-lookup-section-heading + .cover-lookup-manual-add');
+  const divider = cssRule('.cover-lookup-manual-divider');
+  assert.match(attachedComposer, /margin-top:\s*-12px/);
+  assert.match(divider, /margin-top:\s*0/);
+  assert.match(source, /cover-lookup-section-heading[^]*cover-lookup-manual-add[^]*cover-lookup-manual-divider/);
+});
+
 test('provider rows include readable labels, Deezer heart, CAA, and external markers', () => {
   for (const label of ['Apple Music', 'SPOTIFY', 'Deezer', 'Bandcamp', 'Discogs', 'Cover Art Archive', 'YouTube Music']) {
     assert.match(source, new RegExp(`['\"]${label}['\"]`));

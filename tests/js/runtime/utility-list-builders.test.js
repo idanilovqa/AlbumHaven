@@ -6035,7 +6035,7 @@ test('watchSaveTask keeps default callers on ordinary anchor preservation', asyn
   );
 });
 
-test('watchSaveTask persists a failed tag edit and exposes Log History', async () => {
+test('watchSaveTask keeps Edit Tags closed after a late failure and exposes Log History', async () => {
   const context = loadHelpers();
   const originalAlbum = { key: 'artist::album', name: 'Album', tracks: [] };
   const tagEditorDraft = { album: originalAlbum, values: {} };
@@ -6047,6 +6047,8 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   const persistedEntries = [];
   const alerts = [];
   const restoredDrafts = [];
+  const clearedOptimisticSplits = [];
+  const coverLookupOptimisticSplit = { taskIds: ['cover-task-1'] };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -6061,11 +6063,17 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   context.prependUtilityLogHistoryEntry = async (entry) => persistedEntries.push(entry);
   context.showRepairAlert = (...args) => alerts.push(args);
   context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
+  context.clearCoverLookupOptimisticSplit = (split) => clearedOptimisticSplits.push(split);
 
-  await context.watchSaveTask('failed-tag-task', { originalAlbum, tagEditorDraft });
+  await context.watchSaveTask('failed-tag-task', {
+    originalAlbum,
+    tagEditorDraft,
+    coverLookupOptimisticSplit,
+  });
 
   assert.deepEqual(persistedEntries, [logEntry]);
-  assert.deepEqual(restoredDrafts, [tagEditorDraft]);
+  assert.deepEqual(restoredDrafts, []);
+  assert.deepEqual(clearedOptimisticSplits, [coverLookupOptimisticSplit]);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], logEntry.error);
   assert.equal(alerts[0][1], 'error');
@@ -8069,6 +8077,26 @@ test('watchSaveTask hydrates an open merged destination from canonical visible s
   assert.equal(context.state.modalReleases[0].preview_only, false);
 });
 
+test('Edit Tags orders untagged multi-disc files by the disc in their folder, then by file name (Kiama)', () => {
+  const context = loadHelpers();
+  const track = (folder, file) => ({ path: ['N:', 'Music', 'Kiama', '2016 - Sign Of IV', folder, file].join('/') });
+  const ordered = context.orderAlbumTracks([
+    track('cd2 (bonus)', '01. Come On Home.mp3'),
+    track('CD1', '02. Tears.mp3'),
+    track('cd2 (bonus)', '02. The Things You Do.mp3'),
+    track('CD1', '01. Cold Black Heart.mp3'),
+  ]);
+  assert.deepEqual(Array.from(ordered, (item) => item.path.split('/').slice(-2).join('/')), [
+    'CD1/01. Cold Black Heart.mp3',
+    'CD1/02. Tears.mp3',
+    'cd2 (bonus)/01. Come On Home.mp3',
+    'cd2 (bonus)/02. The Things You Do.mp3',
+  ]);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/TFK/Adam & Eve CD2/01.flac' }), 2);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/Band/Discography/01.flac' }), null);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/CD3/01.flac', disc_number: '1' }), 1, 'a disc tag wins');
+});
+
 test('Problematic Files names tagged tracks with their number and untagged tracks by file name', () => {
   const context = loadHelpers();
   context.getFilenameFromPath = (value) => String(value || '').split(/[\/]/).pop();
@@ -8087,6 +8115,23 @@ test('track problem labels align while album problem labels stay content-sized',
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
   assert.match(css, /\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
   assert.doesNotMatch(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill[^}]*inline-size:/);
+});
+
+test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const albums = [
+    { key: 'a', problematic_track_paths: ['x.mp3'], track_paths: ['x.mp3', 'y.mp3'] },
+    { key: 'b', track_paths: ['y.mp3', 'z.mp3'] },
+    { key: 'c', problematic_track_paths: ['z.mp3'] },
+  ];
+  const context = vm.createContext({ state: { utility: { problematicFiles: albums } }, window: {}, escapeHtml: value => value });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/utility-list-builders.js'), 'utf8'), context);
+  const index = context.buildProblematicAlbumTrackPathIndex();
+  for (const trackPath of ['x.mp3', 'y.mp3', 'z.mp3', 'missing.mp3']) {
+    assert.equal(index.get(trackPath) || null, context.getProblematicAlbumForTrackPath(trackPath), trackPath);
+  }
 });
 
 test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {

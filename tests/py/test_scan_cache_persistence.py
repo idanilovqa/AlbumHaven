@@ -323,6 +323,105 @@ def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
         ) in normalized_sql
 
 
+def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    # `<> all(array)` compared every candidate file with every current path.
+    assert "<> all(" not in normalized_sql
+    assert (
+        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
+        "where current_file.private_path = library.local_track_files.private_path )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_identity", [False, True])
+def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_artist_sql(
+        preserve_existing_identity=preserve_existing_identity,
+    ))
+
+    if preserve_existing_identity:
+        assert (
+            "where ( library.local_artists.metadata) is distinct from "
+            "( library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+        assert "sort_name = excluded.sort_name" not in normalized_sql
+    else:
+        assert (
+            "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
+            "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_cover_authority", [True, False])
+def test_album_upsert_skips_albums_whose_update_would_write_the_same_values(preserve_existing_cover_authority):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_sql(
+        preserve_existing_cover_authority=preserve_existing_cover_authority,
+    ))
+    written = re.search(
+        r"release_year = (.*), cover_path = (.*), last_seen_at = now\(\), metadata = (.*) -- ", normalized_sql,
+    )
+    # The guard compares against exactly the values the update would write.
+    assert normalized_sql.endswith(
+        "where ( library.local_albums.artist_id, library.local_albums.title, library.local_albums.release_year, "
+        "library.local_albums.cover_path, library.local_albums.metadata ) is distinct from ( "
+        f"excluded.artist_id, excluded.title, {written[1]}, {written[2]}, {written[3]} );"
+    )
+
+
+def test_featured_artist_upsert_skips_unchanged_credits():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_featured_artist_sql())
+
+    assert (
+        "where library.local_album_featured_artists.metadata is distinct from ( "
+        "library.local_album_featured_artists.metadata || (excluded.metadata - 'source') )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("reported", [[0, 2], []])
+def test_unchanged_row_prefilter_sends_every_row_it_cannot_prove_unchanged(reported):
+    from music_app.services import scan_cache_persistence
+
+    rows = [{"track_key": f"t{index}", "title": f"Track {index}"} for index in range(3)]
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append([row["row_index"] for row in params["rows"].obj])
+            return SimpleNamespace(fetchall=lambda: [{"row_index": index} for index in reported])
+
+    unchanged = scan_cache_persistence._unchanged_row_fingerprints(
+        Connection(), scan_cache_persistence._unchanged_local_track_rows_sql(), rows,
+    )
+
+    assert executed == [[0, 1, 2]]
+    assert [row["track_key"] for row in rows if scan_cache_persistence._row_fingerprint(row) not in unchanged] == (
+        ["t1"] if reported else ["t0", "t1", "t2"]
+    )
+
+
+@pytest.mark.parametrize("builder", ["_unchanged_local_track_rows_sql", "_unchanged_local_track_file_rows_sql"])
+def test_unchanged_row_prefilters_mirror_their_upsert_guards(builder):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(getattr(scan_cache_persistence, builder)())
+
+    assert normalized_sql.startswith("with bootstrap_context as (")
+    assert "is not distinct from" in normalized_sql
+    assert "insert into" not in normalized_sql and "update " not in normalized_sql
+    if builder == "_unchanged_local_track_file_rows_sql":
+        assert "root_resolution.resolution_status = 'resolved'" in normalized_sql
+        assert "#- '{scan_cache,stale_marked_at}'" in normalized_sql
+
+
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 

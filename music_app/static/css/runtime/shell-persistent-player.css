@@ -55,16 +55,6 @@
   max-height: calc(100vh - 40px);
 }
 
-#version-picker-modal {
-  top: var(--app-bar-height);
-  padding: 12px 0;
-  box-sizing: border-box;
-}
-
-.version-picker-card {
-  max-height: min(100%, 760px);
-}
-
 @media (max-width: 720px) {
   #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-modal-dialog,
   #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-modal-dialog {

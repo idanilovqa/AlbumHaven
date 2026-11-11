@@ -104,10 +104,27 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await ui.cards.first().hover();
     await expect(ui.yearWithin(ui.cards.first())).not.toBeVisible();
   });
-  await stepLogger.step('Search hides toolbar artist information but retains result-heading information; explicit navigation restores it',async()=>{
-    await expect(ui.toolbarInfo).not.toBeVisible();
-    await expect(ui.headingInfo).toBeVisible();
-    await expect(ui.infoPanel).not.toBeVisible();
+  // Owner (11-08, UI-SEARCH-INFO): the header "i" shows during a search and must open the artist information when clicked.
+  await stepLogger.step('During a search the header and result-heading info buttons both open the artist information',async()=>{
+    const openAndCloseInfo=async(trigger,artist)=>{
+      await expect(trigger).toBeVisible();
+      await trigger.click();
+      await expect(ui.infoPanel).toBeVisible();
+      await expect(trigger).toHaveAttribute('aria-expanded','true');
+      await expect(ui.infoPanel.getByRole('heading',{name:artist,exact:true})).toBeVisible();
+      await expect(ui.infoSummary).toBeVisible();
+      await expect(ui.infoSummary).not.toHaveText('');
+      await page.keyboard.press('Escape');
+      await expect(ui.infoPanel).not.toBeVisible();
+    };
+    // A search that finds one artist names it in the header, with its "i" (owner example: Dragonland).
+    await searchToolbarActions.search('Mastodon',{submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('Mastodon');
+    await expect(page.locator('[data-gallery-bar-instance="gallery"][data-gallery-context-kind="single-artist"] [data-gallery-context-name]')).toHaveText('Mastodon');
+    await openAndCloseInfo(ui.toolbarInfo,'Mastodon');
+    await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('Neal Morse');
+    await openAndCloseInfo(ui.headingInfo,'Neal Morse');
     await searchToolbarActions.clearSearch({submitWithEnter:true});
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForGalleryReady();
@@ -215,6 +232,35 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,s
       await expect.poll(()=>ui.tracks.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
       expect((await ui.header.boundingBox()).y).toBeCloseTo(header.y,0);
       expect((await ui.art.boundingBox()).y).toBeCloseTo(art.y,0);
+    });
+    // INT-007 / UI-11 (owner, 11-08 evening): the album already linked shows selected; clicking it deselects it and
+    // Save unlinks it, and the gallery updates in the background without the Loading page.
+    await stepLogger.step('Mark As A Version shows the linked album selected and unlinks it in the background',async()=>{
+      await page.setViewportSize({width:1440,height:960});
+      await page.keyboard.press('Escape'); await expect(ui.dialog).toBeHidden();
+      await galleryActions.openAlbumContextMenu('Featured Signal Collection');
+      const menu=galleryActions.galleryPage.albumCard.contextMenu;
+      await expect(menu.getByRole('button',{name:'Unmark as a version',exact:true})).toHaveCount(0);
+      await menu.getByRole('button',{name:'Mark as a version',exact:true}).click();
+      const dialog=page.locator('#app-form-modal');
+      const linked=dialog.locator('[data-version-picker-target]').filter({hasText:'Ordinary Numeric Disc Control'});
+      const save=dialog.locator('#app-form-submit');
+      await expect(dialog).toBeVisible();
+      await expect(linked).toHaveClass(/\bis-selected\b/);
+      await expect(linked).toHaveAttribute('aria-current','true');
+      await expect(save).toBeDisabled();
+      await linked.click();
+      await expect(linked).not.toHaveClass(/\bis-selected\b/);
+      await expect(save).toBeEnabled();
+      // parity-check: allow-read-only-measurement-evaluate -- record whether the Loading page shows on any frame
+      await page.evaluate(()=>{const seen=[];window.__versionLoaderFrames=seen;const read=()=>{const l=document.getElementById('library-loader');seen.push(Boolean(l&&!l.hidden));if(!window.__versionLoaderStop)requestAnimationFrame(read);};requestAnimationFrame(read);});
+      await save.click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText('Album is no longer manually marked as a version.')).toBeVisible();
+      await expect.poll(async()=>{await galleryActions.openAlbumContextMenu('Featured Signal Collection');const offered=await menu.getByRole('button',{name:'Mark as a version',exact:true}).count();await galleryActions.dismissAlbumContextMenu();return offered;},{message:'the link is gone, so nothing is left to mark'}).toBe(0);
+      const loaderFrames=await page.evaluate(()=>{window.__versionLoaderStop=true;return window.__versionLoaderFrames;});
+      expect(loaderFrames.length).toBeGreaterThan(5);
+      expect(loaderFrames.filter(Boolean),'the gallery never goes behind the Loading page').toEqual([]);
     });
   } finally {await fixture.restore();}
 });

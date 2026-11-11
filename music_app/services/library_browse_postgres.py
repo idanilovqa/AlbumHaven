@@ -114,6 +114,9 @@ _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
 # The last complete Problematic Files list survives invalidation so the first
 # page and early search answer at once while the fresh list rebuilds.
 _STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
+# A list someone opened is rebuilt in the background after each library change,
+# so the next open answers from memory instead of rebuilding on the click.
+_REWARMED_UTILITY_KINDS = frozenset({"problematic-files", "rules"})
 _UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
 _UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
@@ -4171,7 +4174,7 @@ class PostgresLibraryBrowseRepository:
             if kind in _STALE_SERVED_UTILITY_KINDS:
                 _UTILITY_PROJECTION_STALE.pop(cache_key, None)
             if (
-                (kind in _STALE_SERVED_UTILITY_KINDS and self._allow_background_prewarm)
+                (kind in _REWARMED_UTILITY_KINDS and self._allow_background_prewarm)
                 or (
                     kind == "loose-tracks"
                     and self._use_shared_connection_pool
@@ -6002,6 +6005,24 @@ def _missing_album_detail_payload(album: Mapping[str, object]) -> dict[str, obje
     payload.pop("file_private_path", None)
     payload.pop("track_paths", None)
     return payload
+
+
+def _album_is_split(metadata: Mapping[str, Any]) -> bool:
+    """Split releases: two or more equally main artists, each on their own tracks.
+
+    Rows persisted by the current scan carry ``is_split_album``. Rows persisted before split
+    detection existed lack the key; for those, a compilation credited "A / B" to exactly its
+    member artists is a split (a collaboration credits every track to both, so it is not a
+    compilation)."""
+    if "is_split_album" in metadata:
+        return bool(metadata.get("is_split_album"))
+    if any(str(metadata.get(field) or "").strip().casefold() == "split" for field in ("release_type", "edition")):
+        return True
+    if not metadata.get("is_compilation"):
+        return False
+    artists = {str(name or "").strip().casefold() for name in metadata.get("artists") or []} - {""}
+    credited = {part.strip().casefold() for part in re.split(r"\s+/\s+", str(metadata.get("album_artist") or ""))} - {""}
+    return len(artists) >= 2 and credited == artists
 
 
 def _nullable_int(value: object) -> int | None:
@@ -8521,7 +8542,7 @@ def _selected_artist_album_payloads(
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
-                "is_split_album": bool(metadata.get("is_split_album")),
+                "is_split_album": _album_is_split(metadata),
                 "root_provenance": dict(root_provenance),
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
@@ -8675,7 +8696,7 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
-            "is_split_album": bool(metadata.get("is_split_album")),
+            "is_split_album": _album_is_split(metadata),
             "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
             "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
@@ -12680,12 +12701,23 @@ def _utility_rules_sql() -> str:
           limit 1
         ),
         relation_context as (
+          -- The whole-library alias map only explains ignored album-artist
+          -- problems; skip building it when no such rule exists.
           select
             library.libraries.id as library_id,
-            coalesce(
-              library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
-              '{}'::jsonb
-            ) as alias_to_canonical
+            case
+              when exists (
+                select 1
+                from library.ignored_repairs
+                where library.ignored_repairs.library_id = library.libraries.id
+                  and right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+              )
+                then coalesce(
+                  library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
+                  '{}'::jsonb
+                )
+              else '{}'::jsonb
+            end as alias_to_canonical
           from library.libraries
           join bootstrap_context
             on bootstrap_context.library_id = library.libraries.id
@@ -12707,7 +12739,7 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             null::text as file_private_path,
             null::jsonb as file_entry,
-            relation_context.alias_to_canonical
+            null::jsonb as alias_to_canonical
           from library.ignored_versions
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_versions.library_id
@@ -12736,7 +12768,10 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             library.local_track_files.private_path as file_private_path,
             library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
-            relation_context.alias_to_canonical
+            case
+              when right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+                then relation_context.alias_to_canonical
+            end as alias_to_canonical
           from library.ignored_repairs
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_repairs.library_id

@@ -17,6 +17,7 @@ from music_app.services.library_indexing import (
 )
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.library_watch_health import FORCED_FULL_SCAN_MODE
+from music_app.services.progressive_scan_publication import ProgressiveScanPublisher, contiguous_revision
 from music_app.services.scan_cache_persistence import (
     ScanCacheInventorySuperseded,
     ScanCachePublicationSuperseded,
@@ -477,14 +478,43 @@ def refresh_library_state(
                 publication_state
             )
 
+    # Albums publish as their folders finish reading; the final publication
+    # below then writes only what the batches did not, plus stale-marking.
+    publish_folders = getattr(scan_cache_adapter, "persist_targeted_inventory_mutation", None)
+    progressive_publisher = (
+        ProgressiveScanPublisher(
+            lambda root_id, entries: publish_folders(root_id=root_id, active_file_entries=entries),
+            logger=logger,
+        ).start()
+        if callable(publish_folders) else None
+    )
     scan_completed_successfully = False
     try:
-        new_file_cache, new_last_scan = scan_music_incremental(
-            use_existing_cache=not ignore_existing_cache,
-            expected_scan_generation=scan_generation,
-            publication_state=publication_state,
-            publish_partial_snapshot=publish_current_browse_snapshot,
-        )
+        try:
+            new_file_cache, new_last_scan = scan_music_incremental(
+                use_existing_cache=not ignore_existing_cache,
+                expected_scan_generation=scan_generation,
+                publication_state=publication_state,
+                publish_partial_snapshot=publish_current_browse_snapshot,
+                **({"on_entries_ready": progressive_publisher.submit} if progressive_publisher else {}),
+            )
+        except BaseException:
+            if progressive_publisher is not None:
+                progressive_publisher.close(cancel=True)
+            raise
+        if progressive_publisher is not None:
+            progressive_publisher.close()
+            # The scan's own batches advanced the revision; another writer's
+            # interleaved commit still supersedes the final publication.
+            expected_inventory_mutation_revision, _ = contiguous_revision(
+                expected_inventory_mutation_revision, progressive_publisher.revisions,
+            )
+            library_state["scan_progressive_publication"] = {
+                "batches": len(progressive_publisher.batches),
+                "failed_batches": progressive_publisher.failed_batches,
+                "first_published_at": progressive_publisher.first_published_at,
+                "max_batch_seconds": max((batch["seconds"] for batch in progressive_publisher.batches), default=0.0),
+            }
         new_separate_release_keys = load_separate_release_keys(cfg)
         rebuilt_albums = build_albums_from_file_cache(new_file_cache, set(new_separate_release_keys or set()))
         with cache_lock:

@@ -49,10 +49,19 @@ function getAlbumTrackPhysicalFolder(track) {
   return parts.join('/').toLocaleLowerCase();
 }
 
+// The tagged disc number, or the disc marker in the file's folder when the tag is empty.
+function getAlbumTrackDiscNumber(track) {
+  const tagged = getPositiveAlbumTrackSortNumber(track?.disc_number);
+  if (tagged !== null) return tagged;
+  const parts = String(track?.path || '').split(/[\\/]/);
+  const folder = parts.length > 1 ? parts[parts.length - 2] : '';
+  return getPositiveAlbumTrackSortNumber(folder.match(ALBUM_TRACK_DISC_FOLDER_PATTERN)?.[1]);
+}
+
 function compareAlbumTracks(left, right) {
   const discCompare = compareAlbumTrackSortNumbers(
-    getPositiveAlbumTrackSortNumber(left?.disc_number),
-    getPositiveAlbumTrackSortNumber(right?.disc_number),
+    getAlbumTrackDiscNumber(left),
+    getAlbumTrackDiscNumber(right),
   );
   if (discCompare) return discCompare;
 
@@ -300,11 +309,7 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
-  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
-  if (folderLoadButton) {
-    folderLoadButton.disabled = false;
-    folderLoadButton.removeAttribute?.('aria-busy');
-  }
+  if (typeof refreshTagEditorFolderCompleteness === 'function') void refreshTagEditorFolderCompleteness(tagEditor);
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -881,6 +886,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
+    ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
+    : null;
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
@@ -992,6 +1000,7 @@ async function confirmManualTagEdit() {
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
       tagEditAlert,
+      coverLookupOptimisticSplit,
     };
     if (
       provisionalProblematicMutation
@@ -1047,6 +1056,9 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    if (coverLookupOptimisticSplit && typeof clearCoverLookupOptimisticSplit === 'function') {
+      clearCoverLookupOptimisticSplit(coverLookupOptimisticSplit);
+    }
     pendingProblematicEntry.settle();
     if (
       provisionalProblematicMutation
@@ -1442,10 +1454,13 @@ function getAlbumReleaseSet(album) {
       }
     });
   }
+  // Owner (11-08): a same-name album is a version only when the server found it shares at least half of the
+  // tracks (shares_tracks); manual links above group regardless.
   sameArtistAlbums.forEach((item) => {
     if (
       normalizeAlbumBaseName(item.name) === targetBase
       && !ignoredVersionKeys.has(String(item.key || ''))
+      && item.shares_tracks !== false
     ) {
       grouped.push(item);
     }
@@ -1480,18 +1495,6 @@ function getAlbumReleaseSet(album) {
   return { releases, selectedIndex };
 }
 
-function isPlainDuplicateVersionTab(release, index, releases) {
-  if (index <= 0 || !release || !Array.isArray(releases) || !releases.length) return false;
-  const original = releases[0] || {};
-  const releaseName = String(release.name || '').trim();
-  const originalName = String(original.name || '').trim();
-  if (!releaseName || releaseName.localeCompare(originalName, undefined, { sensitivity: 'base' }) !== 0) return false;
-  if (String(release.edition || '').trim()) return false;
-  if (isInstrumentalVariant(release)) return false;
-  if (findVariantSuffixIndex(releaseName) > 0) return false;
-  return true;
-}
-
 async function ignoreAlbumVersion(albumKey) {
   const key = String(albumKey || '');
   if (!key) return;
@@ -1517,8 +1520,8 @@ async function ignoreAlbumVersion(albumKey) {
       state.modalReleaseIndex = Math.min(releaseSet.selectedIndex, Math.max(0, state.modalReleases.length - 1));
       renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
     }
-    await fetchAndRender(buildApiUrl(state.view), false);
-    showToast('Album will no longer be counted as a version.', 'success', 2600);
+    await refreshGalleryAfterVersionChange();
+    showToast('Release separated. The rule is listed in Settings › Rules.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to ignore album version.', error);
     showToast(error.message || 'Failed to update version setting.', 'error', 3200);
@@ -1542,11 +1545,17 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
 }
 
+// UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
+// the mounted gallery and its scroll stay; no Loading page.
+function refreshGalleryAfterVersionChange() {
+  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+}
+
 function scheduleVersionGalleryRefresh() {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserTimeout(() => {
       Promise.resolve()
-        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .then(() => refreshGalleryAfterVersionChange())
         .catch((error) => {
           console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
         });
@@ -1572,7 +1581,10 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
       manual_version_links: data.manual_version_links && typeof data.manual_version_links === 'object'
         ? data.manual_version_links
         : {},
+      // Owner (11-09): marking albums as versions removes their Separate release exceptions.
+      ...(Array.isArray(data.ignored_version_keys) ? { ignored_version_keys: data.ignored_version_keys } : {}),
     }, { trackSidebarReveal: false });
+    if (state.utility) state.utility.rulesLoaded = false;
     refreshOpenTrackModalVersionState(childKey);
     showToast('Album marked as a version.', 'success', 2600);
     scheduleVersionGalleryRefresh();
@@ -1632,7 +1644,7 @@ async function revertVersionException(albumKey) {
       }, { trackSidebarReveal: false });
     }
     renderUtilityModalContent();
-    await fetchAndRender(buildApiUrl(state.view), false);
+    await refreshGalleryAfterVersionChange();
     showToast('Rule reverted.', 'success', 2400);
     return true;
   } catch (error) {
@@ -1667,65 +1679,36 @@ function renderTrackModalTabs(els) {
   const tablist = els.tabs.querySelector('.in-page-tabs');
   tablist?.querySelectorAll('[data-in-page-tab]').forEach((button, index) => {
     button.dataset.trackTabIndex = String(index);
-    if (isPlainDuplicateVersionTab(releases[index], index, releases)) {
-      button.dataset.versionContextKey = releases[index].key || '';
-    }
+    // Every version after the original can be separated into its own release.
+    if (index > 0 && releases[index]?.key) button.dataset.versionContextKey = releases[index].key;
   });
   mountInPageTabs(tablist);
   if (restoreTabFocus) tablist?.querySelector('[aria-selected="true"]')?.focus();
-  renderVersionContextMenu();
 }
 
-function ensureVersionContextMenu() {
-  let menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'track-modal-version-context-menu';
-  menu.className = 'track-modal-version-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '<button type="button" data-ignore-version-context="1">Don\'t count as a version</button>';
-  document.body.appendChild(menu);
-  return menu;
-}
-
-function renderVersionContextMenu() {
-  const menu = ensureVersionContextMenu();
-  const stateMenu = state.modalVersionContextMenu || {};
-  if (!stateMenu.visible || !stateMenu.albumKey) {
-    menu.hidden = true;
-    return;
-  }
-  menu.style.left = `${stateMenu.x}px`;
-  menu.style.top = `${stateMenu.y}px`;
-  menu.dataset.albumKey = stateMenu.albumKey;
-  menu.hidden = false;
-  if (typeof activateTriggerSurface === 'function') {
-    activateTriggerSurface(menu, hideVersionContextMenu);
-  }
-}
-
+// Version releases reuse the shared album context menu; "Separate release" records a version rule.
 function showVersionContextMenu(albumKey, x, y) {
-  state.modalVersionContextMenu = {
-    albumKey: String(albumKey || ''),
-    x,
-    y,
-    visible: true,
-  };
-  renderVersionContextMenu();
+  const key = String(albumKey || '');
+  if (!key || isMobileClient() || usesMobilePageLayout()) return;
+  const menu = ensureAlbumCardContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.albumKey = key;
+  menu.dataset.menuKind = 'release';
+  menu.innerHTML = `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(key)}">Separate release</button>`;
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
 
 function hideVersionContextMenu() {
-  state.modalVersionContextMenu = {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  };
-  const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) {
-    menu.hidden = true;
-    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
-  }
+  const menu = document.getElementById('album-card-context-menu');
+  if (menu?.dataset?.menuKind === 'release') hideAlbumCardContextMenu();
+}
+
+function separateAlbumRelease(albumKey) {
+  const key = String(albumKey || '');
+  if (!key) return Promise.resolve();
+  return getManualVersionLinks()[key] ? unmarkAlbumVersion(key) : ignoreAlbumVersion(key);
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -2027,6 +2010,23 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+const renderedTrackModalHeaderHtml = new WeakMap();
+
+// The Album Details header in the chosen layout. The loading state renders it too, so the dialog takes
+// that layout at once instead of after the details arrive (INT-040).
+function buildTrackModalHeaderHtml(album, { versionTabs = false, missing = false } = {}) {
+  return buildAlbumDetailsHeaderHtml({
+    layout: String(document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar').trim().toLowerCase(),
+    artist: album.album_artist || '',
+    album: album.display_name || album.name || 'Album',
+    year: album.display_year || album.year || '',
+    releaseType: album.release_type || 'ALBUM',
+    sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml(album),
+    tags: [versionTabs ? '' : album.edition || '', missing ? 'Missing' : ''].filter(Boolean),
+    actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing }),
+  });
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -2076,23 +2076,19 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
-  const albumDetailsLayout = String(
-    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
-  ).trim().toLowerCase();
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
-      layout: albumDetailsLayout,
-      artist: album.album_artist || '',
-      album: album.display_name || album.name || 'Album',
-      year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      sourceMarkersHtml: coverSourceMarkersHtml,
-      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      poorArtQuality: album.poor_art_quality === true,
-      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
-    });
-    els = getTrackModalElements();
+    const headerHtml = buildTrackModalHeaderHtml(album, { versionTabs: hasVersionTabs, missing: albumMissing });
+    // The summary render and the hydrated details usually build the same header;
+    // rewriting it replaced Close and the header actions under the pointer
+    // (a close click then waited ~500 ms for the new button). Other owners edit
+    // the header in place (closing clears the title), so the live DOM must
+    // still be exactly what this render wrote.
+    const rendered = renderedTrackModalHeaderHtml.get(els.header);
+    if (!rendered || rendered.built !== headerHtml || rendered.dom !== els.header.innerHTML) {
+      els.header.innerHTML = headerHtml;
+      renderedTrackModalHeaderHtml.set(els.header, { built: headerHtml, dom: els.header.innerHTML });
+      els = getTrackModalElements();
+    }
   }
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -2222,6 +2218,11 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
+  if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  if (typeof renderAlbumArtQualityAlert === 'function') renderAlbumArtQualityAlert(els.cover, albumMissing ? null : album);
+  const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
+    ? '' : buildAlbumServiceLinksHtml(album.external_links);
+  if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
@@ -2238,21 +2239,30 @@ function renderTrackModalRelease(album) {
   const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
+      // Folders open in File Explorer only from a browser on the computer running Album Haven; elsewhere the
+      // numbered folder buttons stay visible but disabled, so every copy is still identified.
+      const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+      const canOpenFolders = !capabilities || capabilities.allows('library.files.open_location');
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
-        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
-          label: String(index + 1),
-          ariaLabel: `Open folder ${index + 1}`,
-          variant: 'secondary', size: 'small', quiet: true,
-          className: 'track-modal-duplicate-folder',
-          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
-          attributes: {
-            'data-open-track-modal-duplicate-folder': '1',
-            'data-album-key': resolvedAlbumKey,
-            'data-duplicate-source-index': String(index),
-          },
-        })).join(''),
+        actionsPlacement: 'inline',
+        actionsHtml: duplicateSources.map((source, index) => {
+          const folder = String(source.folder_path || source.folder_name || `Folder ${index + 1}`);
+          return ButtonComponent.renderActionButton({
+            icon: 'folder',
+            badge: String(index + 1),
+            ariaLabel: canOpenFolders ? `Open folder ${index + 1}` : `Folder ${index + 1}`,
+            className: 'track-modal-duplicate-folder',
+            title: canOpenFolders ? folder : `${folder} (folders open only on the computer running Album Haven)`,
+            disabled: !canOpenFolders,
+            attributes: canOpenFolders ? {
+              'data-open-track-modal-duplicate-folder': '1',
+              'data-album-key': resolvedAlbumKey,
+              'data-duplicate-source-index': String(index),
+            } : { 'data-duplicate-source-index': String(index) },
+          });
+        }).join(''),
       });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {
@@ -2434,6 +2444,9 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const sectionTitleByFirstTrack = new Map((Array.isArray(album?.track_sections) ? album.track_sections : [])
+    .map((section) => [String(section?.first_track_path || '').trim(), String(section?.title || '').trim()])
+    .filter(([path, title]) => path && title));
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -2479,12 +2492,18 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isProblematic: Boolean(track.is_problematic),
         problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
+        sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
+    const discSeconds = componentTracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0);
     return {
       discNumber: group.discNumber,
       discLabel,
+      discSubtitle: group.discSubtitle,
       isBonus: Boolean(group.isBonus),
+      lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       tracks: componentTracks,
     };
   });
@@ -2495,6 +2514,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   }
   const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
     && componentGroups.some((group) => !group.isBonus);
+  // A later disc with its own name (e.g. Kultivator CD 2 "Waiting Paths") gets its own length.
+  const hasNamedLaterDisc = componentGroups.some((group, index) => index > 0 && Boolean(group.discSubtitle));
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2504,6 +2525,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     groups: componentGroups,
 
     multiDisc: grouped.multiDisc,
+    perDiscLengths: hasNamedLaterDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
     bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',

@@ -216,6 +216,51 @@ test('reopening loaded Integrations explicitly retries the Last.fm summary witho
  assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:17,lastfm_total:12000,pending:1,can_submit:true}));
 });
 
+test('Integrations shows the remembered Last.fm total at once and later updates only that number',async()=>{
+ const stored=new Map([['albumHaven.lastfmTotal.listener','12000']]);
+ const totalNode={textContent:'LastFM Total: 12000'};let renders=0;let resolveTotal;const requests=[];
+ const c=loadLastfmActions({
+  localStorage:{getItem:key=>stored.has(key)?stored.get(key):null,setItem:(key,value)=>stored.set(key,value)},
+  document:{querySelector:selector=>selector==='#utility-modal [data-lastfm-total]'?totalNode:null},
+  renderUtilityModalContent(){renders+=1;},
+  fetch:async(url)=>{requests.push(url);
+   if(url==='/utilities/integrations/lastfm/scrobbles')return {ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:null,lastfm_total_current:false,pending:3,can_submit:true})};
+   assert.equal(url,'/utilities/integrations/lastfm/scrobbles?refresh_total=1');
+   return new Promise(resolve=>{resolveTotal=resolve;});
+  }});
+ const lastfm={key:'lastfm',connected:true,api_configured:true,username:'listener'};
+ c.state.utility.integrations=[lastfm];
+ const load=c.loadLastfmScrobbleSummary(lastfm);
+ assert.match(c.buildUtilityIntegrationDetail(lastfm),/LastFM Total: 12000</);
+ await load;
+ assert.deepEqual(requests,['/utilities/integrations/lastfm/scrobbles','/utilities/integrations/lastfm/scrobbles?refresh_total=1']);
+ assert.match(c.buildUtilityIntegrationDetail(lastfm),/Scrobbled: 17<[\s\S]*LastFM Total: 12000<[\s\S]*Pending: 3</);
+ const rendersBeforeFresh=renders;
+ resolveTotal({ok:true,json:async()=>({ok:true,scrobbled:99,lastfm_total:12345,lastfm_total_current:true,pending:9,can_submit:true})});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(totalNode.textContent,'LastFM Total: 12345');
+ assert.equal(renders,rendersBeforeFresh);
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:17,lastfm_total:12345,pending:3,can_submit:true}));
+ assert.equal(stored.get('albumHaven.lastfmTotal.listener'),'12345');
+});
+
+test('a failed Last.fm total refresh keeps the remembered number on screen',async()=>{
+ const totalNode={textContent:''};let resolveTotal;
+ const c=loadLastfmActions({
+  localStorage:{getItem:()=>'12000',setItem(){assert.fail('nothing new to remember');}},
+  document:{querySelector:()=>totalNode},
+  fetch:async(url)=>url.endsWith('refresh_total=1')
+   ? new Promise(resolve=>{resolveTotal=resolve;})
+   : {ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:null,lastfm_total_current:false,pending:3,can_submit:true})},
+ });
+ const lastfm={key:'lastfm',connected:true,api_configured:true,username:'listener'};
+ await c.loadLastfmScrobbleSummary(lastfm);
+ resolveTotal({ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:null,lastfm_total_current:false,pending:3,can_submit:true})});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(totalNode.textContent,'LastFM Total: 12000');
+ assert.equal(c.state.utility.lastfmScrobbles.summary.lastfm_total,12000);
+});
+
 test('missing measured statistics are unavailable rather than invented zero or sample values',()=>{
  const html=load().buildUtilityIntegrationDetail({key:'lastfm',connected:false,api_configured:false});
  assert.match(html,/Playback statistics/);assert.match(html,/Unavailable/);assert.doesNotMatch(html,/1,248|86 hours/);

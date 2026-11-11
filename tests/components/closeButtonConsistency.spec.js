@@ -15,7 +15,7 @@ test('close controls retain canonical component sizing across modal surfaces', a
     document.querySelector('#reference').innerHTML = button('');
     document.querySelector('#utility-modal').innerHTML = button('utility-modal-close');
     document.querySelector('.is-mobile-artist-dialog').innerHTML = button('mobile-artist-info-close');
-    document.querySelector('#other').innerHTML = ['image-lightbox-close', 'track-modal-close', 'version-picker-close'].map(button).join('');
+    document.querySelector('#other').innerHTML = ['image-lightbox-close', 'track-modal-close'].map(button).join('');
   });
   const dimensions = locator => locator.evaluate(node => {
     const style = getComputedStyle(node);
@@ -23,7 +23,7 @@ test('close controls retain canonical component sizing across modal surfaces', a
     return { width: style.width, height: style.height, padding: style.padding, radius: style.borderRadius, iconWidth: icon.width, iconHeight: icon.height };
   });
   const canonical = await dimensions(page.locator('#reference button'));
-  for (const name of ['utility-modal-close', 'mobile-artist-info-close', 'image-lightbox-close', 'track-modal-close', 'version-picker-close']) {
+  for (const name of ['utility-modal-close', 'mobile-artist-info-close', 'image-lightbox-close', 'track-modal-close']) {
     expect(await dimensions(page.locator(`button.${name}`)), name).toEqual(canonical);
   }
   await page.evaluate(() => {

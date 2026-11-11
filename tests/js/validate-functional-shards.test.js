@@ -17,9 +17,9 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual-1', 33],
-  ['gallery-search-visual-2', 45],
-  ['cover-providers-1', 22],
+  ['gallery-search-visual-1', 34],
+  ['gallery-search-visual-2', 46],
+  ['cover-providers-1', 26],
   ['cover-providers-2', 14],
   ['metadata-mutations', 18],
   ['playback-utilities-1', 14],
@@ -118,7 +118,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 174-case assignment', () => {
+test('functional shard contract pins the approved eight-way 180-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -132,7 +132,7 @@ test('functional shard contract pins the approved eight-way 174-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 174);
+  assert.equal(total, 180);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -728,19 +728,20 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
     "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
     "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+    "SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 10);
+  assert.equal(isolatedInvocations.length, 11);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   );
   const secondWaveInvocations = waves
     .filter((wave) => wave.wave === 2)
@@ -759,6 +760,7 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
       "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
       "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+      "SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files",
     ].sort(),
   );
   assert.equal(
@@ -790,7 +792,7 @@ validatorTest('gallery startup projections share one early app process before is
   const sharedReaderNames = waves[0].invocations
     .filter((invocation) => invocation.baselineMode === 'shared-setup')
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
-  assert.equal(sharedReaderNames.length, 38);
+  assert.equal(sharedReaderNames.length, 39);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -936,9 +938,9 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual-1', { cases: 33, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 45, waves: [1, 2, 3, 4] }],
-    ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
+    ['gallery-search-visual-1', { cases: 34, waves: [1, 2] }],
+    ['gallery-search-visual-2', { cases: 46, waves: [1, 2, 3, 4] }],
+    ['cover-providers-1', { cases: 26, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 14, waves: [1, 2] }],
     ['metadata-mutations', { cases: 18, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],

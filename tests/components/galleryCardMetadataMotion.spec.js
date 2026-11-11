@@ -26,11 +26,11 @@ for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 760 });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.setContent('<!doctype html><html><body><main class="fixture"></main></body></html>');
-    for (const file of ['runtime/base-layout.css', 'runtime/non-album-and-player.css', 'gallery-main.css', 'mobile-layout.css']) {
+    for (const file of ['runtime/base-layout.css', 'runtime/running-line.css', 'runtime/non-album-and-player.css', 'gallery-main.css', 'mobile-layout.css']) {
       await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', file) });
     }
     await page.addStyleTag({ content: '.fixture { margin: 16px; width: calc((100vw - 44px) / 2); } .fixture > .album-card { width: 100%; }' });
-    for (const file of ['markup-format-helpers.js', 'gallery-main-components.js', 'compact-player-helpers.js', 'mobile-navigation.js', 'gallery-card-component.js']) {
+    for (const file of ['markup-format-helpers.js', 'gallery-main-components.js', 'running-line.js', 'compact-player-helpers.js', 'mobile-navigation.js', 'gallery-card-component.js']) {
       await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
     }
     await page.evaluate(artistName => {
@@ -53,7 +53,8 @@ for (const width of [320, 390]) {
     expect.soft(initialYear.x).toBeGreaterThanOrEqual(cardBounds.x);
     expect.soft(initialYear.right).toBeLessThanOrEqual(cardBounds.x + cardBounds.width);
 
-    await expect.poll(async () => initialArtist.x - (await readTextBounds(card, 'Transatlantic')).x).toBeGreaterThan(8);
+    // RunningLine holds 15% of each leg, then moves at a readable 12 px/s.
+    await expect.poll(async () => initialArtist.x - (await readTextBounds(card, 'Transatlantic')).x, { timeout: 12000 }).toBeGreaterThan(8);
     const movingYear = await readTextBounds(card, '2000');
     expect(movingYear.x).toBeCloseTo(initialYear.x, 0);
     expect(movingYear.y).toBeCloseTo(initialYear.y, 0);

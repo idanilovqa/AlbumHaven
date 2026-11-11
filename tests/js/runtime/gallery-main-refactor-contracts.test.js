@@ -152,13 +152,14 @@ function requireContract(context, name) {
   return context[name];
 }
 
-test('search gallery retains artist information and dividers in artist section headings', () => {
+test('search gallery shows artist information in the header and in artist section headings', () => {
   const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
   const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
   const galleryBar = context.buildGalleryBarHtml(config);
   const artistHeading = context.buildFamilyArtistHeaderHtml(config);
 
-  assert.doesNotMatch(galleryBar, /data-artist-info-trigger/);
+  // Owner (11-08): the header names one artist during a search too, so its info icon shows there.
+  assert.match(galleryBar, /data-artist-info-trigger="1" data-artist="Neal Morse"/);
   assert.match(
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
@@ -505,7 +506,7 @@ test('artist non-album tracks stay disabled until the family count is known', ()
   assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
   context.hasHydratedLibraryNonAlbumTracks = () => true;
   context.updateGalleryMainControls();
-  assert.equal(button.disabled, true, 'a confirmed empty library collection is disabled');
+  assert.equal(button.disabled, false, 'library-wide Loose Tracks is a navigation destination and stays pressable when empty');
   button.dataset.libraryWide = '';
   context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
   context.hasNonAlbumSearchMatches = () => false;
@@ -697,7 +698,7 @@ test('client Gallery state defaults to all sources, Studio plus EP and Compilati
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   });
@@ -728,7 +729,7 @@ test('new primary artist navigation resets filters while preserving the display 
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: [],
   });
@@ -748,7 +749,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -807,7 +808,7 @@ test('relationship controls synchronize and dispatch without enabling release-ty
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   } }, view: {} };
@@ -826,7 +827,8 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   });
   context.updateGalleryMainControls();
   assert.equal(featuredAttributes.get('aria-pressed'), 'false');
-  assert.equal(splitAttributes.get('aria-pressed'), 'true');
+  assert.equal(splitAttributes.get('aria-valuenow'), '2');
+  assert.equal(splitAttributes.get('aria-valuetext'), 'Show Split Albums');
   assert.equal(featured.disabled, false);
   assert.equal(releaseType.disabled, true);
 
@@ -841,11 +843,13 @@ test('relationship controls synchronize and dispatch without enabling release-ty
 
   context.handleGalleryMainClick({
     preventDefault: () => prevented.push(true),
+    detail: 1,
+    clientX: 0,
     target: { closest: selector => selector === '[data-gallery-split-albums]' ? split : null },
   });
   assert.deepEqual(plain(actions), [
     { type: 'toggle-featured-on' },
-    { type: 'toggle-split-albums' },
+    { type: 'set-split-albums', mode: 'separate' },
   ]);
   assert.equal(prevented.length, 2);
 });
@@ -1230,11 +1234,11 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
   assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
-  assert.equal(createGalleryMainState().showSplitAlbums, true);
-  assert.equal(
-    reduceGalleryMainState(createGalleryMainState(), { type: 'toggle-split-albums' }).showSplitAlbums,
-    false,
-  );
+  assert.equal(createGalleryMainState().splitAlbums, 'show');
+  for (const mode of ['hide', 'separate', 'show']) {
+    assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode }).splitAlbums, mode);
+  }
+  assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode: 'bogus' }).splitAlbums, 'show');
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1275,9 +1279,16 @@ test('all unavailable release types remain inert while catalog-backed facts are 
         { key: 'studio', release_type: 'Album', source: 'main_library' },
       ],
     }],
-    filterState: { ...createGalleryMainState(), showSplitAlbums: false },
+    filterState: { ...createGalleryMainState(), splitAlbums: 'hide' },
   }));
   assert.deepEqual(withoutSplits.groups[0].albums.map((album) => album.key), ['studio']);
+  for (const splitAlbums of ['show', 'separate']) {
+    const withSplits = plain(filterGalleryModel({
+      groups: [{ artist: 'Jordsjø', albums: [{ key: 'split', release_type: 'Split', source: 'main_library' }] }],
+      filterState: { ...createGalleryMainState(), splitAlbums },
+    }));
+    assert.deepEqual(withSplits.groups[0].albums.map((album) => album.key), ['split'], splitAlbums);
+  }
 });
 
 test('art-only Gallery hover frame covers the complete card edge', () => {
@@ -2025,4 +2036,17 @@ test('reopening a family drawer cancels the earlier closing callbacks', () => {
   staleFinish();
   assert.equal(run.panel.hidden, false, 'a stale close cannot finish the new animation');
   assert.equal(run.hiddenWrites(), writes);
+});
+
+test('ID-012: each click on the Split Albums switch moves Show -> Separate -> Hide -> Show', () => {
+  const context = loadRuntime();
+  const state = { splitAlbums: 'show' };
+  context.ensureGalleryMainState = () => state;
+  const visited = [];
+  for (let click = 0; click < 3; click += 1) {
+    state.splitAlbums = context.resolveSplitAlbumsSwitchMode();
+    visited.push(state.splitAlbums);
+  }
+  assert.deepEqual(visited, ['separate', 'hide', 'show']);
+  assert.match(galleryMainCssSource, /data-switch-position="1"\] \.gallery-switch__track \{ background: color-mix\(in oklch, #4da3ff 72%, var\(--appearance-play, #4bc173\)\); \}/);
 });

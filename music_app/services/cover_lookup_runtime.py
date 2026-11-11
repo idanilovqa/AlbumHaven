@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
@@ -440,6 +441,39 @@ def fetch_remote_cover_bytes(
         context=f"remote-image:{normalized_url}",
     )
     return result.payload, result.mime_type
+
+
+# Every Cover Look Up open downloaded each remote card's image from its
+# provider again. The proxy keeps recent images in a bounded in-process cache
+# (provider images are re-fetchable, so nothing is persisted); failures are not
+# cached, so a retry still reaches the provider.
+_REMOTE_IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_REMOTE_IMAGE_CACHE: OrderedDict[str, tuple[bytes, str | None]] = OrderedDict()
+_REMOTE_IMAGE_CACHE_BYTES = 0
+_REMOTE_IMAGE_CACHE_LOCK = Lock()
+
+
+def cached_remote_cover_image(image_url: str) -> tuple[bytes, str | None] | None:
+    key = normalize_remote_image_url(image_url)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        cached = _REMOTE_IMAGE_CACHE.get(key)
+        if cached is not None:
+            _REMOTE_IMAGE_CACHE.move_to_end(key)
+        return cached
+
+
+def remember_remote_cover_image(image_url: str, payload: bytes, mime_type: str | None) -> None:
+    global _REMOTE_IMAGE_CACHE_BYTES
+    key = normalize_remote_image_url(image_url)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        previous = _REMOTE_IMAGE_CACHE.pop(key, None)
+        if previous is not None:
+            _REMOTE_IMAGE_CACHE_BYTES -= len(previous[0])
+        _REMOTE_IMAGE_CACHE[key] = (payload, mime_type)
+        _REMOTE_IMAGE_CACHE_BYTES += len(payload)
+        while _REMOTE_IMAGE_CACHE_BYTES > _REMOTE_IMAGE_CACHE_MAX_BYTES and len(_REMOTE_IMAGE_CACHE) > 1:
+            _evicted_key, evicted = _REMOTE_IMAGE_CACHE.popitem(last=False)
+            _REMOTE_IMAGE_CACHE_BYTES -= len(evicted[0])
 
 
 def _callback_accepts_parameter(callback, parameter_name: str) -> bool:

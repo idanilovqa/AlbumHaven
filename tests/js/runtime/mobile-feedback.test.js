@@ -1264,3 +1264,40 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
 });
+
+test('Home names the account and drops the previous artist info button', () => {
+  // Owner (11-09): going back to Home kept the "i" beside the account name, and it opened the last searched band.
+  const removed = [];
+  const info = { remove: () => removed.push('info') };
+  const name = { textContent: 'Folkstone' };
+  const summary = { textContent: '2 albums' };
+  const bar = {
+    parentElement: null,
+    before() {},
+    hidden: true,
+    querySelector: (selector) => ({
+      '[data-gallery-context-name]': name,
+      '[data-gallery-context-summary]': summary,
+      '[data-artist-info-trigger]': info,
+      '.gallery-bar__home-tabs': { hidden: false },
+      '.gallery-bar__actions': { hidden: false },
+    })[selector] || null,
+  };
+  const host = { dataset: { accountName: 'Rendref', homeMounted: 'true' }, hidden: true, prepend(node) { node.parentElement = host; } };
+  const context = load('mobile-home.js', {
+    window: { innerWidth: 390, location: { href: 'https://example.test/' } },
+    URL,
+    state: { view: { query: '', selected_artist: '' }, ui: {} },
+    usesMobilePageLayout: () => true,
+    showMobileGalleryPinchHint() {},
+    document: {
+      getElementById: (id) => (id === 'mobile-home' ? host : null),
+      querySelector: (selector) => (selector === '[data-gallery-bar-instance="gallery"]' ? bar : null),
+      createComment: () => ({ after() {}, parentNode: null }),
+    },
+  });
+  context.syncMobileHome();
+  assert.equal(name.textContent, 'Rendref');
+  assert.equal(summary.textContent, '');
+  assert.deepEqual(removed, ['info']);
+});

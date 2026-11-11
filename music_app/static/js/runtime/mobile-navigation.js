@@ -1,5 +1,5 @@
 /* Responsive shell navigation. Existing components retain their data and event owners. */
-const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false, titleBeforePages: null };
 const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
@@ -9,10 +9,13 @@ function isMobileClient() {
       platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
+function currentClientProfile() { return window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop'); }
+// Owner (11-08 evening): the Settings page opens with its section's title; a generic "Settings" first flashed.
+function mobileUtilityPageTitle() { return MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings'; }
 function mobilePageDescriptor(kind, album = null, options = {}) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? mobileUtilityPageTitle() : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
     libraryWide: kind === 'non-album' && options.libraryWide === true,
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
@@ -40,7 +43,12 @@ function syncMobilePageShell() {
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
+    if (mobilePageState.titleBeforePages === null) mobilePageState.titleBeforePages = document.title;
     document.title = `${active.title} — Album Haven`;
+  } else if (mobilePageState.titleBeforePages !== null) {
+    // Owner (11-08): the tab must never keep a closed page's name (it stayed "Testimony" after browsing on).
+    document.title = mobilePageState.titleBeforePages;
+    mobilePageState.titleBeforePages = null;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
@@ -498,7 +506,7 @@ function syncMobileUtilityContext() {
   const group = resolveMobileLoopSongGroup(descriptor, state.utility.loops || []);
   const song = group?.representativeLoop || group?.loops[0];
   descriptor.title = song ? song.title || song.name || 'Saved loops'
-    : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
+    : mobileUtilityPageTitle();
   descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year].filter(Boolean).join(' • ') : '';
   descriptor.loopCount = song ? `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}` : '';
   if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');
@@ -688,7 +696,7 @@ function initMobileNavigation() {
   form?.before(placeholder);
   const syncLayout = () => {
     const mobile = usesMobilePageLayout();
-    document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
+    document.documentElement.dataset.clientProfile = currentClientProfile();
     if (form) {
       if (mobile) document.querySelector('.app-bar-brand')?.after(form);
       else {
@@ -726,7 +734,7 @@ function initMobileNavigation() {
     if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
   }) : null;
   if (form) searchResize?.observe(form);
-  window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+  const applyLayoutProfileChange = () => {
     if (galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) closeGalleryMainSurface(false);
     const saved = window.AlbumHavenDevicePreferences?.read('galleryDisplayPreferences', null);
     if (saved) {
@@ -741,7 +749,18 @@ function initMobileNavigation() {
     restorePlayerAppearance();
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
-  });
+  };
+  window.matchMedia('(max-width: 900px)').addEventListener('change', applyLayoutProfileChange);
+  // The profile also depends on touch input and the user agent, which Chrome's device toolbar can switch
+  // after the width has already crossed 900px; re-apply whenever a resize leaves the shown profile stale.
+  let layoutProfileFrame = 0;
+  window.addEventListener('resize', () => {
+    if (layoutProfileFrame) return;
+    layoutProfileFrame = requestAnimationFrame(() => {
+      layoutProfileFrame = 0;
+      if (currentClientProfile() !== document.documentElement.dataset.clientProfile) applyLayoutProfileChange();
+    });
+  }, { passive: true });
   document.addEventListener('click', handleMobileSearchOutsideClick, true);
   document.addEventListener('click', (event) => {
     if (handleMobileSettingsClick(event)) return;
@@ -831,7 +850,7 @@ function syncMobileUtilityNavigation() {
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
   trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
-  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
+  trigger.querySelector('.ui-button__content').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');
@@ -899,14 +918,6 @@ function syncMobileAlbumHeader() {
   const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
-  const sourceMarkers = identity?.querySelector?.('.album-details-cover-source-markers')
-    || header.querySelector('.album-details-cover-source-markers');
-  if (sourceMarkers) {
-    const sourceHost = presentation.bodyOwnsIdentity
-      ? identity.querySelector('.album-details-header__copy') : context;
-    if (sourceHost && sourceMarkers.parentElement !== sourceHost) sourceHost.appendChild(sourceMarkers);
-    sourceMarkers.hidden = !albumPage;
-  }
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
   else header.removeAttribute('aria-hidden');
@@ -1050,3 +1061,21 @@ function syncMobileUtilityDetail() {
   if (!modal) return;
   modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }
+
+// INT-023 (owner): a bottom sheet closed by X, the backdrop or a drag slides back down with the same motion it
+// opened with. Returns true while the exit runs; `done` then finishes the close (once, unless reopened).
+const BOTTOM_SHEET_EXIT_MS = 260;
+function runBottomSheetExit(sheet, done, { backdrop = null } = {}) {
+  if (!sheet?.classList || sheet.classList.contains('is-sheet-closing')) return Boolean(sheet?.classList?.contains('is-sheet-closing'));
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  sheet.classList.add('is-sheet-closing');
+  backdrop?.classList?.add('is-sheet-closing');
+  window.setTimeout(() => {
+    if (!sheet.classList.contains('is-sheet-closing')) return; // reopened meanwhile
+    sheet.classList.remove('is-sheet-closing');
+    backdrop?.classList?.remove('is-sheet-closing');
+    done();
+  }, BOTTOM_SHEET_EXIT_MS);
+  return true;
+}
+function cancelBottomSheetExit(sheet) { sheet?.classList?.remove('is-sheet-closing'); }

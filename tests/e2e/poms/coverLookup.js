@@ -7,12 +7,18 @@ export class CoverLookup extends BasePage {
     this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
     this.mobileSheet = page.locator('#cover-lookup-modal.is-mobile-sheet');
     this.mobileBackButton = page.locator('#mobile-back-button');
+    this.splitReleaseChooser = page.getByRole('dialog', { name: 'Choose the current release' });
+    this.splitReleaseChoices = this.splitReleaseChooser.locator('[data-cover-lookup-split-release]');
+    this.splitReleaseOpenButton = this.splitReleaseChooser.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalDialog = page.locator(this.modalDialogSelector);
     this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
     this.albumDetailsLink = this.modalSubtitle.locator("[data-open-cover-lookup-album-details]");
-    this.currentReleaseChoices = this.modalBody.locator('[data-cover-lookup-current-release]');
+    // A split notification asks for its current release in the shared app-form dialog (NavigationTree wide items).
+    this.splitChoiceDialog = this.page.locator('#app-form-modal');
+    this.currentReleaseChoices = this.splitChoiceDialog.locator('[data-cover-lookup-split-release]');
+    this.openChosenReleaseButton = this.splitChoiceDialog.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalStatus = page.locator(this.modalStatusSelector);
     this.modalStatusTitle = this.modalStatus.locator('.on-page-alert__title');
     this.modalStatusMessage = this.modalStatus.locator('.on-page-alert__message');
@@ -558,7 +564,8 @@ export class CoverLookup extends BasePage {
           .some((element) => element.textContent.includes('No local cover art'));
         observation.samples.push({
           empty,
-          wrongPlaceholderCount: placeholders > 0 && placeholders !== expected,
+          // INT-028: while LOCAL lists, only covers already known (the album's own) show as placeholders.
+          wrongPlaceholderCount: placeholders > expected,
           lostKnownCards: observation.sawKnownCards && count !== expected,
         });
         if (count === expected) observation.sawKnownCards = true;
@@ -749,5 +756,11 @@ export class CoverLookup extends BasePage {
 
   taskOpenButtonByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskOpenButtonWithinCardSelector).first();
+  }
+
+  splitReleaseChoiceByTitle(albumName) {
+    return this.splitReleaseChoices.filter({
+      has: this.page.locator('.utility-list-item-title', { hasText: albumName }),
+    });
   }
 }

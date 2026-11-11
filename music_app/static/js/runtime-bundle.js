@@ -46,16 +46,26 @@
         : originalFetch(input, init);
     }
     if (url.origin !== window.location.origin) return originalFetch(input, init);
-    const csrfToken = readCookie(csrfCookieName);
-    if (!csrfToken) {
-      return originalFetch(input, init);
-    }
-    const headers = new Headers(requestInit?.headers || input?.headers || undefined);
-    headers.set('X-Album-Haven-CSRF', csrfToken);
-    return originalFetch(input, {
-      ...(requestInit || {}),
-      credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
-      headers,
+    const send = () => {
+      const csrfToken = readCookie(csrfCookieName);
+      if (!csrfToken) return originalFetch(input, init);
+      const headers = new Headers(requestInit?.headers || input?.headers || undefined);
+      headers.set('X-Album-Haven-CSRF', csrfToken);
+      return originalFetch(input, {
+        ...(requestInit || {}),
+        credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
+        headers,
+      });
+    };
+    // Owner (11-09): writes failed now and then when the page's token was missing or out of date. The server
+    // refuses such a write before any work and sends the session's current token, so it is retried once.
+    // A Request input or a streamed body cannot be sent twice.
+    const replayable = !(typeof Request === 'function' && input instanceof Request)
+      && !(typeof ReadableStream === 'function' && requestInit?.body instanceof ReadableStream);
+    return send().then(async (response) => {
+      if (!replayable || response?.status !== 403 || typeof response.clone !== 'function') return response;
+      const detail = await response.clone().json().then((data) => data?.detail, () => null);
+      return detail === 'CSRF validation failed.' ? send() : response;
     });
   };
 })();
@@ -2652,6 +2662,8 @@ function showAppFormDialog(options = {}) {
     finally { submitting = false; syncSubmit(); }
   };
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  const description = get('description');
+  if (description) { description.textContent = options.description || ''; description.hidden = !options.description; }
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = options.mode === 'reading'; cancel.hidden = false;
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
@@ -2697,6 +2709,8 @@ function showAppFormDialog(options = {}) {
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
   listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  const closeButton = get('close');
+  if (closeButton) listen(closeButton, 'click', () => finish(null));
   listen(modal, 'keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
     if (event.key !== 'Tab') return;
@@ -4392,7 +4406,11 @@ function buildSmallAlertHtml(config = {}) {
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
   const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
+  const tone = ['hoard', 'new_arrivals'].includes(String(config.tone || '')) ? String(config.tone) : '';
+  const toneClass = `${tone ? ` small-alert--tone-${tone}` : ''}${config.presentation === 'badge' ? ' small-alert--badge' : ''}`;
+  const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
+  return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {
@@ -4428,7 +4446,8 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = String(config.className || '').trim();
+  const className = [config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '', String(config.className || '').trim()]
+    .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
@@ -4440,6 +4459,19 @@ if (typeof window !== 'undefined') {
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+}
+
+function toggleSmallAlertBadge(event) {
+  if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+  const badge = event.target?.closest?.('.small-alert--badge');
+  document.querySelectorAll('.small-alert--badge.is-expanded').forEach((node) => { if (node !== badge) node.classList.remove('is-expanded'); });
+  if (!badge || badge.closest('[data-badges-fixed]')) return;
+  if (event.type === 'keydown') event.preventDefault();
+  badge.classList.toggle('is-expanded');
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', toggleSmallAlertBadge);
+  document.addEventListener('keydown', toggleSmallAlertBadge);
 }
 
 // END js/runtime/alert-components.js
@@ -4461,14 +4493,21 @@ function buildMissingAlbumMarkHtml() {
 
 function buildAlbumArtboxHtml(config = {}) {
   const requestedState = String(config.state || '').trim().toLowerCase();
-  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+  const state = ['ready', 'loading', 'empty', 'missing', 'add'].includes(requestedState)
     ? requestedState
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
   const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
-  const content = state === 'missing' || state === 'empty'
+  // "add" invites the user to fill an empty artbox; it is the artbox's own action, not a page control.
+  const addAttributes = Object.entries(config.addAttributes || {})
+    .filter(([name]) => /^data-[a-z0-9-]+$/.test(name))
+    .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`)
+    .join('');
+  const content = state === 'add'
+    ? `<button type="button" class="album-artbox__add"${addAttributes}><span class="album-artbox__add-plus" aria-hidden="true">+</span><span>${escapeHtml(config.addLabel || 'Add art')}</span></button>`
+    : state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
       ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'
@@ -4512,6 +4551,368 @@ function handleUtilityAlbumArtboxError(image) {
 }
 
 // END js/runtime/album-artbox.js
+
+// BEGIN js/runtime/album-additional-artbox.js
+
+/* Album Details second artbox (slot 1): one extra user-chosen artwork under the album cover.
+   Slot 0 stays the album cover. The artbox always holds art: an empty "Add art" box exists only
+   until Album Details closes. Both artboxes use the same Cover Look Up. */
+const ALBUM_ADDITIONAL_ARTBOX_SLOT = 1;
+const albumAdditionalArtboxState = { pendingAlbumKey: '' };
+
+function getCurrentAlbumDetailsRelease() {
+  return state.modalReleases?.[state.modalReleaseIndex] || null;
+}
+
+// UI-14 (owner): Cover Look Up may hold another copy of the album (gallery card, notification), so the
+// Album Details release that carries the saved artworks answers for it.
+function getAlbumAdditionalArtwork(album) {
+  const key = String(album?.key || '');
+  const source = Array.isArray(album?.additional_artworks) ? album
+    : (state.modalReleases || []).find((release) => key && String(release?.key || '') === key);
+  const artworks = Array.isArray(source?.additional_artworks) ? source.additional_artworks : [];
+  return artworks.find((artwork) => Number(artwork?.slot) === ALBUM_ADDITIONAL_ARTBOX_SLOT) || null;
+}
+
+// Cover URL helpers take an album-shaped source; give it its own identity so the album's
+// optimistic main-cover state never leaks into the second artbox.
+function buildAdditionalArtworkCoverSource(album, artwork) {
+  return {
+    key: `${album?.key || ''}::artbox-${ALBUM_ADDITIONAL_ARTBOX_SLOT}`,
+    name: album?.name || '',
+    album_artist: album?.album_artist || '',
+    tracks: [],
+    cover_path: artwork?.cover_path || '',
+    remote_cover_url: artwork?.remote_cover_url || '',
+    remote_cover_source: 'artbox',
+  };
+}
+
+function buildAlbumAdditionalArtboxHtml(album) {
+  const albumName = String(album?.name || 'Album');
+  const artwork = getAlbumAdditionalArtwork(album);
+  if (artwork) {
+    const source = buildAdditionalArtworkCoverSource(album, artwork);
+    const label = `Second artbox for ${albumName}`;
+    const preview = buildAlbumDisplayCoverUrl(source);
+    const full = (typeof buildAlbumLightboxCoverUrl === 'function' && buildAlbumLightboxCoverUrl(source)) || preview;
+    // UI-14 (owner): like the first artbox, a click opens the full-size art; Cover Look Up and the quick cover
+    // search are the hover tools.
+    const toolsHtml = `${ButtonComponent.renderActionButton({
+      icon: 'search', ariaLabel: `Cover Art Look Up for the ${label.toLowerCase()}`, title: 'Cover Art Look Up',
+      className: 'track-modal-cover-tool is-lookup', attributes: { 'data-open-additional-artbox': '1' },
+    })}${ButtonComponent.renderActionButton({
+      icon: 'bolt', ariaLabel: `Search covers for the ${label.toLowerCase()}`, title: 'Quick cover search',
+      className: 'track-modal-cover-tool is-fast-fetch', attributes: { 'data-additional-artbox-quick-search': '1' },
+    })}`;
+    return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
+      state: 'ready',
+      label,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(full)}" data-cover-preview-src="${escapeHtml(preview)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}"><img src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" decoding="async"></button>`,
+      overlayHtml: toolsHtml,
+    })}</div>`;
+  }
+  if (albumAdditionalArtboxState.pendingAlbumKey && albumAdditionalArtboxState.pendingAlbumKey === String(album?.key || '')) {
+    return `<div class="track-modal-cover-shell track-modal-additional-artbox" data-artbox-slot="${ALBUM_ADDITIONAL_ARTBOX_SLOT}">${buildAlbumArtboxHtml({
+      state: 'add',
+      label: `Add art to a second artbox for ${albumName}`,
+      addLabel: 'Add art',
+      addAttributes: { 'data-open-additional-artbox': '1' },
+    })}</div>`;
+  }
+  return '';
+}
+
+function renderAlbumAdditionalArtbox(coverElement, album) {
+  if (!coverElement?.querySelectorAll) return;
+  coverElement.querySelectorAll('.track-modal-additional-artbox').forEach((node) => node.remove());
+  const html = buildAlbumAdditionalArtboxHtml(album);
+  if (html) coverElement.insertAdjacentHTML('beforeend', html);
+}
+
+function rerenderCurrentAlbumDetails() {
+  const release = getCurrentAlbumDetailsRelease();
+  if (release && typeof renderTrackModalRelease === 'function') renderTrackModalRelease(release);
+}
+
+function showAlbumArtboxContextMenu(x, y, slot) {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return false;
+  const items = [];
+  if (slot === ALBUM_ADDITIONAL_ARTBOX_SLOT) {
+    items.push('<button type="button" class="album-card-context-menu-item" data-album-card-action="remove-artbox">Remove artbox</button>');
+  } else if (
+    albumHasDisplayCover(album)
+    && !getAlbumAdditionalArtwork(album)
+    && albumAdditionalArtboxState.pendingAlbumKey !== String(album.key || '')
+  ) {
+    items.push('<button type="button" class="album-card-context-menu-item" data-album-card-action="add-artbox">Add another artbox</button>');
+  }
+  if (!items.length) return false;
+  const menu = ensureAlbumCardContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.albumKey = String(album.key || '');
+  menu.dataset.menuKind = 'artbox';
+  menu.innerHTML = items.join('');
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  return true;
+}
+
+function beginAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album || !albumHasDisplayCover(album) || getAlbumAdditionalArtwork(album)) return;
+  albumAdditionalArtboxState.pendingAlbumKey = String(album.key || '');
+  rerenderCurrentAlbumDetails();
+}
+
+function clearPendingAlbumAdditionalArtbox() {
+  albumAdditionalArtboxState.pendingAlbumKey = '';
+}
+
+function openAlbumAdditionalArtboxLookup() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (album) void openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+}
+
+// Quick cover search for the second artbox: its Cover Look Up opens and runs a fresh search right away.
+async function quickSearchAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return;
+  await openCoverLookupModal(album, { artboxSlot: ALBUM_ADDITIONAL_ARTBOX_SLOT });
+  if (state.coverLookup?.modal?.artboxSlot === ALBUM_ADDITIONAL_ARTBOX_SLOT) startCoverLookupForAlbum(state.coverLookup.modal.album);
+}
+
+function applyAlbumAdditionalArtworks(albumKey, artworks) {
+  const key = String(albumKey || '');
+  const list = Array.isArray(artworks) ? artworks : [];
+  for (const release of state.modalReleases || []) {
+    if (String(release?.key || '') === key) release.additional_artworks = list;
+  }
+  if (getAlbumAdditionalArtwork({ additional_artworks: list }) && albumAdditionalArtboxState.pendingAlbumKey === key) {
+    clearPendingAlbumAdditionalArtbox();
+  }
+  if (String(getCurrentAlbumDetailsRelease()?.key || '') === key) rerenderCurrentAlbumDetails();
+}
+
+async function postAlbumAdditionalArtwork(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'The artbox could not be updated.');
+  return data;
+}
+
+async function removeAlbumAdditionalArtbox() {
+  const album = getCurrentAlbumDetailsRelease();
+  if (!album) return;
+  if (!getAlbumAdditionalArtwork(album)) {
+    clearPendingAlbumAdditionalArtbox();
+    rerenderCurrentAlbumDetails();
+    return;
+  }
+  // Owner (11-09): removing the artbox is immediate; the server confirms in the background, and a refusal puts
+  // the art back with its error.
+  const previous = Array.isArray(album.additional_artworks) ? album.additional_artworks : [];
+  applyAlbumAdditionalArtworks(album.key, previous.filter((artwork) => Number(artwork?.slot) !== ALBUM_ADDITIONAL_ARTBOX_SLOT));
+  void postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork/remove', {
+    album, slot: ALBUM_ADDITIONAL_ARTBOX_SLOT,
+  }).then((data) => applyAlbumAdditionalArtworks(album.key, data.additional_artworks)).catch((error) => {
+    applyAlbumAdditionalArtworks(album.key, previous);
+    showToast(error.message, 'error', 3200);
+  });
+}
+
+// Windows paths compare without case: the library holds both n: and N: spellings of one file.
+function sameLocalPath(left, right) {
+  const normalize = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
+  return Boolean(normalize(left)) && normalize(left) === normalize(right);
+}
+
+// Cover Look Up opened for the second artbox: the first artbox's art cannot be chosen again.
+function isCoverLookupItemInFirstArtbox(item, kind) {
+  const modal = state.coverLookup?.modal;
+  if (!modal?.artboxSlot) return false;
+  const album = modal.album || {};
+  if (kind === 'saved-remote') return true;
+  if (kind === 'local') {
+    return sameLocalPath(album.cover_path, item?.path);
+  }
+  if (kind === 'remote') {
+    const urls = [album.remote_cover_url, album.remote_cover_thumbnail_url]
+      .map((value) => String(value || '').trim()).filter(Boolean);
+    return urls.includes(String(item?.url || '').trim());
+  }
+  return false;
+}
+
+async function saveAdditionalArtworkFromLookup() {
+  const modal = state.coverLookup.modal;
+  const album = modal.album;
+  const remote = modal.selectedRemoteId
+    ? (modal.possibleMatches || []).find((candidate) => String(candidate?.id || '') === String(modal.selectedRemoteId))
+    : null;
+  const selection = remote
+    ? { source_kind: 'remote', remote_url: String(remote.url || '') }
+    : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_path: modal.pendingLocalPath } : null);
+  if (album && !selection && modal.artboxCleared) {
+    // Saved with nothing selected: the second artbox is emptied, freeing its art for the album cover.
+    await removeAlbumAdditionalArtbox();
+    closeCoverLookupModal();
+    return;
+  }
+  if (!album || !selection) return;
+  modal.saving = true;
+  syncCoverLookupSaveButton();
+  try {
+    const data = await postAlbumAdditionalArtwork('/utilities/cover-lookup/additional-artwork', {
+      album, slot: modal.artboxSlot, ...selection,
+    });
+    applyAlbumAdditionalArtworks(album.key, data.additional_artworks);
+    closeCoverLookupModal();
+  } catch (error) {
+    showToast(error.message, 'error', 3200);
+  } finally {
+    modal.saving = false;
+    syncCoverLookupSaveButton();
+  }
+}
+
+// UI-14 (owner): the second artbox's Cover Look Up starts with its saved remote art selected (a blue frame);
+// clicking that art deselects it, so Save empties the artbox.
+function isSecondArtboxSavedRemote(candidate) {
+  const modal = state.coverLookup?.modal;
+  if (!modal?.artboxSlot) return false;
+  const url = String(getAlbumAdditionalArtwork(modal.album)?.remote_cover_url || '').trim();
+  return Boolean(url) && [candidate?.url, candidate?.thumbnail_url].map((value) => String(value || '').trim()).includes(url);
+}
+
+function isSecondArtboxSavedRemoteActive(candidate) {
+  const modal = state.coverLookup?.modal;
+  return Boolean(modal) && !modal.artboxCleared && !modal.selectedRemoteId && !modal.pendingLocalPath
+    && !modal.pendingPastedImageId && isSecondArtboxSavedRemote(candidate);
+}
+
+// UI-14 (owner): in the album cover's Cover Look Up, the art in the second artbox is dimmed and cannot be chosen.
+function isCoverLookupItemInSecondArtbox(item, kind) {
+  const modal = state.coverLookup?.modal;
+  if (!modal || modal.artboxSlot) return false;
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  if (!artwork) return false;
+  if (kind === 'local') {
+    return sameLocalPath(artwork.cover_path, item?.path);
+  }
+  if (kind === 'remote') {
+    const url = String(artwork.remote_url || artwork.remote_cover_url || '').trim();
+    return Boolean(url) && [item?.url, item?.thumbnail_url].map((value) => String(value || '').trim()).includes(url);
+  }
+  return false;
+}
+
+// UI-14 (owner): neither artbox can take the other's picture, even from another source or size: choosing the
+// second artbox's picture as the album cover would otherwise replace it and empty the second artbox. A 64-bit
+// difference hash (dHash) of each preview is computed as it loads (a 9x8 grey downscale, well under a
+// millisecond) and compared with the other artbox's; a near-identical picture is dimmed and cannot be chosen.
+// Previews are same-origin (local covers and the remote-image proxy), so they are readable.
+// The dHash compares brightness gradients only, so two flat or near-flat pictures of different colors hash
+// alike; their average colors must also be close for the pictures to count as the same.
+const ARTBOX_DUPLICATE_MAX_DISTANCE = 6;
+const ARTBOX_DUPLICATE_MAX_COLOR_DELTA = 24;
+const artboxPictureHashes = new Map();
+
+function computeImageDHash(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 9;
+  canvas.height = 8;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(image, 0, 0, 9, 8);
+  let pixels;
+  try { pixels = context.getImageData(0, 0, 9, 8).data; } catch (_error) { return null; }
+  const grey = (x, y) => { const i = (y * 9 + x) * 4; return pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114; };
+  let bits = '';
+  for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) bits += grey(x, y) > grey(x + 1, y) ? '1' : '0';
+  const mean = [0, 1, 2].map((channel) => {
+    let total = 0;
+    for (let index = channel; index < pixels.length; index += 4) total += pixels[index];
+    return total / (pixels.length / 4);
+  });
+  return { bits, mean };
+}
+
+function dHashDistance(left, right) {
+  let distance = 0;
+  for (let index = 0; index < 64; index += 1) if (left[index] !== right[index]) distance += 1;
+  return distance;
+}
+
+function isSameArtboxPicture(left, right) {
+  return dHashDistance(left.bits, right.bits) <= ARTBOX_DUPLICATE_MAX_DISTANCE
+    && left.mean.every((value, channel) => Math.abs(value - right.mean[channel]) <= ARTBOX_DUPLICATE_MAX_COLOR_DELTA);
+}
+
+function hashArtboxPicture(url) {
+  if (!url) return Promise.resolve(null);
+  if (!artboxPictureHashes.has(url)) {
+    artboxPictureHashes.set(url, new Promise((resolve) => {
+      const image = new Image();
+      image.decoding = 'async';
+      image.onload = () => resolve(computeImageDHash(image));
+      image.onerror = () => resolve(null);
+      image.src = url;
+    }));
+  }
+  return artboxPictureHashes.get(url);
+}
+
+function hashLoadedPreview(image) {
+  const url = image.currentSrc || image.src;
+  if (!url) return Promise.resolve(null);
+  if (!artboxPictureHashes.has(url) && image.complete && image.naturalWidth > 0) {
+    artboxPictureHashes.set(url, Promise.resolve(computeImageDHash(image)));
+  }
+  return artboxPictureHashes.has(url)
+    ? artboxPictureHashes.get(url)
+    : new Promise((resolve) => image.addEventListener('load', () => resolve(hashLoadedPreview(image)), { once: true }));
+}
+
+function getOtherArtboxPicture(modal) {
+  if (modal.artboxSlot) return { url: buildAlbumDisplayCoverUrl(modal.album), label: 'Same picture as the album cover' };
+  const artwork = getAlbumAdditionalArtwork(modal.album);
+  return artwork
+    ? { url: buildAlbumDisplayCoverUrl(buildAdditionalArtworkCoverSource(modal.album, artwork)), label: 'Same picture as the second artbox' }
+    : null;
+}
+
+function markOtherArtboxDuplicatePictures(body) {
+  const modal = state.coverLookup?.modal;
+  if (!body?.querySelectorAll || !modal?.album || typeof buildAlbumDisplayCoverUrl !== 'function') return;
+  const other = getOtherArtboxPicture(modal);
+  if (!other?.url) return;
+  void hashArtboxPicture(other.url).then((coverHash) => {
+    if (!coverHash) return;
+    body.querySelectorAll('.cover-lookup-art-card:not(.is-disabled) .cover-lookup-art-preview img').forEach((image) => {
+      void hashLoadedPreview(image).then((hash) => {
+        if (!hash || !isSameArtboxPicture(hash, coverHash)) return;
+        const card = image.closest('.cover-lookup-art-card');
+        if (!card || !card.isConnected || card.classList.contains('is-active')) return;
+        card.classList.add('is-disabled');
+        card.setAttribute('aria-disabled', 'true');
+        card.setAttribute('role', 'group');
+        card.removeAttribute('tabindex');
+        ['data-select-local-cover', 'data-select-remote-cover', 'data-select-pasted-cover'].forEach((name) => card.removeAttribute(name));
+        const label = card.querySelector('.cover-lookup-art-action-label');
+        if (label) label.textContent = other.label;
+      });
+    });
+  });
+}
+
+// END js/runtime/album-additional-artbox.js
 
 // BEGIN js/runtime/gallery-main-components.js
 
@@ -4568,11 +4969,21 @@ function buildLibrarySourceGlyphHtml(category) {
 }
 
 function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  // INT-040: on mobile the sources are colorful icon badges on the album art, never printed names.
+  const presentation = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'badge' : '';
   return normalizeLibrarySourceCategories(categories)
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return `<span class="album-details-header__tag album-details-source-marker album-details-source-marker--${category}" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}<span>${marker.label}</span></span>`;
+      return buildSmallAlertHtml({
+        severity: 'info',
+        tone: category,
+        message: marker.label,
+        iconHtml: buildLibrarySourceGlyphHtml(category),
+        className: `album-details-source-marker album-details-source-marker--${category}`,
+        focusable: true,
+        presentation,
+      });
     })
     .join('');
 }
@@ -4602,7 +5013,6 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -4610,7 +5020,7 @@ function buildGalleryBarHtml(config = {}) {
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
-  const info = isArtist && !isSearch ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
   return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
@@ -4674,6 +5084,16 @@ function buildGalleryCardInfoHtml(config = {}) {
 // BEGIN js/runtime/gallery-main-state.js
 
 const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
+const GALLERY_RELEASE_TYPE_LABELS = Object.freeze({ studio: 'Studio', ep: 'EP', live: 'Live', demo: 'Demo', compilation: 'Compilation', single: 'Single' });
+// Section titles for an artist's own releases when split albums are shown separately.
+const GALLERY_RELEASE_TYPE_SECTION_TITLES = Object.freeze({ studio: 'Studio Albums', ep: 'EPs', live: 'Live Albums', demo: 'Demos', compilation: 'Compilations', single: 'Singles' });
+// Split Albums switch positions, left to right.
+const GALLERY_SPLIT_ALBUM_MODES = ['hide', 'separate', 'show'];
+const GALLERY_SPLIT_ALBUM_LABELS = Object.freeze({ hide: 'Hide Split Albums', separate: 'Separate Split Albums', show: 'Show Split Albums' });
+
+function normalizeGallerySplitAlbumsMode(value) {
+  return GALLERY_SPLIT_ALBUM_MODES.includes(value) ? value : 'show';
+}
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -4686,7 +5106,7 @@ function createGalleryMainState(overrides = {}) {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
     showFeaturedOn: overrides.showFeaturedOn !== false,
-    showSplitAlbums: overrides.showSplitAlbums !== false,
+    splitAlbums: normalizeGallerySplitAlbumsMode(overrides.splitAlbums),
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -4714,8 +5134,8 @@ function reduceGalleryMainState(current, action = {}) {
     next.sources[action.source] = !next.sources[action.source];
   } else if (action.type === 'toggle-featured-on') {
     next.showFeaturedOn = !next.showFeaturedOn;
-  } else if (action.type === 'toggle-split-albums') {
-    next.showSplitAlbums = !next.showSplitAlbums;
+  } else if (action.type === 'set-split-albums') {
+    next.splitAlbums = normalizeGallerySplitAlbumsMode(action.mode);
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -4801,7 +5221,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
       && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
-      && (filterState.showSplitAlbums !== false || !isGallerySplitAlbum(album))
+      && (filterState.splitAlbums !== 'hide' || !isGallerySplitAlbum(album))
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -4920,7 +5340,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     || filterState.albumTypes?.length !== 3
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
-    || filterState.showSplitAlbums === false
+    || filterState.splitAlbums === 'hide'
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;
@@ -4985,10 +5405,9 @@ function syncGalleryCardMetadataMotion(root) {
       frame = 0;
       for (const [row, text] of rows) {
         if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
-        const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
+        const motion = !reduced.matches ? resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
-        row.style.setProperty('--card-text-distance', `${motion.distance}px`);
-        row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
     };
     const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(refresh); };
@@ -5034,19 +5453,11 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const titleId = escapeHtml(config.titleId || 'track-modal-title');
   const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
   const actionHtml = String(config.actionsHtml || '');
-  const qualityAlertHtml = config.poorArtQuality === true
-    ? buildSmallAlertHtml({
-      severity: 'warning',
-      message: 'Poor art quality',
-      className: 'album-details-header__quality-alert',
-      focusable: true,
-    })
-    : '';
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3></div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -5070,7 +5481,42 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, sourceMarkersHtml, ...tagParts].join('');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3></div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+}
+
+// UI-ARTQ: the poor-art warning sits on the album art's top-right corner (desktop) or the album page
+// body's top-right corner (mobile), never in the header. Collapsed it is the icon; hover or focus
+// expands it leftward to its full text. The Album page setting hides it (data-album-art-quality-alert).
+function renderAlbumArtQualityAlert(coverElement, album) {
+  const page = coverElement?.closest?.('#track-modal');
+  page?.querySelectorAll?.('.album-details-art-quality-alert').forEach((node) => node.remove());
+  if (album?.poor_art_quality !== true || !coverElement) return;
+  const mobile = Boolean(page?.classList?.contains('is-mobile-page'))
+    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const host = mobile ? coverElement.closest('.track-modal-body') : coverElement.querySelector('.track-modal-cover-shell');
+  host?.insertAdjacentHTML('beforeend', buildSmallAlertHtml({
+    severity: 'warning',
+    message: 'Poor art quality',
+    className: 'album-details-art-quality-alert',
+    focusable: true,
+  }));
+}
+
+const ALBUM_SERVICE_LINK_PROVIDERS = Object.freeze({
+  discogs: Object.freeze({ label: 'Discogs', host: /(^|\.)discogs\.com$/, icon: '/static/images/icons/service-discogs.png' }),
+  musicbrainz: Object.freeze({ label: 'MusicBrainz', host: /(^|\.)musicbrainz\.org$/, icon: '/static/images/icons/service-musicbrainz.png' }),
+});
+
+// Known release pages under the album art. Only HTTPS pages on each service's own host render.
+function buildAlbumServiceLinksHtml(links = []) {
+  const items = (Array.isArray(links) ? links : []).map((link) => {
+    const provider = ALBUM_SERVICE_LINK_PROVIDERS[String(link?.provider || '')];
+    let url = null;
+    try { url = new URL(String(link?.url || '')); } catch { url = null; }
+    if (!provider || !url || url.protocol !== 'https:' || !provider.host.test(url.hostname)) return '';
+    return `<a class="album-details-service-link" href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer"><img class="album-details-service-link__icon" src="${provider.icon}" alt="" width="16" height="16"><span class="album-details-service-link__label">${provider.label}</span></a>`;
+  }).filter(Boolean);
+  return items.length ? `<div class="album-details-service-links" aria-label="Release pages">${items.join('')}</div>` : '';
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -5113,23 +5559,14 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 }
 
 function buildLooseTracksHeaderActionsHtml() {
-  return [
-    ButtonComponent.renderActionButton({
-      presentation: 'bare',
-      ariaLabel: 'Edit tags',
-      title: 'Edit tags',
-      className: 'track-modal-edit-tags album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
-      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
-    }),
-    ButtonComponent.renderActionButton({
-      presentation: 'bare',
-      ariaLabel: 'Close loose tracks',
-      className: 'album-details-header__action',
-      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
-      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
-    }),
-  ].join('');
+  return ButtonComponent.renderActionButton({
+    presentation: 'bare',
+    ariaLabel: 'Edit tags',
+    title: 'Edit tags',
+    className: 'track-modal-edit-tags album-details-header__action',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+    attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+  });
 }
 
 const MISSING_ALBUM_REASON_TEXT = {
@@ -5192,10 +5629,9 @@ function syncMobileAlbumComposition(album) {
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
   let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
-  const mobileHeader = document.getElementById('mobile-page-header');
   const freshSourceMarkers = overlay.querySelector('.album-details-header .album-details-cover-source-markers');
   const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector('.album-details-cover-source-markers');
+    || cover.querySelector('.track-modal-cover-shell > .album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
   }
@@ -5218,8 +5654,13 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (mobile && mobileHeader) mobileHeader.querySelector('.gallery-bar__context').appendChild(sourceMarkers);
-    else overlay.querySelector('.album-details-header__release-type')?.after(sourceMarkers);
+    // INT-040 (owner, 11-08 evening): web shows the sources on the art (on hover) in every layout; on a phone
+    // Compact and Large cover pin them inside the art's bottom-left corner (Compact's never expand), and
+    // Centered cover keeps them beside the art, under Back.
+    const artHost = cover.querySelector('.track-modal-cover-shell');
+    const host = mobile && layout === 'editorial_canvas' ? rail : artHost;
+    if (host) host.appendChild(sourceMarkers);
+    sourceMarkers.toggleAttribute('data-badges-fixed', mobile && layout === 'stacked_bar');
   }
   if (identity) {
     identity.hidden = !inline;
@@ -5231,11 +5672,9 @@ function syncMobileAlbumComposition(album) {
         title: album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
-        poorArtQuality: album.poor_art_quality === true,
       });
       // B has exactly two visible lines. Keep the shared header builder unchanged.
       identity.querySelector('.album-details-header__secondary').hidden = centered;
-      if (sourceMarkers) identity.querySelector('.album-details-header__copy').appendChild(sourceMarkers);
     }
   }
   const freshActions = cover.querySelector('.album-artbox__overlay');
@@ -5656,7 +6095,6 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
-      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionPath: '',
@@ -5677,17 +6115,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  modalVersionContextMenu: {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  },
-  versionPicker: {
-    album: null,
-    selectedTargetKey: '',
-    saving: false,
-  },
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
@@ -5805,6 +6232,27 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+let searchPendingRailFallback = null;
+function releaseSearchPendingRail() {
+  if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+  searchPendingRailFallback = null;
+  const rail = document.getElementById('shell-navigation-rail');
+  rail?.removeAttribute?.('data-search-pending');
+  rail?.setAttribute?.('aria-busy', 'false');
+}
+function holdSearchPendingRail(searching) {
+  const rail = document.getElementById('shell-navigation-rail');
+  if (searching) {
+    if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+    searchPendingRailFallback = null;
+    rail?.setAttribute?.('data-search-pending', '');
+    rail?.setAttribute?.('aria-busy', 'true');
+  } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
+    // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
+    searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
+  }
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
@@ -5881,6 +6329,7 @@ function renderSidebar() {
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
   ensureSidebarVirtualScrollListeners(el);
+  if (!state.ui?.pendingGallerySearch) releaseSearchPendingRail();
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
@@ -6066,6 +6515,9 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // NEW-005 (owner): while a search runs, the side panel never shows the previous search's tree (leaving Loose
+  // Tracks briefly showed the old selected artist). The tree shows again once it has rendered the new results.
+  holdSearchPendingRail(searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
@@ -6428,10 +6880,23 @@ function installPanelSelectionBoundary() {
   if (panelSelectionBoundaryInstalled) return;
   panelSelectionBoundaryInstalled = true;
   let origin = null;
+  let originMarked = false;
   let gestureOrigin = null;
+  // The marker classes restyle the whole document (their rules reach every
+  // element), so they wait for a drag: a plain click never pays two full style
+  // passes (~100 ms each on a long Loose Tracks list).
+  const markOrigin = () => {
+    if (!origin || originMarked) return;
+    originMarked = true;
+    origin.classList.add('panel-selection-origin');
+    document.documentElement.classList.add('panel-text-selection-active');
+  };
   const release = () => {
-    origin?.classList.remove('panel-selection-origin');
-    document.documentElement.classList.remove('panel-text-selection-active');
+    if (originMarked) {
+      origin?.classList.remove('panel-selection-origin');
+      document.documentElement.classList.remove('panel-text-selection-active');
+    }
+    originMarked = false;
     origin = null;
   };
   const confine = () => {
@@ -6442,11 +6907,10 @@ function installPanelSelectionBoundary() {
     if (event.pointerType === 'touch') { gestureOrigin = null; return; }
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
     origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
-    if (origin) {
-      origin.classList.add('panel-selection-origin');
-      document.documentElement.classList.add('panel-text-selection-active');
-    }
   }, true);
+  document.addEventListener('pointermove', event => {
+    if (origin && !originMarked && (event.buttons & 1)) markOrigin();
+  }, { capture: true, passive: true });
   // A click generated by releasing a drag outside its starting surface is not
   // an outside-click dismissal or an activation of the background underneath.
   document.addEventListener('click', event => {
@@ -6893,6 +7357,10 @@ const galleryMainSurfaceCloseCallbacks = new WeakMap();
 function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
+  if (!immediate && active.surface.classList?.contains?.('is-mobile-artist-dialog') && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(active.surface, () => {
+        if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true });
+      }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
   if (active.key === 'search-suggestions' && state.ui) {
@@ -6955,7 +7423,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
-    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null,
+    openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
@@ -7002,8 +7471,18 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
-  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
-    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  const splitMode = mainState.splitAlbums;
+  // Shown only when the discography in view has a split album, or a non-default position needs undoing.
+  const hasSplitAlbums = splitMode !== 'show' || [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups]
+    .some((groups) => (Array.isArray(groups) ? groups : []).some((group) => (group?.albums || []).some((album) => isGallerySplitAlbum(album))));
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((control) => {
+    const position = GALLERY_SPLIT_ALBUM_MODES.indexOf(splitMode);
+    control.hidden = !hasSplitAlbums;
+    control.dataset.switchPosition = String(position);
+    control.setAttribute('aria-valuenow', String(position));
+    control.setAttribute('aria-valuetext', GALLERY_SPLIT_ALBUM_LABELS[splitMode]);
+    const label = control.querySelector?.('[data-gallery-split-albums-label]');
+    if (label) label.textContent = GALLERY_SPLIT_ALBUM_LABELS[splitMode];
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -7020,6 +7499,7 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
+    // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
     const libraryWide = button.dataset.libraryWide === '1';
     const selectedArtist = Boolean(String(state.view?.selected_artist || '').trim());
     const artistFamily = !libraryWide && selectedArtist && !String(state.view?.query || '').trim();
@@ -7029,9 +7509,9 @@ function updateGalleryMainControls() {
     const scopePending = libraryWide
       ? !hasHydratedLibraryNonAlbumTracks()
       : Boolean(state.view?.non_album_tracks_deferred);
-    const enabled = artistFamily
+    const enabled = libraryWide || (artistFamily
       ? familyCountReady && Number(state.view.non_album_track_count) > 0
-      : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0;
+      : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0);
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
     const matches = typeof hasNonAlbumSearchMatches === 'function'
@@ -7161,8 +7641,10 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const isSearch = Boolean(String(state.view.query || '').trim());
-  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
+  // A new search replaces the artist an open info panel describes; the panel stays open within its own search.
+  const activeSurface = galleryMainSurfaceController?.current?.();
+  if (activeSurface?.surface?.matches?.('.artist-info-overlay')
+      && (activeSurface.openingQuery ?? '') !== String(state.view.query || '').trim()) {
     closeGalleryMainSurface(false);
   }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
@@ -7209,13 +7691,13 @@ function updateGalleryMainChrome() {
   } else {
     name.textContent = context.artist;
     summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (isSearch) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  syncGalleryBarNameFit(bar, name);
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -7283,7 +7765,8 @@ function transitionGalleryMain(action) {
 }
 
 function openGalleryArtistInfo(anchor) {
-  if (String(state.view.query || '').trim()) return;
+  // Owner (11-08): the header shows the "i" during a search, so it opens there too.
+  if (!anchor) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
@@ -7294,6 +7777,25 @@ function openGalleryArtistInfo(anchor) {
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
   overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button></div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
+}
+
+// A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
+// Owner (11-08): every click, on the knob, the track or the label, moves to the next position in the cycle
+// Show -> Separate -> Hide -> Show, so three clicks visit every position once.
+function resolveSplitAlbumsSwitchMode() {
+  const current = Math.max(0, GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums));
+  return GALLERY_SPLIT_ALBUM_MODES[(current + GALLERY_SPLIT_ALBUM_MODES.length - 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+}
+
+function handleSplitAlbumsSwitchKeydown(event) {
+  if (!event.target?.closest?.('[data-gallery-split-albums]')) return false;
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: 2 }[event.key];
+  if (next === undefined) return false;
+  event.preventDefault();
+  const mode = GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, next))];
+  if (mode !== GALLERY_SPLIT_ALBUM_MODES[current]) transitionGalleryMain({ type: 'set-split-albums', mode });
+  return true;
 }
 
 function handleGalleryMainClick(event) {
@@ -7316,7 +7818,11 @@ function handleGalleryMainClick(event) {
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
-  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
+  if (splitAlbums) {
+    event.preventDefault();
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode() });
+    return true;
+  }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -7340,6 +7846,18 @@ function handleGalleryMainClick(event) {
     event.preventDefault();
     openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu'));
     hydrateDeferredNonAlbumTracksForAlbumTypes();
+    return true;
+  }
+  const navigationMode = event.target.closest?.('[data-navigation-mode]');
+  if (navigationMode) {
+    event.preventDefault();
+    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
+    if (navigationMode.dataset.navigationMode === 'collections') {
+      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
+      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
+    } else if (pageOpen) {
+      closeNonAlbumModal();
+    }
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -7443,6 +7961,7 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
+    if (handleSplitAlbumsSwitchKeydown(event)) return;
     if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
       closeGalleryMainSurface(true);
@@ -7470,7 +7989,54 @@ function createGalleryFamilyPaintController(toggle) {
   };
 }
 
+// Owner (11-08): on mobile the gallery buttons share the name's row when the whole name fits beside them; a
+// longer name keeps the row to itself, printed in full, and the buttons move under it. Measured only when the
+// name, its info button or the window width changes, never on every scroll frame.
+function syncGalleryBarNameFit(bar, name) {
+  if (!bar?.classList || !name) return;
+  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}`;
+  if (bar.dataset.galleryNameFitKey === key) return;
+  bar.dataset.galleryNameFitKey = key;
+  bar.classList.remove('is-name-wrapping');
+  if (Number(window.innerWidth) > 900) return;
+  if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
+}
+
 // END js/runtime/gallery-main-interactions.js
+
+// BEGIN js/runtime/running-line.js
+
+/* RunningLine: the one timing contract for text that pans when it overflows its row.
+   Every surface (player, compact player, gallery cards, track credits) measures with
+   resolveRunningLineMotion, sets --running-line-distance / --running-line-duration on the row
+   (applyRunningLineMotion), and animates its text with the shared `running-line-pan` keyframes
+   in base-layout.css. Speed is slow enough to read: 12 px/s while moving, holding at each end. */
+const RUNNING_LINE_SPEED_PX_PER_SECOND = 12;
+const RUNNING_LINE_MOVING_SHARE = 0.7; // running-line-pan holds 15% at each end.
+const RUNNING_LINE_MIN_DURATION_MS = 4000;
+
+function resolveRunningLineMotion({ scrollWidth, clientWidth } = {}) {
+  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
+  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
+  const movingMs = (distance / RUNNING_LINE_SPEED_PX_PER_SECOND) * 1000;
+  return {
+    overflowing: true,
+    distance,
+    durationMs: Math.max(RUNNING_LINE_MIN_DURATION_MS, Math.round(movingMs / RUNNING_LINE_MOVING_SHARE)),
+  };
+}
+
+function applyRunningLineMotion(row, motion) {
+  row.style.setProperty('--running-line-distance', `${motion.distance}px`);
+  row.style.setProperty('--running-line-duration', `${motion.durationMs}ms`);
+}
+
+function clearRunningLineMotion(row) {
+  row.style.removeProperty('--running-line-distance');
+  row.style.removeProperty('--running-line-duration');
+}
+
+// END js/runtime/running-line.js
 
 // BEGIN js/runtime/compact-player-helpers.js
 
@@ -7527,16 +8093,6 @@ function buildCompactPlayerMetadataSummary(track) {
   const album = String(track?.album || '').trim();
   const song = artist && title ? `${artist} - ${title}` : artist || title;
   return song && album ? `${song} / ${album}` : song || album;
-}
-
-function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
-  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
-  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
-  return {
-    overflowing: true,
-    distance,
-    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
-  };
 }
 
 function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
@@ -7610,7 +8166,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMotion,
   resolveCompactPlayerMetadataRevealDelay,
   buildCompactPlayerMetadataSummary,
-  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
@@ -10843,7 +11398,7 @@ function attachAccountMenu(component, options = {}) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -11963,6 +12518,7 @@ function hideAlbumCardContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.albumKey = '';
+  menu.dataset.menuKind = '';
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
@@ -11972,6 +12528,7 @@ function showAlbumCardContextMenu(x, y, album) {
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
+  menu.dataset.menuKind = 'album';
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
     ? state.view.manual_version_links
@@ -11979,15 +12536,28 @@ function showAlbumCardContextMenu(x, y, album) {
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
   const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
+  // Versions grouped under this card (or the card itself, when it is a version) can be separated.
+  const releases = albumKey && typeof getAlbumReleaseSet === 'function' ? getAlbumReleaseSet(album).releases : [];
+  const versions = releases.slice(1).filter((release) => release?.key);
+  const ownVersion = versions.find((release) => String(release.key) === albumKey);
+  const separableReleases = isMarkedVersion ? [] : (ownVersion ? [ownVersion] : versions);
+  const separateItems = separableReleases.map((release) => {
+    const label = separableReleases.length === 1
+      ? 'Separate release'
+      : `Separate release: ${release.tabLabel || release.name || 'Version'}`;
+    return `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(release.key)}">${escapeHtml(label)}</button>`;
+  });
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
     `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
     ...moveActions.map((item) => (
       `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
     )),
-    isMarkedVersion
-      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+    // INT-007 (owner): an existing link is undone in the same dialog, by deselecting its album.
+    getVersionPickerCandidates(album).length || getLinkedVersionKeys(albumKey).size
+      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>'
+      : '',
+    ...separateItems,
   ].join('');
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {
@@ -12026,52 +12596,27 @@ function showArtistTreeContextMenu(x, y, artist) {
   }
 }
 
-function ensureVersionPickerModal() {
-  let modal = document.getElementById('version-picker-modal');
-  if (modal) return modal;
-  modal = document.createElement('div');
-  modal.id = 'version-picker-modal';
-  modal.className = 'confirm-modal';
-  modal.hidden = true;
-  modal.innerHTML = `
-    <div class="confirm-modal-dialog version-picker-card" role="dialog" aria-modal="true" aria-labelledby="version-picker-title">
-      <div class="version-picker-header">
-        ${buildAlbumDetailsHeaderHtml({
-          variant: 'copy', title: 'Mark As A Version', titleId: 'version-picker-title',
-          subtitleId: 'version-picker-subtitle',
-          actionsHtml: ButtonComponent.renderActionButton({
-            icon: 'close', ariaLabel: 'Close version picker', presentation: 'bare',
-            attributes: { 'data-close-version-picker': '1' },
-          }),
-        })}
-      </div>
-      <div class="version-picker-body">
-        <p class="version-picker-description" data-version-picker-description></p>
-        <div class="version-picker-list" data-version-picker-list></div>
-      </div>
-      <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
-        <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-  bindOverlayPointerOrigin(modal);
-  return modal;
+// Version identity ignores case, accents, punctuation and bracketed edition notes:
+// "Helloween", "Helloween (Remastered 2006)" and "HELLOWEEN [Deluxe]" are one title.
+function normalizeVersionTitle(value) {
+  return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+    .replace(/[([][^)\]]*[)\]]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-function getVersionPickerCandidates(album) {
-  const sourceAlbum = album || state.versionPicker.album;
+function getVersionPickerCandidates(sourceAlbum) {
   const sourceKey = String(sourceAlbum?.key || '');
+  const sourceTitle = normalizeVersionTitle(sourceAlbum?.name);
   const sourceArtists = new Set(
     (Array.isArray(sourceAlbum?.artists) ? sourceAlbum.artists : [sourceAlbum?.album_artist])
       .map((value) => String(value || '').trim())
       .filter(Boolean),
   );
   const seen = new Set();
+  if (!sourceTitle) return [];
   return flattenVisibleAlbums()
     .filter((item) => (
       String(item?.key || '') !== sourceKey
+      && normalizeVersionTitle(item?.name) === sourceTitle
       && (Array.isArray(item?.artists) ? item.artists : [item?.album_artist])
         .map((value) => String(value || '').trim())
         .filter(Boolean)
@@ -12086,65 +12631,125 @@ function getVersionPickerCandidates(album) {
     .sort(compareAlbumVariants);
 }
 
-function renderVersionPickerModal() {
-  const modal = ensureVersionPickerModal();
-  const album = state.versionPicker.album;
-  const description = modal.querySelector('[data-version-picker-description]');
-  const list = modal.querySelector('[data-version-picker-list]');
-  const saveButton = modal.querySelector('[data-save-version-picker="1"]');
-  if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
-  const candidates = getVersionPickerCandidates(album);
-  description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
-    : '';
-  list.innerHTML = candidates.length
-    ? candidates.map((item) => {
-      const key = String(item.key || '');
-      const selected = key === String(state.versionPicker.selectedTargetKey || '');
-      return `
-        <button class="version-picker-option ${selected ? 'is-active' : ''}" type="button" data-version-picker-target="${escapeHtml(key)}" aria-pressed="${selected ? 'true' : 'false'}">
-          <span class="version-picker-option-cover">
-            ${item.cover_path
-              ? `<img loading="lazy" decoding="async" src="${buildAlbumDisplayCoverUrl(item)}" alt="">`
-              : '<span class="version-picker-option-cover-placeholder">No cover</span>'}
-          </span>
-          <span class="version-picker-option-meta">
-            <span class="version-picker-option-name">${escapeHtml(item.name || 'Album')}</span>
-            <span class="version-picker-option-subtitle">${escapeHtml(item.year || '')}</span>
-          </span>
-        </button>
-      `;
-    }).join('')
-    : '<div class="version-picker-empty">No other albums from this artist are available in the current view.</div>';
-  saveButton.disabled = state.versionPicker.saving || !state.versionPicker.selectedTargetKey;
-  saveButton.textContent = state.versionPicker.saving ? 'Saving...' : 'Save';
+// Albums already linked as versions of this album (either direction of the {version: album} map).
+function getLinkedVersionKeys(albumKey) {
+  const view = typeof state === 'undefined' ? null : state.view;
+  const links = view?.manual_version_links && typeof view.manual_version_links === 'object'
+    ? view.manual_version_links : {};
+  const key = String(albumKey || '');
+  const linked = new Set();
+  if (!key) return linked;
+  if (links[key]) linked.add(String(links[key]));
+  Object.entries(links).forEach(([version, target]) => { if (String(target) === key) linked.add(String(version)); });
+  return linked;
+}
+
+function buildVersionPickerListHtml(candidates, linkedKeys = new Set()) {
+  if (!candidates.length) return '<div class="version-picker-empty">No other album of this name shares at least half of its tracks.</div>';
+  // INT-007 (owner): an album already marked as a version shows as selected. Each album is the shared wide
+  // navigation-tree item, the same element the split-release choice uses.
+  return candidates.map((item) => {
+    const label = String(item.name || 'Album');
+    const trackCount = Number(item.track_count || (Array.isArray(item.tracks) ? item.tracks.length : 0));
+    return window.NavigationTree.renderItem({
+      variant: 'wide',
+      action: true,
+      key: String(item.key || ''),
+      label,
+      selected: linkedKeys.has(String(item.key || '')),
+      subtitle: [item.album_artist, item.edition].filter(Boolean).join(' · '),
+      year: String(item.year || ''),
+      artworkHtml: buildUtilityAlbumArtbox(item, { label: `Artwork for ${label}` }),
+      count: trackCount ? `${trackCount} ${trackCount === 1 ? 'track' : 'tracks'}` : null,
+      attributes: { 'data-version-picker-target': String(item.key || '') },
+    });
+  }).join('');
+}
+
+// Mark As A Version uses the shared app-form dialog: backdrop click, Escape and Cancel close it.
+// Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): the albums this album already groups with, linked or automatic,
+// start selected, and any number can be selected. The list and selection come from the album's own details:
+// the gallery loads version rules lazily and folds versions into one card, so neither is a reliable source.
+async function loadVersionPickerState(album) {
+  const details = await fetchTrackModalAlbumDetails(album.key, { albumId: album.album_id }).catch(() => null);
+  const albumKey = String(album.key || '');
+  const rules = details?.release_candidate_rules || {};
+  const links = { ...(rules.manual_version_links || {}), ...(state.view?.manual_version_links || {}) };
+  const releaseCandidates = Array.isArray(details?.release_candidates) ? details.release_candidates : null;
+  const releases = getAlbumReleaseSet({ ...album, ...(releaseCandidates ? { release_candidates: releaseCandidates } : {}),
+    release_candidate_rules: { ...rules, manual_version_links: links } }).releases;
+  const current = new Set([
+    ...releases.map((item) => String(item?.key || '')),
+    ...getManualVersionFamilyKeys(albumKey, links),
+  ].filter((key) => key && key !== albumKey));
+  // The server marks whether a same-name album shares at least half of this album's tracks; without details,
+  // the gallery's same-name albums are offered.
+  const galleryOffered = releaseCandidates ? null : new Set(getVersionPickerCandidates(album).map((item) => String(item.key)));
+  // Release candidates are headers only (no cover); the gallery's copy of the same album supplies its artwork.
+  const visible = flattenVisibleAlbums();
+  const galleryAlbum = (key) => state.gallery?.albumIndex?.get?.(key) || visible.find((item) => String(item?.key || '') === key);
+  const byKey = new Map();
+  [...(releaseCandidates || []), ...releases, ...visible].forEach((item) => {
+    const key = String(item?.key || '');
+    if (!key || key === albumKey || byKey.has(key)) return;
+    const offered = releaseCandidates ? item.shares_tracks === true : galleryOffered.has(key);
+    if (offered || current.has(key)) byKey.set(key, { ...(galleryAlbum(key) || {}), ...item });
+  });
+  return { candidates: [...byKey.values()].sort(compareAlbumVariants), current, links };
+}
+
+// Save closes at once (UI-11): the version links are library data, not tag writes, so they apply in the background
+// and the gallery follows without a Loading page.
+function applyVersionPickerChanges(album, { current, links }, selected) {
+  const albumKey = String(album.key || '');
+  const added = [...selected].filter((key) => !current.has(key));
+  const removed = [...current].filter((key) => !selected.has(key));
+  void (async () => {
+    for (const key of added) await markAlbumVersion(key, albumKey);
+    for (const key of removed) {
+      if (links[key]) await unmarkAlbumVersion(key);
+      else if (links[albumKey] === key) await unmarkAlbumVersion(albumKey);
+      else await ignoreAlbumVersion(key);
+    }
+  })().catch(() => scheduleVersionGalleryRefresh());
+  return true;
 }
 
 function openVersionPickerModal(album) {
-  const sourceAlbum = album || null;
-  if (!sourceAlbum) return;
-  state.versionPicker.album = sourceAlbum;
-  state.versionPicker.saving = false;
-  state.versionPicker.selectedTargetKey = '';
-  const modal = ensureVersionPickerModal();
-  renderVersionPickerModal();
-  modal.hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closeVersionPickerModal() {
-  const modal = document.getElementById('version-picker-modal');
-  if (!modal) return;
-  modal.hidden = true;
-  state.versionPicker.album = null;
-  state.versionPicker.selectedTargetKey = '';
-  state.versionPicker.saving = false;
-  const trackModalOpen = !document.getElementById('track-modal')?.hidden;
-  const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
-  const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
-  if (!trackModalOpen && !utilityModalOpen && !lightboxOpen) {
-    document.body.classList.remove('modal-open');
-  }
+  if (!album) return Promise.resolve(null);
+  const selected = new Set();
+  let pickerState = null;
+  let onPick = null;
+  const sameSelection = () => selected.size === pickerState.current.size
+    && [...selected].every((key) => pickerState.current.has(key));
+  return showAppFormDialog({
+    title: 'Mark As A Version',
+    description: `Select the albums that are versions of ${String(album.name || 'this album')}.`,
+    submitLabel: 'Save',
+    submitEnabled: false,
+    contentHtml: '<nav class="navigation-tree navigation-tree--choice" data-version-picker-list aria-label="Album versions" aria-busy="true"><div class="version-picker-empty">Finding versions…</div></nav>',
+    onMount(content, controls) {
+      void loadVersionPickerState(album).then((loaded) => {
+        const list = content.querySelector?.('[data-version-picker-list]');
+        if (!list) return;
+        pickerState = loaded;
+        loaded.current.forEach((key) => selected.add(key));
+        list.removeAttribute('aria-busy');
+        list.innerHTML = buildVersionPickerListHtml(loaded.candidates, loaded.current);
+      });
+      onPick = (event) => {
+        const option = event.target.closest?.('[data-version-picker-target]');
+        if (!option || !pickerState) return;
+        const key = option.getAttribute('data-version-picker-target') || '';
+        if (selected.has(key)) selected.delete(key); else selected.add(key);
+        window.NavigationTree.setItemSelected(option, selected.has(key));
+        controls.setSubmitEnabled(!sameSelection());
+      };
+      content.addEventListener('click', onPick);
+    },
+    onClose(content) { if (onPick) content.removeEventListener('click', onPick); },
+    onSubmit: () => applyVersionPickerChanges(album, pickerState, selected),
+  });
 }
 
 function getVisibleNonAlbumTracks(options = {}) {
@@ -12194,7 +12799,7 @@ function getVisibleNonAlbumTracks(options = {}) {
   const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))
-    || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
+    || String(track.display_path || track.path || '').split(/[\\/]/).slice(0, -1)
       .some((part) => artistFolders.has(folderKey(part)))
   ));
 }
@@ -12471,12 +13076,15 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+    const knownArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    const yearLabel = String(item.year_label || '').trim();
     return {
       path: trackPath,
+      // Loose Tracks rows read "Artist / Title" with the year underneath.
       title,
+      titlePrefix: knownArtist,
       playbackTitle: title,
       artist: String(item.artist || ''),
       albumArtist: String(item.album_artist || ''),
@@ -12486,15 +13094,77 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       duration,
       originalDuration: duration,
       trackNumber: rowIndex,
-      secondaryArtist,
-      displayPath: displayPath || trackPath,
+      secondaryArtist: yearLabel && yearLabel !== 'Unknown' ? yearLabel : '',
+      displayPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
       problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
-      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, secondaryArtist),
+      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
     };
   });
+}
+
+function formatLooseTrackCount(count) {
+  return `${count} ${count === 1 ? 'track' : 'tracks'}`;
+}
+
+function canReadLibraryPaths() {
+  return window.AlbumHavenCapabilities?.allows?.('library.paths.read') === true;
+}
+
+function buildNonAlbumTrackLoadingMarkup() {
+  return buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: canReadLibraryPaths(),
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+    idPrefix: 'loose-track-loading',
+  });
+}
+
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+function closeNonAlbumPageOnTreeNavigation(event) {
+  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
+      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+}
+
+// Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
+function setNonAlbumPagePresentation(overlay, open) {
+  const main = document.getElementById('shell-main-surface');
+  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !overlay.classList.contains('is-mobile-page');
+  overlay.classList.toggle('non-album-modal--page', Boolean(page));
+  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  // Opening from the Album types menu must not leave that menu over the page.
+  if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
+  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  const dialog = overlay.querySelector('.non-album-modal-dialog');
+  if (dialog) {
+    if (page) { dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal'); }
+    else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
+  }
+  syncLibraryNavigationMode(Boolean(open && state.ui.nonAlbumLibraryWide) ? 'collections' : 'artists');
+  return Boolean(page);
+}
+
+// The side panel has two modes: Artists (the artist tree) and Loose Tracks (the Custom Collections tree,
+// holding Loose Tracks today and custom collections later). Library-wide Loose Tracks open = Loose Tracks mode.
+function syncLibraryNavigationMode(mode) {
+  const collections = mode === 'collections';
+  document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
+  });
+  const heading = document.getElementById('navigation-tree-heading');
+  if (heading) heading.textContent = collections ? 'Custom Collections' : 'Artists';
+  // The rail carries the mode, so the CSS shows exactly one tree whatever re-renders a tree's own attributes.
+  document.getElementById('shell-navigation-rail')?.setAttribute('data-library-navigation-mode', mode);
+  const collectionsTree = document.getElementById('sidebar-collections');
+  const artistsTree = document.getElementById('sidebar-list');
+  if (collectionsTree) collectionsTree.hidden = !collections;
+  if (artistsTree) artistsTree.hidden = collections;
+  collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
@@ -12541,12 +13211,20 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
-    return { discLabel: section.title, sectionKey: section.key, tracks };
+    const sectionSeconds = sectionItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+    return {
+      discLabel: section.title,
+      sectionKey: section.key,
+      tracks,
+      countLabel: formatLooseTrackCount(sectionItems.length),
+      lengthDisplay: formatAlbumDuration(sectionSeconds),
+    };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
   return buildAlbumTrackTableHtml({
     groups,
-    showPath: true,
+    // The server sends display paths only to viewers allowed to read library paths.
+    showPath: items.some((item) => String(item?.display_path || '').trim()),
     forceGroupLabels: true,
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
@@ -12646,9 +13324,10 @@ function openNonAlbumModal(options = {}) {
     ? !hasHydratedLibraryNonAlbumTracks()
     : Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
-  const subtitle = !libraryWide && state.view.selected_artist
-    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the selected library sources.';
+  const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
+  const subtitle = hydrationPending
+    ? (libraryWide ? 'Loading loose tracks across the library…' : 'Loading loose tracks…')
+    : `${formatLooseTrackCount(looseTracks.length)}${scope}`;
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -12660,22 +13339,27 @@ function openNonAlbumModal(options = {}) {
     });
   }
   if (typeof presentMobilePage === 'function') {
-    presentMobilePage(mobilePageDescriptor('non-album', null, { libraryWide }));
+    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
   }
   els.table.innerHTML = hydrationPending
-    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
+    ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
-    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    const trackTable = details.closest?.('.album-track-table');
+    const syncExpanded = () => {
+      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+      trackTable?.classList?.toggle('album-track-table--collapsed-disc',
+        Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
+    };
     syncExpanded();
     details.addEventListener?.('toggle', syncExpanded);
   });
   els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   attachSharedPlayer();
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
@@ -12860,6 +13544,7 @@ function closeNonAlbumModal() {
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  setNonAlbumPagePresentation(els.overlay, false);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -13689,7 +14374,6 @@ function getNonAlbumModalElements() {
     overlay: document.getElementById('non-album-modal'),
     header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
-    close: document.getElementById('non-album-modal-close'),
   };
 }
 
@@ -13732,11 +14416,15 @@ function albumRequiresHydration(album) {
 }
 
 function renderTrackModalLoadingState(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
+  if (els.header && typeof buildTrackModalHeaderHtml === 'function') {
+    els.header.innerHTML = buildTrackModalHeaderHtml(album);
+    els = getTrackModalElements();
+  } else {
+    els.title.textContent = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean).join(' - ');
+  }
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -14754,6 +15442,8 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
@@ -14886,7 +15576,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {
@@ -16404,6 +17093,8 @@ function formatLogHistoryTimestamp(value) {
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// How often a running scan's progressively published albums refresh the view.
+const LIVE_SCAN_REFRESH_INTERVAL_MS = 5000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -18876,6 +19567,13 @@ async function pollStatus() {
     const scanFinalizing = Boolean(normalizedStatus.scan_in_progress)
       && String(normalizedStatus.scan_phase || '').trim().toLowerCase() === 'finalizing';
     const busyNow = normalizedStatus.scan_in_progress || normalizedStatus.relations_in_progress;
+    // A reading scan publishes finished albums as it goes; show them while it
+    // runs, at most every few seconds, rather than only once it completes.
+    const liveScanRefreshDue = Boolean(normalizedStatus.scan_in_progress)
+      && !scanFinalizing
+      && !normalizedStatus.relations_in_progress
+      && Date.now() - Number(state.ui.lastLiveScanRefreshAt || 0) >= LIVE_SCAN_REFRESH_INTERVAL_MS;
+    const inventoryRefreshAllowed = !busyNow || liveScanRefreshDue;
     const coverBusyNow = Boolean(normalizedStatus.covers_in_progress);
     const wasPollingBusy = Boolean(state.wasPollingBusy);
     const wasScanFinalizing = Boolean(state.wasScanFinalizing);
@@ -18960,9 +19658,13 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    if (busyNow && liveScanRefreshDue
+      && (state.ui.pendingInventoryMutationViewRefresh || state.ui.pendingArtistTreeRefresh)) {
+      state.ui.lastLiveScanRefreshAt = Date.now();
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
-      && !busyNow
+      && inventoryRefreshAllowed
       && !coverBusyNow
       && !state.busy
       && !hasPendingSidebarNavigation()
@@ -18988,7 +19690,7 @@ async function pollStatus() {
         );
       }
     }
-    if (state.ui.pendingArtistTreeRefresh && !busyNow && !state.busy && !hasPendingSidebarNavigation()) {
+    if (state.ui.pendingArtistTreeRefresh && inventoryRefreshAllowed && !state.busy && !hasPendingSidebarNavigation()) {
       try {
         await refreshArtistTreeAfterInventoryMutation(currentInventoryRevision);
         if (!ownsStatus()) return;
@@ -19982,7 +20684,7 @@ function syncAlbumTrackCreditMotion(root) {
     observer.disconnect();
     visibility?.disconnect();
     reduced.removeEventListener('change', schedule);
-    for (const row of rows) row.classList.remove('is-credit-overflowing');
+    for (const row of rows) { row.classList.remove('is-credit-overflowing'); clearRunningLineMotion(row); }
   });
   schedule();
 }
@@ -20012,7 +20714,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   if (secondary) classes.push('album-track-table__row--secondary');
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
+  // titlePrefix (e.g. "Artist / ") is drawn before the title without becoming part of the title text.
+  const titlePrefix = String(track.titlePrefix || '').trim();
+  const titleHtml = `<span class="album-track-table__title"${titlePrefix ? ` data-title-prefix="${escapeHtml(`${titlePrefix} / `)}"` : ''}>${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary" title="${escapeHtml(secondary)}"><span>${escapeHtml(secondary)}</span></span>` : ''}</span>`;
   const problemReasons = (Array.isArray(track.problemReasons) ? track.problemReasons : [])
     .map((reason) => String(reason || '').trim()).filter(Boolean);
   // The reasons arrive with Album Details, so hovering never loads Problematic Files.
@@ -20047,6 +20751,23 @@ function matchesAlbumTrackSearch(query, title, secondaryArtist) {
     .some(value => String(value || '').toLocaleLowerCase().includes(normalizedQuery)));
 }
 
+// Loading rows keep the real row geometry: number, title and secondary line, optional path, length.
+function buildAlbumTrackTableSkeletonRow(index) {
+  const line = (modifier, width) => `<span class="album-track-table__skeleton album-track-table__skeleton--${modifier}"${width ? ` style="width:${width}%"` : ''}></span>`;
+  const widths = [62, 48, 70, 55];
+  return {
+    key: `skeleton-${index + 1}`,
+    className: 'album-track-table__row album-track-table__row--skeleton',
+    cells: {
+      number: { content: line('number') },
+      title: { content: `${line('title', widths[index % widths.length])}${line('secondary', 28)}` },
+      path: { content: line('path', 74) },
+      problem: { content: '' },
+      duration: { content: line('duration') },
+    },
+  };
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -20055,10 +20776,48 @@ function buildAlbumTrackTableHtml(config = {}) {
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
+  const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
+  const totalLength = String(config.totalLength || '').trim();
+  const mainLength = String(config.mainLength || '').trim();
+  const bonusLength = String(config.bonusLength || '').trim();
+  const summaryLine = (className, label, value) => (
+    `<div class="${className}">${escapeHtml(label)}: ${escapeHtml(value)}</div>`
+  );
+  const summaryBox = (lines) => {
+    const html = lines.filter(Boolean).join('');
+    return html ? `<div class="album-track-table__total">${html}</div>` : '';
+  };
+  // Column priority: number, title and length always fit; the Problematic Files slot exists only when a
+  // listed track needs it; File path is optional and yields first when the table narrows (see CSS).
+  const hasProblemColumn = groups.some((group) => (Array.isArray(group?.tracks) ? group.tracks : [])
+    .some((track) => Boolean(track?.isProblematic)));
+  const groupLabel = (group) => String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+  // The main-album total closes the last main disc; bonus discs then end with their own length and the album total.
+  const bonusGroups = groups.filter((group) => group?.isBonus);
+  const lastMainIndex = groups.reduce((last, group, index) => (group?.isBonus ? last : index), -1);
+  const splitTotals = Boolean(mainLength) && lastMainIndex >= 0 && lastMainIndex < groups.length - 1;
+  const bonusLabel = bonusGroups.length === 1 ? (groupLabel(bonusGroups[0]) || 'Bonus Disc') : 'Bonus Discs';
+  // perDiscLengths: every disc closes with its own length and the album ends with one Total Length
+  // (used when a later disc has its own name). Otherwise main/bonus totals apply.
+  const perDiscLengths = Boolean(config.perDiscLengths) && groups.length > 1;
+  const mainSummaryHtml = splitTotals && !perDiscLengths
+    ? summaryBox([summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength)])
+    : '';
+  const discSummaryHtml = (group, groupIndex) => {
+    const length = String(group?.lengthDisplay || '').trim();
+    const label = groupLabel(group) || `CD ${groupIndex + 1}`;
+    return length ? summaryBox([summaryLine('album-track-table__disc-total', `${label} Length`, length)]) : '';
+  };
+  const finalSummaryHtml = summaryBox(perDiscLengths ? [
+    totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
+  ] : [
+    !splitTotals && mainLength ? summaryLine('album-track-table__main-total', 'Total Main Album Length', mainLength) : '',
+    bonusLength ? summaryLine('album-track-table__bonus-total', `${bonusLabel} Length`, bonusLength) : '',
+    totalLength ? summaryLine('album-track-table__aggregate-total', 'Total Length', totalLength) : '',
+  ]);
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
-    const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
-    // With more than one disc every disc is headed, main or bonus.
+    const label = groupLabel(group);
     const showLabel = Boolean(label) && (
       forceGroupLabels
       || groups.length > 1
@@ -20068,40 +20827,49 @@ function buildAlbumTrackTableHtml(config = {}) {
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
+      ...(hasProblemColumn ? [{ key: 'problem', label: 'Problem', header: 'absent', action: true }] : []),
       { key: 'duration', label: 'Length', action: true },
     ];
     const table = buildCompactDataTable({
       id: `${idPrefix}-tracks-${groupIndex + 1}`,
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
-      headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      // Collapsible sections each carry their own column headers so any section can be read alone.
+      headers: groupIndex === 0 || collapsibleGroups ? 'visible' : 'absent',
+      columns: 'var(--album-track-table-columns)',
       columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
+      // A named section (provider tracklist heading) is a shaded full-span row before its first track.
+      rows: group?.loadingRows ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index)) : tracks.flatMap((track, index) => {
+        const row = buildAlbumTrackTableRow(track, index, config);
+        const sectionTitle = String(track?.sectionTitle || '').trim();
+        return sectionTitle ? [{
+          key: `section:${row.key}`,
+          className: 'album-track-table__section-row',
+          ariaLabel: sectionTitle,
+          fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
+        }, row] : [row];
+      }),
       density: 'compact',
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
     });
-    if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+    const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : (groupIndex === lastMainIndex ? mainSummaryHtml : '');
+    if (collapsibleGroups && (showLabel || group?.loadingRows)) {
+      // Section super-header: title, muted count, and the section length (hidden while collapsed).
+      const count = String(group?.countLabel || '').trim();
+      const length = String(group?.lengthDisplay || '').trim();
+      const headingContent = group?.loadingRows
+        ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
+        : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>`;
     }
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
-    return `<section class="album-track-table__disc">${heading}${table}</section>`;
+    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>`;
   }).join('');
-  const totalLength = String(config.totalLength || '').trim();
-  const mainLength = String(config.mainLength || '').trim();
-  const bonusLength = String(config.bonusLength || '').trim();
-  const summaries = [
-    totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
-    mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
-    bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
-  ].join('');
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  const loading = groups.some((group) => group?.loadingRows);
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {
@@ -20354,9 +21122,7 @@ function buildUtilityIntegrationDetail(item) {
   const summary = scrobbleState.summary;
   const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
   const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
-  const lastfmTotal = scrobbleState.loading
-    ? 'Loading...'
-    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const lastfmTotal = formatLastfmTotal(scrobbleState);
   const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
       <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
       <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
@@ -20380,6 +21146,13 @@ function buildUtilityIntegrationDetail(item) {
       ${submitScrobbles}</div>`;
 }
 
+// The last known Last.fm total stays on screen while a fresher one is fetched.
+function formatLastfmTotal(scrobbleState) {
+  const total = scrobbleState?.summary?.lastfm_total ?? scrobbleState?.rememberedTotal;
+  if (total != null) return String(total);
+  return scrobbleState?.loading || scrobbleState?.refreshingTotal ? 'Loading...' : 'Unavailable';
+}
+
 function matchesUtilityRuleSearch(item) {
   const query = String(state.utility.rulesSearchQuery || '').trim().toLocaleLowerCase();
   if (!query) return true;
@@ -20397,7 +21170,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title" title="${escapeHtml(album.name || album.key || 'Unknown album')}">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -22807,6 +23580,12 @@ async function watchSaveTask(taskId, context = {}) {
         return;
       }
       if (data.status === 'failed') {
+        if (
+          context.coverLookupOptimisticSplit
+          && typeof clearCoverLookupOptimisticSplit === 'function'
+        ) {
+          clearCoverLookupOptimisticSplit(context.coverLookupOptimisticSplit);
+        }
         let viewRefreshed = false;
         if (!mutationWasSuperseded()) {
           try {
@@ -22840,13 +23619,6 @@ async function watchSaveTask(taskId, context = {}) {
           updateOpenTrackModalAfterTagEdit(originalAlbum, reconciledAlbums, {
             preserveHydratedModalAfterFailedSave: true,
           });
-        }
-        if (
-          context.tagEditorDraft
-          && canReconcileOriginView()
-          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
-        ) {
-          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
         }
         if (data.log_entry) {
           try {
@@ -28472,6 +29244,8 @@ function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
   owner.summary = null;
+  owner.rememberedTotal = null;
+  owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   return owner;
@@ -28502,6 +29276,54 @@ function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
   };
 }
 
+const LASTFM_TOTAL_STORAGE_PREFIX = 'albumHaven.lastfmTotal.';
+
+function readRememberedLastfmTotal(username) {
+  try {
+    const stored = localStorage.getItem(LASTFM_TOTAL_STORAGE_PREFIX + username);
+    const total = stored === null ? NaN : Number(stored);
+    return Number.isInteger(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastfmTotal(username, total) {
+  if (total == null) return;
+  try {
+    localStorage.setItem(LASTFM_TOTAL_STORAGE_PREFIX + username, String(total));
+  } catch {
+    // Remembering is a convenience; the next refresh shows the total anyway.
+  }
+}
+
+function paintLastfmTotal(owner) {
+  const node = document.querySelector('#utility-modal [data-lastfm-total]');
+  if (node) node.textContent = `LastFM Total: ${formatLastfmTotal(owner)}`;
+}
+
+// Asking Last.fm takes seconds: the page shows the last known total at once
+// and this replaces only that number when the fresh one arrives.
+async function refreshLastfmTotal(owner, requestGeneration, username) {
+  const isCurrent = () => state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration;
+  owner.refreshingTotal = true;
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles?refresh_total=1', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    const total = data.lastfm_total == null ? NaN : Number(data.lastfm_total);
+    if (!response.ok || !data.ok || !Number.isInteger(total) || total < 0 || !isCurrent() || !owner.summary) return;
+    owner.summary = { ...owner.summary, lastfm_total: total };
+    rememberLastfmTotal(username, total);
+  } catch (error) {
+    console.warn('[AlbumHaven][Integrations] Failed to refresh the Last.fm total.', error);
+  } finally {
+    if (isCurrent()) {
+      owner.refreshingTotal = false;
+      paintLastfmTotal(owner);
+    }
+  }
+}
+
 async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
   const owner = ensureLastfmScrobbleState();
   if (!lastfm?.connected) {
@@ -28510,6 +29332,9 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
   }
   if (owner.loading && !replace) return owner.loadPromise;
   const requestGeneration = ++owner.requestGeneration;
+  const username = String(lastfm.username || '');
+  owner.rememberedTotal = readRememberedLastfmTotal(username);
+  owner.refreshingTotal = false;
   owner.loading = true;
   renderUtilityModalContent();
   const loadPromise = (async () => {
@@ -28518,7 +29343,11 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
-        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        const summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
+        else rememberLastfmTotal(username, summary.lastfm_total);
+        owner.summary = summary;
+        if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
       }
       return owner.summary;
     } catch (error) {
@@ -30123,7 +30952,65 @@ function renderTagEditorArtwork(selectedPaths) {
   const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+  const canOpenFolder = Boolean(folderPath) && !(typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location'));
+  // Same ActionButton and open-location route as the Album Details folder action.
+  // UI-6 (owner, 11-08 evening): right-aligned, and not shown at all when this client cannot open folders.
+  const openFolderButton = canOpenFolder ? ButtonComponent.renderActionButton({
+    ariaLabel: 'Open this folder in File Explorer',
+    title: 'Open this folder in File Explorer',
+    // UI-6 (owner): no outline; the bare action, like the Album Details header folder button.
+    presentation: 'bare',
+    className: 'tag-editor-open-folder',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
+    attributes: { 'data-open-tag-editor-folder': focusedPath },
+  }) : '';
+  const loadFolderButton = state.tagEditor?.folderHasUnloadedTracks === true ? ButtonComponent.renderButton({
+    label: 'Load all tracks from the folder',
+    variant: 'secondary',
+    size: 'small',
+    className: 'tag-editor-folder-load',
+    disabled: Boolean(state.tagEditor.folderLoading),
+    attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-copy"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${loadFolderButton}</div>${openFolderButton}</div>`;
+}
+
+function tagEditorFolderRequestBody(tagEditor, sourcePath, extra = {}) {
+  return JSON.stringify({
+    source_path: sourcePath,
+    album: {
+      key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+      tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+    },
+    ...extra,
+  });
+}
+
+// Shows "Load all tracks from the folder" only when the album folder (every disc) has files not in the editor.
+async function refreshTagEditorFolderCompleteness(tagEditor) {
+  const sourcePath = String(tagEditor?.tracks?.[0]?.path || '');
+  if (!sourcePath) return;
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath, { paths_only: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.tagEditor !== tagEditor || !response.ok || !data.ok) return;
+    const loaded = new Set((tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)));
+    tagEditor.folderHasUnloadedTracks = (Array.isArray(data.paths) ? data.paths : [])
+      .some((path) => !loaded.has(normalizeTagEditorPathKey(path)));
+    if (getTagEditorElements().overlay?.hidden !== true) renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
+  } catch {
+    // Without a folder listing the action stays hidden; editing the loaded tracks is unaffected.
+  }
+}
+
+function getTagEditorTrackFolderName(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 2] : '';
 }
 
 function getTagEditorFocusedPath() {
@@ -30144,25 +31031,15 @@ function normalizeTagEditorPathKey(path) {
 async function loadTagEditorFolderFiles() {
   const tagEditor = state.tagEditor;
   const sourcePath = getTagEditorFocusedPath();
-  const button = document.getElementById('tag-editor-folder-load');
   if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
 
   tagEditor.folderLoading = true;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  }
+  renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
   try {
     const response = await fetch('/utilities/tag-editor/folder-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        source_path: sourcePath,
-        album: {
-          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
-          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
-        },
-      }),
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
@@ -30181,21 +31058,25 @@ async function loadTagEditorFolderFiles() {
       tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
     });
 
+    tagEditor.folderHasUnloadedTracks = false;
     if (!addedTracks.length) {
       showRepairAlert('All supported files from this folder are already loaded.', 'success');
       return;
     }
-    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
-    renderTagEditor();
+    // The folder listing is in disc order (CD1 files, then CD2, ...): keep the editor in that order.
+    const folderOrder = new Map((Array.isArray(data.tracks) ? data.tracks : [])
+      .map((track, index) => [normalizeTagEditorPathKey(track?.path), index]));
+    const position = (track) => folderOrder.get(normalizeTagEditorPathKey(track.path)) ?? Number.MAX_SAFE_INTEGER;
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks]
+      .map((track, index) => ({ track, index }))
+      .sort((a, b) => (position(a.track) - position(b.track)) || (a.index - b.index))
+      .map(({ track }) => track);
   } catch (error) {
     showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
   } finally {
     if (state.tagEditor === tagEditor) {
       tagEditor.folderLoading = false;
-    }
-    if (button && state.tagEditor === tagEditor) {
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      renderTagEditor();
     }
   }
 }
@@ -30286,16 +31167,20 @@ function renderTagEditor(options = {}) {
         ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
+    const showFolderNames = new Set(tracks.map((track) => getTagEditorTrackFolderName(track.path))).size > 1;
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
+      // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
+      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
-            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            <span class="tag-editor-track-name"><span class="tag-editor-track-title">${escapeHtml(filename)}</span>${folderName ? `<span class="tag-editor-track-folder">${escapeHtml(folderName)}</span>` : ''}</span>
             ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
           </button>
         </div>
@@ -30657,15 +31542,6 @@ function openCoverLookupAlbumDetails() {
   );
 }
 
-function buildCoverLookupCurrentReleaseLabel(release) {
-  return [
-    release?.album_artist || '',
-    release?.name || '',
-    release?.year || '',
-    release?.edition || '',
-  ].filter(Boolean).join(' · ');
-}
-
 function buildTrackPathSignature(album) {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   return tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('::');
@@ -30720,7 +31596,7 @@ function logCoverLookupTaskDebug(context, task) {
   });
 }
 
-function reconcileCoverLookupRemoteSelection(possibleMatches) {
+function reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst = false } = {}) {
   const matches = Array.isArray(possibleMatches) ? possibleMatches : [];
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const selectedMatchExists = selectedRemoteId
@@ -30738,8 +31614,10 @@ function reconcileCoverLookupRemoteSelection(possibleMatches) {
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
-  if (selectableMatches.length) {
-    state.coverLookup.modal.selectedRemoteId = String(selectableMatches[0].id);
+  // Owner (11-08): nothing is pre-selected. An unsaved automatic pick is only suggested (the green
+  // suggestion frame), so the gallery never shows "Selected" for a cover that is not the album's.
+  if (selectableMatches.length && suggestFirst && !state.coverLookup.modal.suggestedRemoteId) {
+    state.coverLookup.modal.suggestedRemoteId = String(selectableMatches[0].id);
   }
 }
 
@@ -30901,9 +31779,31 @@ function applyCoverLookupCandidateSource(candidateSource) {
     possibleMatches = previousMatches;
     retainedPreviousMatches = true;
   }
+  // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
+  // so the card shown in Notifications is always identifiable in the gallery.
+  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
+  // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
+  // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
+  // the same or a lower resolution).
+  const suggestionTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modal.taskId || ''));
+  const activeLocalCover = (modal.localCovers || []).find((cover) => cover?.is_active);
+  const hasCurrentCover = Boolean(activeLocalCover || String(modal.album?.cover_path || '').trim()
+    || String(modal.album?.remote_cover_url || '').trim());
+  const searchAwaitsDecision = !hasCurrentCover
+    || (Boolean(suggestionTask) && !isActionedCoverLookupNotification(suggestionTask));
+  const shortEdge = (width, height) => Math.min(Number(width) || 0, Number(height) || 0);
+  const currentCoverEdge = shortEdge(
+    activeLocalCover?.width ?? modal.album?.local_cover_width,
+    activeLocalCover?.height ?? modal.album?.local_cover_height,
+  );
+  const isSelectableSuggestion = (matches, candidateId) => searchAwaitsDecision && Boolean(candidateId) && matches.some((candidate) => (
+    String(candidate?.id || '') === candidateId
+    && String(candidate?.art_kind || 'cover') === 'cover'
+    && !Boolean(candidate?.display_only)
+    && (!currentCoverEdge || shortEdge(candidate?.width, candidate?.height) > currentCoverEdge)
+  ));
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
-    modal.suggestedRemoteId = '';
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
     const selectedOverride = overrideGeneration !== generation
       ? (retainedOverride || incomingOverride)
@@ -30926,12 +31826,14 @@ function applyCoverLookupCandidateSource(candidateSource) {
       }
     }
     modal.possibleMatches = possibleMatches;
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, bestCandidateId) ? bestCandidateId : '';
     modal.selectedRemoteId = String(selectedOverride?.id || '');
     return;
   }
   modal.possibleMatches = possibleMatches;
   if (retainedPreviousMatches) {
-    modal.suggestedRemoteId = '';
+    const previousSuggestion = String(modal.suggestedRemoteId || '');
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, previousSuggestion) ? previousSuggestion : '';
     modal.selectedRemoteId = '';
     return;
   }
@@ -30942,29 +31844,25 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
   );
-  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
-  const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
-    String(candidate?.id || '') === bestCandidateId
-    && String(candidate?.art_kind || 'cover') === 'cover'
-    && !Boolean(candidate?.display_only)
-  ));
+  const bestCandidateIsSelectable = isSelectableSuggestion(possibleMatches, bestCandidateId);
   const task = (state.coverLookup.tasks || []).find((item) => (
     String(item?.id || '') === String(modal.taskId || '')
   ));
-  const hasManualChoice = modal.album?.cover_selection_origin === 'user'
+  const hasManualChoice = Boolean(modal.artboxSlot)
+    || modal.album?.cover_selection_origin === 'user'
     || Boolean(task && isActionedCoverLookupNotification(task))
     || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
-  modal.suggestedRemoteId = bestCandidateIsSelectable && !hasManualChoice ? bestCandidateId : '';
+  modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
   if (hasPendingNonRemoteSelection) {
     modal.selectedRemoteId = '';
     return;
   }
-  if (bestCandidateIsSelectable) {
-    modal.selectedRemoteId = bestCandidateId;
+  // An unchosen cover is only suggested, never pre-selected: the user picks it, then saves.
+  if (bestCandidateIsSelectable && !hasManualChoice) {
+    modal.selectedRemoteId = '';
     return;
   }
-  modal.suggestedRemoteId = '';
-  reconcileCoverLookupRemoteSelection(possibleMatches);
+  reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst: !hasManualChoice && searchAwaitsDecision && !hasCurrentCover });
 }
 
 function applyCoverLookupGalleryPayload(gallery) {
@@ -30994,7 +31892,8 @@ function applyCoverLookupGalleryPayload(gallery) {
       ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
         || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
       : null;
-    if (incomingActiveLocalCover) {
+    // UI-14 (owner): the second artbox's lookup keeps its own saved art selected, not the album cover.
+    if (incomingActiveLocalCover && !state.coverLookup.modal.artboxSlot) {
       state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
       const revision = String(incomingActiveLocalCover.cover_revision || '').trim();
       if (revision && !state.coverLookup.modal.saving
@@ -31143,6 +32042,12 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
 }
 
 function getCoverLookupActiveLocalPath() {
+  // UI-14 (owner, 11-09): the second artbox's lookup starts with only its own saved art selected, never the
+  // album cover.
+  if (state.coverLookup.modal.artboxSlot) {
+    const artwork = typeof getAlbumAdditionalArtwork === 'function' ? getAlbumAdditionalArtwork(state.coverLookup.modal.album) : null;
+    return state.coverLookup.modal.artboxCleared ? '' : String(artwork?.cover_path || '');
+  }
   const retainedPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
   if (retainedPath) return retainedPath;
   if (state.coverLookup.modal.remoteCover && typeof state.coverLookup.modal.remoteCover === 'object') {
@@ -31269,8 +32174,12 @@ function buildTrackModalCoverSourceBadge(source) {
 }
 
 function hasPendingLocalCoverSelection() {
-  const pendingPath = String(state.coverLookup.modal.pendingLocalPath || '');
-  return Boolean(pendingPath && pendingPath !== getCoverLookupActiveLocalPath());
+  const modal = state.coverLookup.modal;
+  const pendingPath = String(modal.pendingLocalPath || '');
+  if (!pendingPath) return false;
+  if (pendingPath !== getCoverLookupActiveLocalPath()) return true;
+  // Clicking a cover the app applied automatically confirms it as the user's own choice.
+  return !modal.artboxSlot && modal.album?.cover_selection_origin === 'automatic';
 }
 
 function hasPendingPastedCoverSelection() {
@@ -31317,9 +32226,11 @@ function syncCoverLookupSaveButton() {
   const savedRemoteCandidateId = String(currentTask?.selected_candidate_id || '');
   const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
   const hasLocalSelection = hasPendingLocalCoverSelection();
-  const hasPastedSelection = Boolean(pendingPastedImageId);
+  // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
+  const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
-  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection));
+  const clearsArtbox = Boolean(state.coverLookup.modal.artboxSlot && state.coverLookup.modal.artboxCleared);
+  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -31363,7 +32274,7 @@ function syncCoverLookupSelectionUi() {
     const shouldBeActive = !selectedRemoteId && !pendingPastedImageId && (
       pendingLocalPath
         ? localPath === pendingLocalPath
-        : card.hasAttribute('data-cover-lookup-local-active')
+        : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
     if (shouldBeActive) {
@@ -31386,10 +32297,12 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
-    const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
-    const isSuggested = !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-      && !pendingLocalPath && !pendingPastedImageId
-      && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
+    const cardId = String(card.getAttribute('data-select-remote-cover') || '');
+    const isActive = cardId === selectedRemoteId || (typeof isSecondArtboxSavedRemoteActive === 'function'
+      && isSecondArtboxSavedRemoteActive((state.coverLookup.modal.possibleMatches || []).find((candidate) => String(candidate?.id || '') === cardId)));
+    const suggestedRemoteId = String(state.coverLookup.modal.suggestedRemoteId || '');
+    const isSuggested = Boolean(suggestedRemoteId)
+      && String(card.getAttribute('data-select-remote-cover') || '') === suggestedRemoteId;
     card.classList.toggle('is-active', isActive);
     card.classList.toggle('is-suggested', isSuggested);
     let check = card.querySelector('.cover-lookup-art-check');
@@ -31466,7 +32379,7 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   }
 }
 
-function markTrackModalCoverTransitionPending(album) {
+function markTrackModalCoverTransitionPending(album, optimisticSrc = '') {
   if (typeof document === 'undefined') return false;
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return false;
@@ -31478,6 +32391,12 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
+  // UI-2 (owner, 11-10): Album Details shows the chosen picture at once, like the gallery, instead of an empty
+  // box until the save finishes; the lookup already loaded this preview.
+  if (optimisticSrc) {
+    image.src = optimisticSrc;
+    return true;
+  }
   image.remove();
   visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
@@ -31513,7 +32432,9 @@ function syncCoverLookupAlbumReferences(updatedAlbums) {
   if (modalAlbum) {
     const replacement = findCoverLookupAlbumReplacement(modalAlbum, candidates);
     if (replacement) {
-      state.coverLookup.modal.album = replacement;
+      // UI-5 (owner): a chosen split release keeps its identity through task updates.
+      state.coverLookup.modal.album = modalAlbum.identity_resolution === 'album_split_choice'
+        ? { ...replacement, identity_resolution: 'album_split_choice' } : replacement;
     }
   }
   const taskIds = [];
@@ -31561,13 +32482,12 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
   const signature = getAlbumPathSignature(album)
     || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
   if (!signature) return;
-  state.coverLookup.optimisticAlbumCovers[signature] = {
-    src: buildCoverUrl(normalizedSourcePath, {
-      size: 480,
-      revision: selectedCandidate?.cover_revision,
-    }),
-    coverPath: normalizedSourcePath,
-  };
+  const src = buildCoverUrl(normalizedSourcePath, {
+    size: 480,
+    revision: selectedCandidate?.cover_revision,
+  });
+  state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
+  return src;
 }
 
 function preloadCoverLookupAlbumImage(album) {
@@ -32200,11 +33120,14 @@ function renderCoverLookupDrawer({
   const terminalCount = hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
     : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+  // A preview move that needs the server owner counts as one more notification (owner, 11-10).
+  const attentionCount = typeof getPreviewMoveAttentionCount === 'function' ? getPreviewMoveAttentionCount() : 0;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + attentionCount;
   if (summary) {
     summary.textContent = [
+      attentionCount ? 'Needs your attention' : '',
       activeCount ? `${activeCount} active` : '',
       terminalCount ? `${terminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
@@ -32529,6 +33452,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isPastedKind = kind === 'pasted';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
+  const inFirstArtbox = typeof isCoverLookupItemInFirstArtbox === 'function' && isCoverLookupItemInFirstArtbox(item, kind);
+  // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
+  const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
+  const inOtherArtbox = inFirstArtbox || inSecondArtbox;
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
@@ -32549,7 +33476,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
-  const isActive = kind === 'local'
+  const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
@@ -32564,12 +33491,15 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && !String(state.coverLookup.modal.pendingLocalPath || '')
         && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
+        // UI-3 (owner): the selection never moves on its own. Until LOCAL has loaded, nothing reads "Selected";
+        // then an active local file wins and the linked remote cover is selected only when none is.
+        && state.coverLookup.modal.localInventoryLoaded === true
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
-        && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+        && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
+          || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
   const isSuggested = kind === 'remote'
-    && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-    && !state.coverLookup.modal.pendingLocalPath && !state.coverLookup.modal.pendingPastedImageId
+    && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
@@ -32580,7 +33510,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
   const otherRemoteArtAttr = isOtherRemoteArt ? 'data-cover-lookup-other-remote-art="1"' : '';
-  const selectAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  const selectAttr = inOtherArtbox || (isOtherRemoteArt && !isSelectableOtherRemoteArt)
     ? ''
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
@@ -32605,10 +33535,15 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
+  const actionLabel = inFirstArtbox ? 'In the first artbox' : inSecondArtbox ? 'In the second artbox' : kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  // UI-14 (owner): hovering art held by the second artbox says how to free it.
+  const roleAttr = inSecondArtbox
+    ? 'role="group" aria-disabled="true" title="Deselect cover in the second artbox first"'
+    : inOtherArtbox
+    ? 'role="group" aria-disabled="true"'
+    : isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
     : 'role="button" tabindex="0"';
   const fallbackPreviewHtml = `
@@ -32618,7 +33553,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${inOtherArtbox ? 'is-disabled' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview${imageUrl ? ' is-loading' : ''}" aria-busy="${Boolean(imageUrl)}">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="var preview=this.parentElement; preview.classList.remove('is-loading'); preview.classList.remove('has-load-error'); preview.setAttribute('aria-busy', 'false');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.remove('is-loading'); preview.classList.add('has-load-error'); preview.setAttribute('aria-busy', 'false'); }">` : ''}
@@ -32635,7 +33570,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isOtherRemoteArt && !isSelectableOtherRemoteArt && !inOtherArtbox ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -32702,6 +33637,7 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
   }).join('');
 }
 
+
 function captureCoverLookupModalScrollAnchor(body) {
   if (!body) return null;
   const scrollTop = Number(body.scrollTop || 0);
@@ -32748,6 +33684,10 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
 }
 
 function replaceCoverLookupModalMarkup(body, markup) {
+  // Identical renders must not touch the DOM: rebuilding hovered cards restarts their transitions
+  // and swallows the first click on controls such as the zoom button.
+  if (body.__coverLookupMarkup === markup && body.firstElementChild
+    && body.__coverLookupFirstElement === body.firstElementChild) return;
   const retainedCards = new Map();
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
@@ -32758,6 +33698,12 @@ function replaceCoverLookupModalMarkup(body, markup) {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
     const retained = retainedCards.get(key);
     if (!retained || typeof card.replaceWith !== 'function') return;
+    const incomingMarkup = String(card.outerHTML || '');
+    if (incomingMarkup && retained.__coverLookupCardMarkup === incomingMarkup) {
+      card.replaceWith(retained);
+      return;
+    }
+    retained.__coverLookupCardMarkup = incomingMarkup;
     const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
     const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
     const previewSource = (image) => String(
@@ -32795,6 +33741,11 @@ function replaceCoverLookupModalMarkup(body, markup) {
     }
     card.replaceWith(retained);
   });
+  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
+    if (!card.__coverLookupCardMarkup) card.__coverLookupCardMarkup = String(card.outerHTML || '');
+  });
+  body.__coverLookupMarkup = markup;
+  body.__coverLookupFirstElement = body.firstElementChild;
 }
 
 function formatCoverLookupImageCount(count) {
@@ -32933,42 +33884,22 @@ function renderCoverLookupModal() {
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
+  // NEW-003: a local-art problem is a compact alert right after the LOCAL heading, expanding to its text on
+  // hover or focus; the section itself never moves or changes shape.
   const galleryErrorMarkup = modalState.galleryError
-    ? buildSmallAlertHtml({ severity: 'error', message: modalState.galleryError }) : '';
-  const hasGalleryCards = localCovers.length || otherArt.length || possibleMatches.length || remoteCover;
+    ? buildSmallAlertHtml({ severity: 'warning', message: modalState.galleryError, focusable: true, className: 'cover-lookup-local-alert' }) : '';
   const localInventoryUnknown = Boolean((modalState.galleryError || modalState.localInventoryPending) && !modalState.localInventoryLoaded);
-  const galleryLoadingMarkup = modalState.loading
-    ? buildCoverLookupGalleryLoadingMarkup(modalState)
-    : !hasGalleryCards ? galleryErrorMarkup : '';
-  const currentReleases = Array.isArray(modalState.currentReleases)
-    ? modalState.currentReleases : [];
-  if (currentReleases.length) {
-    els.body.innerHTML = `
-      <section class="cover-lookup-section cover-lookup-current-release-choice" role="group" aria-labelledby="cover-lookup-current-release-title">
-        <h4 class="cover-lookup-section-title" id="cover-lookup-current-release-title">This album was split—choose the current release</h4>
-        <div class="cover-lookup-current-release-list">
-          ${currentReleases.map((release) => `
-            <button class="cover-lookup-current-release" type="button" data-cover-lookup-current-release="${escapeHtml(release.album_id || '')}">
-              <span>${escapeHtml(buildCoverLookupCurrentReleaseLabel(release))}</span>
-              <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}</span>
-            </button>
-          `).join('')}
-        </div>
-      </section>`;
-    els.body.scrollTop = 0;
-    if (els.findBetter) ButtonComponent.setDisabled(els.findBetter, true);
-    if (els.saveRemote) {
-      els.saveRemote.hidden = false;
-      ButtonComponent.setDisabled(els.saveRemote, true);
-    }
-    return;
-  }
+  // The album's own selected local cover is known before the listing arrives.
+  const expectedLocalCount = String(modalState.album?.cover_path || '').trim() && !remoteCover ? 1 : 0;
+  const galleryLoadingMarkup = modalState.loading ? buildCoverLookupGalleryLoadingMarkup(modalState) : '';
   replaceCoverLookupModalMarkup(els.body, `
-    ${hasGalleryCards ? galleryErrorMarkup : ''}
     ${galleryLoadingMarkup || `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
-      <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown ? '' : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
+      <div class="cover-lookup-section-heading">
+        <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
+        ${galleryErrorMarkup}
+      </div>
+      <div class="cover-lookup-gallery${!localCovers.length && localInventoryUnknown && expectedLocalCount ? ' cover-lookup-gallery-loading' : ''}">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown && expectedLocalCount ? buildCoverLookupGalleryLoadingCards('local', expectedLocalCount) : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
@@ -33021,16 +33952,20 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  if (compact && modalState.initialScrollPending === true && !modalState.loading) {
-    const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
-    els.body.scrollTop = selectedCard
-      ? Math.max(0, Number(selectedCard.offsetTop || 0) - (Number(els.body.clientHeight || 0) - Number(selectedCard.offsetHeight || 0)) / 2)
-      : 0;
-    modalState.initialScrollPending = false;
+  // Owner (11-08): on web and mobile the gallery opens at the top, with LOCAL first even when it is empty.
+  // Later renders (local inventory or candidates arriving) keep it there until the user scrolls.
+  const userScrolledSinceOpen = modalState.initialScrollTop != null
+    && Math.abs(Number(els.body.scrollTop || 0) - Number(modalState.initialScrollTop)) > 2;
+  if (modalState.initialScrollPending === true && !modalState.loading && !userScrolledSinceOpen) {
+    els.body.scrollTop = 0;
+    modalState.initialScrollTop = 0;
+    if (!modalState.localInventoryPending) modalState.initialScrollPending = false;
   } else {
+    if (userScrolledSinceOpen) modalState.initialScrollPending = false;
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
+  if (typeof markOtherArtboxDuplicatePictures === 'function') markOtherArtboxDuplicatePictures(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
@@ -33324,7 +34259,11 @@ async function loadCoverLookupTasks(options = {}) {
       applyCoverLookupTaskUpdates(task);
     });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && tasksChanged) {
+    // Other notifications changing must not re-render or reload the open lookup.
+    const modalTaskSnapshot = (snapshots) => JSON.stringify(snapshots.find((task) => String(task?.id || '') === modalTaskId) || null);
+    const modalTaskChanged = Boolean(modalTaskId)
+      && modalTaskSnapshot(previousTaskSnapshots) !== modalTaskSnapshot(nextTaskSnapshots);
+    if (modalTaskId && tasksChanged && modalTaskChanged) {
       const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
@@ -33484,11 +34423,18 @@ function ensureCoverLookupPolling() {
         String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
         && ['pending', 'running'].includes(String(task?.status || ''))
       ));
+      // A persisted snapshot can claim "running" after its task ended. Refresh once per distinct
+      // snapshot, not on every tick, so a stale status cannot drive endless gallery reloads.
+      const stalledSnapshotToken = ['pending', 'running'].includes(String(snapshot?.status || ''))
+        ? `${state.coverLookup.modal.taskId}|${snapshot?.search_generation || ''}|${snapshot?.revision || ''}|${snapshot?.updated_at || ''}`
+        : '';
       if (
         modalOpen
         && !hasMatchingActiveTask
-        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+        && stalledSnapshotToken
+        && stalledSnapshotToken !== state.coverLookup.modal.refreshedStalledSnapshotToken
       ) {
+        state.coverLookup.modal.refreshedStalledSnapshotToken = stalledSnapshotToken;
         await refreshCoverLookupGallery(false);
       }
     } finally {
@@ -33661,14 +34607,18 @@ async function finishCoverLookupMutation(mutationKey, session) {
 }
 
 async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true } = {}) {
-  clearTimeout(coverLookupLocalInventoryTimer);
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   const album = state.coverLookup.modal.album;
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
-  if (showLoading && !state.coverLookup.modal.localInventoryLoaded) state.coverLookup.modal.loading = true;
-  state.coverLookup.modal.galleryError = '';
-  renderCoverLookupModal();
+  // Background refreshes keep the current gallery and any shown error until the response settles,
+  // so an unchanged failure stays steady instead of flashing on every refresh.
+  if (showLoading) {
+    if (!state.coverLookup.modal.localInventoryLoaded) state.coverLookup.modal.loading = true;
+    state.coverLookup.modal.galleryError = '';
+    renderCoverLookupModal();
+  }
   try {
     const response = await fetch('/utilities/cover-lookup/gallery', {
       method: 'POST',
@@ -33676,26 +34626,25 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
       body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '', ...(!includeLocal ? { include_local: false } : {}) }),
     });
     const data = await response.json().catch(() => ({}));
+    const isSplit = !response.ok && data.resolution_kind === 'album_split'
+      && Array.isArray(data.current_releases) && data.current_releases.length > 1;
+    // UI-5 (owner): a split is a fact about this lookup, not this request. While a search runs, each progress
+    // poll starts a newer request, so a split answer must not be dropped as stale or the chooser waits for
+    // the search to end.
+    if (isSplit && state.coverLookup.modal.album === album) {
+      handleCoverLookupSplitResponse(data.current_releases);
+      return;
+    }
     if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
-      if (
-        data.resolution_kind === 'album_split'
-        && Array.isArray(data.current_releases)
-        && data.current_releases.length > 1
-      ) {
-        state.coverLookup.modal.currentReleases = data.current_releases;
-        state.coverLookup.modal.loading = false;
-        renderCoverLookupModal();
-        return;
-      }
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
-    state.coverLookup.modal.currentReleases = [];
-    applyCoverLookupGalleryPayload(data);
+    state.coverLookup.modal.galleryError = '';
+      applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
-    if (state.coverLookup.modal.localInventoryPending) {
+    if (state.coverLookup.modal.localInventoryPending && typeof setTimeout === 'function') {
       coverLookupLocalInventoryTimer = setTimeout(() => {
         if (isCurrent()) void refreshCoverLookupGallery(false);
       }, 1000);
@@ -33703,25 +34652,137 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
     void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
   } catch (error) {
     if (!isCurrent()) return;
+    const previousError = state.coverLookup.modal.galleryError;
     state.coverLookup.modal.loading = false;
     state.coverLookup.modal.galleryError = error.message || 'Could not load cover art. Reopen to retry.';
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     renderCoverLookupModal();
-    showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    if (previousError !== state.coverLookup.modal.galleryError) {
+      showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    }
   }
 }
 
-async function chooseCoverLookupCurrentRelease(albumId) {
-  const release = (state.coverLookup.modal.currentReleases || []).find((candidate) => (
-    String(candidate?.album_id || '') === String(albumId || '')
-  ));
-  if (!release) return;
-  const taskId = state.coverLookup.modal.taskId;
-  const overlay = getCoverLookupModalElements().overlay;
-  await openCoverLookupModal(release, {
-    taskId,
-    mobileSheet: Boolean(overlay && isCoverLookupMobileSheet(overlay)),
+const coverLookupSplitReleasesByTask = new Map();
+// UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
+const coverLookupSplitChoiceByTask = new Map();
+
+function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
+  const originalPaths = getAlbumTrackPaths(originalAlbum);
+  if (originalPaths.size < 2) return null;
+  const releasesByPaths = new Map();
+  (Array.isArray(updatedAlbums) ? updatedAlbums : []).forEach((album) => {
+    const paths = getAlbumTrackPaths(album);
+    if (
+      paths.size > 0
+      && paths.size < originalPaths.size
+      && Array.from(paths).every((path) => originalPaths.has(path))
+    ) {
+      releasesByPaths.set(Array.from(paths).sort().join('\n'), {
+        ...album,
+        track_count: Number(album?.track_count || 0) || paths.size,
+      });
+    }
   });
+  const releases = Array.from(releasesByPaths.values());
+  const coveredPaths = new Set(releases.flatMap((album) => Array.from(getAlbumTrackPaths(album))));
+  if (releases.length < 2 || coveredPaths.size !== originalPaths.size) return null;
+  const taskIds = [];
+  (state.coverLookup.tasks || []).forEach((task) => {
+    const taskPaths = getAlbumTrackPaths(task?.album_payload);
+    if (
+      task?.id
+      && taskPaths.size === originalPaths.size
+      && Array.from(taskPaths).every((path) => originalPaths.has(path))
+    ) {
+      const taskId = String(task.id);
+      coverLookupSplitReleasesByTask.set(taskId, releases);
+      taskIds.push(taskId);
+    }
+  });
+  return taskIds.length ? { taskIds, releases } : null;
+}
+
+function clearCoverLookupOptimisticSplit(recordedSplit) {
+  (recordedSplit?.taskIds || []).forEach((taskId) => {
+    if (coverLookupSplitReleasesByTask.get(taskId) === recordedSplit.releases) {
+      coverLookupSplitReleasesByTask.delete(taskId);
+    }
+  });
+}
+
+function handleCoverLookupSplitResponse(releases) {
+  const taskId = String(state.coverLookup.modal.taskId || '');
+  const album = state.coverLookup.modal.album;
+  const overlay = getCoverLookupModalElements().overlay;
+  const mobileSheet = Boolean(overlay && isCoverLookupMobileSheet(overlay));
+  coverLookupGalleryRequest += 1;
+  if (taskId) coverLookupSplitReleasesByTask.set(taskId, releases);
+  const chosen = coverLookupSplitChoiceByTask.get(taskId);
+  if (chosen && album?.identity_resolution !== 'album_split_choice') {
+    // The open album lost its chosen identity (a task update replaced it): restore it and reload, never re-ask.
+    state.coverLookup.modal.album = { ...album, ...chosen };
+    void refreshCoverLookupGallery(false);
+    return;
+  }
+  if (chosen) {
+    state.coverLookup.modal.galleryError = 'This release changed again. Reopen the notification to choose it.';
+    coverLookupSplitChoiceByTask.delete(taskId);
+    renderCoverLookupModal();
+    return;
+  }
+  closeCoverLookupModal();
+  void presentCoverLookupSplitChoice(releases, { taskId, mobileSheet });
+}
+
+function buildCoverLookupSplitReleaseItemsHtml(releases) {
+  return releases.map((release) => {
+    const album = (typeof getIndexedAlbum === 'function' && getIndexedAlbum(release.key)) || release;
+    const label = String(release.name || album.name || 'Album');
+    return window.NavigationTree.renderItem({
+      variant: 'wide',
+      action: true,
+      key: String(release.album_id || release.key || ''),
+      label,
+      subtitle: [release.album_artist, release.edition].filter(Boolean).join(' · '),
+      year: String(release.year || ''),
+      artworkHtml: buildUtilityAlbumArtbox(album, { label: `Artwork for ${label}` }),
+      count: `${Number(release.track_count || 0)} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}`,
+      attributes: { 'data-cover-lookup-split-release': String(release.album_id || release.key || '') },
+    });
+  }).join('');
+}
+
+// A notification whose album was split asks which current release it belongs to in a compact
+// dialog, then opens Cover Look Up for that release only.
+async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileSheet = false } = {}) {
+  let chosenId = '';
+  const chosen = await showAppFormDialog({
+    title: 'Choose the current release',
+    contentHtml: `<p class="confirm-modal-text">This album was split. Choose the release this notification belongs to.</p><nav class="navigation-tree navigation-tree--choice" aria-label="Split releases">${buildCoverLookupSplitReleaseItemsHtml(releases)}</nav>`,
+    submitLabel: 'Open Cover Look Up',
+    submitEnabled: false,
+    onMount: (content, dialog) => {
+      content.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-cover-lookup-split-release]');
+        if (!item) return;
+        event.preventDefault();
+        chosenId = item.getAttribute('data-cover-lookup-split-release') || '';
+        content.querySelectorAll('[data-cover-lookup-split-release]')
+          .forEach((node) => window.NavigationTree.setItemSelected(node, node === item));
+        dialog?.setSubmitEnabled(Boolean(chosenId));
+      });
+    },
+    onSubmit: () => chosenId,
+  });
+  const found = releases.find((candidate) => (
+    String(candidate?.album_id || candidate?.key || '') === String(chosen || '')
+  ));
+  if (!found) return false;
+  const release = { ...found, identity_resolution: 'album_split_choice' };
+  if (taskId) coverLookupSplitChoiceByTask.set(taskId, release);
+  await openCoverLookupModal(release, { taskId, mobileSheet });
+  return true;
 }
 
 function restoreCoverLookupDrawerScroll() {
@@ -33747,6 +34808,14 @@ async function openCoverLookupModal(album, options = {}) {
       ? usesMobilePageLayout()
       : Number(window.innerWidth || 0) > 0 && Number(window.innerWidth) <= 900
   );
+  const knownSplit = coverLookupSplitReleasesByTask.get(String(options.taskId || ''));
+  const chosenSplit = coverLookupSplitChoiceByTask.get(String(options.taskId || ''));
+  if (knownSplit && chosenSplit && album.identity_resolution !== 'album_split_choice') album = { ...chosenSplit };
+  else if (knownSplit && album.identity_resolution !== 'album_split_choice') {
+    await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
+    return;
+  }
+  if (typeof cancelBottomSheetExit === 'function') cancelBottomSheetExit(els.overlay);
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
@@ -33771,6 +34840,8 @@ async function openCoverLookupModal(album, options = {}) {
     cachedCandidates.length,
   );
   state.coverLookup.modal.album = album;
+  // Slot 1 means the lookup chooses art for the second artbox, not the album cover.
+  state.coverLookup.modal.artboxSlot = Number(options.artboxSlot) || 0;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
   state.coverLookup.modal.localInventoryLoaded = false;
@@ -33783,7 +34854,6 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
     ? cachedCandidateGeneration
@@ -33793,6 +34863,11 @@ async function openCoverLookupModal(album, options = {}) {
     : 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
+  // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
+  state.coverLookup.modal.artboxCleared = false;
+  if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
+    state.coverLookup.modal.activeLocalSelectionPath = String(getAlbumAdditionalArtwork(album)?.cover_path || '');
+  }
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
@@ -33806,11 +34881,20 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualStatusText = '';
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.initialScrollPending = true;
+  state.coverLookup.modal.refreshedStalledSnapshotToken = '';
+  state.coverLookup.modal.initialScrollTop = null;
   state.coverLookup.modal.galleryError = '';
   state.coverLookup.modal.loading = !cachedGallery
     || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);
   state.coverLookup.modal.saving = false;
   if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery);
+  // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
+  // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
+  const awaitIdentity = Boolean(requestedTaskId) && album.identity_resolution !== 'album_split_choice';
+  els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
+  const revealSession = coverLookupModalSession;
+  const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
+  if (awaitIdentity && typeof setTimeout === 'function') setTimeout(reveal, 1200);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
@@ -33820,14 +34904,18 @@ async function openCoverLookupModal(album, options = {}) {
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await refreshCoverLookupGallery(false);
+  reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
     ensureCoverLookupPolling();
   }
 }
 
-function closeCoverLookupModal() {
-  clearTimeout(coverLookupLocalInventoryTimer);
+function closeCoverLookupModal({ immediate = false } = {}) {
+  const sheetOverlay = getCoverLookupModalElements().overlay;
+  if (!immediate && isCoverLookupMobileSheet(sheetOverlay) && !sheetOverlay.hidden && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(sheetOverlay, () => closeCoverLookupModal({ immediate: true }))) return;
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();
@@ -33851,12 +34939,12 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
+  state.coverLookup.modal.artboxSlot = 0;
   state.coverLookup.modal.sourceAlbum = null;
   state.coverLookup.modal.taskId = '';
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.possibleMatches = [];
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
   state.coverLookup.modal.candidateRevision = 0;
@@ -34023,6 +35111,17 @@ async function startCoverLookupForAlbum(album, options = {}) {
 
 function selectLocalCoverFromLookup(sourcePath) {
   if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (modalState.artboxSlot && String(sourcePath || '') === String(modalState.activeLocalSelectionPath || '')
+      && !modalState.pendingLocalPath && !modalState.selectedRemoteId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -34034,7 +35133,6 @@ function selectLocalCoverFromLookup(sourcePath) {
 
 async function saveLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
-  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
@@ -34046,9 +35144,11 @@ async function saveLocalCoverFromLookup(sourcePath) {
   try {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
-    applyOptimisticLocalCoverSelection(album, sourcePath);
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
-    markTrackModalCoverTransitionPending(album);
+    const optimisticSrc = applyOptimisticLocalCoverSelection(album, sourcePath);
+    // The optimistic cover is already visible and a failure rolls back with an
+    // error alert, so Save closes at once instead of waiting for promotion.
+    closeCoverLookupModal();
+    markTrackModalCoverTransitionPending(album, optimisticSrc);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);
@@ -34074,7 +35174,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
-    if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
       ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
       : false;
@@ -34174,6 +35273,17 @@ function selectRemoteCoverFromLookup(candidateId) {
   ));
   if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved remote art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (typeof isSecondArtboxSavedRemote === 'function' && isSecondArtboxSavedRemote(selectedCandidate)
+      && !modalState.selectedRemoteId && !modalState.pendingLocalPath && !modalState.pendingPastedImageId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
@@ -34225,7 +35335,13 @@ async function saveRemoteCoverFromLookup() {
   const selectionOwnerGeneration = String(
     state.coverLookup.modal.remoteSelectionOverrideGeneration || '',
   ).trim();
-  const taskId = selectionOwnerGeneration || state.coverLookup.modal.taskId;
+  // A search's generation is not its task id. Send the owning task's id so the server saves on that task and
+  // stops its remaining provider work instead of opening a second task (FTC-COVERS-013).
+  const generationOwnerTask = selectionOwnerGeneration
+    ? (state.coverLookup.tasks || []).find((task) => coverLookupCandidateGenerationKey(task?.search_generation || task?.id)
+      === coverLookupCandidateGenerationKey(selectionOwnerGeneration))
+    : null;
+  const taskId = String(generationOwnerTask?.id || selectionOwnerGeneration || state.coverLookup.modal.taskId || '');
   const snapshotGeneration = selectionOwnerGeneration || String(
     state.coverLookup.modal.candidateSnapshot?.search_generation || '',
   ).trim();
@@ -34243,7 +35359,8 @@ async function saveRemoteCoverFromLookup() {
   let optimisticAlbum = null;
   let optimisticEntry = null;
   try {
-    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeCoverLookupModal();
+    // Remote saves continue as a task; Save closes at once on every layout.
+    closeCoverLookupModal();
     optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
     optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
       .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
@@ -34298,7 +35415,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.manualBusy = false;
       state.coverLookup.modal.pendingLocalPath = '';
       state.coverLookup.modal.selectedRemoteId = '';
-      closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
@@ -34455,6 +35571,10 @@ async function savePastedCoverFromLookup(imageId) {
 
 async function saveCoverFromLookup() {
   if (isCoverLookupMutationPending()) return;
+  if (state.coverLookup.modal.artboxSlot) {
+    await saveAdditionalArtworkFromLookup();
+    return;
+  }
   if (String(state.coverLookup.modal.selectedRemoteId || '')) {
     await saveRemoteCoverFromLookup();
     return;
@@ -34469,6 +35589,99 @@ async function saveCoverFromLookup() {
 }
 
 // END js/runtime/cover-lookup-modal-and-drawer.js
+
+// BEGIN js/runtime/preview-move-attention.js
+
+/* Owner (11-10): a preview move that needs the owner (files failed, the move was canceled, or it stopped making
+   progress) shows in the notification panel and as a pop-up alert; the notice opens Settings › Server. */
+const PREVIEW_MOVE_ACTION = 'Move album previews';
+const PREVIEW_MOVE_STALL_MS = 5 * 60 * 1000;
+const PREVIEW_MOVE_POLL_MS = { idle: 60 * 1000, active: 15 * 1000 };
+const previewMoveAttention = { notice: null, lastProgress: null, alerted: new Set(), timer: 0, started: false };
+
+// Why a move needs the owner, or null. A move that runs without progress for five minutes has stalled.
+function getPreviewMoveAttention(storage, now = Date.now()) {
+  if (!storage || typeof storage !== 'object') return null;
+  const operationState = String(storage.operation_state || 'idle');
+  const operationId = String(storage.operation_id || '');
+  const failed = Number(storage.failed_count || 0);
+  if (['queued', 'running', 'cancel_requested'].includes(operationState)) {
+    const done = Number(storage.completed_count || 0) + failed;
+    const last = previewMoveAttention.lastProgress;
+    if (!last || last.operationId !== operationId || last.done !== done) {
+      previewMoveAttention.lastProgress = { operationId, done, at: now };
+      return null;
+    }
+    return now - last.at >= PREVIEW_MOVE_STALL_MS
+      ? { key: `${operationId}:stalled`, detail: 'No progress for 5 minutes' }
+      : null;
+  }
+  previewMoveAttention.lastProgress = null;
+  if (!storage.requested_mode) return null;
+  if (operationState === 'canceled') return { key: `${operationId}:canceled`, detail: 'The move was canceled' };
+  if (failed > 0) {
+    return { key: `${operationId}:failed:${failed}`, detail: `${failed} ${failed === 1 ? 'file' : 'files'} failed` };
+  }
+  return null;
+}
+
+function buildPreviewMoveAttentionHtml(notice) {
+  // The notification panel's own card: same layout and failed state as a cover lookup notification.
+  return `<div class="cover-lookup-task-card is-failed">
+    <a class="cover-lookup-task-open" href="/admin/server" data-preview-move-attention aria-label="${escapeHtml(`${PREVIEW_MOVE_ACTION} failed. Your attention is needed. Open Server settings`)}">
+      <span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>
+      <span class="cover-lookup-task-copy">
+        <span class="cover-lookup-task-title">${escapeHtml(`${PREVIEW_MOVE_ACTION} failed`)}</span>
+        <span class="cover-lookup-task-byline">Your attention is needed</span>
+        <span class="cover-lookup-task-meta"><span class="cover-lookup-task-status-label is-failed">${escapeHtml(notice.detail)}</span></span>
+      </span>
+    </a>
+  </div>`;
+}
+
+function applyPreviewMoveAttention(storage, now = Date.now()) {
+  const notice = getPreviewMoveAttention(storage, now);
+  previewMoveAttention.notice = notice;
+  const slot = document.getElementById('preview-move-attention');
+  if (slot) {
+    slot.innerHTML = notice ? buildPreviewMoveAttentionHtml(notice) : '';
+    slot.hidden = !notice;
+  }
+  if (typeof renderCoverLookupDrawer === 'function') renderCoverLookupDrawer();
+  // One pop-up per failure, cancel or stall of a move, so the owner notices even with the panel closed.
+  if (notice && !previewMoveAttention.alerted.has(notice.key) && typeof showToast === 'function') {
+    previewMoveAttention.alerted.add(notice.key);
+    showToast(`${PREVIEW_MOVE_ACTION} failed. Your attention is needed.`, 'error', 8000);
+  }
+  return notice;
+}
+
+async function refreshPreviewMoveAttention() {
+  previewMoveAttention.timer = 0;
+  let storage = null;
+  try {
+    const response = await fetch('/admin/server/preview-storage', { headers: { Accept: 'application/json' } });
+    if (response.ok) storage = await response.json();
+  } catch (_error) {
+    storage = null;
+  }
+  if (storage) applyPreviewMoveAttention(storage);
+  const active = ['queued', 'running', 'cancel_requested'].includes(String(storage?.operation_state || ''));
+  previewMoveAttention.timer = setTimeout(refreshPreviewMoveAttention, active ? PREVIEW_MOVE_POLL_MS.active : PREVIEW_MOVE_POLL_MS.idle);
+}
+
+// Only an account that may read preview storage watches it (the slot is rendered for it alone).
+function startPreviewMoveAttention() {
+  if (previewMoveAttention.started || !document.getElementById('preview-move-attention')) return;
+  previewMoveAttention.started = true;
+  void refreshPreviewMoveAttention();
+}
+
+function getPreviewMoveAttentionCount() {
+  return previewMoveAttention.notice ? 1 : 0;
+}
+
+// END js/runtime/preview-move-attention.js
 
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
 
@@ -34523,10 +35736,19 @@ function getAlbumTrackPhysicalFolder(track) {
   return parts.join('/').toLocaleLowerCase();
 }
 
+// The tagged disc number, or the disc marker in the file's folder when the tag is empty.
+function getAlbumTrackDiscNumber(track) {
+  const tagged = getPositiveAlbumTrackSortNumber(track?.disc_number);
+  if (tagged !== null) return tagged;
+  const parts = String(track?.path || '').split(/[\\/]/);
+  const folder = parts.length > 1 ? parts[parts.length - 2] : '';
+  return getPositiveAlbumTrackSortNumber(folder.match(ALBUM_TRACK_DISC_FOLDER_PATTERN)?.[1]);
+}
+
 function compareAlbumTracks(left, right) {
   const discCompare = compareAlbumTrackSortNumbers(
-    getPositiveAlbumTrackSortNumber(left?.disc_number),
-    getPositiveAlbumTrackSortNumber(right?.disc_number),
+    getAlbumTrackDiscNumber(left),
+    getAlbumTrackDiscNumber(right),
   );
   if (discCompare) return discCompare;
 
@@ -34774,11 +35996,7 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
-  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
-  if (folderLoadButton) {
-    folderLoadButton.disabled = false;
-    folderLoadButton.removeAttribute?.('aria-busy');
-  }
+  if (typeof refreshTagEditorFolderCompleteness === 'function') void refreshTagEditorFolderCompleteness(tagEditor);
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -35355,6 +36573,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
+    ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
+    : null;
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
@@ -35466,6 +36687,7 @@ async function confirmManualTagEdit() {
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
       tagEditAlert,
+      coverLookupOptimisticSplit,
     };
     if (
       provisionalProblematicMutation
@@ -35521,6 +36743,9 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    if (coverLookupOptimisticSplit && typeof clearCoverLookupOptimisticSplit === 'function') {
+      clearCoverLookupOptimisticSplit(coverLookupOptimisticSplit);
+    }
     pendingProblematicEntry.settle();
     if (
       provisionalProblematicMutation
@@ -35916,10 +37141,13 @@ function getAlbumReleaseSet(album) {
       }
     });
   }
+  // Owner (11-08): a same-name album is a version only when the server found it shares at least half of the
+  // tracks (shares_tracks); manual links above group regardless.
   sameArtistAlbums.forEach((item) => {
     if (
       normalizeAlbumBaseName(item.name) === targetBase
       && !ignoredVersionKeys.has(String(item.key || ''))
+      && item.shares_tracks !== false
     ) {
       grouped.push(item);
     }
@@ -35954,18 +37182,6 @@ function getAlbumReleaseSet(album) {
   return { releases, selectedIndex };
 }
 
-function isPlainDuplicateVersionTab(release, index, releases) {
-  if (index <= 0 || !release || !Array.isArray(releases) || !releases.length) return false;
-  const original = releases[0] || {};
-  const releaseName = String(release.name || '').trim();
-  const originalName = String(original.name || '').trim();
-  if (!releaseName || releaseName.localeCompare(originalName, undefined, { sensitivity: 'base' }) !== 0) return false;
-  if (String(release.edition || '').trim()) return false;
-  if (isInstrumentalVariant(release)) return false;
-  if (findVariantSuffixIndex(releaseName) > 0) return false;
-  return true;
-}
-
 async function ignoreAlbumVersion(albumKey) {
   const key = String(albumKey || '');
   if (!key) return;
@@ -35991,8 +37207,8 @@ async function ignoreAlbumVersion(albumKey) {
       state.modalReleaseIndex = Math.min(releaseSet.selectedIndex, Math.max(0, state.modalReleases.length - 1));
       renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
     }
-    await fetchAndRender(buildApiUrl(state.view), false);
-    showToast('Album will no longer be counted as a version.', 'success', 2600);
+    await refreshGalleryAfterVersionChange();
+    showToast('Release separated. The rule is listed in Settings › Rules.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to ignore album version.', error);
     showToast(error.message || 'Failed to update version setting.', 'error', 3200);
@@ -36016,11 +37232,17 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
 }
 
+// UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
+// the mounted gallery and its scroll stay; no Loading page.
+function refreshGalleryAfterVersionChange() {
+  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+}
+
 function scheduleVersionGalleryRefresh() {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserTimeout(() => {
       Promise.resolve()
-        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .then(() => refreshGalleryAfterVersionChange())
         .catch((error) => {
           console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
         });
@@ -36046,7 +37268,10 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
       manual_version_links: data.manual_version_links && typeof data.manual_version_links === 'object'
         ? data.manual_version_links
         : {},
+      // Owner (11-09): marking albums as versions removes their Separate release exceptions.
+      ...(Array.isArray(data.ignored_version_keys) ? { ignored_version_keys: data.ignored_version_keys } : {}),
     }, { trackSidebarReveal: false });
+    if (state.utility) state.utility.rulesLoaded = false;
     refreshOpenTrackModalVersionState(childKey);
     showToast('Album marked as a version.', 'success', 2600);
     scheduleVersionGalleryRefresh();
@@ -36106,7 +37331,7 @@ async function revertVersionException(albumKey) {
       }, { trackSidebarReveal: false });
     }
     renderUtilityModalContent();
-    await fetchAndRender(buildApiUrl(state.view), false);
+    await refreshGalleryAfterVersionChange();
     showToast('Rule reverted.', 'success', 2400);
     return true;
   } catch (error) {
@@ -36141,65 +37366,36 @@ function renderTrackModalTabs(els) {
   const tablist = els.tabs.querySelector('.in-page-tabs');
   tablist?.querySelectorAll('[data-in-page-tab]').forEach((button, index) => {
     button.dataset.trackTabIndex = String(index);
-    if (isPlainDuplicateVersionTab(releases[index], index, releases)) {
-      button.dataset.versionContextKey = releases[index].key || '';
-    }
+    // Every version after the original can be separated into its own release.
+    if (index > 0 && releases[index]?.key) button.dataset.versionContextKey = releases[index].key;
   });
   mountInPageTabs(tablist);
   if (restoreTabFocus) tablist?.querySelector('[aria-selected="true"]')?.focus();
-  renderVersionContextMenu();
 }
 
-function ensureVersionContextMenu() {
-  let menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'track-modal-version-context-menu';
-  menu.className = 'track-modal-version-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '<button type="button" data-ignore-version-context="1">Don\'t count as a version</button>';
-  document.body.appendChild(menu);
-  return menu;
-}
-
-function renderVersionContextMenu() {
-  const menu = ensureVersionContextMenu();
-  const stateMenu = state.modalVersionContextMenu || {};
-  if (!stateMenu.visible || !stateMenu.albumKey) {
-    menu.hidden = true;
-    return;
-  }
-  menu.style.left = `${stateMenu.x}px`;
-  menu.style.top = `${stateMenu.y}px`;
-  menu.dataset.albumKey = stateMenu.albumKey;
-  menu.hidden = false;
-  if (typeof activateTriggerSurface === 'function') {
-    activateTriggerSurface(menu, hideVersionContextMenu);
-  }
-}
-
+// Version releases reuse the shared album context menu; "Separate release" records a version rule.
 function showVersionContextMenu(albumKey, x, y) {
-  state.modalVersionContextMenu = {
-    albumKey: String(albumKey || ''),
-    x,
-    y,
-    visible: true,
-  };
-  renderVersionContextMenu();
+  const key = String(albumKey || '');
+  if (!key || isMobileClient() || usesMobilePageLayout()) return;
+  const menu = ensureAlbumCardContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.albumKey = key;
+  menu.dataset.menuKind = 'release';
+  menu.innerHTML = `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(key)}">Separate release</button>`;
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
 
 function hideVersionContextMenu() {
-  state.modalVersionContextMenu = {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  };
-  const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) {
-    menu.hidden = true;
-    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
-  }
+  const menu = document.getElementById('album-card-context-menu');
+  if (menu?.dataset?.menuKind === 'release') hideAlbumCardContextMenu();
+}
+
+function separateAlbumRelease(albumKey) {
+  const key = String(albumKey || '');
+  if (!key) return Promise.resolve();
+  return getManualVersionLinks()[key] ? unmarkAlbumVersion(key) : ignoreAlbumVersion(key);
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -36501,6 +37697,23 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+const renderedTrackModalHeaderHtml = new WeakMap();
+
+// The Album Details header in the chosen layout. The loading state renders it too, so the dialog takes
+// that layout at once instead of after the details arrive (INT-040).
+function buildTrackModalHeaderHtml(album, { versionTabs = false, missing = false } = {}) {
+  return buildAlbumDetailsHeaderHtml({
+    layout: String(document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar').trim().toLowerCase(),
+    artist: album.album_artist || '',
+    album: album.display_name || album.name || 'Album',
+    year: album.display_year || album.year || '',
+    releaseType: album.release_type || 'ALBUM',
+    sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml(album),
+    tags: [versionTabs ? '' : album.edition || '', missing ? 'Missing' : ''].filter(Boolean),
+    actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing }),
+  });
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -36550,23 +37763,19 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
-  const albumDetailsLayout = String(
-    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
-  ).trim().toLowerCase();
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
-      layout: albumDetailsLayout,
-      artist: album.album_artist || '',
-      album: album.display_name || album.name || 'Album',
-      year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      sourceMarkersHtml: coverSourceMarkersHtml,
-      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      poorArtQuality: album.poor_art_quality === true,
-      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
-    });
-    els = getTrackModalElements();
+    const headerHtml = buildTrackModalHeaderHtml(album, { versionTabs: hasVersionTabs, missing: albumMissing });
+    // The summary render and the hydrated details usually build the same header;
+    // rewriting it replaced Close and the header actions under the pointer
+    // (a close click then waited ~500 ms for the new button). Other owners edit
+    // the header in place (closing clears the title), so the live DOM must
+    // still be exactly what this render wrote.
+    const rendered = renderedTrackModalHeaderHtml.get(els.header);
+    if (!rendered || rendered.built !== headerHtml || rendered.dom !== els.header.innerHTML) {
+      els.header.innerHTML = headerHtml;
+      renderedTrackModalHeaderHtml.set(els.header, { built: headerHtml, dom: els.header.innerHTML });
+      els = getTrackModalElements();
+    }
   }
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -36696,6 +37905,11 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
+  if (!albumMissing && typeof renderAlbumAdditionalArtbox === 'function') renderAlbumAdditionalArtbox(els.cover, album);
+  if (typeof renderAlbumArtQualityAlert === 'function') renderAlbumArtQualityAlert(els.cover, albumMissing ? null : album);
+  const serviceLinksHtml = albumMissing || typeof buildAlbumServiceLinksHtml !== 'function'
+    ? '' : buildAlbumServiceLinksHtml(album.external_links);
+  if (serviceLinksHtml) els.cover.insertAdjacentHTML('beforeend', serviceLinksHtml);
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
@@ -36712,21 +37926,30 @@ function renderTrackModalRelease(album) {
   const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
+      // Folders open in File Explorer only from a browser on the computer running Album Haven; elsewhere the
+      // numbered folder buttons stay visible but disabled, so every copy is still identified.
+      const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+      const canOpenFolders = !capabilities || capabilities.allows('library.files.open_location');
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
         severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
-        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
-          label: String(index + 1),
-          ariaLabel: `Open folder ${index + 1}`,
-          variant: 'secondary', size: 'small', quiet: true,
-          className: 'track-modal-duplicate-folder',
-          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
-          attributes: {
-            'data-open-track-modal-duplicate-folder': '1',
-            'data-album-key': resolvedAlbumKey,
-            'data-duplicate-source-index': String(index),
-          },
-        })).join(''),
+        actionsPlacement: 'inline',
+        actionsHtml: duplicateSources.map((source, index) => {
+          const folder = String(source.folder_path || source.folder_name || `Folder ${index + 1}`);
+          return ButtonComponent.renderActionButton({
+            icon: 'folder',
+            badge: String(index + 1),
+            ariaLabel: canOpenFolders ? `Open folder ${index + 1}` : `Folder ${index + 1}`,
+            className: 'track-modal-duplicate-folder',
+            title: canOpenFolders ? folder : `${folder} (folders open only on the computer running Album Haven)`,
+            disabled: !canOpenFolders,
+            attributes: canOpenFolders ? {
+              'data-open-track-modal-duplicate-folder': '1',
+              'data-album-key': resolvedAlbumKey,
+              'data-duplicate-source-index': String(index),
+            } : { 'data-duplicate-source-index': String(index) },
+          });
+        }).join(''),
       });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {
@@ -36908,6 +38131,9 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const sectionTitleByFirstTrack = new Map((Array.isArray(album?.track_sections) ? album.track_sections : [])
+    .map((section) => [String(section?.first_track_path || '').trim(), String(section?.title || '').trim()])
+    .filter(([path, title]) => path && title));
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -36953,12 +38179,18 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isProblematic: Boolean(track.is_problematic),
         problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
+        sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };
     });
+    const discSeconds = componentTracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0);
     return {
       discNumber: group.discNumber,
       discLabel,
+      discSubtitle: group.discSubtitle,
       isBonus: Boolean(group.isBonus),
+      lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       tracks: componentTracks,
     };
   });
@@ -36969,6 +38201,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   }
   const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
     && componentGroups.some((group) => !group.isBonus);
+  // A later disc with its own name (e.g. Kultivator CD 2 "Waiting Paths") gets its own length.
+  const hasNamedLaterDisc = componentGroups.some((group, index) => index > 0 && Boolean(group.discSubtitle));
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -36978,6 +38212,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     groups: componentGroups,
 
     multiDisc: grouped.multiDisc,
+    perDiscLengths: hasNamedLaterDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasMainAndBonusDiscs && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
     bonusLength: hasMainAndBonusDiscs && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
@@ -40823,15 +42058,38 @@ class VirtualArtistGrid {
                 uniqueAlbums[existingIndex] = album;
             }
         });
-        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
-        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
+        // A split release belongs to each of its equally main artists, never under Featured On.
+        const isFeaturedOnly = (album) => album?.artist_relationship === 'featured'
+          && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
+        const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
+        const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
+        // Separate: split albums leave the artist's own rows for one section per release type.
+        const splitAlbums = state?.gallery?.mainState?.splitAlbums === 'separate'
+          ? ownedAlbums.filter((album) => isGallerySplitAlbum(album)) : [];
+        const artistAlbums = splitAlbums.length ? ownedAlbums.filter((album) => !splitAlbums.includes(album)) : ownedAlbums;
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(ownedAlbums);
+        // With split sections present, the artist's own releases are labelled by type too ("Studio Albums").
+        if (splitAlbums.length) {
+            GALLERY_RELEASE_TYPES.forEach((type) => {
+                const typedAlbums = artistAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+                if (!typedAlbums.length) return;
+                blocks.push({ kind: 'subheading', title: GALLERY_RELEASE_TYPE_SECTION_TITLES[type], count: typedAlbums.length });
+                appendRows(typedAlbums);
+            });
+        } else {
+            appendRows(artistAlbums);
+        }
+        GALLERY_RELEASE_TYPES.forEach((type) => {
+            const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+            if (!typedSplits.length) return;
+            blocks.push({ kind: 'subheading', title: `${GALLERY_RELEASE_TYPE_LABELS[type]} Split`, count: typedSplits.length });
+            appendRows(typedSplits);
+        });
         if (featuredAlbums.length) {
             blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
             appendRows(featuredAlbums);
@@ -42292,11 +43550,10 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
       frame = 0;
       for (const [row, text] of entries) {
         const motion = !media?.matches && !row.hidden
-          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
           : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-metadata-overflowing', motion.overflowing);
-        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
-        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
     };
     const schedule = () => {
@@ -42331,8 +43588,7 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
         window.removeEventListener('resize', schedule);
         for (const row of entries.keys()) {
           row.classList.remove('is-metadata-overflowing');
-          row.style.removeProperty('--player-metadata-distance');
-          row.style.removeProperty('--player-metadata-duration');
+          clearRunningLineMotion(row);
         }
         entries.clear();
       },
@@ -43620,11 +44876,10 @@ function refreshCompactPlayerMetadataRows(els = compactPlayerElements()) {
   for (const [row, text] of [[els.titleRow, els.titleText], [els.artistRow, els.artistText]]) {
     if (!row || !text) continue;
     const motion = compactPlayerPresentation === 'docked' && !reducedMotion
-      ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+      ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
       : { overflowing: false, distance: 0, durationMs: 0 };
     row.classList.toggle('is-overflowing', motion.overflowing);
-    row.style.setProperty('--compact-player-row-pan-distance', `${motion.distance}px`);
-    row.style.setProperty('--compact-player-row-pan-duration', `${motion.durationMs}ms`);
+    applyRunningLineMotion(row, motion);
   }
 }
 
@@ -44252,6 +45507,15 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const openTagEditorFolderButton = event.target.closest('[data-open-tag-editor-folder]');
+  if (openTagEditorFolderButton) {
+    event.preventDefault();
+    if (openTagEditorFolderButton.disabled) return;
+    const trackPath = openTagEditorFolderButton.getAttribute('data-open-tag-editor-folder') || '';
+    void openAlbumInExplorer({ name: '', tracks: [{ path: trackPath }] });
+    return;
+  }
+
   const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
   if (exceptionOption) {
     event.preventDefault();
@@ -44299,7 +45563,7 @@ async function handleUtilityBootstrapClick(event) {
     renderProblemFilterControls(getUtilityModalElements());
   }
   if (
-    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal')
+    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal')
     && state.coverLookup.drawerOpen
   ) {
     state.coverLookup.drawerOpen = false;
@@ -44953,7 +46217,7 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    const album = resolveTrackModalActionAlbum(trackModalCoverLookupButton);
     if (album) openCoverLookupModal(album);
     return;
   }
@@ -45181,14 +46445,6 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const candidateId = selectRemoteCoverButton.getAttribute('data-select-remote-cover') || '';
     selectRemoteCoverFromLookup(candidateId);
-    return;
-  }
-  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
-  if (currentReleaseButton) {
-    event.preventDefault();
-    void chooseCoverLookupCurrentRelease(
-      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
-    );
     return;
   }
     const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
@@ -45854,17 +47110,6 @@ function handleGalleryBootstrapClick(event) {
     void confirmMissingAlbumRemoval(album, runtimeOptions);
     return;
   }
-  const ignoreVersionButton = event.target.closest('[data-ignore-version-context="1"]');
-  if (ignoreVersionButton) {
-    event.preventDefault();
-    const menu = document.getElementById('track-modal-version-context-menu');
-    ignoreAlbumVersion(menu?.dataset.albumKey || '');
-    return;
-  }
-
-  if (!event.target.closest('#track-modal-version-context-menu')) {
-    hideVersionContextMenu();
-  }
   const toggleCombineSimilarArtistsButton = event.target.closest('[data-toggle-combine-similar-artists="1"]');
   if (toggleCombineSimilarArtistsButton && !toggleCombineSimilarArtistsButton.disabled) {
     event.preventDefault();
@@ -45884,7 +47129,10 @@ function handleGalleryBootstrapClick(event) {
   }
 
   const closeNonAlbumModalButton = event.target.closest('[data-close-non-album-modal="1"]');
-  if (closeNonAlbumModalButton || overlayClickStartedOnOverlay(document.getElementById('non-album-modal'), event)) {
+  const nonAlbumOverlay = document.getElementById('non-album-modal');
+  // The desktop Loose Tracks page has no backdrop; only the modal presentation closes on an outside click.
+  if (closeNonAlbumModalButton || (!nonAlbumOverlay?.classList?.contains('non-album-modal--page')
+      && overlayClickStartedOnOverlay(nonAlbumOverlay, event))) {
     event.preventDefault();
     closeNonAlbumModal();
     return;
@@ -45933,6 +47181,18 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-additional-artbox="1"]')) {
+    event.preventDefault();
+    openAlbumAdditionalArtboxLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-additional-artbox-quick-search="1"]')) {
+    event.preventDefault();
+    void quickSearchAlbumAdditionalArtbox();
+    return;
+  }
+
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
@@ -45945,9 +47205,25 @@ function handleGalleryBootstrapClick(event) {
     event.preventDefault();
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
+    const menuAlbumKey = menu?.dataset.albumKey || '';
+    const album = getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
+
+    if (action === 'add-artbox') {
+      beginAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'remove-artbox') {
+      void removeAlbumAdditionalArtbox();
+      return;
+    }
+
+    if (action === 'separate-release') {
+      void separateAlbumRelease(albumAction.getAttribute('data-separate-release-key') || menuAlbumKey);
+      return;
+    }
 
     if (action === 'open-explorer') {
       openAlbumInExplorer(album);
@@ -45967,49 +47243,10 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'mark-version') {
-      openVersionPickerModal(album);
+      void openVersionPickerModal(album);
       return;
     }
 
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
-    return;
-  }
-
-  const versionPickerOption = event.target.closest('[data-version-picker-target]');
-  if (versionPickerOption) {
-    event.preventDefault();
-    state.versionPicker.selectedTargetKey = versionPickerOption.getAttribute('data-version-picker-target') || '';
-    renderVersionPickerModal();
-    return;
-  }
-
-  const closeVersionPickerButton = event.target.closest('[data-close-version-picker="1"]');
-  if (closeVersionPickerButton || overlayClickStartedOnOverlay(document.getElementById('version-picker-modal'), event)) {
-    event.preventDefault();
-    closeVersionPickerModal();
-    return;
-  }
-
-  const saveVersionPickerButton = event.target.closest('[data-save-version-picker="1"]');
-  if (saveVersionPickerButton) {
-    event.preventDefault();
-    const sourceAlbum = state.versionPicker.album;
-    const targetKey = String(state.versionPicker.selectedTargetKey || '');
-    if (!sourceAlbum || !targetKey || state.versionPicker.saving) return;
-    state.versionPicker.saving = true;
-    renderVersionPickerModal();
-    markAlbumVersion(sourceAlbum.key || '', targetKey)
-      .then(() => {
-        closeVersionPickerModal();
-      })
-      .catch(() => {
-        state.versionPicker.saving = false;
-        renderVersionPickerModal();
-      });
     return;
   }
 
@@ -46546,7 +47783,7 @@ function handleSidebarArtistSelectionClick(event) {
     || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
-    || previousGalleryMainState.showSplitAlbums === false
+    || previousGalleryMainState.splitAlbums === 'hide'
   ));
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();
@@ -47528,6 +48765,12 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     abandonScanPageForNavigation({ clearSelection: true });
   }
   const normalizedQuery = String(nextQuery || '');
+  // Owner (11-08): a new search never sits on Loose Tracks showing the previous search's matches. It returns to
+  // the artist tree so the gallery opens the best matching artist; a Loose Tracks match shows as the dot on the
+  // Loose Tracks side-bar button.
+  if (normalizedQuery.trim() && normalizedQuery.trim() !== String(state.view.query || '').trim()
+      && document.getElementById('non-album-modal')?.hidden === false
+      && typeof closeNonAlbumModal === 'function') closeNonAlbumModal();
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
   state.ui.failedGallerySearch = null;
@@ -48513,7 +49756,7 @@ function handleGalleryBootstrapPopState(options = {}) {
 // BEGIN js/runtime/mobile-navigation.js
 
 /* Responsive shell navigation. Existing components retain their data and event owners. */
-const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false, titleBeforePages: null };
 const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
@@ -48523,10 +49766,13 @@ function isMobileClient() {
       platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
+function currentClientProfile() { return window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop'); }
+// Owner (11-08 evening): the Settings page opens with its section's title; a generic "Settings" first flashed.
+function mobileUtilityPageTitle() { return MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings'; }
 function mobilePageDescriptor(kind, album = null, options = {}) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? mobileUtilityPageTitle() : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
     libraryWide: kind === 'non-album' && options.libraryWide === true,
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
@@ -48554,7 +49800,12 @@ function syncMobilePageShell() {
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
+    if (mobilePageState.titleBeforePages === null) mobilePageState.titleBeforePages = document.title;
     document.title = `${active.title} — Album Haven`;
+  } else if (mobilePageState.titleBeforePages !== null) {
+    // Owner (11-08): the tab must never keep a closed page's name (it stayed "Testimony" after browsing on).
+    document.title = mobilePageState.titleBeforePages;
+    mobilePageState.titleBeforePages = null;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
@@ -49012,7 +50263,7 @@ function syncMobileUtilityContext() {
   const group = resolveMobileLoopSongGroup(descriptor, state.utility.loops || []);
   const song = group?.representativeLoop || group?.loops[0];
   descriptor.title = song ? song.title || song.name || 'Saved loops'
-    : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
+    : mobileUtilityPageTitle();
   descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year].filter(Boolean).join(' • ') : '';
   descriptor.loopCount = song ? `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}` : '';
   if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');
@@ -49202,7 +50453,7 @@ function initMobileNavigation() {
   form?.before(placeholder);
   const syncLayout = () => {
     const mobile = usesMobilePageLayout();
-    document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
+    document.documentElement.dataset.clientProfile = currentClientProfile();
     if (form) {
       if (mobile) document.querySelector('.app-bar-brand')?.after(form);
       else {
@@ -49240,7 +50491,7 @@ function initMobileNavigation() {
     if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
   }) : null;
   if (form) searchResize?.observe(form);
-  window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+  const applyLayoutProfileChange = () => {
     if (galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) closeGalleryMainSurface(false);
     const saved = window.AlbumHavenDevicePreferences?.read('galleryDisplayPreferences', null);
     if (saved) {
@@ -49255,7 +50506,18 @@ function initMobileNavigation() {
     restorePlayerAppearance();
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
-  });
+  };
+  window.matchMedia('(max-width: 900px)').addEventListener('change', applyLayoutProfileChange);
+  // The profile also depends on touch input and the user agent, which Chrome's device toolbar can switch
+  // after the width has already crossed 900px; re-apply whenever a resize leaves the shown profile stale.
+  let layoutProfileFrame = 0;
+  window.addEventListener('resize', () => {
+    if (layoutProfileFrame) return;
+    layoutProfileFrame = requestAnimationFrame(() => {
+      layoutProfileFrame = 0;
+      if (currentClientProfile() !== document.documentElement.dataset.clientProfile) applyLayoutProfileChange();
+    });
+  }, { passive: true });
   document.addEventListener('click', handleMobileSearchOutsideClick, true);
   document.addEventListener('click', (event) => {
     if (handleMobileSettingsClick(event)) return;
@@ -49345,7 +50607,7 @@ function syncMobileUtilityNavigation() {
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
   trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
-  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
+  trigger.querySelector('.ui-button__content').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');
@@ -49413,14 +50675,6 @@ function syncMobileAlbumHeader() {
   const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
-  const sourceMarkers = identity?.querySelector?.('.album-details-cover-source-markers')
-    || header.querySelector('.album-details-cover-source-markers');
-  if (sourceMarkers) {
-    const sourceHost = presentation.bodyOwnsIdentity
-      ? identity.querySelector('.album-details-header__copy') : context;
-    if (sourceHost && sourceMarkers.parentElement !== sourceHost) sourceHost.appendChild(sourceMarkers);
-    sourceMarkers.hidden = !albumPage;
-  }
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
   else header.removeAttribute('aria-hidden');
@@ -49565,6 +50819,24 @@ function syncMobileUtilityDetail() {
   modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }
 
+// INT-023 (owner): a bottom sheet closed by X, the backdrop or a drag slides back down with the same motion it
+// opened with. Returns true while the exit runs; `done` then finishes the close (once, unless reopened).
+const BOTTOM_SHEET_EXIT_MS = 260;
+function runBottomSheetExit(sheet, done, { backdrop = null } = {}) {
+  if (!sheet?.classList || sheet.classList.contains('is-sheet-closing')) return Boolean(sheet?.classList?.contains('is-sheet-closing'));
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+  sheet.classList.add('is-sheet-closing');
+  backdrop?.classList?.add('is-sheet-closing');
+  window.setTimeout(() => {
+    if (!sheet.classList.contains('is-sheet-closing')) return; // reopened meanwhile
+    sheet.classList.remove('is-sheet-closing');
+    backdrop?.classList?.remove('is-sheet-closing');
+    done();
+  }, BOTTOM_SHEET_EXIT_MS);
+  return true;
+}
+function cancelBottomSheetExit(sheet) { sheet?.classList?.remove('is-sheet-closing'); }
+
 // END js/runtime/mobile-navigation.js
 
 // BEGIN js/runtime/in-page-tabs.js
@@ -49662,6 +50934,8 @@ function syncMobileHome() {
       const summary = bar.querySelector('[data-gallery-context-summary]');
       if (name) name.textContent = host.dataset.accountName || 'My music';
       if (summary) summary.textContent = '';
+      // Owner (11-09): Home names the account, not an artist, so the previous artist's "i" never stays beside it.
+      bar.querySelector('[data-artist-info-trigger]')?.remove();
     }
   }
   if (!show) showMobileGalleryPinchHint();
@@ -49839,6 +51113,7 @@ document.querySelectorAll('[data-account-menu-component]').forEach((component) =
 }));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof startPreviewMoveAttention === 'function') startPreviewMoveAttention();
 if (typeof loadCoverLookupNotificationCounts === 'function') {
   void loadCoverLookupNotificationCounts({ toast: false });
 }
@@ -50166,6 +51441,11 @@ document.addEventListener('contextmenu', (event) => {
       event.clientY,
       sidebarArtist.getAttribute('data-sidebar-artist') || '',
     );
+    return;
+  }
+  const artboxShell = event.target.closest('#track-modal-cover .track-modal-cover-shell');
+  if (artboxShell && showAlbumArtboxContextMenu(event.clientX, event.clientY, Number(artboxShell.dataset.artboxSlot || 0))) {
+    event.preventDefault();
     return;
   }
   const versionTab = event.target.closest('[data-version-context-key]');

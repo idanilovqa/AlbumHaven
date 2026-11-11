@@ -1,5 +1,7 @@
 /* NavigationTree keeps flat link/button semantics and consumer-owned spacing. */
 .navigation-tree { min-width: 0; }
+/* A dialog that asks the user to pick one album lists them as wide items in this scrolling column. */
+.navigation-tree--choice { display: grid; gap: 4px; max-height: min(60vh, 420px); margin-top: 12px; overflow-y: auto; }
 .navigation-tree-item { min-width: 0; position: relative; }
 /* Pointer hover uses a neutral filled surface; outlines indicate keyboard focus. */
 :root .navigation-tree-item:hover:not(:disabled):not([aria-disabled="true"]) {
@@ -69,3 +71,5 @@ button.navigation-tree-item[data-navigation-tree-item="panel"] {
   .selection-accent-previews { grid-template-columns: minmax(0, 1fr); }
   .selection-accent-actions [role=status] { flex-basis: 100%; }
 }
+/* A hidden tree (e.g. Custom Collections while browsing Artists) stays hidden whatever list layout hosts it. */
+.navigation-tree[hidden] { display: none !important; }

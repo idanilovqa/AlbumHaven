@@ -38,8 +38,14 @@ def test_release_candidate_headers_keep_versions_lightweight_and_manual_links_co
             return [{'album_id': 11, 'key': 'artist::album', 'name': 'Album', 'album_artist': 'Artist', 'year': 1985,
                      'private_path': 'must not escape', 'tracks': [{'path': 'must not escape'}]}]
 
+    class Titles:
+        def fetchall(self):
+            return []
+
     class Connection:
         def execute(self, sql, params):
+            if 'local_tracks where album_id' in sql:
+                return Titles()
             assert sql == _release_candidates_sql()
             assert params == {'album_id': 12, 'album_key': 'artist::album deluxe', 'base_title': 'album',
                               'manual_keys': ['artist::album deluxe', 'other::manual parent']}
@@ -75,3 +81,32 @@ def test_candidates_preserve_virtual_year_releases_already_resolved_from_selecte
     result = load_release_candidates(Connection(), {'album_id': 10, **releases[0]}, {}, resolved_releases=releases)
     assert [release['key'] for release in result['release_candidates']] == [release['key'] for release in releases]
     assert {release['album_id'] for release in result['release_candidates']} == {10}
+
+
+def test_same_name_albums_are_versions_only_when_they_share_half_their_tracks():
+    from music_app.services.album_release_candidates import tracklists_share_half
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    titles = {1: ['Murderer', 'Warrior', 'Victim of Fate', 'Cry for Freedom', 'Starlight'],
+              2: ['Out for the Glory', 'Fear of the Fallen', 'Best Time', 'Mass Pollution'],
+              3: ['Starlight', 'Murderer (Remastered)', 'Warrior', 'Victim of Fate', 'Bonus']}
+
+    class Connection:
+        def execute(self, sql, params):
+            if 'local_tracks where album_id' in sql:
+                return Rows([{'album_id': album_id, 'title': title} for album_id in params['ids'] for title in titles[album_id]])
+            return Rows([{'album_id': 1, 'key': 'helloween::1985', 'name': 'Helloween', 'year': 1985},
+                         {'album_id': 2, 'key': 'helloween::2021', 'name': 'Helloween', 'year': 2021},
+                         {'album_id': 3, 'key': 'helloween::2006', 'name': 'Helloween (Remastered 2006)', 'year': 2006}])
+
+    result = load_release_candidates(Connection(), {'album_id': 1, 'key': 'helloween::1985', 'name': 'Helloween'}, {})
+    assert {release['key']: release['shares_tracks'] for release in result['release_candidates']} == {
+        'helloween::1985': True, 'helloween::2021': False, 'helloween::2006': True}
+    assert tracklists_share_half(['A', 'B'], ['a!', 'C (Live)', 'D']) is True
+    assert tracklists_share_half([], ['A']) is False

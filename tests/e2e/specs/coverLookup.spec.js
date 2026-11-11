@@ -380,7 +380,8 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
       .toEqual(COVER_LOOKUP_TARGET);
     await trackModalActions.waitForLoadedSummary();
     const lookup = coverLookupActions.coverLookup;
-    const expectedNames = ['cover.jpg', 'Art/Back.jpg', 'Art/CD.JPG', 'Art/Front.jpg', 'Art/Front-Larger.jpg'];
+    // The pinned test library also keeps its placeholder cover.png in this folder; it is a real local image.
+    const expectedNames = ['cover.jpg', 'cover.png', 'Art/Back.jpg', 'Art/CD.JPG', 'Art/Front.jpg', 'Art/Front-Larger.jpg'];
     for (let opening = 0; opening < 2; opening += 1) {
       const observation = await lookup.startLocalInventoryObservation(expectedNames.length);
       let evidence;
@@ -395,7 +396,8 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
         evidence = await lookup.finishLocalInventoryObservation(observation);
       }
       expect(evidence.sawKnownCards).toBe(true);
-      expect(evidence.samples.some(sample => sample.empty || sample.wrongPlaceholderCount || sample.lostKnownCards)).toBe(false);
+      const badSamples = evidence.samples.filter(sample => sample.empty || sample.wrongPlaceholderCount || sample.lostKnownCards);
+      expect(badSamples, `opening ${opening + 1}: ${JSON.stringify(badSamples.slice(0, 5))}`).toEqual([]);
       await coverLookupActions.closeModal();
     }
     await trackModalActions.close();
@@ -925,7 +927,9 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
           newCandidateIds = (await coverLookupActions.readRemoteCandidateIds())
             .filter((candidateId) => !priorCandidateIds.includes(candidateId));
           return newCandidateIds.length;
-        }, { message: 'The gallery must render all 30 new manual candidates before the held provider finishes.' })
+        // The provider stays held until released, so ordering, not the default 10 s poll, is the contract:
+        // measuring 30 full-size (7500 px) fixture images takes about 18 s on a developer machine.
+        }, { timeout: 60_000, message: 'The gallery must render all 30 new manual candidates before the held provider finishes.' })
           .toBeGreaterThanOrEqual(30);
         for (const candidateId of newCandidateIds) {
           await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
@@ -1543,16 +1547,18 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
 
     await coverLookupActions.openDrawer();
     await coverLookupActions.openTaskWithKeyboard(SPLIT_FIXTURE.album, 'Enter');
-    const selector = page.getByRole('group', {
-      name: 'This album was split—choose the current release',
-    });
+    const selector = coverLookupActions.coverLookup.splitReleaseChooser;
     await expect(selector).toBeVisible();
+    await expect(coverLookupActions.coverLookup.modal).toBeHidden();
+    await expect(coverLookupActions.coverLookup.splitReleaseChoices).toHaveCount(2);
+    await expect(coverLookupActions.coverLookup.splitReleaseOpenButton).toBeDisabled();
     const requestPromise = page.waitForRequest((request) => (
       request.method() === 'POST'
       && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
       && request.postDataJSON()?.album?.name === SPLIT_FIXTURE.splitAlbum
     ));
-    await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
+    await coverLookupActions.coverLookup.splitReleaseChoiceByTitle(SPLIT_FIXTURE.splitAlbum).click();
+    await coverLookupActions.coverLookup.splitReleaseOpenButton.click();
     const request = await requestPromise;
 
     await expect(coverLookupActions.coverLookup.modal).toBeVisible();
@@ -2562,7 +2568,9 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
     const suggestedCard = coverLookupActions.coverLookup.remoteCoverCardById(automaticCandidate.id);
     await expect(suggestedCard).toBeVisible();
-    await expect(suggestedCard).toHaveClass(/\bis-suggested\b/);
+    // INT-028 (owner, 11-07): opened from Album Details, the already applied automatic pick is not suggested
+    // again; a suggestion follows only an unactioned search and only for sharper art than the current cover.
+    await expect(suggestedCard).not.toHaveClass(/\bis-suggested\b/);
     await expect(suggestedCard).not.toHaveClass(/\bis-active\b/);
     await expect(coverLookupActions.coverLookup.activeLocalCoverCard).toHaveClass(/\bis-active\b/);
     await coverLookupActions.selectLocalCoverByNameAndSave('cover.jpg');

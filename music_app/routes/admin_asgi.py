@@ -39,7 +39,7 @@ from music_app.services.admin_reauthentication_postgres import (
 from music_app.services.admin_mail_actions_postgres import (
     PostgresAdminMailActionService,
 )
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import allowed_actions_for_request, can_browse_server_folders
 from music_app.services.capability_assignments import AssignmentConflict, assignment_editor, member_role_label
 from music_app.services.generated_preview_storage import (
     preview_storage_policy_from_mapping,
@@ -153,7 +153,9 @@ async def get_preview_storage(request: Request) -> Response:
             {"detail": "Album preview storage is temporarily unavailable."},
             status_code=503,
         )
-    return _preview_storage_response(state)
+    # The last album-folder cleanup of a move is kept by the worker that ran it (counts only, no paths).
+    cleanup = getattr(getattr(request.app.state, "generated_preview_relocation", None), "cleanup_summary", None)
+    return _preview_storage_response({**state, **({"cache_cleanup": dict(cleanup)} if cleanup else {})})
 
 
 @router.put("/admin/server/preview-storage", status_code=202)

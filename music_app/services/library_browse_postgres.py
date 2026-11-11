@@ -2943,12 +2943,12 @@ class PostgresLibraryBrowseRepository:
             payload = self._build_problematic_files_payload_uncached()
             fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
             self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-            payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
             cache_key = self._utility_projection_cache_key(kind)
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 current = cache_key is None or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
             if current and fingerprint:
                 self._queue_problematic_files_snapshot_store(payload, fingerprint)
+            payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
             payload["projection_cache_status"] = "rebuilt"
             return payload
 
@@ -7203,7 +7203,7 @@ def _problematic_search_album_ids_sql() -> str:
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
 _PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
-_PROBLEMATIC_SNAPSHOT_VERSION = 1
+_PROBLEMATIC_SNAPSHOT_VERSION = 2
 
 
 def _problematic_inventory_fingerprint(connection: Any) -> str:

@@ -11731,6 +11731,47 @@ def test_problematic_loose_tracks_detail_reuses_cached_projection(monkeypatch):
             browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
 
 
+def test_problematic_loose_tracks_detail_is_private_but_persisted_with_snapshot(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: None,
+    )
+    cache_key = repository._utility_projection_cache_key("problematic-files")
+    detail = {"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY, "detail_loaded": True}
+    snapshot = {}
+    monkeypatch.setattr(
+        repository,
+        "_build_problematic_files_payload_uncached",
+        lambda: {
+            "items": [{"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY}],
+            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: detail,
+            browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint",
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_queue_problematic_files_snapshot_store",
+        lambda payload, _fingerprint: snapshot.update(payload),
+    )
+    with browse._UTILITY_PROJECTION_CACHE_LOCK:
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+
+    try:
+        payload = repository.build_problematic_files_payload()
+        assert browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY not in payload
+        assert snapshot[browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] == detail
+        assert repository.build_problematic_file_detail_payload(
+            browse._PROBLEMATIC_LOOSE_TRACKS_KEY
+        ) == detail
+    finally:
+        with browse._UTILITY_PROJECTION_CACHE_LOCK:
+            browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            browse._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+
+
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 

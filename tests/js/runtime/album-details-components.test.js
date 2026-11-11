@@ -25,6 +25,113 @@ function loadComponents() {
   return context;
 }
 
+test('Album Details consumes only authorized selected-cover presentation slots', () => {
+  const context = loadComponents();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveAlbumDetailsCoverSlots({
+      selected_covers_loaded: true,
+      selected_covers: [
+        { selection_id: 'front', image_url: '/cover?selection_id=front', path: 'C:/private/front.jpg' },
+        { selection_id: 'back', unavailable: true, path: 'C:/private/back.jpg' },
+      ],
+    }))),
+    [
+      { selectionId: 'front', imageUrl: '/cover?selection_id=front', unavailable: false },
+      { selectionId: 'back', imageUrl: '', unavailable: true },
+    ],
+  );
+  assert.equal(context.resolveAlbumDetailsCoverSlots({ selected_covers: [] }).length, 0);
+});
+
+test('Album Details keeps a singleton on the existing artbox', () => {
+  const context = loadComponents();
+  const frontHtml = '<span class="album-artbox">Front</span>';
+  const html = context.buildAlbumDetailsCoverStackHtml({
+    frontHtml,
+    albumName: 'Album',
+    slots: [{ selection_id: 'front', image_url: '/cover?selection_id=front' }],
+  });
+
+  assert.equal(html, frontHtml);
+});
+
+test('Album Details keeps an unavailable saved slot explicit when only the primary is available', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsCoverStackHtml({
+    frontHtml: '<span class="album-artbox">Front</span>',
+    albumName: 'Album',
+    slots: [
+      { selection_id: 'front', image_url: '/cover?selection_id=front' },
+      { selection_id: 'missing', unavailable: true },
+    ],
+  });
+
+  assert.match(html, /album-details-cover-stack/);
+  assert.match(html, /is-unavailable[^>]*role="img"/);
+  assert.doesNotMatch(html, /data-album-details-cover-step/);
+});
+
+test('Album Details stacks authorized covers in saved order with shared buttons', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsCoverStackHtml({
+    frontHtml: '<span class="album-artbox">Front</span>',
+    albumName: 'Album',
+    activeIndex: 0,
+    slots: [
+      { selection_id: 'front', image_url: '/cover?selection_id=front' },
+      { selection_id: 'back', image_url: '/cover?selection_id=back' },
+      { selection_id: 'insert', unavailable: true },
+    ],
+  });
+
+  assert.match(html, /album-details-cover-stack/);
+  assert.match(html, /data-album-details-cover-index="1"[\s\S]*selection_id=back/);
+  assert.match(html, /class="album-details-cover-stack__rear is-bottom is-unavailable"[^>]*data-album-details-cover-index="2"/);
+  assert.match(html, /data-album-details-cover-step="-1"/);
+  assert.match(html, /data-album-details-cover-step="1"/);
+  assert.match(html, /action-button--bare/);
+  assert.doesNotMatch(html, /[A-Z]:\\|data-cover-path|\/Music\//);
+});
+
+test('Album Details stack exposes bounded pointer-position variables', () => {
+  const context = loadComponents();
+  const listeners = {};
+  const values = new Map();
+  const stack = {
+    dataset: {},
+    style: {
+      setProperty(name, value) { values.set(name, value); },
+      removeProperty(name) { values.delete(name); },
+    },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 200 }),
+  };
+
+  context.bindAlbumDetailsCoverStackPointer(stack);
+  listeners.pointermove({ clientX: 110, clientY: 20 });
+  assert.equal(values.get('--album-cover-pointer-x'), '2.000px');
+  assert.equal(values.get('--album-cover-pointer-y'), '-2.000px');
+  assert.equal(values.get('--album-cover-pointer-rotation'), '0.600deg');
+  listeners.pointerup();
+  assert.equal(values.size, 0);
+  listeners.pointermove({ clientX: 110, clientY: 20 });
+  listeners.pointerleave();
+  assert.equal(values.size, 0);
+});
+
+test('Album Details stack reserves layout room and is static under reduced motion', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'),
+    'utf8',
+  );
+  assert.match(css, /\.track-modal-dialog:has\(\.album-details-cover-stack\)[^}]*width:\s*min\(892px/s);
+  assert.match(css, /\.track-modal-body:has\(\.album-details-cover-stack\)[^}]*grid-template-columns:\s*minmax\(260px, 320px\)/s);
+  assert.match(css, /\.album-details-cover-stack\s*\{[^}]*padding-block:\s*12px/s);
+  assert.match(css, /\.album-details-cover-stack__rear\.is-top[^}]*--album-cover-pointer-x/s);
+  assert.match(css, /\.album-details-cover-nav\s*\{[^}]*border:\s*0[^}]*background:\s*transparent/s);
+  assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*\.album-details-cover-stack__rear[^}]*transition:\s*none/s);
+});
+
 test('Album Details headers never render library source markers', () => {
   const context = loadComponents();
   const html = context.buildAlbumDetailsHeaderHtml({

@@ -178,6 +178,23 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  const rearCoverButton = event.target.closest('[data-album-details-cover-index]');
+  if (rearCoverButton && !rearCoverButton.classList.contains('is-unavailable')) {
+    event.preventDefault();
+    browseTrackModalSelectedCover(
+      Number(rearCoverButton.getAttribute('data-album-details-cover-index')),
+      { absolute: true },
+    );
+    return;
+  }
+
+  const coverStepButton = event.target.closest('[data-album-details-cover-step]');
+  if (coverStepButton) {
+    event.preventDefault();
+    browseTrackModalSelectedCover(Number(coverStepButton.getAttribute('data-album-details-cover-step')));
+    return;
+  }
+
   const lightboxTrigger = event.target.closest('[data-open-lightbox="1"]');
   if (lightboxTrigger) {
     event.preventDefault();

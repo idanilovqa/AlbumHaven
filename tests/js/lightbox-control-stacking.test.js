@@ -83,9 +83,13 @@ test('fullscreen cover navigation uses centered SVG chevrons instead of baseline
   assert.doesNotMatch(overlayShell, /id="image-lightbox-(?:prev|next)"[^>]*>[‹›]/);
   assert.match(navRule, /align-items:\s*center\s*;/);
   assert.match(navRule, /justify-content:\s*center\s*;/);
+  assert.match(navRule, /width:\s*32px\s*;/);
+  assert.match(navRule, /height:\s*32px\s*;/);
+  assert.match(navRule, /border:\s*0\s*;/);
+  assert.match(navRule, /background:\s*transparent\s*;/);
   assert.match(iconRule, /display:\s*block\s*;/);
-  assert.match(iconRule, /width:\s*24px\s*;/);
-  assert.match(iconRule, /height:\s*24px\s*;/);
+  assert.match(iconRule, /width:\s*18px\s*;/);
+  assert.match(iconRule, /height:\s*18px\s*;/);
 });
 
 test('fullscreen controls keep light ink on the dark overlay in every theme', () => {

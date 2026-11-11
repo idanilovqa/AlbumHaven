@@ -1674,13 +1674,16 @@ function buildTrackModalCoverVisualHtml({
   localCoverPath,
   remoteCoverUrl,
 }) {
+  const localCoverAttribute = localCoverPath
+    ? ` data-cover-path="${escapeHtml(localCoverPath)}"` : '';
+  const remoteCoverAttribute = remoteCoverUrl
+    ? ` data-remote-cover-url="${escapeHtml(remoteCoverUrl)}"` : '';
   return `
     <span class="track-modal-cover-visual is-loading">
       <span class="cover-placeholder" aria-hidden="true"></span>
       <img
         alt="Album cover for ${escapeHtml(albumName)}"
-        data-cover-path="${escapeHtml(localCoverPath)}"
-        data-remote-cover-url="${escapeHtml(remoteCoverUrl)}"
+        ${localCoverAttribute}${remoteCoverAttribute}
         data-cover-visual-state="pending"
         aria-hidden="true"
         onload="handleTrackModalCoverImageLoad(this)"
@@ -1900,12 +1903,48 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+function getTrackModalSelectedCoverIndex(album) {
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  const albumKey = getTrackModalAlbumRequestKey(album);
+  const browsing = state.ui?.trackModalSelectedCoverBrowser;
+  if (!slots.length || !albumKey || browsing?.albumKey !== albumKey) return 0;
+  const index = Number(browsing.index);
+  return Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+}
+
+function browseTrackModalSelectedCover(value, options = {}) {
+  const album = typeof getCurrentTrackModalAlbum === 'function'
+    ? getCurrentTrackModalAlbum() : state.modalReleases[state.modalReleaseIndex];
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  if (!album || slots.length < 2) return false;
+  const current = getTrackModalSelectedCoverIndex(album);
+  const requested = Number(value);
+  if (!Number.isInteger(requested)) return false;
+  const index = options.absolute === true
+    ? requested
+    : (current + requested + slots.length) % slots.length;
+  if (index < 0 || index >= slots.length) return false;
+  state.ui.trackModalSelectedCoverBrowser = {
+    albumKey: getTrackModalAlbumRequestKey(album),
+    index,
+  };
+  renderTrackModalRelease(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
+  return true;
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
     ? buildAlbumArtboxHtml
     : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
+  const selectedCoverSlots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  const selectedCoverIndex = getTrackModalSelectedCoverIndex(album);
+  const activeSelectedCover = selectedCoverSlots[selectedCoverIndex] || null;
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
@@ -1990,11 +2029,11 @@ function renderTrackModalRelease(album) {
       </div>
       ${coverSourceMarkersHtml}
     `;
-  } else if (albumHasDisplayCover(album)) {
-    const coverSrc = buildAlbumDisplayCoverUrl(album);
-    const lightboxSrc = typeof buildAlbumLightboxCoverUrl === 'function'
+  } else if (activeSelectedCover ? !activeSelectedCover.unavailable : albumHasDisplayCover(album)) {
+    const coverSrc = activeSelectedCover?.imageUrl || buildAlbumDisplayCoverUrl(album);
+    const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
-      : coverSrc;
+      : coverSrc);
     const canInspectHtmlElements = typeof HTMLElement !== 'undefined' && typeof HTMLImageElement !== 'undefined';
     const existingCoverImage = canInspectHtmlElements && els.cover instanceof HTMLElement
       ? els.cover.querySelector('img')
@@ -2011,22 +2050,32 @@ function renderTrackModalRelease(album) {
       )
       ? existingCoverImage
       : null;
-    const localCoverPathRaw = String(album?.cover_path || '').trim();
-    const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
+    const localCoverPathRaw = activeSelectedCover ? '' : String(album?.cover_path || '').trim();
+    const remoteCoverUrlRaw = activeSelectedCover
+      ? '' : String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverPath = escapeHtml(localCoverPathRaw);
     const remoteCoverUrl = escapeHtml(remoteCoverUrlRaw);
     const lightboxGalleryAttribute = state.ui?.trackModalCoverLightboxGallery === false
       ? ''
       : ' data-lightbox-gallery="visible"';
+    const frontCoverHtml = renderAlbumArtbox({
+      state: 'ready',
+      label: `Album cover for ${album.name}`,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}" data-selected-cover-index="${selectedCoverIndex}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+      overlayHtml: coverToolsHtml,
+    });
+    const coverPresentationHtml = typeof buildAlbumDetailsCoverStackHtml === 'function'
+      ? buildAlbumDetailsCoverStackHtml({
+        frontHtml: frontCoverHtml,
+        slots: selectedCoverSlots,
+        activeIndex: selectedCoverIndex,
+        albumName: album.name,
+      })
+      : frontCoverHtml;
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-      ${renderAlbumArtbox({
-        state: 'ready',
-        label: `Album cover for ${album.name}`,
-        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        overlayHtml: coverToolsHtml,
-      })}
-      ${coverSourceBadge}
+      ${coverPresentationHtml}
+      ${activeSelectedCover ? '' : coverSourceBadge}
       </div>
       ${coverSourceMarkersHtml}
     `;
@@ -2050,8 +2099,10 @@ function renderTrackModalRelease(album) {
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-path', localCoverPathRaw);
-        reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+        if (localCoverPathRaw) reusableCoverImage.setAttribute('data-cover-path', localCoverPathRaw);
+        else reusableCoverImage.removeAttribute('data-cover-path');
+        if (remoteCoverUrlRaw) reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+        else reusableCoverImage.removeAttribute('data-remote-cover-url');
         reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
         visual.appendChild(reusableCoverImage);
         coverImageSlot.replaceWith(visual);
@@ -2085,16 +2136,30 @@ function renderTrackModalRelease(album) {
       }
     }
   } else {
+    const emptyCoverHtml = renderAlbumArtbox({
+      state: activeSelectedCover ? 'missing' : 'empty',
+      label: activeSelectedCover
+        ? `Selected cover ${selectedCoverIndex + 1} for ${album.name || 'Album'} is unavailable`
+        : `${album.name || 'Album'} has no cover art`,
+      overlayHtml: coverToolsHtml,
+    });
+    const coverPresentationHtml = typeof buildAlbumDetailsCoverStackHtml === 'function'
+      ? buildAlbumDetailsCoverStackHtml({
+        frontHtml: emptyCoverHtml,
+        slots: selectedCoverSlots,
+        activeIndex: selectedCoverIndex,
+        albumName: album.name,
+      })
+      : emptyCoverHtml;
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-      ${renderAlbumArtbox({
-        state: 'empty',
-        label: `${album.name || 'Album'} has no cover art`,
-        overlayHtml: coverToolsHtml,
-      })}
+      ${coverPresentationHtml}
       </div>
       ${coverSourceMarkersHtml}
     `;
+  }
+  if (typeof bindAlbumDetailsCoverStackPointer === 'function') {
+    bindAlbumDetailsCoverStackPointer(els.cover.querySelector?.('.album-details-cover-stack'));
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);

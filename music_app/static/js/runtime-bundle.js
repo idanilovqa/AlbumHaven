@@ -5232,6 +5232,81 @@ function albumTaggedArtistNote(album) {
     : '';
 }
 
+function resolveAlbumDetailsCoverSlots(album) {
+  if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return [];
+  return album.selected_covers.slice(0, 3).map((slot) => ({
+    selectionId: String(slot?.selectionId || slot?.selection_id || ''),
+    imageUrl: String(slot?.imageUrl || slot?.image_url || ''),
+    unavailable: slot?.unavailable === true || !String(slot?.imageUrl || slot?.image_url || ''),
+  })).filter((slot) => slot.selectionId);
+}
+
+function buildAlbumDetailsCoverStackHtml(config = {}) {
+  const frontHtml = String(config.frontHtml || '');
+  const slots = resolveAlbumDetailsCoverSlots({
+    selected_covers_loaded: true,
+    selected_covers: Array.isArray(config.slots) ? config.slots : [],
+  });
+  if (slots.length < 2) return frontHtml;
+  const canBrowse = slots.filter((slot) => !slot.unavailable).length > 1;
+  const activeIndex = Math.min(
+    slots.length - 1,
+    Math.max(0, Number.isInteger(config.activeIndex) ? config.activeIndex : 0),
+  );
+  const albumName = String(config.albumName || 'Album');
+  const rearHtml = slots
+    .map((slot, index) => ({ slot, index }))
+    .filter(({ index }) => index !== activeIndex)
+    .map(({ slot, index }, rearIndex) => {
+    const positionClass = rearIndex === 0 ? 'is-top' : 'is-bottom';
+    const label = `Show cover ${index + 1} of ${slots.length} for ${albumName}`;
+    if (slot.unavailable) {
+      return `<span class="album-details-cover-stack__rear ${positionClass} is-unavailable" data-album-details-cover-index="${index}" role="img" aria-label="${escapeHtml(label)} unavailable"></span>`;
+    }
+    const previewUrl = `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`;
+    return `<button class="album-details-cover-stack__rear ${positionClass}" type="button" data-album-details-cover-index="${index}" aria-label="${escapeHtml(label)}"><img src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async"></button>`;
+  }).join('');
+  const previous = canBrowse ? ButtonComponent.renderActionButton({
+    icon: 'previous',
+    ariaLabel: 'Show previous selected cover',
+    className: 'album-details-cover-nav album-details-cover-nav--previous',
+    shape: 'round',
+    presentation: 'bare',
+    attributes: { 'data-album-details-cover-step': '-1' },
+  }) : '';
+  const next = canBrowse ? ButtonComponent.renderActionButton({
+    icon: 'next',
+    ariaLabel: 'Show next selected cover',
+    className: 'album-details-cover-nav album-details-cover-nav--next',
+    shape: 'round',
+    presentation: 'bare',
+    attributes: { 'data-album-details-cover-step': '1' },
+  }) : '';
+  return `<div class="album-details-cover-stack" data-album-details-cover-count="${slots.length}" data-album-details-cover-active-index="${activeIndex}"><div class="album-details-cover-stack__rear-layer">${rearHtml}</div><div class="album-details-cover-stack__front">${frontHtml}</div><div class="album-details-cover-stack__navigation">${previous}${next}</div></div>`;
+}
+
+function bindAlbumDetailsCoverStackPointer(stack) {
+  if (!stack?.addEventListener || stack.dataset?.pointerTrackingBound === '1') return;
+  if (!stack.dataset) stack.dataset = {};
+  stack.dataset.pointerTrackingBound = '1';
+  const clear = () => {
+    stack.style.removeProperty('--album-cover-pointer-x');
+    stack.style.removeProperty('--album-cover-pointer-y');
+    stack.style.removeProperty('--album-cover-pointer-rotation');
+  };
+  stack.addEventListener('pointermove', (event) => {
+    const bounds = stack.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, ((event.clientX - bounds.left) / bounds.width) * 2 - 1));
+    const y = Math.max(-1, Math.min(1, ((event.clientY - bounds.top) / bounds.height) * 2 - 1));
+    stack.style.setProperty('--album-cover-pointer-x', `${(x * 2).toFixed(3)}px`);
+    stack.style.setProperty('--album-cover-pointer-y', `${(y * 2).toFixed(3)}px`);
+    stack.style.setProperty('--album-cover-pointer-rotation', `${(x * 0.6).toFixed(3)}deg`);
+  });
+  stack.addEventListener('pointerup', clear);
+  stack.addEventListener('pointerleave', clear);
+  stack.addEventListener('pointercancel', clear);
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';
@@ -5828,6 +5903,14 @@ const state = {
       pendingLocalPath: '',
       pendingPastedImageId: '',
       selectedRemoteId: '',
+      orderedCoverSelections: [],
+      orderedSelectionMode: false,
+      orderedCoversRevision: 0,
+      currentCoverToken: '',
+      orderedCoverMutationId: '',
+      orderedCoverBaseline: '[]',
+      orderedSelectionLoaded: false,
+      suppressOrderedSelectionClickKey: '',
       possibleMatches: [],
       currentReleases: [],
       candidateSnapshot: null,
@@ -14855,23 +14938,49 @@ function getLightboxVisibleAlbumGroups() {
   return Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : [];
 }
 
+function getLightboxAlbumKey(album) {
+  return getAlbumPathSignature(album)
+    || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
+}
+
+function buildLightboxGalleryItemsForAlbum(album) {
+  if (!album) return [];
+  const key = getLightboxAlbumKey(album);
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  if (slots.length) {
+    return slots.map((slot, index) => ({
+      key: index === 0 ? key : `${key}::selected-cover:${index}`,
+      src: slot.unavailable ? '' : slot.imageUrl,
+      previewSrc: slot.unavailable
+        ? '' : `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`,
+      remoteSrc: '',
+      alt: `Album cover ${index + 1} of ${slots.length} for ${album.name || 'Album'}`,
+      album,
+      selectedCoverIndex: index,
+      unavailable: slot.unavailable,
+    }));
+  }
+  if (!albumHasDisplayCover(album)) return [];
+  return [{
+    key,
+    src: typeof buildAlbumLightboxCoverUrl === 'function'
+      ? buildAlbumLightboxCoverUrl(album)
+      : buildAlbumDisplayCoverUrl(album),
+    previewSrc: buildAlbumDisplayCoverUrl(album),
+    remoteSrc: String(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '').trim()
+      ? buildAlbumRemoteCoverUrl(album, { preferThumbnail: false })
+      : '',
+    alt: `Album cover for ${album.name || 'Album'}`,
+    album,
+  }];
+}
+
 function getLightboxGalleryItems() {
   const seen = new Set();
   return getLightboxVisibleAlbumGroups()
     .flatMap((group) => Array.isArray(group?.albums) ? group.albums : [])
-    .filter((album) => album && albumHasDisplayCover(album))
-    .map((album) => ({
-      key: getAlbumPathSignature(album) || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`,
-      src: typeof buildAlbumLightboxCoverUrl === 'function'
-        ? buildAlbumLightboxCoverUrl(album)
-        : buildAlbumDisplayCoverUrl(album),
-      previewSrc: buildAlbumDisplayCoverUrl(album),
-      remoteSrc: String(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '').trim()
-        ? buildAlbumRemoteCoverUrl(album, { preferThumbnail: false })
-        : '',
-      alt: `Album cover for ${album.name || 'Album'}`,
-      album,
-    }))
+    .flatMap(buildLightboxGalleryItemsForAlbum)
     .filter((item) => {
       if (!item.key || seen.has(item.key)) return false;
       seen.add(item.key);
@@ -15441,7 +15550,8 @@ function applyLightboxImageItem(item) {
   setLightboxLoadingPresentation(els.image, els.loading, true);
   if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
   if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
-  return sources.length ? startLightboxSourcePreload(els.image, loadToken) : false;
+  startLightboxSourcePreload(els.image, loadToken);
+  return true;
 }
 
 function showStandaloneLightboxItem(item) {
@@ -16325,6 +16435,7 @@ function openTrackModal(album, options = {}) {
     els.overlay.classList.add('is-above-settings');
   }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
+  state.ui.trackModalSelectedCoverBrowser = null;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
   }
@@ -16514,11 +16625,19 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
 function getTrackModalLightboxSourceAlbumKey(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || typeof album !== 'object') return '';
+  let key = '';
   if (typeof getAlbumPathSignature === 'function') {
     const signature = getAlbumPathSignature(album);
-    if (signature) return signature;
+    if (signature) key = signature;
   }
-  return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
+  if (!key) {
+    key = String(getAlbumIdentity(album) || album?.key
+      || `${album?.name || ''}::${album?.album_artist || ''}`);
+  }
+  const selectedCoverIndex = Number(button?.getAttribute?.('data-selected-cover-index'));
+  return Number.isInteger(selectedCoverIndex) && selectedCoverIndex > 0
+    ? `${key}::selected-cover:${selectedCoverIndex}`
+    : key;
 }
 
 let imageLightboxReturnFocus = null;
@@ -16559,6 +16678,12 @@ function bindLightboxSwipe(overlay) {
   }, { passive: false });
 }
 
+function getLightboxOpeningIndex(items, src, sourceKey = '') {
+  const sourceIndex = items.findIndex((item) => item?.src === src);
+  if (sourceIndex >= 0) return sourceIndex;
+  return sourceKey ? items.findIndex((item) => item?.key === sourceKey) : -1;
+}
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
@@ -16574,9 +16699,11 @@ function openImageLightbox(src, alt, options = {}) {
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
   state.lightbox.currentIndex = -1;
-  const itemIndex = state.lightbox.items.findIndex((item) => (
-    item?.src === src || (state.lightbox.sourceAlbumKey && item?.key === state.lightbox.sourceAlbumKey)
-  ));
+  const itemIndex = getLightboxOpeningIndex(
+    state.lightbox.items,
+    src,
+    state.lightbox.sourceAlbumKey,
+  );
   if (itemIndex >= 0) {
     showLightboxItem(itemIndex);
   } else {
@@ -32658,6 +32785,7 @@ const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 32 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
 const COVER_LOOKUP_SHEET_DISMISS_DISTANCE = 72;
+const COVER_LOOKUP_ORDERED_HOLD_MS = 550;
 const COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX = 'albumhaven.coverLookup.interruptionNotice.';
 
 function applyCoverLookupTaskModalStatus(task) {
@@ -33590,8 +33718,19 @@ function syncCoverLookupSaveButton() {
   const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
+  const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
+    ? state.coverLookup.modal.orderedCoverSelections : [];
+  const hasOrderedSelection = orderedSelections.length > 0
+    && orderedCoverSelectionSignature(orderedSelections)
+      !== String(state.coverLookup.modal.orderedCoverBaseline || '[]');
+  const allowLegacySelection = state.coverLookup.modal.orderedSelectionLoaded !== true;
   saveButton.hidden = false;
-  saveButton.disabled = localMutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.disabled = localMutationPending || Boolean(state.coverLookup.modal.saving)
+    || !(
+      hasOrderedSelection
+      || hasPastedSelection
+      || (allowLegacySelection && (hasRemoteSelection || hasLocalSelection))
+    );
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -33624,9 +33763,289 @@ function getCoverLookupStatusTone(task) {
   return 'neutral';
 }
 
+function applyCoverLookupSelectionIntent(entry, options = {}) {
+  const key = String(entry?.key || '').trim();
+  if (!key || !entry?.reference || typeof entry.reference !== 'object') return false;
+  const modal = state.coverLookup.modal;
+  const current = Array.isArray(modal.orderedCoverSelections)
+    ? modal.orderedCoverSelections : [];
+  const index = current.findIndex((item) => String(item?.key || '') === key);
+
+  if (options.held) {
+    if (!current.length) {
+      modal.orderedCoverSelections = [{ key, reference: { ...entry.reference } }];
+      modal.orderedSelectionMode = true;
+      modal.orderedCoverMutationId = '';
+      syncCoverLookupSelectionUi();
+      return true;
+    }
+    if (current.length !== 1 || index !== 0) return false;
+    modal.orderedSelectionMode = !Boolean(modal.orderedSelectionMode);
+    syncCoverLookupSelectionUi();
+    return true;
+  }
+
+  if (!modal.orderedSelectionMode) {
+    modal.orderedCoverSelections = [{ key, reference: { ...entry.reference } }];
+  } else if (index >= 0) {
+    if (current.length === 1) return false;
+    modal.orderedCoverSelections = current.filter((_item, itemIndex) => itemIndex !== index);
+  } else {
+    if (current.length >= 3) return false;
+    modal.orderedCoverSelections = [...current, { key, reference: { ...entry.reference } }];
+  }
+  modal.orderedCoverMutationId = '';
+  syncCoverLookupSelectionUi();
+  return true;
+}
+
+function coverLookupSelectionEntryForCard(card) {
+  const key = String(card?.getAttribute?.('data-cover-selection-key') || '');
+  if (!key) return null;
+  const existing = (state.coverLookup.modal.orderedCoverSelections || [])
+    .find((item) => String(item?.key || '') === key);
+  if (existing) return existing;
+  if (card.classList?.contains?.('is-active') && state.coverLookup.modal.currentCoverToken) {
+    return {
+      key,
+      reference: {
+        retain_current: true,
+        expected_primary: String(state.coverLookup.modal.currentCoverToken),
+      },
+    };
+  }
+  const localPath = String(card.getAttribute?.('data-select-local-cover') || '');
+  if (localPath) return { key, reference: { kind: 'local', path: localPath } };
+  const candidateId = String(card.getAttribute?.('data-select-remote-cover') || '');
+  const candidate = (state.coverLookup.modal.possibleMatches || [])
+    .find((item) => String(item?.id || '') === candidateId);
+  const generation = String(
+    candidate?._coverLookupGeneration
+    || candidate?.candidate_generation
+    || state.coverLookup.modal.candidateGeneration
+    || '',
+  );
+  return candidateId && generation ? {
+    key,
+    reference: { kind: 'remote', candidate_id: candidateId, candidate_generation: generation },
+  } : null;
+}
+
+function consumeCoverLookupHeldSelectionClick(card) {
+  const key = String(card?.getAttribute?.('data-cover-selection-key') || '');
+  if (!key || key !== String(state.coverLookup.modal.suppressOrderedSelectionClickKey || '')) {
+    return false;
+  }
+  state.coverLookup.modal.suppressOrderedSelectionClickKey = '';
+  return true;
+}
+
+function bindCoverLookupOrderedSelectionHold(overlay) {
+  if (!overlay || typeof overlay.addEventListener !== 'function') return;
+  if (!overlay.dataset) overlay.dataset = {};
+  if (overlay.dataset.orderedSelectionHoldBound === '1') return;
+  overlay.dataset.orderedSelectionHoldBound = '1';
+  let gesture = null;
+  const clear = () => {
+    if (gesture?.timer) window.clearTimeout(gesture.timer);
+    gesture = null;
+  };
+  const begin = (card, origin = {}) => {
+    const entry = coverLookupSelectionEntryForCard(card);
+    if (!entry || !card.classList?.contains?.('is-active')) return;
+    gesture = {
+      card,
+      key: entry.key,
+      pointerId: origin.pointerId,
+      x: Number(origin.clientX || 0),
+      y: Number(origin.clientY || 0),
+      held: false,
+      timer: 0,
+    };
+    gesture.timer = window.setTimeout(() => {
+      if (!gesture || gesture.card !== card) return;
+      gesture.held = applyCoverLookupSelectionIntent(entry, { held: true });
+      if (gesture.held) state.coverLookup.modal.suppressOrderedSelectionClickKey = entry.key;
+    }, COVER_LOOKUP_ORDERED_HOLD_MS);
+  };
+  overlay.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    const card = event.target?.closest?.('[data-cover-selection-key]');
+    if (card && event.target?.closest?.('button, a, input, textarea, select')) return;
+    if (card) begin(card, event);
+  });
+  overlay.addEventListener('pointermove', (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    if (Math.hypot(Number(event.clientX || 0) - gesture.x, Number(event.clientY || 0) - gesture.y) > 8) {
+      clear();
+    }
+  });
+  overlay.addEventListener('pointerup', clear);
+  overlay.addEventListener('pointercancel', clear);
+  overlay.addEventListener('keydown', (event) => {
+    if (event.repeat || !['Enter', ' ', 'Spacebar'].includes(event.key)) return;
+    const card = event.target?.closest?.('[data-cover-selection-key]');
+    if (card && event.target?.closest?.('button, a, input, textarea, select')) return;
+    if (!card) return;
+    event.preventDefault();
+    begin(card);
+  });
+  overlay.addEventListener('keyup', (event) => {
+    if (!gesture || !['Enter', ' ', 'Spacebar'].includes(event.key)) return;
+    event.preventDefault();
+    const card = gesture.card;
+    const held = gesture.held;
+    clear();
+    if (held) state.coverLookup.modal.suppressOrderedSelectionClickKey = '';
+    else card.click?.();
+  });
+}
+
+function orderedCoverSelectionEntry(reference) {
+  const selectionId = String(reference?.selection_id || '').trim();
+  if (!selectionId) return null;
+  const kind = String(reference?.kind || '').trim();
+  const key = kind === 'local' && reference?.path
+    ? `local:${reference.path}`
+    : kind === 'remote' && reference?.candidate_id
+      ? `remote:${reference.candidate_id}`
+      : kind === 'remote' && reference?.url
+        ? `remote-url:${normalizeCoverLookupCandidateUrl(reference.url)}`
+      : `saved:${selectionId}`;
+  return { key, reference: { selection_id: selectionId } };
+}
+
+function orderedCoverSelectionSignature(selections) {
+  return JSON.stringify((Array.isArray(selections) ? selections : []).map((item) => item.reference));
+}
+
+function orderedCoverAlbumId(album) {
+  const albumId = Number(album?.selected_covers_album_id || album?.album_id || 0);
+  return Number.isInteger(albumId) && albumId > 0 ? albumId : 0;
+}
+
+async function loadOrderedCoverSelectionForAlbum(album) {
+  const albumId = orderedCoverAlbumId(album);
+  if (!albumId) return false;
+  try {
+    const response = await fetch(`/albums/${albumId}/selected-covers`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Cover selection is unavailable.');
+    if (state.coverLookup.modal.album && state.coverLookup.modal.album !== album) return false;
+    const selections = (Array.isArray(data.selected_covers) ? data.selected_covers : [])
+      .map(orderedCoverSelectionEntry)
+      .filter(Boolean);
+    state.coverLookup.modal.orderedCoverSelections = selections;
+    state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
+    state.coverLookup.modal.orderedCoversRevision = Math.max(
+      0, Number(data.selected_covers_revision || 0) || 0,
+    );
+    state.coverLookup.modal.currentCoverToken = String(data.current_cover_token || '');
+    state.coverLookup.modal.orderedCoverMutationId = '';
+    state.coverLookup.modal.orderedCoverBaseline = orderedCoverSelectionSignature(selections);
+    state.coverLookup.modal.orderedSelectionLoaded = true;
+    syncCoverLookupSelectionUi();
+    return true;
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load ordered cover selection.', error);
+    return false;
+  }
+}
+
+function selectedCoverImageUrl(libraryId, albumId, selectionId) {
+  return `/cover?${new URLSearchParams({
+    library_id: String(libraryId),
+    album_id: String(albumId),
+    selection_id: String(selectionId),
+  })}`;
+}
+
+async function saveOrderedCoverSelection() {
+  const modal = state.coverLookup.modal;
+  const album = modal.album;
+  const albumId = orderedCoverAlbumId(album);
+  const selections = Array.isArray(modal.orderedCoverSelections)
+    ? modal.orderedCoverSelections : [];
+  if (!albumId || !selections.length || modal.saving) return false;
+  const mutationId = String(modal.orderedCoverMutationId || crypto.randomUUID());
+  modal.orderedCoverMutationId = mutationId;
+  modal.saving = true;
+  syncCoverLookupSaveButton();
+  try {
+    const response = await fetch(`/albums/${albumId}/selected-covers`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_revision: Math.max(0, Number(modal.orderedCoversRevision || 0) || 0),
+        mutation_id: mutationId,
+        references: selections.map((item) => ({ ...item.reference })),
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to save cover selection.');
+    const libraryId = Number(album.selected_covers_library_id || 0);
+    const saved = (Array.isArray(data.selected_covers) ? data.selected_covers : []).map((item) => ({
+      ...item,
+      ...(libraryId > 0 ? {
+        image_url: selectedCoverImageUrl(libraryId, albumId, item.selection_id),
+      } : {}),
+    }));
+    album.selected_covers = saved;
+    album.selected_covers_loaded = true;
+    album.selected_covers_album_id = albumId;
+    album.selected_covers_revision = Math.max(0, Number(data.selected_covers_revision || 0) || 0);
+    modal.orderedCoversRevision = album.selected_covers_revision;
+    modal.orderedCoverSelections = selections.map((entry, index) => ({
+      key: entry.key,
+      reference: { selection_id: String(saved[index]?.selection_id || '') },
+    }));
+    modal.orderedCoverBaseline = orderedCoverSelectionSignature(modal.orderedCoverSelections);
+    modal.orderedCoverMutationId = '';
+    closeCoverLookupModal();
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][CoverLookup] Failed to save ordered cover selection.', error);
+    if (typeof showToast === 'function') {
+      showToast(error.message || 'Failed to save cover selection.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    modal.saving = false;
+    syncCoverLookupSaveButton();
+  }
+}
+
 function syncCoverLookupSelectionUi() {
   const modal = document.getElementById('cover-lookup-modal');
   if (!modal || modal.hidden) return;
+  const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
+    ? state.coverLookup.modal.orderedCoverSelections : [];
+  if (orderedSelections.length) {
+    const numbered = Boolean(state.coverLookup.modal.orderedSelectionMode);
+    const limitReached = numbered && orderedSelections.length >= 3;
+    modal.querySelectorAll('[data-cover-selection-key]').forEach((card) => {
+      const key = String(card.getAttribute('data-cover-selection-key') || '');
+      const index = orderedSelections.findIndex((item) => String(item?.key || '') === key);
+      const selected = index >= 0;
+      card.classList.toggle('is-active', selected);
+      card.classList.toggle('is-selection-limited', limitReached && !selected);
+      card.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      let check = card.querySelector('.cover-lookup-art-check');
+      if (selected && !check) {
+        check = document.createElement('span');
+        check.className = 'cover-lookup-art-check';
+        card.querySelector('.cover-lookup-art-preview')?.appendChild(check);
+      }
+      if (selected) check.innerHTML = numbered ? String(index + 1) : '&#10003;';
+      else check?.remove();
+      const actionLabel = card.querySelector('.cover-lookup-art-action-label');
+      if (actionLabel) {
+        actionLabel.textContent = selected ? (numbered ? `Selected ${index + 1}` : 'Selected') : 'Select';
+      }
+    });
+    syncCoverLookupSaveButton();
+    return;
+  }
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const pendingLocalPath = String(state.coverLookup.modal.pendingLocalPath || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
@@ -34789,6 +35208,18 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
+  const selectionKey = kind === 'local'
+    ? `local:${String(item?.path || '')}`
+    : kind === 'pasted'
+      ? `pasted:${String(item?.id || '')}`
+      : String(item?.id || '').trim()
+        ? `remote:${String(item.id)}`
+        : `remote-url:${normalizeCoverLookupCandidateUrl(item?.url)}`;
+  const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
+    ? state.coverLookup.modal.orderedCoverSelections : [];
+  const orderedSelectionIndex = orderedSelections.findIndex((entry) => entry?.key === selectionKey);
+  const orderedLimitReached = Boolean(state.coverLookup.modal.orderedSelectionMode)
+    && orderedSelections.length >= 3;
   const imageUrl = kind === 'remote'
     ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
     : kind === 'saved-remote'
@@ -34806,7 +35237,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
-  const isActive = kind === 'local'
+  const legacyIsActive = kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
@@ -34824,6 +35255,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+  const isActive = orderedSelections.length ? orderedSelectionIndex >= 0 : legacyIsActive;
   const isSuggested = kind === 'remote'
     && isActive
     && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
@@ -34846,6 +35278,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     : kind === 'saved-remote'
       ? 'data-cover-lookup-saved-remote="1"'
       : `data-select-remote-cover="${escapeHtml(item.id || '')}"`;
+  const selectionKeyAttr = selectAttr ? `data-cover-selection-key="${escapeHtml(selectionKey)}"` : '';
   const localActiveAttr = kind === 'local' && isActive ? 'data-cover-lookup-local-active="1"' : '';
   const previewAlt = escapeHtml(item.filename || item.album || 'cover art');
   const albumLink = String(item?.album_url || '').trim();
@@ -34875,7 +35308,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${orderedLimitReached && !isActive ? 'is-selection-limited' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${selectionKeyAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
@@ -34884,7 +35317,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
             </svg>
           </button>
-          ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
+          ${isActive ? `<span class="cover-lookup-art-check">${state.coverLookup.modal.orderedSelectionMode ? orderedSelectionIndex + 1 : '&#10003;'}</span>` : ''}
           ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
           ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
@@ -35984,6 +36417,7 @@ async function openCoverLookupModal(album, options = {}) {
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
+  bindCoverLookupOrderedSelectionHold(els.overlay);
   const requestedTaskId = String(options.taskId || '');
   const albumTrackSignature = buildTrackPathSignature(album);
   const matchingTask = (state.coverLookup.tasks || []).find((task) => (
@@ -36013,6 +36447,14 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
+  state.coverLookup.modal.orderedCoverSelections = [];
+  state.coverLookup.modal.orderedSelectionMode = false;
+  state.coverLookup.modal.orderedCoversRevision = 0;
+  state.coverLookup.modal.currentCoverToken = '';
+  state.coverLookup.modal.orderedCoverMutationId = '';
+  state.coverLookup.modal.orderedCoverBaseline = '[]';
+  state.coverLookup.modal.orderedSelectionLoaded = false;
+  state.coverLookup.modal.suppressOrderedSelectionClickKey = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
   state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
@@ -36048,7 +36490,10 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
-  await refreshCoverLookupGallery(false);
+  await Promise.all([
+    refreshCoverLookupGallery(false),
+    loadOrderedCoverSelectionForAlbum(album),
+  ]);
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
     ensureCoverLookupPolling();
@@ -36068,6 +36513,14 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
+  state.coverLookup.modal.orderedCoverSelections = [];
+  state.coverLookup.modal.orderedSelectionMode = false;
+  state.coverLookup.modal.orderedCoversRevision = 0;
+  state.coverLookup.modal.currentCoverToken = '';
+  state.coverLookup.modal.orderedCoverMutationId = '';
+  state.coverLookup.modal.orderedCoverBaseline = '[]';
+  state.coverLookup.modal.orderedSelectionLoaded = false;
+  state.coverLookup.modal.suppressOrderedSelectionClickKey = '';
   state.coverLookup.modal.remoteCover = null;
   state.coverLookup.modal.activeLocalSelectionPath = '';
   revokeCoverLookupPastedImageUrls();
@@ -36255,7 +36708,10 @@ function selectLocalCoverFromLookup(sourcePath) {
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
-  syncCoverLookupSelectionUi();
+  applyCoverLookupSelectionIntent({
+    key: `local:${String(sourcePath || '')}`,
+    reference: { kind: 'local', path: String(sourcePath || '') },
+  });
 }
 
 async function saveLocalCoverFromLookup(sourcePath) {
@@ -36428,7 +36884,19 @@ function selectRemoteCoverFromLookup(candidateId) {
   state.coverLookup.modal.remoteSelectionOverrideUrl = normalizeCoverLookupCandidateUrl(
     selectedCandidate?.url,
   );
-  syncCoverLookupSelectionUi();
+  applyCoverLookupSelectionIntent({
+    key: `remote:${String(candidateId || '')}`,
+    reference: {
+      kind: 'remote',
+      candidate_id: String(candidateId || ''),
+      candidate_generation: String(
+        selectedCandidate?._coverLookupGeneration
+        || selectedCandidate?.candidate_generation
+        || state.coverLookup.modal.candidateGeneration
+        || '',
+      ),
+    },
+  });
 }
 
 function selectPastedCoverFromLookup(imageId) {
@@ -36673,6 +37141,21 @@ async function savePastedCoverFromLookup(imageId) {
 
 async function saveCoverFromLookup() {
   if (isCoverLookupLocalMutationPending()) return;
+  const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
+    ? state.coverLookup.modal.orderedCoverSelections : [];
+  if (
+    !String(state.coverLookup.modal.pendingPastedImageId || '')
+    && orderedSelections.length
+    && orderedCoverSelectionSignature(orderedSelections)
+      !== String(state.coverLookup.modal.orderedCoverBaseline || '[]')
+  ) {
+    await saveOrderedCoverSelection();
+    return;
+  }
+  if (
+    state.coverLookup.modal.orderedSelectionLoaded === true
+    && !String(state.coverLookup.modal.pendingPastedImageId || '')
+  ) return;
   if (String(state.coverLookup.modal.selectedRemoteId || '')) {
     await saveRemoteCoverFromLookup();
     return;
@@ -38366,13 +38849,16 @@ function buildTrackModalCoverVisualHtml({
   localCoverPath,
   remoteCoverUrl,
 }) {
+  const localCoverAttribute = localCoverPath
+    ? ` data-cover-path="${escapeHtml(localCoverPath)}"` : '';
+  const remoteCoverAttribute = remoteCoverUrl
+    ? ` data-remote-cover-url="${escapeHtml(remoteCoverUrl)}"` : '';
   return `
     <span class="track-modal-cover-visual is-loading">
       <span class="cover-placeholder" aria-hidden="true"></span>
       <img
         alt="Album cover for ${escapeHtml(albumName)}"
-        data-cover-path="${escapeHtml(localCoverPath)}"
-        data-remote-cover-url="${escapeHtml(remoteCoverUrl)}"
+        ${localCoverAttribute}${remoteCoverAttribute}
         data-cover-visual-state="pending"
         aria-hidden="true"
         onload="handleTrackModalCoverImageLoad(this)"
@@ -38592,12 +39078,48 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
   }
 }
 
+function getTrackModalSelectedCoverIndex(album) {
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  const albumKey = getTrackModalAlbumRequestKey(album);
+  const browsing = state.ui?.trackModalSelectedCoverBrowser;
+  if (!slots.length || !albumKey || browsing?.albumKey !== albumKey) return 0;
+  const index = Number(browsing.index);
+  return Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+}
+
+function browseTrackModalSelectedCover(value, options = {}) {
+  const album = typeof getCurrentTrackModalAlbum === 'function'
+    ? getCurrentTrackModalAlbum() : state.modalReleases[state.modalReleaseIndex];
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  if (!album || slots.length < 2) return false;
+  const current = getTrackModalSelectedCoverIndex(album);
+  const requested = Number(value);
+  if (!Number.isInteger(requested)) return false;
+  const index = options.absolute === true
+    ? requested
+    : (current + requested + slots.length) % slots.length;
+  if (index < 0 || index >= slots.length) return false;
+  state.ui.trackModalSelectedCoverBrowser = {
+    albumKey: getTrackModalAlbumRequestKey(album),
+    index,
+  };
+  renderTrackModalRelease(album);
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
+  return true;
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
     ? buildAlbumArtboxHtml
     : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
+  const selectedCoverSlots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  const selectedCoverIndex = getTrackModalSelectedCoverIndex(album);
+  const activeSelectedCover = selectedCoverSlots[selectedCoverIndex] || null;
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
@@ -38682,11 +39204,11 @@ function renderTrackModalRelease(album) {
       </div>
       ${coverSourceMarkersHtml}
     `;
-  } else if (albumHasDisplayCover(album)) {
-    const coverSrc = buildAlbumDisplayCoverUrl(album);
-    const lightboxSrc = typeof buildAlbumLightboxCoverUrl === 'function'
+  } else if (activeSelectedCover ? !activeSelectedCover.unavailable : albumHasDisplayCover(album)) {
+    const coverSrc = activeSelectedCover?.imageUrl || buildAlbumDisplayCoverUrl(album);
+    const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
-      : coverSrc;
+      : coverSrc);
     const canInspectHtmlElements = typeof HTMLElement !== 'undefined' && typeof HTMLImageElement !== 'undefined';
     const existingCoverImage = canInspectHtmlElements && els.cover instanceof HTMLElement
       ? els.cover.querySelector('img')
@@ -38703,22 +39225,32 @@ function renderTrackModalRelease(album) {
       )
       ? existingCoverImage
       : null;
-    const localCoverPathRaw = String(album?.cover_path || '').trim();
-    const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
+    const localCoverPathRaw = activeSelectedCover ? '' : String(album?.cover_path || '').trim();
+    const remoteCoverUrlRaw = activeSelectedCover
+      ? '' : String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverPath = escapeHtml(localCoverPathRaw);
     const remoteCoverUrl = escapeHtml(remoteCoverUrlRaw);
     const lightboxGalleryAttribute = state.ui?.trackModalCoverLightboxGallery === false
       ? ''
       : ' data-lightbox-gallery="visible"';
+    const frontCoverHtml = renderAlbumArtbox({
+      state: 'ready',
+      label: `Album cover for ${album.name}`,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}" data-selected-cover-index="${selectedCoverIndex}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+      overlayHtml: coverToolsHtml,
+    });
+    const coverPresentationHtml = typeof buildAlbumDetailsCoverStackHtml === 'function'
+      ? buildAlbumDetailsCoverStackHtml({
+        frontHtml: frontCoverHtml,
+        slots: selectedCoverSlots,
+        activeIndex: selectedCoverIndex,
+        albumName: album.name,
+      })
+      : frontCoverHtml;
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-      ${renderAlbumArtbox({
-        state: 'ready',
-        label: `Album cover for ${album.name}`,
-        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        overlayHtml: coverToolsHtml,
-      })}
-      ${coverSourceBadge}
+      ${coverPresentationHtml}
+      ${activeSelectedCover ? '' : coverSourceBadge}
       </div>
       ${coverSourceMarkersHtml}
     `;
@@ -38742,8 +39274,10 @@ function renderTrackModalRelease(album) {
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-path', localCoverPathRaw);
-        reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+        if (localCoverPathRaw) reusableCoverImage.setAttribute('data-cover-path', localCoverPathRaw);
+        else reusableCoverImage.removeAttribute('data-cover-path');
+        if (remoteCoverUrlRaw) reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+        else reusableCoverImage.removeAttribute('data-remote-cover-url');
         reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
         visual.appendChild(reusableCoverImage);
         coverImageSlot.replaceWith(visual);
@@ -38777,16 +39311,30 @@ function renderTrackModalRelease(album) {
       }
     }
   } else {
+    const emptyCoverHtml = renderAlbumArtbox({
+      state: activeSelectedCover ? 'missing' : 'empty',
+      label: activeSelectedCover
+        ? `Selected cover ${selectedCoverIndex + 1} for ${album.name || 'Album'} is unavailable`
+        : `${album.name || 'Album'} has no cover art`,
+      overlayHtml: coverToolsHtml,
+    });
+    const coverPresentationHtml = typeof buildAlbumDetailsCoverStackHtml === 'function'
+      ? buildAlbumDetailsCoverStackHtml({
+        frontHtml: emptyCoverHtml,
+        slots: selectedCoverSlots,
+        activeIndex: selectedCoverIndex,
+        albumName: album.name,
+      })
+      : emptyCoverHtml;
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-      ${renderAlbumArtbox({
-        state: 'empty',
-        label: `${album.name || 'Album'} has no cover art`,
-        overlayHtml: coverToolsHtml,
-      })}
+      ${coverPresentationHtml}
       </div>
       ${coverSourceMarkersHtml}
     `;
+  }
+  if (typeof bindAlbumDetailsCoverStackPointer === 'function') {
+    bindAlbumDetailsCoverStackPointer(els.cover.querySelector?.('.album-details-cover-stack'));
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
@@ -47955,6 +48503,12 @@ async function handleUtilityBootstrapClick(event) {
   }
 
   const selectLocalCoverButton = event.target.closest('[data-select-local-cover]');
+  const heldCoverSelection = event.target.closest('[data-cover-selection-key]');
+  if (heldCoverSelection && consumeCoverLookupHeldSelectionClick(heldCoverSelection)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (selectLocalCoverButton && !event.target.closest('[data-delete-local-cover]')) {
     event.preventDefault();
     const sourcePath = selectLocalCoverButton.getAttribute('data-select-local-cover') || '';
@@ -48811,6 +49365,23 @@ function handleGalleryBootstrapClick(event) {
         state.versionPicker.saving = false;
         renderVersionPickerModal();
       });
+    return;
+  }
+
+  const rearCoverButton = event.target.closest('[data-album-details-cover-index]');
+  if (rearCoverButton && !rearCoverButton.classList.contains('is-unavailable')) {
+    event.preventDefault();
+    browseTrackModalSelectedCover(
+      Number(rearCoverButton.getAttribute('data-album-details-cover-index')),
+      { absolute: true },
+    );
+    return;
+  }
+
+  const coverStepButton = event.target.closest('[data-album-details-cover-step]');
+  if (coverStepButton) {
+    event.preventDefault();
+    browseTrackModalSelectedCover(Number(coverStepButton.getAttribute('data-album-details-cover-step')));
     return;
   }
 

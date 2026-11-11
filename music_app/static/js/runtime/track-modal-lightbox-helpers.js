@@ -715,6 +715,7 @@ function openTrackModal(album, options = {}) {
     els.overlay.classList.add('is-above-settings');
   }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
+  state.ui.trackModalSelectedCoverBrowser = null;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
   }
@@ -904,11 +905,19 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
 function getTrackModalLightboxSourceAlbumKey(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || typeof album !== 'object') return '';
+  let key = '';
   if (typeof getAlbumPathSignature === 'function') {
     const signature = getAlbumPathSignature(album);
-    if (signature) return signature;
+    if (signature) key = signature;
   }
-  return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
+  if (!key) {
+    key = String(getAlbumIdentity(album) || album?.key
+      || `${album?.name || ''}::${album?.album_artist || ''}`);
+  }
+  const selectedCoverIndex = Number(button?.getAttribute?.('data-selected-cover-index'));
+  return Number.isInteger(selectedCoverIndex) && selectedCoverIndex > 0
+    ? `${key}::selected-cover:${selectedCoverIndex}`
+    : key;
 }
 
 let imageLightboxReturnFocus = null;
@@ -949,6 +958,12 @@ function bindLightboxSwipe(overlay) {
   }, { passive: false });
 }
 
+function getLightboxOpeningIndex(items, src, sourceKey = '') {
+  const sourceIndex = items.findIndex((item) => item?.src === src);
+  if (sourceIndex >= 0) return sourceIndex;
+  return sourceKey ? items.findIndex((item) => item?.key === sourceKey) : -1;
+}
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
@@ -964,9 +979,11 @@ function openImageLightbox(src, alt, options = {}) {
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
   state.lightbox.currentIndex = -1;
-  const itemIndex = state.lightbox.items.findIndex((item) => (
-    item?.src === src || (state.lightbox.sourceAlbumKey && item?.key === state.lightbox.sourceAlbumKey)
-  ));
+  const itemIndex = getLightboxOpeningIndex(
+    state.lightbox.items,
+    src,
+    state.lightbox.sourceAlbumKey,
+  );
   if (itemIndex >= 0) {
     showLightboxItem(itemIndex);
   } else {

@@ -909,6 +909,12 @@ async function handleUtilityBootstrapClick(event) {
   }
 
   const selectLocalCoverButton = event.target.closest('[data-select-local-cover]');
+  const heldCoverSelection = event.target.closest('[data-cover-selection-key]');
+  if (heldCoverSelection && consumeCoverLookupHeldSelectionClick(heldCoverSelection)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (selectLocalCoverButton && !event.target.closest('[data-delete-local-cover]')) {
     event.preventDefault();
     const sourcePath = selectLocalCoverButton.getAttribute('data-select-local-cover') || '';

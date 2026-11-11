@@ -3420,6 +3420,46 @@ async function flushTrackModalCoverWork() {
   await Promise.resolve();
 }
 
+test('track-modal selected covers reuse the artbox and expose no source paths', () => {
+  const album = {
+    key: 'ordered-cover-album',
+    name: 'Ordered Cover Album',
+    album_artist: 'Artist',
+    cover_path: 'C:/private/front.jpg',
+    tracks: [],
+    selected_covers_loaded: true,
+    selected_covers: [
+      { selection_id: 'front', image_url: '/cover?selection_id=front' },
+      { selection_id: 'back', image_url: '/cover?selection_id=back' },
+      { selection_id: 'insert', unavailable: true },
+    ],
+  };
+  const { context, cover } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:selected-cover', cached: true }),
+  });
+
+  context.renderTrackModalRelease(album);
+
+  assert.match(cover.innerHTML, /album-details-cover-stack/);
+  assert.match(cover.innerHTML, /album-artbox/);
+  assert.match(cover.innerHTML, /data-selected-cover-index="0"/);
+  assert.match(cover.innerHTML, /data-album-details-cover-index="1"/);
+  assert.match(cover.innerHTML, /selection_id=back/);
+  assert.doesNotMatch(cover.innerHTML, /C:\/private|data-cover-path/);
+
+  context.state.ui.trackModalSelectedCoverBrowser = { albumKey: album.key, index: 1 };
+  context.renderTrackModalRelease(album);
+  assert.match(cover.innerHTML, /data-selected-cover-index="1"/);
+  assert.match(cover.innerHTML, /data-cover-src="\/cover\?selection_id=back"/);
+
+  context.state.ui.trackModalSelectedCoverBrowser = { albumKey: album.key, index: 2 };
+  context.renderTrackModalRelease(album);
+  assert.match(cover.innerHTML, /Selected cover 3 for Ordered Cover Album is unavailable/);
+  assert.match(cover.innerHTML, /album-artbox--missing/);
+  assert.doesNotMatch(cover.innerHTML, /data-selected-cover-index="[01]"/);
+});
+
 test('first track-modal cover render stays source-less until a shared-cache hit resolves', async () => {
   const cachedResult = createDeferred();
   const { context, cover, loaderCalls, directFetchCalls } = createTrackModalCoverContext({

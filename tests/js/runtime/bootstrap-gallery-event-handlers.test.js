@@ -528,6 +528,40 @@ test('scroll movement cancels an artist tree long press before the menu opens', 
   assert.deepEqual(opened, []);
 });
 
+test('Album Details cover controls delegate browsing without saving', () => {
+  const calls = [];
+  const context = {
+    document: { getElementById: () => null },
+    state: { relatedExpanded: false, versionPicker: {} },
+    handleGalleryMainClick: () => false,
+    hideVersionContextMenu() {},
+    overlayClickStartedOnOverlay: () => false,
+    browseTrackModalSelectedCover(value, options) { calls.push({ value, options }); },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const fire = (selector, attributes, classNames = []) => {
+    const button = {
+      classList: { contains: (name) => classNames.includes(name) },
+      getAttribute: (name) => attributes[name] || '',
+    };
+    let prevented = false;
+    context.handleGalleryBootstrapClick({
+      preventDefault() { prevented = true; },
+      target: { closest: (candidate) => (candidate === selector ? button : null) },
+    });
+    assert.equal(prevented, true);
+  };
+
+  fire('[data-album-details-cover-index]', { 'data-album-details-cover-index': '2' });
+  fire('[data-album-details-cover-step]', { 'data-album-details-cover-step': '-1' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    { value: 2, options: { absolute: true } },
+    { value: -1 },
+  ]);
+});
+
 test('handleGalleryBootstrapClick opens all loose tracks in the tag editor', () => {
   const { context, calls } = createContext();
   let prevented = false;

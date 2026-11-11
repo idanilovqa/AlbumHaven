@@ -23,6 +23,81 @@ function albumTaggedArtistNote(album) {
     : '';
 }
 
+function resolveAlbumDetailsCoverSlots(album) {
+  if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return [];
+  return album.selected_covers.slice(0, 3).map((slot) => ({
+    selectionId: String(slot?.selectionId || slot?.selection_id || ''),
+    imageUrl: String(slot?.imageUrl || slot?.image_url || ''),
+    unavailable: slot?.unavailable === true || !String(slot?.imageUrl || slot?.image_url || ''),
+  })).filter((slot) => slot.selectionId);
+}
+
+function buildAlbumDetailsCoverStackHtml(config = {}) {
+  const frontHtml = String(config.frontHtml || '');
+  const slots = resolveAlbumDetailsCoverSlots({
+    selected_covers_loaded: true,
+    selected_covers: Array.isArray(config.slots) ? config.slots : [],
+  });
+  if (slots.length < 2) return frontHtml;
+  const canBrowse = slots.filter((slot) => !slot.unavailable).length > 1;
+  const activeIndex = Math.min(
+    slots.length - 1,
+    Math.max(0, Number.isInteger(config.activeIndex) ? config.activeIndex : 0),
+  );
+  const albumName = String(config.albumName || 'Album');
+  const rearHtml = slots
+    .map((slot, index) => ({ slot, index }))
+    .filter(({ index }) => index !== activeIndex)
+    .map(({ slot, index }, rearIndex) => {
+    const positionClass = rearIndex === 0 ? 'is-top' : 'is-bottom';
+    const label = `Show cover ${index + 1} of ${slots.length} for ${albumName}`;
+    if (slot.unavailable) {
+      return `<span class="album-details-cover-stack__rear ${positionClass} is-unavailable" data-album-details-cover-index="${index}" role="img" aria-label="${escapeHtml(label)} unavailable"></span>`;
+    }
+    const previewUrl = `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`;
+    return `<button class="album-details-cover-stack__rear ${positionClass}" type="button" data-album-details-cover-index="${index}" aria-label="${escapeHtml(label)}"><img src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async"></button>`;
+  }).join('');
+  const previous = canBrowse ? ButtonComponent.renderActionButton({
+    icon: 'previous',
+    ariaLabel: 'Show previous selected cover',
+    className: 'album-details-cover-nav album-details-cover-nav--previous',
+    shape: 'round',
+    presentation: 'bare',
+    attributes: { 'data-album-details-cover-step': '-1' },
+  }) : '';
+  const next = canBrowse ? ButtonComponent.renderActionButton({
+    icon: 'next',
+    ariaLabel: 'Show next selected cover',
+    className: 'album-details-cover-nav album-details-cover-nav--next',
+    shape: 'round',
+    presentation: 'bare',
+    attributes: { 'data-album-details-cover-step': '1' },
+  }) : '';
+  return `<div class="album-details-cover-stack" data-album-details-cover-count="${slots.length}" data-album-details-cover-active-index="${activeIndex}"><div class="album-details-cover-stack__rear-layer">${rearHtml}</div><div class="album-details-cover-stack__front">${frontHtml}</div><div class="album-details-cover-stack__navigation">${previous}${next}</div></div>`;
+}
+
+function bindAlbumDetailsCoverStackPointer(stack) {
+  if (!stack?.addEventListener || stack.dataset?.pointerTrackingBound === '1') return;
+  if (!stack.dataset) stack.dataset = {};
+  stack.dataset.pointerTrackingBound = '1';
+  const clear = () => {
+    stack.style.removeProperty('--album-cover-pointer-x');
+    stack.style.removeProperty('--album-cover-pointer-y');
+    stack.style.removeProperty('--album-cover-pointer-rotation');
+  };
+  stack.addEventListener('pointermove', (event) => {
+    const bounds = stack.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, ((event.clientX - bounds.left) / bounds.width) * 2 - 1));
+    const y = Math.max(-1, Math.min(1, ((event.clientY - bounds.top) / bounds.height) * 2 - 1));
+    stack.style.setProperty('--album-cover-pointer-x', `${(x * 2).toFixed(3)}px`);
+    stack.style.setProperty('--album-cover-pointer-y', `${(y * 2).toFixed(3)}px`);
+    stack.style.setProperty('--album-cover-pointer-rotation', `${(x * 0.6).toFixed(3)}deg`);
+  });
+  stack.addEventListener('pointerup', clear);
+  stack.addEventListener('pointerleave', clear);
+  stack.addEventListener('pointercancel', clear);
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';

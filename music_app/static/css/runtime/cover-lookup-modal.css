@@ -530,6 +530,9 @@
   outline-offset: -2px;
   box-shadow: none;
 }
+.cover-lookup-art-card.is-selection-limited {
+  opacity: 0.72;
+}
 .cover-lookup-art-card.is-suggested {
   border-color: var(--appearance-success, var(--success, #52d7aa));
   outline-color: var(--appearance-success, var(--success, #52d7aa));

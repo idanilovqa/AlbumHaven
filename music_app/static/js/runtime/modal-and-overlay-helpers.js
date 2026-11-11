@@ -805,23 +805,49 @@ function getLightboxVisibleAlbumGroups() {
   return Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : [];
 }
 
+function getLightboxAlbumKey(album) {
+  return getAlbumPathSignature(album)
+    || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
+}
+
+function buildLightboxGalleryItemsForAlbum(album) {
+  if (!album) return [];
+  const key = getLightboxAlbumKey(album);
+  const slots = typeof resolveAlbumDetailsCoverSlots === 'function'
+    ? resolveAlbumDetailsCoverSlots(album) : [];
+  if (slots.length) {
+    return slots.map((slot, index) => ({
+      key: index === 0 ? key : `${key}::selected-cover:${index}`,
+      src: slot.unavailable ? '' : slot.imageUrl,
+      previewSrc: slot.unavailable
+        ? '' : `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`,
+      remoteSrc: '',
+      alt: `Album cover ${index + 1} of ${slots.length} for ${album.name || 'Album'}`,
+      album,
+      selectedCoverIndex: index,
+      unavailable: slot.unavailable,
+    }));
+  }
+  if (!albumHasDisplayCover(album)) return [];
+  return [{
+    key,
+    src: typeof buildAlbumLightboxCoverUrl === 'function'
+      ? buildAlbumLightboxCoverUrl(album)
+      : buildAlbumDisplayCoverUrl(album),
+    previewSrc: buildAlbumDisplayCoverUrl(album),
+    remoteSrc: String(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '').trim()
+      ? buildAlbumRemoteCoverUrl(album, { preferThumbnail: false })
+      : '',
+    alt: `Album cover for ${album.name || 'Album'}`,
+    album,
+  }];
+}
+
 function getLightboxGalleryItems() {
   const seen = new Set();
   return getLightboxVisibleAlbumGroups()
     .flatMap((group) => Array.isArray(group?.albums) ? group.albums : [])
-    .filter((album) => album && albumHasDisplayCover(album))
-    .map((album) => ({
-      key: getAlbumPathSignature(album) || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`,
-      src: typeof buildAlbumLightboxCoverUrl === 'function'
-        ? buildAlbumLightboxCoverUrl(album)
-        : buildAlbumDisplayCoverUrl(album),
-      previewSrc: buildAlbumDisplayCoverUrl(album),
-      remoteSrc: String(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '').trim()
-        ? buildAlbumRemoteCoverUrl(album, { preferThumbnail: false })
-        : '',
-      alt: `Album cover for ${album.name || 'Album'}`,
-      album,
-    }))
+    .flatMap(buildLightboxGalleryItemsForAlbum)
     .filter((item) => {
       if (!item.key || seen.has(item.key)) return false;
       seen.add(item.key);
@@ -1391,7 +1417,8 @@ function applyLightboxImageItem(item) {
   setLightboxLoadingPresentation(els.image, els.loading, true);
   if (typeof els.image.removeAttribute === 'function') els.image.removeAttribute('src');
   if (els.image.classList?.remove) els.image.classList.remove('is-unavailable');
-  return sources.length ? startLightboxSourcePreload(els.image, loadToken) : false;
+  startLightboxSourcePreload(els.image, loadToken);
+  return true;
 }
 
 function showStandaloneLightboxItem(item) {

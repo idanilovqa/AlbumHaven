@@ -377,6 +377,7 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
             "library.settings.manage": True,
             "library.filesystem.browse": True,
             "library.paths.read": True,
+            "library.files.edit_tags": True,
         },
         "settings": {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
@@ -5915,6 +5916,28 @@ def test_collection_tag_edit_rejects_mixed_raw_album_identity(monkeypatch):
     assert exc_info.value.status_code == 403
 
 
+def test_edit_tags_payload_helper_returns_plain_error_contract_for_opaque_ref_failure(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=SimpleNamespace()),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+    monkeypatch.setattr(
+        routes,
+        "_resolve_collection_tag_edit_refs",
+        lambda *_args: (_ for _ in ()).throw(routes.PlaybackContractError(403)),
+    )
+
+    result = asyncio.run(routes.run_edit_tags_payload(
+        request,
+        {"confirmed": True, "album": {"tracks": [{"media_ref": "opaque"}]}, "updates": {"opaque": {"title": "Fixed"}}},
+        history_scope=None,
+    ))
+
+    assert result == ({"ok": False, "error": "Invalid or unavailable playback request."}, 403)
+
+
 def test_collection_tag_edit_resolves_media_ref_when_client_omits_collection_marker(
     monkeypatch,
 ):
@@ -6073,6 +6096,21 @@ def test_member_save_task_poll_rejects_another_actor(monkeypatch):
         routes._save_task_result_for_request(request, "task-1")
 
     assert exc_info.value.status_code == 403
+
+
+def test_save_task_route_wraps_playback_contract_error_as_json_response(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    monkeypatch.setattr(
+        routes,
+        "_save_task_result_for_request",
+        lambda *_args: (_ for _ in ()).throw(routes.PlaybackContractError(403)),
+    )
+
+    response = asyncio.run(routes.utilities_save_task(SimpleNamespace(), "task-1"))
+
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"ok": False, "error": "Invalid or unavailable playback request."}
 
 
 def test_opaque_edit_task_route_binds_scoped_path_free_poll(asgi_app, monkeypatch):

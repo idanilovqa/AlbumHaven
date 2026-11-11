@@ -692,6 +692,34 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
         assert {row["name"] for row in retained} == {"Retained Guest"}
 
 
+def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    clean = fixture.entry("Owner/Root Catch-up/01.flac")
+    broken = fixture.entry("Owner/Root Catch-up/02.flac")
+    tags = {
+        clean["path"]: dict(clean),
+        broken["path"]: {**broken, "title": "Bad\x00Title", "album": "Repair Album\x00", "genre": "Rock\x00"},
+    }
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(tags[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(Path(clean["path"]).parent,), deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+    assert result.revision > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_file_album, metadata #>> '{scan_cache,file_entry,title}' as title "
+            "from library.local_track_files where scan_cache_stale is false order by private_path"
+        ).fetchall()
+    assert [row["private_path"] for row in rows] == [clean["path"], broken["path"]]
+    assert all("\x00" not in str(row["title"]) + str(row["scan_file_album"]) for row in rows)
+    assert rows[1]["title"] == "Bad; Title" and rows[1]["scan_file_album"] == "Repair Album"
+
+
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])
 def test_live_targeted_publication_rechecks_health_after_inventory_lock_wait(watcher_repair_inventory, blocked_root):
     from music_app.services.library_watch_health import LibraryWatchHealthProblem, PostgresLibraryWatchHealthStore

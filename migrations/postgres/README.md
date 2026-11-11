@@ -422,6 +422,15 @@ the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
 expressions on databases without these columns, so rollback only drops the index
 and the columns; a running server retries with the inline form once it finds them gone.
+
+Migration `0116_add_problematic_text_corrections.sql` is an already-applied
+historical identity with SHA-256
+`0a9ba1063966f69c87b494f9d0be2608cd2c15d9026d94c5a62077c70b206b0d`.
+It preserves derived reversible text corrections in a side table synchronized
+from scan metadata without rewriting `library.local_track_files`. Preserve this
+filename and exact SQL bytes; do not renumber, rewrite, replay, or edit its
+ledger row.
+
 `0179_add_ordered_cover_metadata_constraint.sql` adds a structural CHECK for
 optional ordered cover references in `library.local_albums.metadata`. Existing
 nonobject metadata and objects without `selected_covers` remain legacy values,

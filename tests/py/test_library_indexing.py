@@ -1855,3 +1855,35 @@ def test_scan_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: P
     assert all(entry["cover_path"] is None for entry in updated.values())
 
 
+def test_scan_rereads_unchanged_files_from_a_historical_reader_version(tmp_path: Path, monkeypatch):
+    from music_app.services import metadata
+
+    path = tmp_path / "a.mp3"
+    stat = SimpleNamespace(st_mtime=1.0, st_size=2)
+    stored = {"path": str(path), "mtime": 1.0, "size": 2, "title": "Stored", "metadata_schema_version": 5}
+    changed = tmp_path / "b.mp3"
+    changed_stored = {**stored, "path": str(changed), "mtime": 0.5}
+    reads = []
+
+    def read_metadata(read_path):
+        reads.append(read_path.name)
+        return {"path": str(read_path), "mtime": 1.0, "size": 2, "title": "Read", "artists": ["A"],
+                "is_compilation": None, "compilation_tag": None,
+                "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION}
+
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
+    entries = {
+        entry_path.name: entry
+        for entry_path, _stat, _existing, entry, _read in library_indexing._ordered_scan_metadata_entries(
+            {"scan_generation": 1, "scan_in_progress": True},
+            [(path, stat), (changed, stat)],
+            {str(path): stored, str(changed): changed_stored},
+            expected_scan_generation=1,
+        )
+    }
+
+    assert reads == ["a.mp3", "b.mp3"]
+    assert entries["a.mp3"]["title"] == entries["b.mp3"]["title"] == "Read"
+    assert entries["a.mp3"]["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION
+
+

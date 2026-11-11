@@ -63,6 +63,8 @@ from music_app.services.opinion_read_seams import (
 )
 from music_app.services.metadata import (
     NON_ALBUM_EXCEPTION_VALUES,
+    TRACK_ARTIST_UNREADABLE_REASON,
+    text_correction_reason,
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
@@ -5595,6 +5597,7 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "album_rating": file_entry.get("album_rating"),
         "exception_type": _effective_row_exception_type(row_payload),
         "_text_mojibake_candidate": row_payload.get("file_text_mojibake_candidate"),
+        "text_corrections": _row_json_mapping(row_payload.get("file_text_corrections")) or file_entry.get("text_corrections"),
         "local_album_membership_problem": (
             row_payload["local_album_membership_problem"]
             if "local_album_membership_problem" in row_payload
@@ -5629,6 +5632,7 @@ def _album_file_year_mismatch(album: Mapping[str, object]) -> bool:
 
 
 _PROBLEM_REASON_IDENTITY_CODES = {
+    TRACK_ARTIST_UNREADABLE_REASON: "track-artist-unreadable",
     "Empty audio file": "empty-audio-file",
     "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
@@ -6159,6 +6163,13 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield str(entry["local_album_membership_problem"])
     if reviewable_edition_title(entry.get("album"), entry.get("edition")):
         yield "Edition descriptor in album name"
+    yield from _text_correction_problem_reasons(entry.get("text_corrections"))
+
+
+def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
+    """Problems the app corrects for display but the tags still carry."""
+    for field, correction in (corrections.items() if isinstance(corrections, Mapping) else ()):
+        yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
 def _iter_problematic_track_reasons(
@@ -11418,7 +11429,8 @@ def _problematic_files_sql(
               or library.local_tracks.track_number <= 0) as track_problem,
             (library.local_track_files.scan_file_entry_is_object is true
               and (library.local_track_files.scan_file_text_mojibake_candidate is true
-                or library.local_track_files.scan_file_metadata_problem_candidate is true)) as file_problem,
+                or library.local_track_files.scan_file_metadata_problem_candidate is true
+                or text_corrections.track_file_id is not null)) as file_problem,
             nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
             nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
             nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year,
@@ -11432,6 +11444,8 @@ def _problematic_files_sql(
             on roots.id = library.local_track_files.library_root_id
            and roots.library_id = library.local_tracks.library_id
            and roots.is_active is true
+          left join library.local_track_file_text_corrections text_corrections
+            on text_corrections.track_file_id = library.local_track_files.id
           where library.local_track_files.scan_cache_stale is false
             and __PATH_KEY_PRESENT__
         ),
@@ -11927,6 +11941,8 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_year as file_year,
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
+            (select text_corrections.text_corrections from library.local_track_file_text_corrections text_corrections
+              where text_corrections.track_file_id = library.local_track_files.id) as file_text_corrections,
             exception_override.override_payload ->> 'exception_type' as exception_type,
             exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
@@ -11965,6 +11981,7 @@ def _problematic_files_sql(
           active_track_files.file_year,
           active_track_files.file_track_number,
           active_track_files.file_text_mojibake_candidate,
+          active_track_files.file_text_corrections,
           active_track_files.exception_type,
           active_track_files.exception_override_present,
         """

@@ -467,11 +467,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Numbers stay contiguous, except migrations reserved past numbers that
     # unmerged branches and the production ledger already use.
-    reserved = {112, 171, 172, 173, 174, 175, 176, 177}
+    reserved = {112, 116, 171, 172, 173, 174, 175, 176, 177, 179, 180}
     contiguous = [number for number in migration_numbers if number not in reserved]
     assert contiguous == list(range(1, len(contiguous) + 1))
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-75:] == [
+    assert migration_names[-78:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -540,6 +540,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0106_create_android_artifact_access.sql",
         "0107_add_android_device_key_signer.sql",
         "0112_add_problematic_file_path_projection.sql",
+        "0116_add_problematic_text_corrections.sql",
         "0171_create_musicbrainz_artist_enrichment.sql",
         "0172_add_musicbrainz_artist_discogs_link.sql",
         "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
@@ -547,6 +548,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0175_add_musicbrainz_match_album_evidence.sql",
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
+        "0179_add_ordered_cover_metadata_constraint.sql",
+        "0180_add_confirmed_copy_retirement.sql",
     ]
 
 
@@ -3354,3 +3357,18 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+
+def test_text_corrections_migration_never_rewrites_local_track_files():
+    sql = _normalized_sql(
+        (Path(__file__).parents[2] / "migrations" / "postgres" / "0116_add_problematic_text_corrections.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert "alter table library.local_track_files" not in sql
+    assert "generated always" not in sql
+    assert "update library.local_track_files" not in sql
+    assert "from library.local_track_files" not in sql
+    assert "create table if not exists library.local_track_file_text_corrections" in sql
+    assert "after insert or update of metadata on library.local_track_files" in sql
+
+

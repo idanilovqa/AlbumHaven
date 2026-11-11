@@ -328,3 +328,58 @@ def test_album_haven_app_upsert_executes_generated_candidate_function():
         finally:
             connection.rollback()
             isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_album_haven_app_writes_keep_text_corrections_in_their_side_table():
+    database_url = _isolated_runtime_url_or_skip()
+    setup_url = _isolated_migrator_url_or_skip()
+    isolatedPostgres.prepare_isolated_database(setup_url, database_url)
+    corrected = (
+        '{"scan_cache":{"stale":false,"file_entry":{"artist":"A","text_corrections":'
+        '{"artist":{"original":"??","corrected":"A","kind":"lost_characters"}}}}}'
+    )
+    clean = '{"scan_cache":{"stale":false,"file_entry":{"artist":"A","text_corrections":null}}}'
+    with psycopg.connect(database_url) as connection:
+        try:
+            library_id = connection.execute("select id from library.libraries order by id limit 1").fetchone()[0]
+            artist_id = connection.execute(
+                "insert into library.local_artists(library_id, artist_key, name) values (%s, 'corrections-contract-artist', 'A') returning id",
+                (library_id,),
+            ).fetchone()[0]
+            album_id = connection.execute(
+                "insert into library.local_albums(library_id, artist_id, album_key, title) values (%s, %s, 'corrections-contract-album', 'C') returning id",
+                (library_id, artist_id),
+            ).fetchone()[0]
+            track_id = connection.execute(
+                "insert into library.local_tracks(library_id, album_id, artist_id, track_key, title) values (%s, %s, %s, 'corrections-contract-track', 'T') returning id",
+                (library_id, album_id, artist_id),
+            ).fetchone()[0]
+
+            def write(metadata):
+                file_id = connection.execute(
+                    """
+                    insert into library.local_track_files(track_id, private_path, metadata)
+                    values (%s, 'C:\\corrections-contract.mp3', %s::jsonb)
+                    on conflict (private_path) do update set metadata = excluded.metadata
+                    returning id
+                    """,
+                    (track_id, metadata),
+                ).fetchone()[0]
+                return file_id, connection.execute(
+                    "select text_corrections from library.local_track_file_text_corrections where track_file_id = %s",
+                    (file_id,),
+                ).fetchall()
+
+            file_id, rows = write(corrected)
+            assert rows == [({"artist": {"original": "??", "corrected": "A", "kind": "lost_characters"}},)]
+            # The writer's undo record is the runtime role's to keep.
+            connection.execute(
+                "insert into library.local_track_file_text_correction_writes(track_file_id, text_corrections) select track_file_id, text_corrections from library.local_track_file_text_corrections where track_file_id = %s",
+                (file_id,),
+            )
+            assert write(clean)[1] == []
+            assert connection.execute(
+                "select count(*) from library.local_track_file_text_correction_writes where track_file_id = %s", (file_id,),
+            ).fetchone()[0] == 1
+        finally:
+            connection.rollback()

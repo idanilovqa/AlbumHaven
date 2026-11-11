@@ -378,11 +378,11 @@ class PostgresScanCacheAdapter:
             active_file_entries or deleted_paths or deleted_subtrees or moves
         ):
             raise ValueError("Confirmed copy retirement cannot be combined with another inventory mutation.")
-        file_cache = {
+        file_cache = _without_nul_file_entries({
             str(path): dict(entry)
             for path, entry in active_file_entries.items()
             if str(path).strip() and isinstance(entry, dict)
-        }
+        })
         incoming_track_paths = set(file_cache)
         stale_by_root: dict[str, dict[str, set[str]]] = {
             normalized_root_id: {
@@ -2200,6 +2200,7 @@ class PostgresScanCacheAdapter:
     ) -> dict[str, object] | None:
         publication_started_at = perf_counter()
         del cache_path
+        file_cache = _without_nul_file_entries(file_cache)
         committed_relation_state: dict[str, object] | None = None
         repaired_cover_entries: dict[str, dict[str, object]] = {}
         with self._connect_to_database() as connection:
@@ -2479,7 +2480,21 @@ def _connect(database_url: str) -> Any:
     return psycopg.connect(database_url, row_factory=dict_row)
 
 
+def _without_nul_file_entries(file_cache: dict) -> dict:
+    """Postgres text rejects NUL; one malformed tag must not block a whole root."""
+    from music_app.services.metadata import without_nul_characters
+
+    return {
+        path: without_nul_characters(entry) if isinstance(entry, dict) else entry
+        for path, entry in (file_cache or {}).items()
+    }
+
+
 def _jsonb(value: object) -> object:
+    from music_app.services.metadata import without_nul_characters
+
+    # Postgres jsonb rejects NUL; one malformed value must not abort a root.
+    value = without_nul_characters(value)
     if Jsonb is None:
         return value
     return Jsonb(value)

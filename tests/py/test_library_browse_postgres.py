@@ -18553,3 +18553,15 @@ def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
     assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
         sql, "selected_active_track_file_rows"
     )
+
+
+def test_a_display_correction_is_a_problematic_file_until_written():
+    from music_app.services.library_browse_postgres import _physical_file_problem_reasons
+
+    assert list(_physical_file_problem_reasons({"text_corrections": {
+        "artist": {"original": "??", "corrected": "A", "kind": "lost_characters"},
+        "album_artist": {"original": "Ã©", "corrected": "é", "kind": "decoded"},
+    }})) == ["Track artist unreadable — using album artist", "Encoding problem"]
+    assert list(_physical_file_problem_reasons({})) == []
+
+

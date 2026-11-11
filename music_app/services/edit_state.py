@@ -48,6 +48,11 @@ def update_cache_entry_after_repairs(
         updated_entry[field] = normalize_exception_value(value) if field == "exception_type" else value
         if field == "year":
             updated_entry["release_date"] = value
+    corrections = updated_entry.get("text_corrections")
+    if isinstance(corrections, dict):
+        # A written field now holds what the tags say; nothing is left to correct.
+        remaining = {field: correction for field, correction in corrections.items() if field not in repairs}
+        updated_entry["text_corrections"] = remaining or None
     try:
         stat = path.stat()
         updated_entry["mtime"] = stat.st_mtime

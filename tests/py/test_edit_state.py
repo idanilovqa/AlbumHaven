@@ -279,3 +279,15 @@ def test_refresh_changed_files_in_cache_requires_explicit_config():
         assert "config" in str(exc)
     else:
         raise AssertionError("refresh_changed_files_in_cache should require explicit config")
+
+
+def test_a_written_field_clears_its_display_correction(tmp_path):
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"audio")
+    entry = {"artist": "A", "album_artist": "B", "text_corrections": {
+        "artist": {"original": "??", "corrected": "A", "kind": "lost_characters"},
+        "album_artist": {"original": "\u00c3\u00a9", "corrected": "B", "kind": "decoded"}}}
+    partly = edit_state_module.update_cache_entry_after_repairs(path, entry, {"artist": "A"})
+    assert set(partly["text_corrections"]) == {"album_artist"}
+    fully = edit_state_module.update_cache_entry_after_repairs(path, partly, {"album_artist": "B"})
+    assert fully["text_corrections"] is None

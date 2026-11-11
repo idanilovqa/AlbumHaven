@@ -106,6 +106,7 @@ _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
 _PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
+_PROBLEMATIC_LOOSE_TRACKS_KEY = "loose-source::all"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
@@ -4085,19 +4086,47 @@ class PostgresLibraryBrowseRepository:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
             def standalone_rows() -> list[object]:
-                from hashlib import sha256
-                from music_app.services.album_local_membership import physical_album_root
-
+                cached_paths: set[str] | None = None
+                if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+                    cached_payloads = []
+                    complete = self._get_cached_utility_projection(
+                        "problematic-files", copy_payload=False,
+                    )
+                    if isinstance(complete, Mapping):
+                        cached_payloads.append(complete)
+                    pages = self._get_cached_utility_projection(
+                        _PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False,
+                    )
+                    if isinstance(pages, Mapping):
+                        cached_payloads.extend(
+                            page for page in pages.values() if isinstance(page, Mapping)
+                        )
+                    for payload in cached_payloads:
+                        item = next((
+                            item for item in payload.get("items") or []
+                            if isinstance(item, Mapping)
+                            and item.get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY
+                        ), None)
+                        paths = {
+                            str(path).strip()
+                            for path in (item or {}).get("track_paths") or []
+                            if str(path or "").strip()
+                        }
+                        if paths:
+                            cached_paths = paths
+                            break
                 standalone = []
                 for raw in self._inventory_repository.load_non_album_candidates(
-                    limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=active_connection, unassigned_only=True,
+                    private_paths=cached_paths,
+                    limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+                    connection=active_connection,
+                    unassigned_only=True,
                 ):
                     row = dict(raw)
                     entry = dict(_row_json_mapping(row.get("file_entry")))
                     if row.get("album_id") is not None or not entry.get("local_album_membership_problem"):
                         continue
-                    root_identity = str(row.get("root_id") or "") + "::" + physical_album_root(row.get("private_path"))
-                    key = "loose-source::" + sha256(root_identity.encode("utf-8")).hexdigest()[:24]
+                    key = _PROBLEMATIC_LOOSE_TRACKS_KEY
                     if normalized_album_key is not None and key != normalized_album_key:
                         continue
                     row.update(album_key=key, file_private_path=row.get("private_path"),
@@ -4114,7 +4143,7 @@ class PostgresLibraryBrowseRepository:
                     standalone.append(row)
                 return standalone
 
-            if normalized_album_key and normalized_album_key.startswith("loose-source::"):
+            if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
                 return standalone_rows()
             if use_selected_album_ids:
                 if not selected_album_ids:
@@ -4349,7 +4378,13 @@ class PostgresLibraryBrowseRepository:
         if not isinstance(payload, Mapping):
             return None
         payload = dict(payload)
-        if payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None) != current_fingerprint or not current_fingerprint:
+        snapshot_version = payload.pop(_PROBLEMATIC_SNAPSHOT_VERSION_KEY, None)
+        snapshot_fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
+        if (
+            snapshot_version != _PROBLEMATIC_SNAPSHOT_VERSION
+            or snapshot_fingerprint != current_fingerprint
+            or not current_fingerprint
+        ):
             return payload if allow_outdated else None
         return payload
 
@@ -4361,6 +4396,7 @@ class PostgresLibraryBrowseRepository:
             {
                 **{key: value for key, value in payload.items() if key != "projection_cache_status"},
                 _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
+                _PROBLEMATIC_SNAPSHOT_VERSION_KEY: _PROBLEMATIC_SNAPSHOT_VERSION,
             },
             default=str,
         )
@@ -7133,6 +7169,8 @@ def _problematic_search_album_ids_sql() -> str:
 
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
+_PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
+_PROBLEMATIC_SNAPSHOT_VERSION = 1
 
 
 def _problematic_inventory_fingerprint(connection: Any) -> str:

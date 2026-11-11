@@ -11602,6 +11602,64 @@ def test_problematic_file_entry_preserves_disc_total_and_subtitle():
     assert entry["disc_subtitle"] == "Bonus"
 
 
+def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypatch):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _PROBLEMATIC_LOOSE_TRACKS_KEY,
+    )
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: None,
+    )
+    rows = [
+        {
+            "album_id": None,
+            "root_id": root_id,
+            "private_path": path,
+            "title": title,
+            "file_entry": {
+                "artist": artist,
+                "title": title,
+                "local_album_membership_problem": "Mixed album metadata in one folder",
+            },
+        }
+        for root_id, path, artist, title in (
+            ("main", "Main/Loose/one.flac", "First Artist", "One"),
+            ("downloads", "Downloads/Loose/two.flac", "Second Artist", "Two"),
+        )
+    ]
+    requested_paths = []
+
+    def load_candidates(**options):
+        requested_paths.append(set(options.get("private_paths") or []))
+        return rows
+
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", load_candidates)
+    monkeypatch.setattr(
+        repository,
+        "_get_cached_utility_projection",
+        lambda kind, **_options: {
+            "items": [{
+                "key": _PROBLEMATIC_LOOSE_TRACKS_KEY,
+                "track_paths": [row["private_path"] for row in rows],
+            }],
+        } if kind == "problematic-files" else None,
+    )
+
+    result = repository._load_problematic_file_rows(
+        album_key=_PROBLEMATIC_LOOSE_TRACKS_KEY,
+        connection=object(),
+    )
+
+    assert {row["album_key"] for row in result} == {_PROBLEMATIC_LOOSE_TRACKS_KEY}
+    assert {row["file_private_path"] for row in result} == {
+        "Main/Loose/one.flac",
+        "Downloads/Loose/two.flac",
+    }
+    assert requested_paths == [{"Main/Loose/one.flac", "Downloads/Loose/two.flac"}]
+
+
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -15642,7 +15700,42 @@ def test_problematic_files_snapshot_is_stored_only_by_writer_instances(monkeypat
     writer._queue_problematic_files_snapshot_store(payload, "fingerprint")
     assert len(submitted) == 1
     stored = json.loads(submitted[0][1][0])
-    assert stored == {"items": [{"key": "a"}], browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint"}
+    assert stored == {
+        "items": [{"key": "a"}],
+        browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint",
+        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: browse._PROBLEMATIC_SNAPSHOT_VERSION,
+    }
+
+
+def test_problematic_files_snapshot_version_is_required_for_normal_serving(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from music_app.services import library_browse_postgres as browse
+
+    snapshot = {
+        "items": [{"key": "loose-source::old-root-hash"}],
+        browse._SNAPSHOT_FINGERPRINT_KEY: "current",
+    }
+
+    class Connection:
+        def execute(self, _sql):
+            return SimpleNamespace(fetchone=lambda: {"payload": json.dumps(snapshot)})
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/old-snapshot",
+    })
+    monkeypatch.setattr(repository, "_connect_to_database", connection_context)
+    monkeypatch.setattr(browse, "_problematic_inventory_fingerprint", lambda _connection: "current")
+
+    assert repository._load_problematic_files_snapshot() is None
+    assert repository._load_problematic_files_snapshot(allow_outdated=True) == {
+        "items": [{"key": "loose-source::old-root-hash"}],
+    }
 
 
 def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_lists_albums(monkeypatch):

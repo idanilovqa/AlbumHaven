@@ -189,7 +189,13 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+      return buildSmallAlertHtml({
+        severity: 'info',
+        message: marker.label,
+        focusable: true,
+        trustedIconHtml: buildLibrarySourceGlyphHtml(category),
+        className: `small-alert--fit-content album-details-source-marker album-details-source-marker--${category}`,
+      });
     })
     .join('');
 }

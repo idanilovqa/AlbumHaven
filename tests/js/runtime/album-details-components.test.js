@@ -60,7 +60,7 @@ test('Album Details renders the backend poor-art classification as a focusable S
   );
 });
 
-test('Album Details renders noninteractive source markers below the cover', () => {
+test('Album Details renders source markers as focusable shared SmallAlerts below the desktop cover', () => {
   const context = loadComponents();
   const html = context.buildAlbumCoverSourceMarkersHtml({
     root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
@@ -69,6 +69,10 @@ test('Album Details renders noninteractive source markers below the cover', () =
   assert.match(html, /album-details-cover-source-markers/);
   assert.match(html, /aria-label="Hoard"/);
   assert.match(html, /aria-label="New Arrivals"/);
+  assert.equal((html.match(/small-alert small-alert--info small-alert--fit-content album-details-source-marker/g) || []).length, 2);
+  assert.equal((html.match(/tabindex="0"/g) || []).length, 2);
+  assert.match(html, /small-alert__text">Hoard</);
+  assert.match(html, /small-alert__text">New Arrivals</);
   assert.doesNotMatch(html, /<button|data-open-tracklist/);
   assert.equal(context.buildAlbumCoverSourceMarkersHtml({ source: 'main_library' }), '');
 });
@@ -102,7 +106,7 @@ test('Album Details render path places source markers after the cover shell', ()
   assert.equal([...render.matchAll(/\$\{coverSourceMarkersHtml\}/g)].length, 3);
 });
 
-test('mobile Album Details keeps source markers with the cover instead of either header', () => {
+test('mobile Album Details keeps source alerts on the artwork instead of either header or the rail', () => {
   const navigation = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js'),
     'utf8',
@@ -121,18 +125,22 @@ test('mobile Album Details keeps source markers with the cover instead of either
   );
 
   assert.doesNotMatch(navigation, /mobile-album-source-markers|buildAlbumSourceMarkerItemsHtml/);
-  assert.doesNotMatch(components, /mobile-album-overview__source-markers/);
-  assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers/);
+  assert.doesNotMatch(components, /mobile-album-overview__source-markers|mobileHeader\?\.querySelector\([^\n]*album-details-cover-source-markers/);
+  assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers|mobile-page-header > \.album-details-cover-source-markers/);
   assert.match(components, /overview\.prepend\(rail\)/);
-  assert.match(components, /rail\.appendChild\(sourceMarkers\)/);
+  assert.doesNotMatch(components, /(?:rail|mobileHeader)\.appendChild\(sourceMarkers\)/);
   assert.match(navigation, /mobile-album-overview__rail/);
   assert.match(
     mobileCss,
     /mobile-album-overview__rail[^}]*grid-column:\s*1[^}]*grid-row:\s*1[^}]*flex-direction:\s*column[^}]*gap:\s*8px/s,
   );
   assert.doesNotMatch(mobileCss, /mobile-album-overview\s*>\s*\.album-details-cover-source-markers[^}]*grid-row:\s*1/s);
-  assert.match(mobileCss, /album-details-cover-source-markers[^}]*flex-direction:\s*column/s);
-  assert.match(mobileCss, /\.album-details-cover-source-markers/);
+  assert.match(mobileCss, /track-modal-cover\s*\{[^}]*position:\s*relative/s);
+  assert.match(mobileCss, /album-details-cover-source-markers[^}]*position:\s*absolute[^}]*left:\s*12px[^}]*bottom:\s*12px[^}]*flex-direction:\s*column[^}]*align-items:\s*flex-start/s);
+  assert.match(mobileCss, /album-details-cover-source-markers \.album-details-source-marker[^}]*--mobile-source-marker-size:\s*32px[^}]*--mobile-source-glyph-size:\s*20px[^}]*width:\s*var\(--mobile-source-marker-size\)[^}]*height:\s*var\(--mobile-source-marker-size\)/s);
+  assert.match(mobileCss, /album-details-source-marker \.small-alert__icon[^}]*width:\s*calc\(var\(--mobile-source-marker-size\) - 2px\)[^}]*height:\s*calc\(var\(--mobile-source-marker-size\) - 2px\)/s);
+  assert.match(mobileCss, /album-details-source-marker svg[^}]*width:\s*var\(--mobile-source-glyph-size\)[^}]*height:\s*var\(--mobile-source-glyph-size\)/s);
+  assert.match(mobileCss, /data-album-details-layout="classic_bar"[^}]*album-details-source-marker[^}]*--mobile-source-marker-size:\s*34px[^}]*--mobile-source-glyph-size:\s*18px/s);
   assert.match(mobileCss, /mobile-album-overview \.track-modal-cover[^}]*aspect-ratio:\s*auto/);
   assert.match(trackModalCss, /\.track-modal-cover:has\(> \.album-details-cover-source-markers\)[^}]*aspect-ratio:\s*auto/);
   assert.match(

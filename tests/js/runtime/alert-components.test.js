@@ -56,6 +56,28 @@ test('an interactive SmallAlert is the regular compact alert as a button for its
   assert.match(html, /small-alert__text">MBID: Multiple matches</);
 });
 
+test('SmallAlert accepts a trusted shared-component icon without changing its accessible label', () => {
+  const context = loadAlertComponents();
+  const html = context.buildSmallAlertHtml({
+    severity: 'info',
+    message: 'Hoard',
+    focusable: true,
+    trustedIconHtml: '<svg data-source-glyph="hoard" aria-hidden="true"></svg>',
+    className: 'small-alert--fit-content',
+  });
+
+  assert.match(html, /small-alert--fit-content/);
+  assert.match(html, /aria-label="Hoard"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /data-source-glyph="hoard"/);
+  assert.doesNotMatch(html, /<circle cx="12" cy="12" r="9"/);
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
+    'utf8',
+  );
+  assert.match(css, /small-alert--fit-content:is\(:hover,\s*:focus,\s*:focus-visible\)[^}]*width:\s*max-content/s);
+});
+
 test('the separator alert keeps its own column so the divider line stops at it', () => {
   const alertCss = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),

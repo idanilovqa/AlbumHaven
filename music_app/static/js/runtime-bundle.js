@@ -4426,7 +4426,10 @@ function buildSmallAlertHtml(config = {}) {
   const interactive = config.interactive === true;
   const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
-  const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  const iconHtml = typeof config.trustedIconHtml === 'string' && config.trustedIconHtml
+    ? config.trustedIconHtml
+    : buildAlertIconHtml(severity);
+  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
   if (interactive) {
     return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
   }
@@ -4762,7 +4765,13 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+      return buildSmallAlertHtml({
+        severity: 'info',
+        message: marker.label,
+        focusable: true,
+        trustedIconHtml: buildLibrarySourceGlyphHtml(category),
+        className: `small-alert--fit-content album-details-source-marker album-details-source-marker--${category}`,
+      });
     })
     .join('');
 }
@@ -5366,14 +5375,6 @@ function syncMobileAlbumComposition(album) {
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
   let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
-  const mobileHeader = document.getElementById('mobile-page-header');
-  const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
-  const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
-    || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
-  if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
-    retainedSourceMarkers.remove();
-  }
-  const sourceMarkers = freshSourceMarkers || retainedSourceMarkers;
   if (inline && !overview) {
     overview = document.createElement('div');
     overview.className = 'mobile-album-overview';
@@ -5391,11 +5392,6 @@ function syncMobileAlbumComposition(album) {
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
-  if (sourceMarkers) {
-    if (inline && rail) rail.appendChild(sourceMarkers);
-    else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
-    else cover.appendChild(sourceMarkers);
-  }
   if (identity) {
     identity.hidden = !inline;
     if (inline) {

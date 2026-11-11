@@ -77,6 +77,7 @@
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
+.small-alert.small-alert--fit-content:is(:hover, :focus, :focus-visible) { width: max-content; }
 
 .alert-label {
   box-sizing: border-box;

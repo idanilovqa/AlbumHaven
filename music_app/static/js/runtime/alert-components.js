@@ -36,7 +36,10 @@ function buildSmallAlertHtml(config = {}) {
   const interactive = config.interactive === true;
   const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
-  const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  const iconHtml = typeof config.trustedIconHtml === 'string' && config.trustedIconHtml
+    ? config.trustedIconHtml
+    : buildAlertIconHtml(severity);
+  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
   if (interactive) {
     return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
   }

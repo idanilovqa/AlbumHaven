@@ -15,10 +15,11 @@
 .album-details-header__tag--missing { --album-details-tag-accent: var(--appearance-error, #ef5350); }
 .album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 8px 0 0; }
-.album-details-source-marker { display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--muted); pointer-events: none; }
-.album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.album-details-source-marker--hoard { color: var(--library-source-hoard); }
-.album-details-source-marker--new_arrivals { color: var(--library-source-arrivals); }
+.album-details-source-marker { width: 24px; height: 24px; color: var(--alert-ink); box-shadow: none; }
+.album-details-source-marker .small-alert__icon { width: 22px; height: 22px; }
+.album-details-source-marker .small-alert__icon svg { width: 14px; height: 14px; }
+.album-details-source-marker--hoard { --alert-edge: var(--library-source-hoard); }
+.album-details-source-marker--new_arrivals { --alert-edge: var(--library-source-arrivals); }
 :root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__action-icon {

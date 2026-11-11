@@ -32,12 +32,7 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
   const view = state.view || {};
   const expectedArtist = String(target.artist || '').trim();
   const expectedAlbum = String(target.album || '').trim();
-  const input = document.querySelector('#search-input');
-  const inputQuery = input instanceof HTMLInputElement ? String(input.value || '').trim() : '';
-  const projectionQuery = target.query === undefined
-    ? inputQuery
-    : String(target.query || '').trim();
-  const compactTarget = Boolean(projectionQuery && (expectedArtist || expectedAlbum));
+  const compactTarget = Boolean(expectedArtist || expectedAlbum);
   const compactGroups = (groups) => {
     if (!compactTarget) return groups;
     return (Array.isArray(groups) ? groups : []).flatMap((group) => {
@@ -52,52 +47,6 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
       }
       return [{ ...group, albums }];
     });
-  };
-  const readDom = () => {
-    const selectors = target.domSelectors;
-    if (!selectors) return null;
-    const normalize = value => String(value || '').replace(/\s+/gu, ' ').trim();
-    const visible = (element) => {
-      if (!(element instanceof HTMLElement) || element.hidden) return false;
-      const style = getComputedStyle(element);
-      const bounds = element.getBoundingClientRect();
-      return style.display !== 'none'
-        && style.visibility !== 'hidden'
-        && style.visibility !== 'collapse'
-        && bounds.width > 0
-        && bounds.height > 0;
-    };
-    const contextArtist = normalize(document
-      .querySelector(selectors.singleArtistContextNameSelector)?.textContent);
-    const attachedMatch = Array.from(document.querySelectorAll(selectors.cardSelector))
-      .some((card) => {
-        if (!visible(card)) return false;
-        const title = card.querySelector(selectors.titleButtonSelector);
-        if (!title || normalize(title.textContent) !== expectedAlbum) return false;
-        const details = card.querySelector(selectors.detailsButtonWithinCardSelector);
-        if (!details) return false;
-        const sectionArtist = normalize(card
-          .closest(selectors.artistSectionSelector)
-          ?.querySelector(selectors.artistNameSelector)?.textContent);
-        return (sectionArtist || contextArtist) === expectedArtist;
-      });
-    const loader = document.querySelector(selectors.libraryLoaderSelector);
-    const loaderVisible = visible(loader);
-    return {
-      attachedArtists: Array.from(document.querySelectorAll(selectors.artistHeadingSelector))
-        .map(artist => normalize(artist.textContent))
-        .filter(Boolean),
-      attachedMatch,
-      loaderStatus: loaderVisible
-        ? normalize(document.querySelector(selectors.libraryLoaderStatusSelector)?.textContent)
-        : '',
-      loaderTitle: loaderVisible
-        ? normalize(document.querySelector(selectors.libraryLoaderTitleSelector)?.textContent)
-        : '',
-      loaderVisible,
-      spinnerVisible: loaderVisible
-        && visible(document.querySelector(selectors.libraryLoaderSpinnerSelector)),
-    };
   };
   return {
     artist_groups: compactGroups(view.artist_groups),
@@ -121,8 +70,6 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
     authoritativeMountedFamily: Boolean(view.selected_artist)
       && typeof buildOptimisticSidebarArtistSelectionGroups === 'function'
       && buildOptimisticSidebarArtistSelectionGroups(view.selected_artist)?.skipFetch === true,
-    dom: readDom(),
-    inputQuery,
   };
 }
 
@@ -1000,27 +947,6 @@ export class GalleryPage extends BasePage {
     const expectedAlbum = String(expected.album || '').trim();
     const canReadAppliedProjection = typeof this.page.evaluate === 'function'
       || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
-    const readDomState = () => this.page.evaluate(
-      readAppliedGalleryProjectionSnapshot,
-      {
-        album: expectedAlbum,
-        artist: expectedArtist,
-        query: expected.query,
-        domSelectors: {
-          artistHeadingSelector: this.artistHeadingSelector,
-          artistNameSelector: '.artist-name',
-          artistSectionSelector: '.artist-section',
-          cardSelector: this.albumCard.cardSelector,
-          detailsButtonWithinCardSelector: this.albumCard.detailsButtonWithinCardSelector,
-          libraryLoaderSelector: this.libraryLoaderSelector,
-          libraryLoaderSpinnerSelector: this.libraryLoaderSpinnerSelector,
-          libraryLoaderStatusSelector: this.libraryLoaderStatusSelector,
-          libraryLoaderTitleSelector: this.libraryLoaderTitleSelector,
-          singleArtistContextNameSelector: `${this.albumCard.singleArtistContextSelector} ${this.albumCard.singleArtistContextNameSelector}`,
-          titleButtonSelector: this.albumCard.titleButtonSelector,
-        },
-      },
-    );
     const readLocatorDomState = async () => {
       const [attachedMatch, loaderVisible, attachedArtists] = await Promise.all([
         this.albumCard.detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum).count().then(count => count > 0),
@@ -1046,23 +972,8 @@ export class GalleryPage extends BasePage {
         spinnerVisible,
       };
     };
-    let inputQuery = '';
-    let projection;
-    let initialDom;
-    let atomicDomSnapshot = false;
-    if (typeof this.page.evaluate === 'function') {
-      projection = await readDomState();
-      atomicDomSnapshot = Boolean(projection?.dom);
-      if (atomicDomSnapshot) {
-        initialDom = projection.dom;
-        inputQuery = projection.inputQuery;
-      }
-    }
-    if (!atomicDomSnapshot) {
-      const input = this.page.locator('#search-input');
-      inputQuery = await input.count() ? await input.inputValue() : '';
-      initialDom = await readLocatorDomState();
-    }
+    const input = this.page.locator('#search-input');
+    const inputQuery = await input.count() ? await input.inputValue() : '';
     const expectedQuery = expected.query === undefined
       ? String(inputQuery || '').trim()
       : String(expected.query || '').trim();
@@ -1071,20 +982,21 @@ export class GalleryPage extends BasePage {
         ? this.readAppliedAlbumTargetProjection({
           artist: expectedArtist,
           album: expectedAlbum,
-          query: expected.query,
+          query: expectedQuery,
         })
         : this.readAppliedGalleryProjection()
     );
-    if (!projection) {
-      projection = canReadAppliedProjection ? await readAppliedProjection() : {
+    const [projection, initialDom] = await Promise.all([
+      canReadAppliedProjection ? readAppliedProjection() : Promise.resolve({
         ...(payload || {}),
         busy: false,
         pendingViewTransition: false,
         surface: 'albums',
         locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
         locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
-      };
-    }
+      }),
+      readLocatorDomState(),
+    ]);
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
     const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
@@ -1111,17 +1023,10 @@ export class GalleryPage extends BasePage {
     const startupHydrating = !payloadObserved || Boolean(
       bootstrapPayload?.bootstrap?.startupHydration?.required,
     );
-    let finalProjection;
-    let finalDom;
-    if (atomicDomSnapshot) {
-      finalProjection = await readDomState();
-      finalDom = finalProjection.dom;
-    } else {
-      [finalProjection, finalDom] = await Promise.all([
-        canReadAppliedProjection ? readAppliedProjection() : Promise.resolve(projection),
-        readLocatorDomState(),
-      ]);
-    }
+    const [finalProjection, finalDom] = await Promise.all([
+      canReadAppliedProjection ? readAppliedProjection() : Promise.resolve(projection),
+      readLocatorDomState(),
+    ]);
     const finalAttachedMatch = finalDom.attachedMatch;
     const finalAttachedArtists = finalDom.attachedArtists;
     const finalObservation = this.productionViewObserver.read();

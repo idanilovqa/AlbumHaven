@@ -807,10 +807,10 @@ export class SearchToolbar extends BasePage {
         || bootstrapPayload?.startup_payload?.first_paint_view
         || bootstrapPayload?.initial_view
         || null;
-      // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
       const loader = this.page.locator(this.libraryLoaderSelector);
       const [runtimeView, inputQuery, loaderVisible, attachedArtistTexts,
         attachedSidebarArtistTexts] = await Promise.all([
+        // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
         this.page.evaluate(() => {
           if (typeof state === 'undefined' || !state.gallery?.mainState
             || typeof getFilteredGalleryMainModel !== 'function') return null;

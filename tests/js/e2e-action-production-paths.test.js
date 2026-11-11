@@ -2285,19 +2285,6 @@ test('gallery readiness uses hydration state instead of a fixed virtualized-card
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);
 });
 
-test('album target readiness reads each stable DOM snapshot atomically', () => {
-  const galleryPom = read('tests/e2e/poms/galleryPage.js');
-  const readinessStart = galleryPom.indexOf('async readAlbumTargetState');
-  const readinessEnd = galleryPom.indexOf('async waitForCoverSchedulerIdle');
-  assert.ok(readinessStart >= 0 && readinessEnd > readinessStart);
-  const readiness = galleryPom.slice(readinessStart, readinessEnd);
-
-  assert.match(readiness, /const readDomState = \(\) => this\.page\.evaluate\(/);
-  assert.match(readiness, /domSelectors:/);
-  assert.match(readiness, /initialDom = projection\.dom/);
-  assert.match(readiness, /finalDom = finalProjection\.dom/);
-});
-
 test('album identity topology uses action-owned scrolling and rendered card locators only', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href;
   const { GalleryActions } = await import(moduleUrl);

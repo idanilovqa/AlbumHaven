@@ -15258,18 +15258,13 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
             browse_connections.append(self)
             return self
 
-        def execute(self, sql, params=None):
-            if "albums.id = any(%(candidate_ids)s::bigint[])" in str(sql):
-                requested_limits.append(params["limit"])
-                return _InventoryCursor(rows=[{"album_id": album_id} for album_id in params["candidate_ids"][:params["limit"]]])
-            return super().execute(sql, params)
-
     repository._browse_connection_context = lambda: BrowseConnection()
     repository._get_stale_utility_projection = lambda _kind: None
 
-    def load_candidate_ids(connection):
+    def load_candidate_ids(*, connection, limit):
         assert connection is not None
-        return frozenset({3, 1, 2})
+        requested_limits.append(limit)
+        return [1, 2]
 
     def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
         assert album_key is None
@@ -15278,7 +15273,7 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
         requested_album_ids.append(list(album_ids or []))
         return [row for row in rows if row["album_id"] in set(album_ids or [])]
 
-    repository._problematic_candidate_album_ids = load_candidate_ids
+    repository._load_problematic_candidate_ids = load_candidate_ids
     repository._load_problematic_file_rows = load_rows
 
     def load_missing_rows(*, connection, limit):
@@ -15501,10 +15496,11 @@ def test_problematic_files_search_filters_the_cached_complete_list_exactly():
         ),
     )
     repository._get_cached_utility_projection = lambda kind: {
-        "count": 3,
+        "count": 4,
         "items": [
             {"key": "a", "name": "Alpha", "problem_reasons": ["Year mismatch"]},
             {"key": "b", "name": "Beta", "search_text": "Hidden Track"},
+            {"key": "d", "name": "Delta", "problem_reasons": ["Album artist mismatch"]},
             {"key": "c", "name": "Gamma", "raw_name": "Р“Р°РјРјР°"},
         ],
         "initial_detail": {"key": "a"},
@@ -15512,6 +15508,8 @@ def test_problematic_files_search_filters_the_cached_complete_list_exactly():
 
     assert [item["key"] for item in repository.build_problematic_files_search("YEAR MISMATCH")["items"]] == ["a"]
     assert [item["key"] for item in repository.build_problematic_files_search("hidden")["items"]] == ["b"]
+    assert repository.build_problematic_files_search("art")["items"] == []
+    assert [item["key"] for item in repository.build_problematic_files_search("album artist mismatch")["items"]] == ["d"]
     cached = repository.build_problematic_files_search("Р“Р°Рј")
     assert [item["key"] for item in cached["items"]] == ["c"]
     assert cached["complete"] is True
@@ -15669,7 +15667,7 @@ def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_l
     def connection_context():
         yield Connection()
 
-    monkeypatch.setattr(repository, "_get_cached_utility_projection", lambda _kind: None)
+    monkeypatch.setattr(repository, "_get_cached_utility_projection", lambda _kind, **_options: None)
     monkeypatch.setattr(repository, "_get_stale_utility_projection", lambda _kind: None)
     monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda allow_outdated=False: {
         "items": [{"key": "artist::first"}, {"key": "artist::second"}, {"key": "artist::third"}],

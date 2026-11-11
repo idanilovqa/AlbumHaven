@@ -7059,6 +7059,26 @@ test('problematic search always includes structured summary fields beside compac
   }
 });
 
+test('problematic search does not treat a fragment inside a problem reason as content', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFiles = [{
+    key: 'reason-only-album',
+    name: 'Unrelated Album',
+    album_artist: 'Unrelated Performer',
+    problem_reasons: ['Album artist mismatch'],
+  }];
+  context.state.utility.selectedProblemFilters = [];
+
+  context.state.utility.searchQuery = 'art';
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
+
+  context.state.utility.searchQuery = 'album artist mismatch';
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
+    ['reason-only-album'],
+  );
+});
+
 test('track problem navigation refreshes one stale loaded summary before selecting the exact track', async () => {
   const { context, trackPath } = loadProblematicTrackNavigationHelpers();
   const refreshedAlbum = {

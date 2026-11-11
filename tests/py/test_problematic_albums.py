@@ -44,6 +44,18 @@ def test_problematic_albums_tests_do_not_import_flask_fixtures():
     assert "tests.py." + "flask_fixtures" not in source
 
 
+def test_problematic_summary_search_text_excludes_problem_reason_labels():
+    payload = api_problematic_albums_module._build_problematic_album_summary_payload(
+        SimpleNamespace(name="Album", album_artist="Performer", year=2026, tracks=[]),
+        problem_reasons=["Album artist mismatch"],
+        repair_preview={},
+        cover_width=0,
+        cover_height=0,
+    )
+
+    assert "artist mismatch" not in payload["search_text"].lower()
+
+
 def _problematic_payload_kwargs(**overrides):
     kwargs = {
         "text_problem_reason": lambda *args, **kwargs: None,

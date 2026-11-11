@@ -74,7 +74,6 @@ def _build_problematic_album_summary_payload(
         str(getattr(album, "year", "") or ""),
         str(repair_preview.get("raw_name") or ""),
         str(repair_preview.get("raw_album_artist") or ""),
-        *[str(reason or "") for reason in problem_reasons],
         *track_titles,
     ]
     return {

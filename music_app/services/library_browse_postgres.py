@@ -7098,13 +7098,15 @@ def _problematic_summary_matches_query(album: Mapping[str, object], needle: str)
         str(album.get(key) or "")
         for key in ("name", "raw_name", "album_artist", "raw_album_artist", "year")
     ]
-    haystack += texts(album.get("problem_reasons"))
     haystack.append(str(album.get("search_text") or ""))
     haystack += [str(track.get("title") or "") for track in album.get("tracks") or [] if isinstance(track, Mapping)]
     for row in album.get("repair_preview_rows") or []:
         if isinstance(row, Mapping):
             haystack += [str(row.get(key) or "") for key in ("track_title", "original", "repaired")]
-    return needle in "\n".join(haystack).lower()
+    if needle in "\n".join(haystack).lower():
+        return True
+    pattern = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", re.IGNORECASE)
+    return any(pattern.search(reason) for reason in texts(album.get("problem_reasons")))
 
 
 def _problematic_search_album_ids_sql() -> str:

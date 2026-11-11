@@ -2396,11 +2396,13 @@ function replaceCoverLookupModalMarkup(body, markup) {
       || image?.getAttribute?.('src')
       || '',
     );
-    // A still-deferred image has loaded nothing worth keeping.
+    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
     if (
       retainedImage
       && incomingImage
       && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
+      && retainedImage.complete === true
+      && Number(retainedImage.naturalWidth || 0) > 0
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {

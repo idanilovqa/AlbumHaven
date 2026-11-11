@@ -4,6 +4,8 @@
 
 - The song cache keeps a song once it is heard, not when it was only fetched ahead and then skipped (web and Android).
 - Fixed an intermittent Cover Lookup candidate image failure after a cover save.
+- Immediately completed Edit Tags saves remain visible until dismissed, including while opening Status.
+- Closing the artwork lightbox restores focus after Problematic Files refreshes its detail panel.
 - Migrations may be numbered and applied out of order but never share a number; a CI check enforces it, and only code merged to main migrates shared or production databases.
 
 ## 0.11.0 - 2026-11-09

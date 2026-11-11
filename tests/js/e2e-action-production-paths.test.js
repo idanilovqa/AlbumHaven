@@ -234,13 +234,14 @@ test('notification hover evidence waits for finite owned transitions before read
 test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
   const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
   const vm = require('node:vm');
-  for (const scenario of ['stable', 'translation', 'resize', 'already-settled', 'timeout', 'cancel']) {
+  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'already-settled', 'timeout', 'cancel']) {
     await t.test(scenario, async () => {
       const frames = new Map();
       const timers = new Map();
       let nextId = 0;
       let settled = scenario === 'already-settled';
       let progressVisible = false;
+      let toastVisible = scenario !== 'settled-after-baseline';
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
         querySelector: () => ({ textContent: 'Cover search started.' }),
@@ -263,7 +264,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
             if (selector === '.modal-status') return modalStatus;
             return modal;
           },
-          querySelectorAll: () => [toast],
+          querySelectorAll: () => toastVisible ? [toast] : [],
         },
         getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
         requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
@@ -292,7 +293,12 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
       } else {
         progressVisible = true;
         paint();
-        if (scenario !== 'already-settled') {
+        if (scenario === 'settled-after-baseline') {
+          toastVisible = true;
+          settled = true;
+          paint();
+          if (frames.size) paint();
+        } else if (scenario !== 'already-settled') {
           if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
           if (scenario === 'resize') rectangle = { ...rectangle, height: 710, width: 802 };
           paint();
@@ -309,7 +315,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
       else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
       else {
         assert.equal(result.baselineUnsettled, true);
-        assert.equal(result.sampledFrames, 4);
+        assert.equal(result.sampledFrames, scenario === 'settled-after-baseline' ? 2 : 4);
         assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
           height: scenario === 'resize' ? 10 : 0,
           width: scenario === 'resize' ? 2 : 0,
@@ -2277,6 +2283,19 @@ test('gallery readiness uses hydration state instead of a fixed virtualized-card
   assert.match(gallery, /bounds\.width > 0 && bounds\.height > 0/);
   assert.doesNotMatch(readiness, /albumCards\.first\(\)/);
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);
+});
+
+test('album target readiness reads each stable DOM snapshot atomically', () => {
+  const galleryPom = read('tests/e2e/poms/galleryPage.js');
+  const readinessStart = galleryPom.indexOf('async readAlbumTargetState');
+  const readinessEnd = galleryPom.indexOf('async waitForCoverSchedulerIdle');
+  assert.ok(readinessStart >= 0 && readinessEnd > readinessStart);
+  const readiness = galleryPom.slice(readinessStart, readinessEnd);
+
+  assert.match(readiness, /const readDomState = \(\) => this\.page\.evaluate\(/);
+  assert.match(readiness, /domSelectors:/);
+  assert.match(readiness, /initialDom = projection\.dom/);
+  assert.match(readiness, /finalDom = finalProjection\.dom/);
 });
 
 test('album identity topology uses action-owned scrolling and rendered card locators only', async () => {
@@ -5084,6 +5103,8 @@ test('search readiness waits for the committed URL query and completed view requ
   assert.match(searchPom, /searchParams\.get\('q'\)/);
   assert.match(searchPom, /const timeout = Number\(options\.timeout \|\| 30000\)/);
   assert.match(searchPom, /const initialObservation = this\.productionViewObserver\.read\(\)/);
+  assert.match(searchPom, /if \(initiallyBusy\) \{[\s\S]*?continue;/);
+  assert.match(searchPom, /await Promise\.all\(\[/);
   assert.match(searchPom, /const finalObservation = this\.productionViewObserver\.read\(\)/);
   assert.match(searchPom, /finalObservation\.stateRevision !== initialObservation\.stateRevision/);
   assert.match(searchPom, /!hasStableDomEvidence\(/);

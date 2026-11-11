@@ -7149,12 +7149,58 @@ require('node:test')('the leading remote card loads its preview first when anoth
 });
 
 require('node:test')('a re-render does not keep a still-deferred preview in place of a loading one', () => {
-  const imageWith = (attributes) => ({
+  const imageWith = (attributes, state = {}) => ({
+    ...state,
     hasAttribute: name => Object.hasOwn(attributes, name),
     getAttribute: name => attributes[name] ?? null,
     replaceWith(value) { this.replacedWith = value; },
   });
   const retainedImage = imageWith({ 'data-cover-lookup-deferred-src': 'leading.jpg' });
+  const incomingImage = imageWith({ src: 'leading.jpg' });
+  const card = (image) => ({
+    attributes: [],
+    childNodes: [image],
+    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
+    querySelector: () => image,
+    replaceChildren(...children) { this.children = children; },
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedCard = card(retainedImage);
+  const incomingCard = card(incomingImage);
+  let rendered = false;
+  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
+  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
+
+  assert.equal(incomingImage.replacedWith, undefined);
+  assert.deepEqual(retainedCard.children, [incomingImage]);
+  assert.strictEqual(incomingCard.replacedWith, retainedCard);
+
+  const decodedImage = imageWith({ src: 'decoded.jpg' }, { complete: true, naturalWidth: 100 });
+  const decodedIncomingImage = imageWith({ src: 'decoded.jpg' });
+  const decodedRetainedCard = card(decodedImage);
+  const decodedIncomingCard = card(decodedIncomingImage);
+  let decodedRendered = false;
+  const decodedBody = {
+    querySelectorAll: () => (decodedRendered ? [decodedIncomingCard] : [decodedRetainedCard]),
+  };
+  Object.defineProperty(decodedBody, 'innerHTML', { set() { decodedRendered = true; } });
+
+  context.replaceCoverLookupModalMarkup(decodedBody, '<div>gallery results</div>');
+
+  assert.strictEqual(decodedIncomingImage.replacedWith, decodedImage);
+});
+
+require('node:test')('a re-render replaces a failed preview instead of retaining its broken image state', () => {
+  const imageWith = (attributes, state = {}) => ({
+    ...state,
+    hasAttribute: name => Object.hasOwn(attributes, name),
+    getAttribute: name => attributes[name] ?? null,
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedImage = imageWith({ src: 'leading.jpg' }, { complete: true, naturalWidth: 0 });
   const incomingImage = imageWith({ src: 'leading.jpg' });
   const card = (image) => ({
     attributes: [],

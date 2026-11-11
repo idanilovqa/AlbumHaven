@@ -1637,6 +1637,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -1745,6 +1746,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);

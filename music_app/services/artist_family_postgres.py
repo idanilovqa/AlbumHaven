@@ -53,6 +53,7 @@ def load_selected_artist_family_projection(
     *,
     connect: Callable[[str], Any] | None = None,
     connection: Any | None = None,
+    include_alias_maps: bool = True,
 ) -> dict[str, object]:
     artist_name = str(selected_artist or "").strip()
     if not artist_name:
@@ -106,7 +107,7 @@ def load_selected_artist_family_projection(
                 )
             alias_to_canonical: dict[str, str] = {}
             canonical_to_aliases: dict[str, list[str]] = {}
-            if artist_keys:
+            if include_alias_maps and artist_keys:
                 alias_rows = list(
                     active_connection.execute(
                         _load_artist_alias_rows_sql(),
@@ -117,7 +118,7 @@ def load_selected_artist_family_projection(
                     alias_rows,
                     preferred_name_by_artist_key=preferred_name_by_artist_key,
                 )
-            if not list(canonical_to_aliases.get(artist_name) or [])[1:]:
+            if include_alias_maps and not list(canonical_to_aliases.get(artist_name) or [])[1:]:
                 collaboration_alias_rows = list(
                     active_connection.execute(
                         _load_collaboration_alias_candidates_sql(),

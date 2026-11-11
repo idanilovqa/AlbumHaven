@@ -9615,6 +9615,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -9723,6 +9724,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -16666,7 +16668,28 @@ function closeImageLightbox() {
   }
   const returnFocus = imageLightboxReturnFocus;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  let focusTarget = returnFocus?.isConnected ? returnFocus : null;
+  if (!focusTarget && returnFocus?.getAttribute) {
+    const triggerAttribute = ['data-open-lightbox', 'data-cover-lookup-open-lightbox']
+      .find((attribute) => returnFocus.getAttribute(attribute) === '1');
+    if (triggerAttribute) {
+      const coverSrc = returnFocus.getAttribute('data-cover-src') || '';
+      const coverAlt = returnFocus.getAttribute('data-cover-alt') || '';
+      const replacements = Array.from(document.querySelectorAll(`[${triggerAttribute}="1"]`))
+        .filter((candidate) => {
+          const visibility = getComputedStyle(candidate).visibility;
+          return candidate.disabled !== true
+            && !candidate.closest('[hidden], [inert]')
+            && candidate.getClientRects().length > 0
+            && visibility !== 'hidden'
+            && visibility !== 'collapse'
+            && (candidate.getAttribute('data-cover-src') || '') === coverSrc
+            && (candidate.getAttribute('data-cover-alt') || '') === coverAlt;
+        });
+      if (replacements.length === 1) [focusTarget] = replacements;
+    }
+  }
+  focusTarget?.focus?.();
 }
 
 function closeTrackModal() {
@@ -34944,11 +34967,13 @@ function replaceCoverLookupModalMarkup(body, markup) {
       || image?.getAttribute?.('src')
       || '',
     );
-    // A still-deferred image has loaded nothing worth keeping.
+    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
     if (
       retainedImage
       && incomingImage
       && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
+      && retainedImage.complete === true
+      && Number(retainedImage.naturalWidth || 0) > 0
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {
@@ -42029,7 +42054,9 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   if (!albumHasDisplayCover(album)) {
     return '<div class="cover-placeholder">No cover art</div>';
   }
-  const coverPriority = options.coverPriority === 'visible' ? 'visible' : 'near';
+  const coverPriority = ['visible', 'background'].includes(options.coverPriority)
+    ? options.coverPriority
+    : 'near';
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -42179,6 +42206,7 @@ class VirtualArtistGrid {
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
     this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmTimeout = 0;
     this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
@@ -42350,9 +42378,14 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
-    if (!this._albumDetailPrewarmRaf) return;
-    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
-    this._albumDetailPrewarmRaf = 0;
+    if (this._albumDetailPrewarmRaf) {
+      cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+      this._albumDetailPrewarmRaf = 0;
+    }
+    if (this._albumDetailPrewarmTimeout) {
+      clearBrowserTimeout(this._albumDetailPrewarmTimeout);
+      this._albumDetailPrewarmTimeout = 0;
+    }
   }
 
   scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
@@ -42371,15 +42404,19 @@ class VirtualArtistGrid {
       this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
         if (generation !== this._albumDetailPrewarmGeneration) return;
         this._albumDetailPrewarmRaf = 0;
-        if (
-          renderGeneration !== this._renderGeneration
-          || !this.isScrollSettled
-          || this.lastKey !== rangeKey
-          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
-        ) {
-          return;
-        }
-        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        this._albumDetailPrewarmTimeout = scheduleBrowserTimeout(() => {
+          this._albumDetailPrewarmTimeout = 0;
+          if (
+            generation !== this._albumDetailPrewarmGeneration
+            || renderGeneration !== this._renderGeneration
+            || !this.isScrollSettled
+            || this.lastKey !== rangeKey
+            || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+          ) {
+            return;
+          }
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        }, 250);
       });
     });
   }
@@ -42449,6 +42486,12 @@ class VirtualArtistGrid {
     const normalizedToken = Number(token);
     if (!force && (!normalizedToken || !this._activeCoverLoadUserActionTokens.has(normalizedToken))) {
       return false;
+    }
+    if (!force && (this._raf || this._measureRaf || this._measureTimeout || this._stabilizeRaf)) {
+      scheduleBrowserAnimationFrame(() => {
+        this.resumeSelectedArtistCoverLoadsAfterUserAction(normalizedToken);
+      });
+      return true;
     }
     if (!this._activeCoverLoadUserActionTokens.size) return false;
     if (force) {
@@ -43663,9 +43706,6 @@ class VirtualArtistGrid {
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
       return;
     }
-    if (String(state?.view?.selected_artist || '').trim()) {
-      return;
-    }
     const scrollRect = this.scrollEl.getBoundingClientRect();
     let promotedCoverCount = 0;
     this.containerEl.querySelectorAll('.cover img').forEach((image) => {
@@ -44341,10 +44381,13 @@ class VirtualArtistGrid {
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
-      const coverPriority = blockBottom >= Number(options.viewportTop || 0)
-        && blockTop <= Number(options.viewportBottom || 0)
+      const visible = blockBottom >= Number(options.viewportTop || 0)
+        && blockTop <= Number(options.viewportBottom || 0);
+      const coverPriority = visible
         ? 'visible'
-        : 'near';
+        : section.sectionType === 'primary' && String(state?.view?.selected_artist || '').trim()
+          ? 'background'
+          : 'near';
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
@@ -48832,6 +48875,26 @@ function scrollRootGalleryToArtist(artist) {
   });
 }
 
+function beginSidebarArtistCoverLoadSuspension() {
+  if (
+    typeof virtualGrid === 'undefined'
+    || !virtualGrid
+    || typeof virtualGrid.suspendSelectedArtistCoverLoadsForUserAction !== 'function'
+  ) return () => {};
+  const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  const resume = (requestResult = true) => {
+    if (
+      requestResult === false
+      && (Boolean(state.ui?.activeViewRequestController) || Boolean(state.ui?.pendingViewRequest))
+    ) {
+      scheduleBrowserTimeout(() => resume(false), 16);
+      return;
+    }
+    virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction?.(token);
+  };
+  return resume;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
@@ -48966,9 +49029,10 @@ function handleSidebarArtistSelectionClick(event) {
       resetScrollForUserArtistSelection: true,
     });
   }
-  fetchAndRender(buildApiUrl(nextView, {
+  const resumeCoverLoads = beginSidebarArtistCoverLoadSuspension();
+  Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
     omitSidebar: true,
-  }), true);
+  }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true));
   if (!sidebarSelectionUpdated) {
     renderSidebar();
   }

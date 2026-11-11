@@ -6,9 +6,13 @@ export class UtilitySearchSection extends BasePage {
     this.searchInput = page.locator('#utility-problematic-search');
     this.problemFilterButton = page.locator('#utility-problem-filter-button');
     this.problemFilterMenu = page.locator('#utility-problem-filter-menu');
-    this.problemFilterOptions = page.locator('[data-problem-filter-value]');
+    this.problemFilterOptions = page.locator(this.problemFilterOptionSelector);
     this.problemFilterChips = page.locator('#utility-problem-filter-chips');
     this.problemFilterChipButtons = page.locator('#utility-problem-filter-chips [data-remove-problem-filter]');
+  }
+
+  get problemFilterOptionSelector() {
+    return '[data-problem-filter-value]';
   }
 
   filterOptionByValue(problemType) {

@@ -54,6 +54,7 @@ export class TrackModal extends BasePage {
     this.lightboxPreviousButton = page.locator('#image-lightbox-prev');
     this.lightboxNextButton = page.locator('#image-lightbox-next');
     this.header = this.dialog.locator('.album-details-header');
+    this.headerTags = this.header.locator('.album-details-header__tag');
     this.headerActions = this.dialog.locator('.album-details-header__actions .action-button');
     this.missingAlert = this.dialog.locator('[data-on-page-alert="error"]');
     this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');

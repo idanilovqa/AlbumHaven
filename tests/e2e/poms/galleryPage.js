@@ -260,7 +260,18 @@ export class GalleryPage extends BasePage {
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
+    this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
+    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country');
+    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
+    this.artistInfoTrigger = this.galleryContext.locator('[data-artist-info-trigger]');
+    this.artistInfoPanel = page.locator('[data-artist-info-overlay]');
+    this.artistInfoHeading = this.artistInfoPanel.locator('h2');
+    this.artistInfoCredit = this.artistInfoPanel.locator('[data-artist-info-credit]');
+    this.artistInfoIdentities = this.artistInfoPanel.locator('[data-artist-info-identities]');
+    this.artistInfoIdentityRows = this.artistInfoIdentities.locator('li');
+    this.artistInfoLinks = this.artistInfoPanel.locator('a[href]');
     this.gallerySurface = page.locator('.shell-main-surface:has(> [data-gallery-bar-instance="gallery"])');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);

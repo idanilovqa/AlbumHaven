@@ -309,6 +309,45 @@ export class GalleryActions {
     await this.galleryPage.goto(pathname);
   }
 
+  async waitForContextName(name, options = {}) {
+    await expect(this.galleryPage.galleryContextName).toHaveText(name, {
+      timeout: options.timeout || 60000,
+    });
+  }
+
+  async readArtistContextMetadata() {
+    return {
+      countries: await this.galleryPage.galleryContextCountryPills.allInnerTexts(),
+      genres: await this.galleryPage.galleryContextGenrePills.allInnerTexts(),
+    };
+  }
+
+  async openArtistInfoPanel() {
+    await this.galleryPage.artistInfoTrigger.click();
+    await expect(this.galleryPage.artistInfoPanel).toBeVisible();
+  }
+
+  async readArtistInfoSnapshot() {
+    const links = await this.galleryPage.artistInfoLinks.all();
+    const identities = await this.galleryPage.artistInfoIdentities.count()
+      ? String(await this.galleryPage.artistInfoIdentities.textContent() || '').trim()
+      : '';
+    return {
+      heading: String(await this.galleryPage.artistInfoHeading.textContent() || '').trim(),
+      credit: (await this.galleryPage.artistInfoCredit.allTextContents()).map((value) => value.trim()),
+      identities,
+      identityRows: (await this.galleryPage.artistInfoIdentityRows.allTextContents()).map((value) => value.trim()),
+      links: (await Promise.all(links.map(async (link) => (
+        await link.isVisible() ? link.getAttribute('href') : null
+      )))).filter(Boolean),
+    };
+  }
+
+  async closeArtistInfoPanel() {
+    await this.galleryPage.page.keyboard.press('Escape');
+    await expect(this.galleryPage.artistInfoPanel).toBeHidden();
+  }
+
   async clickFirstAlbumDetails() {
     await this.galleryPage.albumDetailsButtons.first().click();
   }

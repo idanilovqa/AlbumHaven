@@ -1,7 +1,7 @@
 // Seeds MusicBrainz artist identities into the isolated E2E database for the Delivery 1
 // scenarios, as the stored outcome of the enrichment would be, and removes them again.
-// Rows are owner decisions with a matcher version no backfill re-checks, so the
-// background enrichment worker never replaces them during a test.
+// Manual decisions and a pinned matcher version keep the background enrichment worker
+// from replacing these rows during a test.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveIsolatedE2ESetupConnection } from './isolatedPostgresConnection.js';
@@ -59,9 +59,10 @@ export async function createMusicBrainzIdentityFixture() {
       delete from integration.musicbrainz_artist_tags where artist_mbid = '${mbid}';
       ${country ? `insert into integration.musicbrainz_artist_countries (artist_mbid, country_code, country_name, provenance, observed_at)
         values ('${mbid}', ${literal(country.code)}, ${literal(country.name)}, 'musicbrainz', now());` : ''}
-      ${genres.map((genre, index) => `insert into integration.musicbrainz_artist_tags
+      ${genres.map((genre) => `insert into integration.musicbrainz_artist_tags
         (artist_mbid, tag_name, tag_normalized, vote_count, is_genre, provenance)
-        values ('${mbid}', ${literal(genre)}, ${literal(genre.toLowerCase())}, ${10 - index}, true, 'musicbrainz');`).join('\n')}
+        values ('${mbid}', ${literal(genre.name)}, ${literal(genre.name.toLowerCase())},
+          ${Number(genre.voteCount)}, ${genre.isGenre === false ? 'false' : 'true'}, 'musicbrainz');`).join('\n')}
       commit;`);
   }
 

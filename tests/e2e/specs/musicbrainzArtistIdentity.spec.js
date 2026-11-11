@@ -6,6 +6,7 @@ import { expect, test } from '../support/baseFixtures.js';
 import { createMusicBrainzIdentityFixture } from '../helpers/musicbrainzIdentityFixture.js';
 
 const GUEST = 'Compilation Signal Guest';
+const CREDITED = 'Functional Balance Artist 03';
 const LEAD = 'Compilation Signal Lead';
 // Its own artist, so the Problematic Files case never shares rows with the Gallery cases.
 const UNCONFIRMED = 'Album Rating Contract';
@@ -19,59 +20,93 @@ const MBID = {
   unconfirmed: '0e2e0001-0000-4000-8000-000000000007',
 };
 
-async function openArtist(page, { galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
+async function openArtist({ galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
   await searchToolbarActions.search(artist, { submitWithEnter: true });
-  await searchToolbarActions.waitForQuery(artist);
-  await expect(page.locator('[data-gallery-context-name]').first()).toHaveText(expectedTitle, { timeout: 60000 });
+  if (expectedTitle === artist) await searchToolbarActions.waitForQuery(artist);
+  await galleryActions.waitForContextName(expectedTitle);
 }
 
-async function openArtistPanel(page) {
-  await page.locator('.gallery-bar__title [data-artist-info-trigger]').first().click();
-  const panel = page.locator('[data-artist-info-overlay]');
-  await expect(panel).toBeVisible();
-  return panel;
-}
-
-async function albumDetailsTags(page, { galleryActions, trackModalActions }, artist, album) {
+async function albumDetailsTags({ galleryActions, trackModalActions }, artist, album) {
   await galleryActions.clickAlbumDetailsByArtistAndAlbum(artist, album);
   await trackModalActions.waitForInteractiveSummary();
-  return page.locator('#track-modal .album-details-header__tag').allInnerTexts();
+  return trackModalActions.readHeaderTags();
 }
 
 test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres and links', { tag: '@area:gallery-search' }, async ({
   galleryActions,
-  page,
   searchToolbarActions,
   stepLogger,
 }) => {
   const fixture = await createMusicBrainzIdentityFixture();
   try {
-    await stepLogger.step('MBD1-04, MBD1-06: the header shows the name, then country and genre pills', async () => {
+    await fixture.matchArtist(CREDITED, {
+      mbid: MBID.credited,
+      name: 'Signal Guest Collective',
+    }, { creditName: CREDITED });
+    await stepLogger.step('MBD1-04, MBD1-06: the sticky header keeps the artist, country and top genres together', async () => {
       await fixture.matchArtist(GUEST, {
         mbid: MBID.guest, name: GUEST, country: { code: 'FI', name: 'Finland' },
-        genres: ['progressive rock', 'art rock'], discogsArtistId: 424242,
+        genres: [
+          { name: 'progressive rock', voteCount: 12 },
+          { name: 'art rock', voteCount: 8 },
+          { name: 'doom metal', voteCount: 4 },
+          { name: 'folk rock', voteCount: 2 },
+          { name: 'melancholy', voteCount: 100, isGenre: false },
+        ],
+        discogsArtistId: 424242,
       });
-      await openArtist(page, { galleryActions, searchToolbarActions }, GUEST);
-      const bar = page.locator('.gallery-bar__context').first();
-      await expect(bar.locator('.ui-metadata-pill--country')).toHaveText('Finland');
-      await expect(bar.locator('.ui-metadata-pill--genre')).toHaveText(['progressive rock', 'art rock']);
+      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await galleryActions.scrollGalleryToMiddle();
+      await expect.poll(async () => (
+        await galleryActions.readGalleryScrollState()
+      ).scrollTop, { timeout: 60000 }).toBeGreaterThan(0);
+      await galleryActions.waitForContextName(GUEST);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['Finland'],
+        genres: ['progressive rock', 'art rock', 'doom metal'],
+      });
+    });
+
+    await stepLogger.step('MBD1-06: zero-vote MusicBrainz genres remain visible', async () => {
+      await fixture.matchArtist(GUEST, {
+        mbid: MBID.guest, name: GUEST, country: { code: 'FI', name: 'Finland' },
+        genres: [
+          { name: 'dark wave', voteCount: 0 },
+          { name: 'ambient', voteCount: 0 },
+        ],
+        discogsArtistId: 424242,
+      });
+      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['Finland'],
+        genres: ['ambient', 'dark wave'],
+      });
     });
 
     await stepLogger.step('MBD1-19: the artist panel links to MusicBrainz and Discogs', async () => {
-      const panel = await openArtistPanel(page);
-      await expect(panel.locator(`a[href="https://musicbrainz.org/artist/${MBID.guest}"]`)).toBeVisible();
-      await expect(panel.locator('a[href="https://www.discogs.com/artist/424242"]')).toBeVisible();
-      await expect(panel.locator('[data-artist-info-credit]')).toHaveCount(0);
+      await galleryActions.openArtistInfoPanel();
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          credit: [],
+          links: expect.arrayContaining([
+            `https://musicbrainz.org/artist/${MBID.guest}`,
+            'https://www.discogs.com/artist/424242',
+          ]),
+        }),
+      );
     });
 
     await stepLogger.step('MBD1-38: an artist matched under another name shows that name and how it is tagged', async () => {
-      await fixture.matchArtist(GUEST, { mbid: MBID.credited, name: 'Signal Guest Collective' }, { creditName: GUEST });
-      await openArtist(page, { galleryActions, searchToolbarActions }, GUEST, 'Signal Guest Collective');
-      const panel = await openArtistPanel(page);
-      await expect(panel.locator('h2')).toHaveText('Signal Guest Collective');
-      await expect(panel.locator('[data-artist-info-credit]')).toHaveText(`Tagged as ${GUEST} in your files.`);
+      await openArtist({ galleryActions, searchToolbarActions }, CREDITED, 'Signal Guest Collective');
+      await galleryActions.openArtistInfoPanel();
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          heading: 'Signal Guest Collective',
+          credit: [`Tagged as ${CREDITED} in your files.`],
+        }),
+      );
     });
   } finally {
     await fixture.restore();
@@ -80,7 +115,6 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
 
 test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist', { tag: '@area:album-details' }, async ({
   galleryActions,
-  page,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
@@ -93,17 +127,26 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
           albums: ['Functional Fixture Album 248', 'Functional Fixture Album 249'] },
         { mbid: MBID.leadSweden, name: LEAD, disambiguation: 'Swedish band', albums: ['Functional Fixture Album 250'] },
       ]);
-      await openArtist(page, { galleryActions, searchToolbarActions }, LEAD);
-      const identities = (await openArtistPanel(page)).locator('[data-artist-info-identities]');
-      await expect(identities).toContainText('Your albums belong to 2 MusicBrainz artists:');
-      await expect(identities.locator('li')).toHaveText([
-        /Compilation Signal Lead \(UK band\) · 2 albums/, /Compilation Signal Lead \(Swedish band\) · 1 album/]);
-      await expect(identities.locator(`a[href="https://musicbrainz.org/artist/${MBID.leadSweden}"]`)).toBeVisible();
-      await page.keyboard.press('Escape');
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await galleryActions.openArtistInfoPanel();
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          identities: expect.stringContaining('Your albums belong to 2 MusicBrainz artists:'),
+          identityRows: [
+            expect.stringMatching(/Compilation Signal Lead \(UK band\) · 2 albums/),
+            expect.stringMatching(/Compilation Signal Lead \(Swedish band\) · 1 album/),
+          ],
+          links: expect.arrayContaining([
+            `https://musicbrainz.org/artist/${MBID.leadUk}`,
+            `https://musicbrainz.org/artist/${MBID.leadSweden}`,
+          ]),
+        }),
+      );
+      await galleryActions.closeArtistInfoPanel();
     });
 
     await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
-      const tags = await albumDetailsTags(page, { galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
       expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
       await trackModalActions.closeIfOpen();
     });
@@ -113,14 +156,22 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
       await fixture.personWithBand(LEAD,
         { mbid: MBID.person, name: LEAD, kind: 'Person', albums: ['Functional Fixture Album 248'] },
         { mbid: MBID.band, name: LEAD, disambiguation: 'the band', albums: ['Functional Fixture Album 249'] });
-      await openArtist(page, { galleryActions, searchToolbarActions }, LEAD);
-      const panel = await openArtistPanel(page);
-      await expect(panel.locator(`a[href="https://musicbrainz.org/artist/${MBID.person}"]`).first()).toBeVisible();
-      const associated = panel.locator('[data-artist-info-identities]');
-      await expect(associated).toContainText('Also on MusicBrainz as:');
-      await expect(associated.locator('li')).toHaveText([/Compilation Signal Lead \(the band\) · 1 album/]);
-      await page.keyboard.press('Escape');
-      const tags = await albumDetailsTags(page, { galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 249');
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await galleryActions.openArtistInfoPanel();
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          identities: expect.stringContaining('Also on MusicBrainz as:'),
+          identityRows: [
+            expect.stringMatching(/Compilation Signal Lead \(the band\) · 1 album/),
+          ],
+          links: expect.arrayContaining([
+            `https://musicbrainz.org/artist/${MBID.person}`,
+            `https://musicbrainz.org/artist/${MBID.band}`,
+          ]),
+        }),
+      );
+      await galleryActions.closeArtistInfoPanel();
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 249');
       expect(tags.filter((tag) => tag.startsWith('MusicBrainz:') || tag.startsWith('Tagged as'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
@@ -131,41 +182,40 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
 
 test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page', { tag: '@area:problematic-files' }, async ({
   galleryActions,
-  page,
   settingsModalAppBarActions,
   stepLogger,
   utilityProblematicFilesActions,
   utilityTabBarActions,
 }) => {
   const fixture = await createMusicBrainzIdentityFixture();
-  let releaseCompleteList;
   try {
     await fixture.unconfirmedArtist(UNCONFIRMED, { mbid: MBID.unconfirmed, name: UNCONFIRMED, disambiguation: 'Finnish band' });
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
-      // Hold the complete list back: everything asserted here comes from the bounded first page.
-      const held = new Promise((resolve) => { releaseCompleteList = resolve; });
-      await page.route(/\/utilities\/problematic-files$/, async (route) => { await held; await route.continue(); });
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
       await settingsModalAppBarActions.openSettings();
+      const boundedPage = utilityProblematicFilesActions.waitForBoundedPageEvidence(
+        'MBID: Unconfirmed match',
+        UNCONFIRMED,
+      );
       await utilityTabBarActions.openTab('problematic-files');
+      await utilityProblematicFilesActions.openProblemFilterMenu();
+      await boundedPage;
+      await utilityProblematicFilesActions.closeProblemFilterMenu();
       await utilityProblematicFilesActions.waitForFirstVisible();
       expect(await utilityProblematicFilesActions.readProblemFilterValues()).toContain('MBID: Unconfirmed match');
       await utilityProblematicFilesActions.waitForAlbumInSidebarList(UNCONFIRMED);
     });
 
     await stepLogger.step('MBD1-20: the Unconfirmed match suggests its MusicBrainz artist', async () => {
-      releaseCompleteList();
       await utilityProblematicFilesActions.waitForReady();
       await utilityProblematicFilesActions.applySingleProblemFilter('MBID: Unconfirmed match');
-      await utilityProblematicFilesActions.selectAlbumByTitle(UNCONFIRMED);
-      const detail = page.locator('#utility-problematic-detail');
-      await expect(detail).toContainText(UNCONFIRMED);
-      await expect(detail.locator(`a[href="https://musicbrainz.org/artist/${MBID.unconfirmed}"]`).first()).toBeVisible();
+      const detail = await utilityProblematicFilesActions.selectAlbumByTitle(UNCONFIRMED);
+      expect(detail.title).toBe(UNCONFIRMED);
+      await expect.poll(() => utilityProblematicFilesActions.readSelectedDetailLinks(), { timeout: 60000 })
+        .toContain(`https://musicbrainz.org/artist/${MBID.unconfirmed}`);
     });
   } finally {
-    releaseCompleteList?.();
-    await page.unroute(/\/utilities\/problematic-files$/).catch(() => {});
     await fixture.restore();
   }
 });

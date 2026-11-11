@@ -57,6 +57,16 @@ export class UtilityProblematicFilesActions {
       };
       const activeTab = modal?.querySelector(expected.activeTabSelector);
       if (!visible(activeTab) || activeTab.getAttribute('data-utility-tab') !== 'problematic-files') return false;
+      if (expected.problemType) {
+        if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
+        const filter = Array.from(modal.querySelectorAll(expected.filterOptionSelector))
+          .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
+        const album = Array.from(modal.querySelectorAll(expected.listItemSelector)).find((item) => {
+          const title = String(item.querySelector(expected.listItemTitleSelector)?.textContent || '').trim();
+          return title === expected.albumTitle || title.startsWith(`${expected.albumTitle} / `);
+        });
+        return visible(filter) && visible(album);
+      }
       const hasVisibleItem = Array.from(modal.querySelectorAll(expected.listItemSelector)).some(visible);
       const selected = modal.querySelector(expected.activeListItemSelector);
       const title = modal.querySelector(expected.detailTitleSelector);
@@ -73,7 +83,40 @@ export class UtilityProblematicFilesActions {
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
       listEmptyStateSelector: this.utilityProblematicFilesTab.listEmptyStateSelector,
       detailEmptyStateSelector: this.utilityProblematicFilesTab.detailEmptyStateSelector,
+      problemType: options.problemType || '',
+      albumTitle: options.albumTitle || '',
+      filterOptionSelector: this.utilityProblematicFilesTab.searchSection?.problemFilterOptionSelector || '',
+      listItemTitleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
     });
+  }
+
+  async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
+    await this.waitForFirstVisible({
+      albumTitle,
+      problemType,
+      timeout: options.timeout || 60000,
+    });
+  }
+
+  async openProblemFilterMenu(options = {}) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (!await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+    }
+    await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu, {
+      timeout: options.timeout || 60000,
+    });
+  }
+
+  async closeProblemFilterMenu(options = {}) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+      await searchSection.problemFilterMenu.waitFor({
+        state: 'hidden',
+        timeout: options.timeout || 60000,
+      });
+    }
   }
 
   async expectCoreLayoutVisible(options = {}) {
@@ -284,8 +327,7 @@ export class UtilityProblematicFilesActions {
     if (await searchSection.filterChipByValue(problemType).count()) {
       return;
     }
-    await searchSection.problemFilterButton.click();
-    await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu);
+    await this.openProblemFilterMenu();
     await searchSection.filterOptionByValue(problemType).click();
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state === 'undefined') return false;
@@ -342,6 +384,13 @@ export class UtilityProblematicFilesActions {
       problemReasons: problemReasons.map((value) => value.trim()).filter(Boolean),
       fileTypes: fileTypes.map((value) => value.trim()).filter(Boolean),
     };
+  }
+
+  async readSelectedDetailLinks() {
+    const links = await this.utilityProblematicFilesTab.detailLinks.all();
+    return (await Promise.all(links.map(async (link) => (
+      await link.isVisible() ? link.getAttribute('href') : null
+    )))).filter(Boolean);
   }
 
   async selectListItemByIndex(index) {

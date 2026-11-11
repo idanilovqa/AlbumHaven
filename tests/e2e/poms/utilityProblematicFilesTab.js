@@ -31,6 +31,7 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.detailTitle = page.locator(this.detailTitleSelector).first();
     this.detailScroller = page.locator(this.detailScrollerSelector).first();
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
+    this.detailLinks = this.mainBody.detail.locator('a[href]');
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
       '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '

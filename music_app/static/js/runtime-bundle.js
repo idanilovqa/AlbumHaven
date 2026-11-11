@@ -8230,7 +8230,9 @@ function handleGalleryMainClick(event) {
   if (nonAlbum) {
     event.preventDefault();
     if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
-      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+      openNonAlbumModal({
+        libraryWide: nonAlbum.dataset.libraryWide === '1' || !String(state.view?.selected_artist || '').trim(),
+      });
     }
     return true;
   }

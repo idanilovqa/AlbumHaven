@@ -982,6 +982,30 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   assert.equal(prevented.length, 2);
 });
 
+test('all-artists Non-album tracks opens the reloadable library-wide page', () => {
+  const context = loadRuntime({
+    state: { view: { selected_artist: '' }, ui: {} },
+    window: { innerWidth: 1440 },
+    document: { getElementById: () => null },
+  });
+  const button = {
+    dataset: {},
+    disabled: false,
+    getAttribute: () => 'false',
+  };
+  let opened;
+  context.openNonAlbumModal = options => { opened = options; };
+
+  context.handleGalleryMainClick({
+    preventDefault() {},
+    target: {
+      closest: selector => selector === '[data-open-non-album-tracks]' ? button : null,
+    },
+  });
+
+  assert.deepEqual(plain(opened), { libraryWide: true });
+});
+
 test('the first Artist Family click deselects that artist from the default all-selected state', () => {
   const context = loadRuntime();
   const createGalleryMainState = requireContract(context, 'createGalleryMainState');

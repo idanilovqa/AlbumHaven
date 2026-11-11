@@ -110,7 +110,7 @@
     }
   }, true);
   window.addEventListener('error', () => window.AlbumHavenStartupProgress.fail());
-  // The server paints the document's starting stage (sign-in 0, app 25), so the
+  // The server paints the document's starting stage (sign-in 0, app 50), so the
   // first frame already shows it and progress only moves forward from there.
   const initialPercent = Number(root.dataset.startupProgress) || 0;
   if (initialPercent > 0) {

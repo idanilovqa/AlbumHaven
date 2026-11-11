@@ -474,7 +474,9 @@ def test_index_bootstrap_defers_selected_artist_gallery_until_runtime_hydration(
     assert payload["initial_view"]["selected_artist"] == "Broadcast"
     assert payload["initial_view"]["artist_groups"] == []
     assert payload["bootstrap"]["startupHydration"]["required"] is True
-    assert "artist=Broadcast" in payload["bootstrap"]["startupHydration"]["endpoint"]
+    assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
+    )
     assert payload["bootstrap"]["startupPreview"]["renderedGalleryMarkup"] is False
     assert startup_preview["gallery_html"] == ""
 

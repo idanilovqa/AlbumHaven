@@ -432,6 +432,7 @@ test('current GalleryBar owner puts the album count on the name line and the pil
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-total::before\s*\{[^}]*content:\s*"\\2022"/s, 'a fat dot leads the count');
   // Summary and pills share one fixed-height second line, so the header never shifts while scrolling.
   assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*min-height:\s*20px/s);
+  assert.doesNotMatch(mobileLayoutCssSource, /\.gallery-bar__summary:empty\s*\{[^}]*display:\s*none/s);
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {

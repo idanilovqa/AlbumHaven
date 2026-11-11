@@ -578,8 +578,7 @@ def _build_startup_hydration_contract(
             visible_library_categories,
             active_surface=normalized_surface,
             root_sidebar=bool(
-                initial_view_partial
-                and normalized_surface == "albums"
+                normalized_surface == "albums"
                 and selected_artist
                 and not query_raw
             ),

@@ -2568,6 +2568,70 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
     assert payload["view_data_source"] == "postgres_library_browse"
 
 
+def test_asgi_search_loose_tracks_prefetch_skips_gallery_search(app, asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    search_calls = []
+
+    class LooseTracksRepository:
+        def __init__(self, config):
+            assert config is app.config
+
+        def build_search_payload(self, **kwargs):
+            search_calls.append(kwargs)
+            return {"view_data_source": "postgres_library_browse"}
+
+        def build_library_loose_tracks_payload(self, *, query_params=None):
+            assert query_params.get("q") == "Neal Morse"
+            assert query_params.getlist("category") == ["main_library"]
+            return {
+                "library_non_album_tracks": [{"title": "Search loose track"}],
+                "non_album_tracks_deferred": False,
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", LooseTracksRepository)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/view-data",
+        query={
+            "q": "Neal Morse",
+            "surface": "albums",
+            "category": ["main_library"],
+            "omit_sidebar": "1",
+            "include_non_album": "1",
+            "include_library_wide_non_album": "1",
+        },
+    )
+
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["library_non_album_tracks"] == [{"title": "Search loose track"}]
+    assert payload["inventory_mutation_revision"] == 0
+    assert search_calls == []
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/view-data",
+        query={
+            "q": "Neal Morse",
+            "surface": "albums",
+            "payload_tier": "full",
+            "omit_sidebar": "1",
+            "include_non_album": "1",
+            "include_library_wide_non_album": "1",
+        },
+    )
+
+    assert status == 200
+    assert _decode_json(body)["view_data_source"] == "postgres_library_browse"
+    assert len(search_calls) == 1
+
+
 def test_asgi_search_pending_projection_schedules_recovery_and_returns_retryable_response(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as routes
     from music_app.services import gallery_projection_postgres as projection

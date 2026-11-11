@@ -652,7 +652,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary {
     grid-column: 2; grid-row: 2; align-self: start; min-width: 0; margin: 0;
   }
-  [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary:empty { display: none; }
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }

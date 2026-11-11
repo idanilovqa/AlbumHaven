@@ -170,6 +170,7 @@ function createContext(stateOverrides = {}) {
     problemFilterButton: {
       classList: { toggle() {} },
       setAttribute() {},
+      focus() { this.focused = true; },
     },
   };
   const context = {
@@ -528,7 +529,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
-  });
+  }, { detail: 0 });
 
   context.handleUtilityBootstrapClick(event);
 
@@ -536,9 +537,10 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, true, 'the menu stays open for the next pick');
+  assert.equal(context.state.utility.problemDropdownOpen, false);
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
+  assert.equal(context.getUtilityModalElements().problemFilterButton.focused, true);
 });
 
 test('applying a problem filter clears the selected album in the live bootstrap handler when it no longer matches', () => {
@@ -563,7 +565,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, '');
-  assert.equal(context.state.utility.problemDropdownOpen, true, 'the menu stays open for the next pick');
+  assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
 test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {

@@ -2484,22 +2484,10 @@ class PostgresScanCacheAdapter:
                 # which then rebases onto this publication and retries.
                 connection.execute(_increment_inventory_mutation_revision_sql())
 
-            if seed_missing_album_ratings:
-                if album_rating_seed_guard is None:
-                    raise RuntimeError(
-                        "Scan rating seeding requires a current-generation guard."
-                    )
-                def seed_and_commit_publication() -> None:
-                    _seed_missing_tag_ratings(connection, self._config, albums)
-                    prepare_publication_commit()
-                    connection.commit()
-
-                album_rating_seed_guard(seed_and_commit_publication)
-            elif publication_commit_guard is not None:
-                prepare_publication_commit()
+            _seed_missing_tag_ratings(connection, self._config, albums)
+            prepare_publication_commit()
+            if publication_commit_guard is not None:
                 publication_commit_guard(connection.commit)
-            else:
-                prepare_publication_commit()
         if repaired_cover_entries:
             committed_relation_state = dict(committed_relation_state or {})
             committed_relation_state["repaired_cover_entries"] = repaired_cover_entries

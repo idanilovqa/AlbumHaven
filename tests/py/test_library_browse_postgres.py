@@ -1568,7 +1568,7 @@ def test_non_album_candidate_uses_private_path_when_relative_path_is_missing():
     assert [entry["path"] for entry in entries] == [path]
 
 
-def test_non_album_search_matches_a_folder_name_without_inventing_tags():
+def test_non_album_search_does_not_match_folder_names_without_tags():
     from music_app.services import library_browse_postgres as browse
 
     path = r"D:\Music\Classic\Richard Wagner\Der Ring des Nibelungen\01-Das Rheingold\01.flac"
@@ -1594,7 +1594,7 @@ def test_non_album_search_matches_a_folder_name_without_inventing_tags():
         query="Der Ring des Nibelungen",
     )
 
-    assert [entry["path"] for entry in entries] == [path]
+    assert entries == []
 
 
 def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
@@ -1771,8 +1771,20 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
          "display_path": "Broadcast/Loose/family.flac", "library_root_category": "main_library"},
         {"title": "Other loose", "artist": "Other", "album_artist": "Other",
          "display_path": "Other/Loose/other.flac", "library_root_category": "main_library"},
+        {"title": "Alias loose", "artist": "Morse, Portnoy & George",
+         "album_artist": "Morse, Portnoy & George",
+         "display_path": "Morse, Portnoy & George/Loose/alias.flac",
+         "library_root_category": "main_library"},
     ]
     monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: tracks)
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda **_kwargs: {
+            "alias_to_canonical": {"Morse, Portnoy & George": "Neal Morse"},
+            "canonical_to_aliases": {"Neal Morse": ["Morse, Portnoy & George"]},
+        },
+    )
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
@@ -1794,9 +1806,15 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
     payload = repository.build_library_loose_tracks_payload(
         query_params={"artist": "Broadcast"}
     )
+    search_payload = repository.build_library_loose_tracks_payload(
+        query_params={"q": " Neal Morse "}
+    )
 
     assert count == {"non_album_track_count": 1}
     assert [track["title"] for track in payload["non_album_tracks"]] == ["Family loose"]
+    assert [track["title"] for track in search_payload["library_non_album_tracks"]] == [
+        "Alias loose"
+    ]
 
 
 def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
@@ -1812,8 +1830,13 @@ def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
         ),
     )
     stored = []
+    loaded_queries = []
     monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
-    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **kwargs: loaded_queries.append(kwargs.get("query", "")) or [],
+    )
     monkeypatch.setattr(
         browse,
         "_problematic_inventory_fingerprint",
@@ -1825,8 +1848,9 @@ def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
         lambda _connection, tracks, fingerprint: stored.append((tracks, fingerprint)),
     )
 
-    repository.build_library_loose_tracks_payload()
+    repository.build_library_loose_tracks_payload(query_params={"q": "Family"})
 
+    assert loaded_queries == [""]
     assert stored == [([], "fingerprint-before-build")]
 
 
@@ -5997,7 +6021,7 @@ def test_search_preview_sql_matches_disc_subtitles_through_their_own_index():
         assert ("search_utf8_hex" in subtitle_clause) is use_utf8_prefilter
 
 
-def test_search_preview_sql_matches_folder_names_without_exposing_paths():
+def test_search_preview_sql_does_not_match_folder_paths():
     from music_app.services.library_browse_postgres import _search_preview_sql
 
     sql = " ".join(_search_preview_sql().split()).lower()
@@ -6005,8 +6029,8 @@ def test_search_preview_sql_matches_folder_names_without_exposing_paths():
         "matched_track_album_ids as materialized (", 1
     )[0]
 
-    assert "library.local_track_files.relative_path" in file_matches
-    assert "like lower(%(query_like)s)" in file_matches
+    assert "library.local_track_files.relative_path" not in file_matches
+    assert "regexp_replace(coalesce(library.local_track_files.private_path" in file_matches
 
 
 def test_search_preview_sql_separates_active_and_stale_filename_matches():
@@ -8539,8 +8563,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    # The search tree is alphabetical; the exact match is still selected.
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Cosmic Cathedral", "Neal Morse"]
+    # Exact-family search keeps the tree aligned with the rendered gallery.
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Cosmic Cathedral"]
     assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),

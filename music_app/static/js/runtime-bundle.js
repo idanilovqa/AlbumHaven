@@ -22908,7 +22908,7 @@ function syncAlbumTrackCreditMotion(root) {
     // Read every width before writing any class: interleaving forced one
     // synchronous layout per row.
     const overflowing = rows.map((row) => !reduced.matches && visible.has(row)
-      && resolveCompactPlayerMetadataRowMotion({
+      && resolveRunningLineMotion({
         clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth,
       }).overflowing);
     rows.forEach((row, index) => row.classList.toggle('is-credit-overflowing', overflowing[index]));
@@ -23127,7 +23127,9 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
-    const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : (groupIndex === lastMainIndex ? mainSummaryHtml : '');
+    const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : '';
+    const mainSummarySectionHtml = groupIndex === lastMainIndex && mainSummaryHtml
+      ? `<section class="album-track-table__disc">${mainSummaryHtml}</section>` : '';
     if (collapsibleGroups && (showLabel || group?.loadingRows)) {
       // Section super-header: title, muted count, and the section length (hidden while collapsed).
       const count = String(group?.countLabel || '').trim();
@@ -23135,7 +23137,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       const headingContent = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -23144,7 +23146,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>`;
+    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
   return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
@@ -49030,13 +49032,10 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
-      // The menu stays open so several problem types can be picked in a row.
+      state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
-      if (event.detail === 0) {
-        Array.from(getUtilityModalElements().problemFilterMenu?.querySelectorAll?.('[data-problem-filter-value]') || [])
-          .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
-      }
+      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
     return;
   }

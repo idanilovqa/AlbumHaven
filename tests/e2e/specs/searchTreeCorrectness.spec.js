@@ -203,6 +203,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     'Capture the complete Transatlantic artist-name gallery',
     async () => {
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}`);
+      await galleryActions.waitForGalleryReady();
       await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST);
       const albums = await galleryActions.readAppliedPrimaryArtistAlbumNames(TRANSATLANTIC_ARTIST);
       expect(albums.length).toBeGreaterThan(1);
@@ -217,6 +218,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   let completeNealView;
   await stepLogger.step('Search for Transatlantic from Neal Morse', async () => {
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}`);
+    await galleryActions.waitForGalleryReady();
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
     completeNealView = {
       albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
@@ -745,9 +747,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     await navigationPanelActions.waitForSidebarArtistNames(directUrlTrees.rootNames);
     await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
-    expect(await searchToolbarActions.readCanonicalSearchState({
-      source: 'bootstrap',
-    })).toEqual(
+    expect(await searchToolbarActions.readCanonicalSearchState()).toEqual(
       expect.objectContaining({
         query: '',
         searchContext: null,
@@ -764,9 +764,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: DEEP_LINK_QUERY,
     });
-    const canonicalState = await searchToolbarActions.readCanonicalSearchState({
-      source: 'bootstrap',
-    });
+    const canonicalState = await searchToolbarActions.readCanonicalSearchState();
     expect(canonicalState.query).toBe(DEEP_LINK_QUERY);
     expect(canonicalState.selectedArtist).toBe(FAMILY_ARTIST);
     expect(canonicalState.searchContext).toEqual(expect.objectContaining({

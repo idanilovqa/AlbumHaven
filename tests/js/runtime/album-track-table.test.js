@@ -166,7 +166,7 @@ test('AlbumTrackTable closes the main discs with their total and ends bonus disc
   assert.ok(html.includes('class="album-track-table__bonus-total">Bonus Disc Length: 22:30</div>'));
   assert.ok(html.includes('class="album-track-table__aggregate-total">Total Length: 25m 30s</div>'));
   assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 2);
-  assert.match(html, /<section class="album-track-table__disc">[\s\S]*Main 2[\s\S]*album-track-table__main-total[\s\S]*<\/section><section class="album-track-table__disc"><h4/);
+  assert.match(html, /<section class="album-track-table__disc">[\s\S]*Main 2[\s\S]*<\/section><section class="album-track-table__disc"><div class="album-track-table__total">[\s\S]*album-track-table__main-total[\s\S]*<\/section><section class="album-track-table__disc"><h4/);
   assert.equal((html.match(/class="compact-data-table-header"/g) || []).length, 1);
 });
 
@@ -401,9 +401,9 @@ test('Loose Tracks credit motion reads every row before writing and pans only vi
       observe() {}
       disconnect() {}
     },
-    resolveCompactPlayerMetadataRowMotion: ({ clientWidth, scrollWidth }) => ({ overflowing: scrollWidth > clientWidth }),
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'running-line.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js'), 'utf8'), context);
   context.syncAlbumTrackCreditMotion({ querySelectorAll: () => rows });
   intersect([{ target: rows[0], isIntersecting: true }, { target: rows[2], isIntersecting: true }]);

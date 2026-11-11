@@ -62,7 +62,7 @@
   <link rel="stylesheet" href="/static/css/startup-progress.css?v={{ runtime_asset_version | default(app_version | default('')) }}">
 </head>
 <body>
-  {% set startup_progress_initial = 25 %}
+  {% set startup_progress_initial = 50 %}
   {% include "components/startup-progress.html" %}
   {% set shell_app_bar = shell_slots.app_bar if shell_slots and shell_slots.app_bar else {} %}
   {% set shell_header_surfaces = shell_app_bar.header_surfaces if shell_app_bar and shell_app_bar.header_surfaces else {} %}

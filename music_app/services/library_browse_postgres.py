@@ -552,6 +552,7 @@ class PostgresLibraryBrowseRepository:
         params = query_params or {}
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
+        query = str(params.get("q") or "")
         with self._connect_to_database() as connection:
             tracks = self._load_non_album_track_snapshot(connection)
             relation_alias_maps = None
@@ -592,6 +593,7 @@ class PostgresLibraryBrowseRepository:
                     alias_to_canonical=relation_alias_maps["alias_to_canonical"],
                     canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
                     connection=connection,
+                    query="",
                     include_library_wide=True,
                 )
                 entries = loaded[1] if isinstance(loaded, tuple) else loaded
@@ -609,6 +611,8 @@ class PostgresLibraryBrowseRepository:
                     tracks,
                     snapshot_fingerprint,
                 )
+            if query and relation_alias_maps is None:
+                relation_alias_maps = self._load_relation_alias_maps(connection=connection)
             if selected_artist:
                 relation_alias_maps = relation_alias_maps or self._load_relation_alias_maps(
                     connection=connection
@@ -647,6 +651,9 @@ class PostgresLibraryBrowseRepository:
                 visible_library_categories=list(
                     view_state.get("visible_library_categories") or []
                 ),
+                alias_to_canonical=(relation_alias_maps or {}).get("alias_to_canonical", {}),
+                canonical_to_aliases=(relation_alias_maps or {}).get("canonical_to_aliases", {}),
+                query=query,
             )
             return {
                 "library_non_album_tracks": tracks,
@@ -2467,7 +2474,6 @@ class PostgresLibraryBrowseRepository:
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups,
-                    alphabetical=True,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {
@@ -4632,12 +4638,14 @@ def _filter_non_album_snapshot_tracks(
     visible_artist_names: Iterable[object] = (),
     alias_to_canonical: Mapping[str, object] | None = None,
     canonical_to_aliases: Mapping[str, object] | None = None,
+    query: object = "",
 ) -> list[dict[str, object]]:
     visible_artist_keys, visible_path_parts = _non_album_artist_scope(
         visible_artist_names,
         alias_to_canonical or {},
         canonical_to_aliases or {},
     )
+    query_text = str(query or "").strip()
     filtered = []
     for raw_track in tracks:
         track = dict(_row_mapping(raw_track))
@@ -4650,8 +4658,43 @@ def _filter_non_album_snapshot_tracks(
             visible_path_parts,
         ):
             continue
+        if query_text and not _non_album_entry_matches_query(
+            track,
+            query_text,
+            artist_names=_expanded_artist_name_list(
+                (track.get("artist"), track.get("album_artist")),
+                alias_to_canonical or {},
+                canonical_to_aliases or {},
+            ),
+        ):
+            continue
         filtered.append(track)
     return filtered
+
+
+def _non_album_entry_matches_query(
+    entry: Mapping[str, object],
+    query: object,
+    *,
+    artist_names: Iterable[object] = (),
+) -> bool:
+    from music_app.services.view_search import fold_search_accents
+
+    query_text = str(query or "")
+    folded_query = fold_search_accents(query_text)
+    if not folded_query:
+        return True
+    file_name = Path(str(entry.get("path") or "")).name
+    return any(
+        folded_query in fold_search_accents(str(value or ""))
+        for value in (*artist_names, entry.get("album_artist"), entry.get("artist"))
+    ) or any(
+        query_text.lower() in str(value or "").strip().lower()
+        for value in (
+            entry.get("album"), entry.get("title"), file_name,
+            Path(file_name).stem, entry.get("disc_subtitle"),
+        )
+    )
 
 
 def _non_album_entries_from_inventory_candidates(
@@ -4666,17 +4709,14 @@ def _non_album_entries_from_inventory_candidates(
 ) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Loose-track entries visible to the artist scope; with ``include_library_wide``
     also the library-wide list, from one pass."""
-    from music_app.services.view_search import fold_search_accents
-
     visible_artist_keys, visible_path_parts = _non_album_artist_scope(
         visible_artist_names,
         alias_to_canonical,
         canonical_to_aliases,
     )
     # Loose tracks follow the Gallery search rule (_search_preview_sql): the whole
-    # query inside an artist (accents folded), album, title, folder/file or CD name.
+    # query inside an artist (accents folded), album, title, file or CD name.
     query_text = str(query or "")
-    folded_query = fold_search_accents(query_text)
     normalized_alias_to_canonical = {
         local_inventory_identity_key(alias): canonical
         for alias, canonical in alias_to_canonical.items()
@@ -4716,22 +4756,12 @@ def _non_album_entries_from_inventory_candidates(
         )
         if not in_artist_scope and not include_library_wide:
             continue
-        if folded_query:
-            file_name = Path(str(entry.get("path") or "")).name
-            artist_match = any(
-                folded_query in fold_search_accents(str(value or ""))
-                for value in (entry_artist, canonical_artist, entry.get("artist"))
-            )
-            text_match = any(
-                query_text.lower() in str(value or "").strip().lower()
-                for value in (
-                    entry.get("album"), entry.get("title"), file_name,
-                    Path(file_name).stem, entry.get("disc_subtitle"),
-                    *relative_path.replace("\\", "/").split("/")[:-1],
-                )
-            )
-            if not (artist_match or text_match):
-                continue
+        if not _non_album_entry_matches_query(
+            entry,
+            query_text,
+            artist_names=(entry_artist, canonical_artist),
+        ):
+            continue
         if include_library_wide:
             library_entries.append(entry)
         if in_artist_scope:
@@ -11093,12 +11123,7 @@ def _search_preview_sql(
               library.local_track_files.scan_cache_stale
             from library.local_track_files
             where ({file_path_prefilter_sql}(
-                lower(btrim(coalesce(
-                  nullif(library.local_track_files.relative_path, ''),
-                  library.local_track_files.private_path,
-                  ''
-                ))) like lower(%(query_like)s) escape ''
-                or lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
+                lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
                   escape ''
                 or lower(btrim(
                   regexp_replace(

@@ -702,6 +702,12 @@ def view_data(request: Request) -> JSONResponse:
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
+    if _is_postgres_search_loose_tracks_prefetch_request(request):
+        payload = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_library_loose_tracks_payload(query_params=request.query_params)
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
+        return JSONResponse(payload)
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -865,6 +871,17 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         return False
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     return selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
+
+
+def _is_postgres_search_loose_tracks_prefetch_request(request: Request) -> bool:
+    params = request.query_params
+    return (
+        _is_postgres_album_search_request(request)
+        and not str(params.get("payload_tier") or "").strip()
+        and _request_flag_value(params.get("omit_sidebar"))
+        and _request_flag_value(params.get("include_non_album"))
+        and _request_flag_value(params.get("include_library_wide_non_album"))
+    )
 
 
 def _is_postgres_album_search_candidate(request: Request) -> bool:

@@ -178,13 +178,10 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
-      // The menu stays open so several problem types can be picked in a row.
+      state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
-      if (event.detail === 0) {
-        Array.from(getUtilityModalElements().problemFilterMenu?.querySelectorAll?.('[data-problem-filter-value]') || [])
-          .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
-      }
+      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
     return;
   }

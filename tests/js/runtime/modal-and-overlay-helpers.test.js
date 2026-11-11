@@ -286,6 +286,66 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+test('populated Loose Tracks paints before deferred table enhancements run', () => {
+  const { context, flushAnimationFrame } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  const summary = new FakeElement('summary');
+  const trackTable = new FakeElement('track-table');
+  const details = new FakeElement('details');
+  const calls = [];
+
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  details.open = true;
+  details.querySelector = () => summary;
+  details.closest = () => trackTable;
+  details.addEventListener = () => calls.push('collapsible');
+  trackTable.querySelector = () => null;
+  trackTable.classList.toggle = () => calls.push('collapsed-state');
+  table.querySelectorAll = () => [details];
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildAlbumDetailsHeaderHtml = () => '<h2>Loose Tracks</h2>';
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.syncAlbumTrackCreditMotion = () => calls.push('credit-motion');
+  context.attachSharedPlayer = () => calls.push('shared-player');
+  context.URL = URL;
+  context.state.view.library_non_album_tracks = [{
+    path: 'D:/Music/Loose.flac',
+    title: 'Loose',
+    artist: 'Artist',
+    duration_seconds: 60,
+    exception_type: 'Interview',
+  }];
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+
+  context.openNonAlbumModal({ libraryWide: true });
+
+  assert.equal(overlay.hidden, false);
+  assert.match(table.innerHTML, /Loose/);
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
+
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
+
+  assert.deepEqual(calls, [
+    'credit-motion',
+    'collapsed-state',
+    'collapsible',
+    'shared-player',
+  ]);
+});
+
 test('initial artist loose tracks remain usable without a second gallery request', async () => {
   const { context } = loadHelper();
   const tracks = [{ path: '/music/agalloch/loose.flac', artist: 'Agalloch', title: 'Loose' }];

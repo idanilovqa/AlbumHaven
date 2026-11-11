@@ -2750,6 +2750,52 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
     }
 
 
+def test_postgres_root_source_totals_use_ready_projection_for_every_scope(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection_module
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+    )
+    contexts = []
+    projected_scopes = []
+    monkeypatch.setattr(
+        projection_module,
+        "gallery_projection_context",
+        lambda connection: contexts.append(connection) or {"library_id": 1},
+    )
+
+    def fake_projection(_connection, view_state, *, context):
+        assert context == {"library_id": 1}
+        projected_scopes.append(tuple(view_state["visible_library_categories"]))
+        count = len(projected_scopes)
+        return ([{"artist": str(index)} for index in range(count)], count + 10)
+
+    monkeypatch.setattr(
+        projection_module,
+        "load_gallery_projection_sidebar",
+        fake_projection,
+    )
+
+    payload = repository.build_root_source_totals_payload()
+
+    assert len(contexts) == 1
+    assert len(projected_scopes) == 7
+    assert payload == {
+        "source_totals_by_scope": {
+            "": {"artist_count": 0, "album_count": 0},
+            "hoard": {"artist_count": 4, "album_count": 14},
+            "hoard|main_library": {"artist_count": 5, "album_count": 15},
+            "hoard|main_library|new_arrivals": {"artist_count": 7, "album_count": 17},
+            "hoard|new_arrivals": {"artist_count": 6, "album_count": 16},
+            "main_library": {"artist_count": 1, "album_count": 11},
+            "main_library|new_arrivals": {"artist_count": 3, "album_count": 13},
+            "new_arrivals": {"artist_count": 2, "album_count": 12},
+        },
+    }
+
+
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
     monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):

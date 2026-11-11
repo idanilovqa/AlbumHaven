@@ -871,21 +871,28 @@ function openNonAlbumModal(options = {}) {
     : looseTracks.length
       ? buildNonAlbumTrackSectionsMarkup(looseTracks)
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
-  if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
-  els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
-    const summary = details.querySelector?.('summary');
-    const trackTable = details.closest?.('.album-track-table');
-    const syncExpanded = () => {
-      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
-      trackTable?.classList?.toggle('album-track-table--collapsed-disc',
-        Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
-    };
-    syncExpanded();
-    details.addEventListener?.('toggle', syncExpanded);
-  });
+  const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
+  els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
   if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
-  attachSharedPlayer();
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserAnimationFrame(() => {
+      if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
+      if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
+      els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+        const summary = details.querySelector?.('summary');
+        const trackTable = details.closest?.('.album-track-table');
+        const syncExpanded = () => {
+          summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+          trackTable?.classList?.toggle('album-track-table--collapsed-disc',
+            Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
+        };
+        syncExpanded();
+        details.addEventListener?.('toggle', syncExpanded);
+      });
+      attachSharedPlayer();
+    });
+  });
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {

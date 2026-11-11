@@ -1024,7 +1024,7 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 _HOME_POSTGRES_PARAMS = frozenset({
     "gallery_scope", "gallery_display", "gallery_display_mode", "gallery_scale_percent",
     "category", "omit_sidebar", "include_non_album", "include_library_wide_non_album",
-    "client_surface", "client_surface_class",
+    "client_surface", "client_surface_class", "source_totals",
 })
 
 
@@ -1046,10 +1046,18 @@ async def home_data(request: Request) -> JSONResponse:
 
 def _build_home_data_payload(request: Request) -> dict[str, object]:
     library_state = _library_state(request)
-    if (
-        not library_state.get("scan_in_progress")
-        and select_runtime_persistence_adapter("library_browse", _app_config(request)).effective_backend
+    postgres_browse = (
+        select_runtime_persistence_adapter(
+            "library_browse", _app_config(request)
+        ).effective_backend
         == PERSISTENCE_BACKEND_POSTGRES
+    )
+    if (
+        postgres_browse
+        and (
+            _request_flag_value(request.query_params.get("source_totals"))
+            or not library_state.get("scan_in_progress")
+        )
     ):
         return _build_postgres_home_payload(request)
     _hydrate_cached_library_for_asgi(request)
@@ -1081,6 +1089,13 @@ def _build_postgres_home_payload(request: Request) -> dict[str, object]:
 
     config = _app_config(request)
     repository = PostgresLibraryBrowseRepository(config)
+    if _request_flag_value(request.query_params.get("source_totals")):
+        inventory_mutation_revision = int(
+            _library_state(request).get("inventory_mutation_revision") or 0
+        )
+        payload = repository.build_root_source_totals_payload()
+        payload["inventory_mutation_revision"] = inventory_mutation_revision
+        return payload
     omit_sidebar = _request_flag_value(request.query_params.get("omit_sidebar"))
     root_params = QueryParams([
         ("surface", "albums"),

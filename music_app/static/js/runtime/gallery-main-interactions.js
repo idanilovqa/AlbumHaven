@@ -280,45 +280,59 @@ function cacheCurrentGallerySourceTotals() {
   return cacheGallerySourceTotals(categories, state.view);
 }
 
-async function prefetchGallerySourceTotals(categories) {
+async function prefetchGallerySourceTotalsForAllScopes() {
   if (typeof state === 'undefined' || !state?.gallery || !state?.view
-    || typeof fetch !== 'function' || state.view.query || state.view.selected_artist) return;
-  const normalized = ['main_library', 'new_arrivals', 'hoard'].filter(source => categories.includes(source));
-  const key = gallerySourceScopeKey(normalized);
-  state.gallery.sourceTotalsByScope ||= {};
-  state.gallery.pendingSourceTotalScopes ||= new Set();
-  if (state.gallery.sourceTotalsByScope[key] || state.gallery.pendingSourceTotalScopes.has(key)) return;
-  if (!normalized.length) {
-    state.gallery.sourceTotalsByScope[key] = { artistCount: 0, albumCount: 0 };
-    return;
+    || typeof fetch !== 'function') return false;
+  const currentRevision = Number(
+    state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+  );
+  if (Number.isSafeInteger(state.gallery.sourceTotalsRevision)
+    && state.gallery.sourceTotalsRevision !== currentRevision) {
+    state.gallery.sourceTotalsByScope = {};
   }
-  state.gallery.pendingSourceTotalScopes.add(key);
-  try {
-    const params = new URLSearchParams({ omit_sidebar: '1' });
-    normalized.forEach(source => params.append('category', source));
-    const response = await fetch(`/home-data?${params}`, { headers: { Accept: 'application/json' } });
-    if (!response.ok) return;
-    if (cacheGallerySourceTotals(normalized, await response.json())
-      && key === gallerySourceScopeKey(activeGallerySourceCategories(ensureGalleryMainState()))) {
-      updateGalleryMainChrome();
-    }
-  } catch {
-    // Keep the last authoritative total when background prefetch is unavailable.
-  } finally {
-    state.gallery.pendingSourceTotalScopes.delete(key);
-  }
-}
-
-function prefetchGallerySourceNeighborTotals(mainState = ensureGalleryMainState()) {
-  if (typeof state === 'undefined' || !state?.gallery || !state?.view) return;
   cacheCurrentGallerySourceTotals();
-  const current = activeGallerySourceCategories(mainState);
-  ['main_library', 'new_arrivals', 'hoard'].forEach(source => {
-    const next = current.includes(source)
-      ? current.filter(category => category !== source)
-      : [...current, source];
-    void prefetchGallerySourceTotals(next);
-  });
+  const expectedKeys = [
+    '', 'hoard', 'hoard|main_library', 'hoard|main_library|new_arrivals',
+    'hoard|new_arrivals', 'main_library', 'main_library|new_arrivals', 'new_arrivals',
+  ];
+  if (state.gallery.sourceTotalsRevision === currentRevision
+    && expectedKeys.every(key => state.gallery.sourceTotalsByScope?.[key])) return true;
+  if (state.gallery.pendingSourceTotalsRequest) return state.gallery.pendingSourceTotalsRequest;
+  const request = (async () => {
+    try {
+      const response = await fetch('/home-data?source_totals=1', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return false;
+      const payload = await response.json();
+      const received = payload?.source_totals_by_scope;
+      const responseRevision = Number(payload?.inventory_mutation_revision);
+      const latestRevision = Number(
+        state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+      );
+      if (!Number.isSafeInteger(responseRevision) || responseRevision !== latestRevision
+        || !received || !expectedKeys.every((key) => {
+        const total = received[key];
+        return Number.isFinite(Number(total?.artist_count))
+          && Number.isFinite(Number(total?.album_count));
+      })) return false;
+      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys.map((key) => [key, {
+        artistCount: Number(received[key].artist_count),
+        albumCount: Number(received[key].album_count),
+      }]));
+      state.gallery.sourceTotalsRevision = responseRevision;
+      updateGalleryMainChrome();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (state.gallery.pendingSourceTotalsRequest === request) {
+        state.gallery.pendingSourceTotalsRequest = null;
+      }
+    }
+  })();
+  state.gallery.pendingSourceTotalsRequest = request;
+  return request;
 }
 
 function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
@@ -790,7 +804,7 @@ function updateGalleryMainChrome() {
   }
 }
 
-function transitionGalleryMain(action) {
+function transitionGalleryMain(action, options = {}) {
   cacheCurrentGallerySourceTotals();
   const previousView = ensureGalleryMainState().view;
   const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
@@ -798,8 +812,19 @@ function transitionGalleryMain(action) {
   // authoritative scope on both hide and show; scope mismatch blocks stale edits.
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
+  const sourceTotalsCurrent = state.gallery.sourceTotalsRevision === Number(
+    state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+  );
+  if (action.type === 'toggle-source' && options.sourceTotalsResolved !== true
+    && (!sourceTotalsCurrent
+      || !state.gallery.sourceTotalsByScope?.[gallerySourceScopeKey(hydrationCategories)])) {
+    return Promise.resolve(prefetchGallerySourceTotalsForAllScopes())
+      .then(resolved => (resolved
+        ? transitionGalleryMain(action, { sourceTotalsResolved: true })
+        : false));
+  }
   state.gallery.mainState = nextState;
-  if (action.type === 'toggle-source') prefetchGallerySourceNeighborTotals(nextState);
+  if (action.type === 'toggle-source') prefetchGallerySourceTotalsForAllScopes();
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
     persistCurrentGalleryDisplayPreferences(state.view);
@@ -971,7 +996,7 @@ function handleGalleryMainClick(event) {
 function initGalleryMain() {
   if (typeof installPanelSelectionBoundary === 'function') installPanelSelectionBoundary();
   ensureGalleryMainState();
-  prefetchGallerySourceNeighborTotals();
+  prefetchGallerySourceTotalsForAllScopes();
   galleryMainSurfaceController = createAnchoredSurfaceController();
   const panel = document.querySelector('[data-artist-family-panel]');
   const player = document.querySelector('[data-shell-slot="bottom_player"]');

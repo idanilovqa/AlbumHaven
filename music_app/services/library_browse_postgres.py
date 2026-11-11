@@ -805,6 +805,55 @@ class PostgresLibraryBrowseRepository:
             "show_all_artists_sidebar_link": True,
         }
 
+    def build_root_source_totals_payload(self) -> dict[str, object]:
+        from music_app.services.gallery_projection_postgres import (
+            gallery_projection_context,
+            load_gallery_projection_sidebar,
+        )
+
+        connection = self._connect_to_database()
+        try:
+            connection.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            )
+            context = gallery_projection_context(connection)
+            if not context:
+                raise GalleryProjectionPending("Gallery source totals are being prepared.")
+            sources = ("main_library", "new_arrivals", "hoard")
+            totals: dict[str, dict[str, int]] = {
+                "": {"artist_count": 0, "album_count": 0},
+            }
+            for mask in range(1, 2 ** len(sources)):
+                scope = [
+                    source for index, source in enumerate(sources)
+                    if mask & (1 << index)
+                ]
+                projection = load_gallery_projection_sidebar(
+                    connection,
+                    {
+                        "gallery_scope": "all",
+                        "visible_library_categories": scope,
+                    },
+                    context=context,
+                )
+                if projection is None:
+                    raise GalleryProjectionPending("Gallery source totals are being prepared.")
+                sidebar, album_count = projection
+                totals["|".join(sorted(scope))] = {
+                    "artist_count": len(sidebar),
+                    "album_count": album_count,
+                }
+        finally:
+            try:
+                rollback = getattr(connection, "rollback", None)
+                if callable(rollback):
+                    rollback()
+            finally:
+                close = getattr(connection, "close", None)
+                if callable(close):
+                    close()
+        return {"source_totals_by_scope": totals}
+
     def build_root_sidebar_payload(
         self,
         *,

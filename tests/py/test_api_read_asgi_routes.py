@@ -1508,6 +1508,16 @@ def _install_postgres_home_fakes(app, monkeypatch, *, repository_calls, threadpo
             self._record("counts", query_params)
             return {"artist_count": 2, "album_count": 3, "show_all_artists_sidebar_link": True}
 
+        def build_root_source_totals_payload(self):
+            assert threadpool_state["active"] is True
+            repository_calls.append({"call": "source_totals"})
+            return {
+                "source_totals_by_scope": {
+                    "": {"artist_count": 0, "album_count": 0},
+                    "main_library": {"artist_count": 2, "album_count": 3},
+                },
+            }
+
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", forbidden_legacy_builder)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", forbidden_legacy_builder)
@@ -1562,6 +1572,31 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     assert repository_calls[0]["gallery_display"] == "covers"
     assert repository_calls[0]["categories"] == ["main_library", "new_arrivals"]
     # One threadpool hop owns every synchronous builder; the event loop stays free.
+    assert threadpool_state["functions"] == ["_build_home_data_payload"]
+
+
+def test_asgi_home_data_source_totals_skips_gallery_and_recent_payloads(
+    app, asgi_app, monkeypatch,
+):
+    repository_calls: list[dict[str, object]] = []
+    threadpool_state = {"functions": [], "active": False}
+    _install_postgres_home_fakes(
+        app, monkeypatch, repository_calls=repository_calls, threadpool_state=threadpool_state,
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/home-data", query={"source_totals": "1"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "inventory_mutation_revision": 0,
+        "source_totals_by_scope": {
+            "": {"artist_count": 0, "album_count": 0},
+            "main_library": {"artist_count": 2, "album_count": 3},
+        },
+    }
+    assert repository_calls == [{"call": "source_totals"}]
     assert threadpool_state["functions"] == ["_build_home_data_payload"]
 
 

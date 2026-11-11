@@ -1814,56 +1814,138 @@ test('a source switch over a partial gallery keeps an immediate exact count belo
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly))),
-    { artistCount: 120, albumCount: 900 },
+    mounted,
   );
   const complete = { ...partial, initial_view_partial: false };
-  assert.equal(context.resolveGallerySummaryTotals(complete, mounted, hoardOnly), mounted);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(complete,
+      mounted, hoardOnly, null, { hoard: { artistCount: 7, albumCount: 11 } }))),
+    { artistCount: 7, albumCount: 11 },
+  );
 });
 
-test('source total prefetch caches the exact Postgres count and refreshes the active header', async () => {
+test('source total prefetch caches every rapid toggle combination from one request', async () => {
   const requests = [];
-  const state = {
-    gallery: {
-      mainState: {
-        sources: { main_library: false, new_arrivals: false, hoard: true },
+  let responseRevision = 42;
+  const sourceTotals = Object.fromEntries([
+    '',
+    'hoard',
+    'hoard|main_library',
+    'hoard|main_library|new_arrivals',
+    'hoard|new_arrivals',
+    'main_library',
+    'main_library|new_arrivals',
+    'new_arrivals',
+  ].map((key, index) => [key, { artist_count: index, album_count: index + 10 }]));
+  const context = loadRuntime({
+    state: {
+      status: { inventory_mutation_revision: 42 },
+      gallery: {
+        mainState: {
+          sources: { main_library: true, new_arrivals: true, hoard: true },
+        },
+        sourceTotalsByScope: {},
       },
-      sourceTotalsByScope: {},
-      pendingSourceTotalScopes: new Set(),
+      view: {
+        loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+        artist_count: 120,
+        album_count: 900,
+      },
     },
-    view: {
-      query: '',
-      selected_artist: '',
+    fetch: async (url) => {
+      requests.push(url);
+      return { ok: true, json: async () => ({
+        inventory_mutation_revision: responseRevision,
+        source_totals_by_scope: sourceTotals,
+      }) };
+    },
+  });
+
+  await Promise.all([
+    context.prefetchGallerySourceTotalsForAllScopes(),
+    context.prefetchGallerySourceTotalsForAllScopes(),
+  ]);
+
+  assert.deepEqual(requests, ['/home-data?source_totals=1']);
+  assert.deepEqual(plain(context.state.gallery.sourceTotalsByScope), Object.fromEntries(
+    Object.entries(sourceTotals).map(([key, value]) => [key, {
+      artistCount: value.artist_count,
+      albumCount: value.album_count,
+    }]),
+  ));
+  assert.equal(context.state.gallery.sourceTotalsRevision, 42);
+
+  context.state.status.inventory_mutation_revision = 43;
+  responseRevision = 43;
+  await context.prefetchGallerySourceTotalsForAllScopes();
+
+  assert.deepEqual(requests, [
+    '/home-data?source_totals=1',
+    '/home-data?source_totals=1',
+  ]);
+  assert.equal(context.state.gallery.sourceTotalsRevision, 43);
+});
+test('a source transition waits for its exact total instead of flashing the previous count', async () => {
+  let releaseTotals;
+  const totalsReady = new Promise(resolve => { releaseTotals = resolve; });
+  const renders = [];
+  const context = loadRuntime({
+    state: { status: { inventory_mutation_revision: 42 }, gallery: {}, view: {
       loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
       artist_count: 120,
       album_count: 900,
-    },
+    } },
+    window: { location: {}, history: {} },
+    renderArtistGroups: options => renders.push(options),
+  });
+  context.state.gallery.mainState = context.createGalleryMainState();
+  context.state.gallery.sourceTotalsRevision = 41;
+  context.state.gallery.sourceTotalsByScope = {
+    'hoard|new_arrivals': { artistCount: 99, albumCount: 99 },
   };
-  let failPrefetch = true;
+  context.prefetchGallerySourceTotalsForAllScopes = async () => {
+    await totalsReady;
+    context.state.gallery.sourceTotalsByScope['hoard|new_arrivals'] = {
+      artistCount: 7,
+      albumCount: 11,
+    };
+    return true;
+  };
+
+  const transition = context.transitionGalleryMain({
+    type: 'toggle-source',
+    source: 'main_library',
+  });
+  assert.equal(context.state.gallery.mainState.sources.main_library, true);
+  assert.equal(renders.length, 0);
+
+  releaseTotals();
+  await transition;
+
+  assert.equal(context.state.gallery.mainState.sources.main_library, false);
+  assert.equal(renders.length, 1);
+});
+test('a source transition keeps its current state when exact totals stay stale', async () => {
+  const renders = [];
   const context = loadRuntime({
-    state,
-    URLSearchParams,
-    fetch: async (url) => {
-      requests.push(url);
-      if (failPrefetch) throw new Error('offline');
-      return { ok: true, json: async () => ({ artist_count: 7, album_count: 11 }) };
-    },
+    state: { status: { inventory_mutation_revision: 42 }, gallery: {}, view: {
+      loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+      artist_count: 120,
+      album_count: 900,
+    } },
+    window: { location: {}, history: {} },
+    renderArtistGroups: options => renders.push(options),
   });
-  let headerRefreshes = 0;
-  context.updateGalleryMainChrome = () => { headerRefreshes += 1; };
+  context.state.gallery.mainState = context.createGalleryMainState();
+  context.state.gallery.sourceTotalsRevision = 41;
+  context.prefetchGallerySourceTotalsForAllScopes = async () => false;
 
-  await context.prefetchGallerySourceTotals(['hoard']);
-  assert.equal(state.gallery.pendingSourceTotalScopes.size, 0);
-  failPrefetch = false;
-  await context.prefetchGallerySourceTotals(['hoard']);
-
-  assert.deepEqual(requests, [
-    '/home-data?omit_sidebar=1&category=hoard',
-    '/home-data?omit_sidebar=1&category=hoard',
-  ]);
-  assert.deepEqual(plain(state.gallery.sourceTotalsByScope), {
-    hoard: { artistCount: 7, albumCount: 11 },
-  });
-  assert.equal(headerRefreshes, 1);
+  assert.equal(await context.transitionGalleryMain({
+    type: 'toggle-source',
+    source: 'main_library',
+  }), false);
+  assert.equal(context.state.gallery.mainState.sources.main_library, true);
+  assert.equal(renders.length, 0);
 });
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };

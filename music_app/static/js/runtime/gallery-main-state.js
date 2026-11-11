@@ -250,20 +250,19 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups, s
   // source; otherwise the true totals arrive with the source request.
   const loadedSources = view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'];
   const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
-  if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
-    && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
-    const cached = sourceTotalsByScope[gallerySourceScopeKey(activeSources)];
-    return cached || {
-      artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
-      albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
-    };
-  }
-  if (filterState && (
+  const hasNonSourceFilters = Boolean(filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 3
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
     || filterState.splitAlbums === 'hide'
+  ));
+  if (!hasNonSourceFilters && activeSources.length
+    && !gallerySourceScopesEqual(activeSources, loadedSources)) {
+    const cached = sourceTotalsByScope[gallerySourceScopeKey(activeSources)];
+    return cached || rootTotals;
+  }
+  if (filterState && (hasNonSourceFilters
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;

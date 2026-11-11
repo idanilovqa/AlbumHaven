@@ -28,12 +28,21 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
     path.join(root, 'music_app', 'templates', 'partials', 'primary-modals.html'),
     'utf8',
   );
+  const componentCss = fs.readFileSync(
+    path.join(root, 'music_app', 'static', 'css', 'button-component.css'),
+    'utf8',
+  );
 
   assert.match(template, /data-tag-editor-exception-anchor/);
+  assert.match(template, /class="ui-dropdown-control"/);
   assert.match(template, /role="combobox"/);
   assert.match(template, /aria-controls="tag-editor-exception-menu"/);
   assert.match(template, /id="tag-editor-exception-menu"[^>]+role="listbox"[^>]+hidden/);
   assert.doesNotMatch(template, /<datalist id="tag-editor-exception-types"/);
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control::after\s*\{[^}]*top:\s*50%[^}]*width:\s*5px[^}]*height:\s*5px[^}]*border-right:\s*1\.5px solid var\(--muted,[^}]*transform:\s*translateY\(-70%\) rotate\(45deg\)/s,
+  );
 });
 
 test('custom collection name is hidden at the form boundary unless selected', () => {
@@ -48,10 +57,7 @@ test('custom collection name is hidden at the form boundary unless selected', ()
   assert.match(css, /\.tag-editor-form\s+label\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /label\[data-custom-collection-name-field\]\[hidden\]\s*\{[^}]*display:\s*flex[^}]*visibility:\s*hidden/s);
   assert.match(css, /\.tag-editor-exception-menu\s*\{[^}]*position:\s*fixed/s);
-  assert.match(
-    css,
-    /\.tag-editor-exception-field::after\s*\{[^}]*border-right:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*border-bottom:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*transform:\s*rotate\(45deg\)[^}]*pointer-events:\s*none/s,
-  );
+  assert.doesNotMatch(css, /\.tag-editor-exception-field::after/);
   assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input[^}]*padding-right:\s*34px/s);
   assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input:focus\s*\{[^}]*transition:\s*none/s);
   assert.match(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text\)/s);

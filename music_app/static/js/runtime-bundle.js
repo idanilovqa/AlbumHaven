@@ -15357,7 +15357,13 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
       problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
-      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
+      isSearchMatch: matchesAlbumTrackSearch(
+        state.view?.query,
+        title,
+        knownArtist,
+        item.album_artist,
+        filename,
+      ),
     };
   });
 }
@@ -23001,9 +23007,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
-function matchesAlbumTrackSearch(query, title, secondaryArtist) {
+function matchesAlbumTrackSearch(query, ...values) {
   const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
-  return Boolean(normalizedQuery && [title, secondaryArtist]
+  return Boolean(normalizedQuery && values
     .some(value => String(value || '').toLocaleLowerCase().includes(normalizedQuery)));
 }
 

@@ -257,9 +257,12 @@ def _non_album_candidates_sql(
                 library.local_tracks.metadata ->> 'album',
                 library.local_artists.name,
                 library.local_albums.title,
-                library.local_track_files.relative_path,
-                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}',
-                active_track_files.private_path
+                regexp_replace(
+                    coalesce(library.local_track_files.relative_path, active_track_files.private_path, ''),
+                    '^.*[\\\\/]',
+                    ''
+                ),
+                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}'
             )) not like query_pattern.pattern
         )
     """ if filter_query else ""

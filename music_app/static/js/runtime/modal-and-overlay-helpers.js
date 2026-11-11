@@ -597,7 +597,13 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
       problemReasons: Array.isArray(item.problem_reasons) ? item.problem_reasons : [],
-      isSearchMatch: matchesAlbumTrackSearch(state.view?.query, title, knownArtist),
+      isSearchMatch: matchesAlbumTrackSearch(
+        state.view?.query,
+        title,
+        knownArtist,
+        item.album_artist,
+        filename,
+      ),
     };
   });
 }

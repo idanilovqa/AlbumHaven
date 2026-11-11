@@ -1021,6 +1021,39 @@ test('Loose Tracks highlights current title and artist matches using the shared 
   assert.doesNotMatch(context.buildNonAlbumTrackSectionsMarkup(items), /album-track-table__row--search-match/);
 });
 
+test('Loose Tracks highlights filename and album artist matches but not folder-only text', () => {
+  const { context } = loadHelper();
+  const items = [
+    {
+      path: 'C:\\Music\\ДДТ\\folder-only.mp3',
+      filename: 'folder-only.mp3',
+      title: 'Попса',
+      artist: 'VA',
+      album_artist: 'VA',
+    },
+    {
+      path: 'C:\\Music\\Other\\ДДТ online.mp3',
+      filename: 'ДДТ online.mp3',
+      title: 'Other Song',
+      artist: 'VA',
+      album_artist: 'VA',
+    },
+    {
+      path: 'C:\\Music\\Other\\guest.mp3',
+      filename: 'guest.mp3',
+      title: 'Guest Song',
+      artist: 'VA',
+      album_artist: 'ДДТ',
+    },
+  ];
+  context.state.view.query = 'ДДТ';
+
+  assert.deepEqual(
+    Array.from(context.buildNonAlbumTrackRowsMarkup(items, 0), row => row.isSearchMatch),
+    [false, true, true],
+  );
+});
+
 function createAlbumCard(viewport, options = {}) {
   const card = new FakeElement('album-card');
   card.offsetTop = Number(options.cardTop || 0);

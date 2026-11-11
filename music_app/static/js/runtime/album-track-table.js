@@ -114,9 +114,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
-function matchesAlbumTrackSearch(query, title, secondaryArtist) {
+function matchesAlbumTrackSearch(query, ...values) {
   const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
-  return Boolean(normalizedQuery && [title, secondaryArtist]
+  return Boolean(normalizedQuery && values
     .some(value => String(value || '').toLocaleLowerCase().includes(normalizedQuery)));
 }
 

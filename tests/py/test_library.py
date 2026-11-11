@@ -886,6 +886,20 @@ def test_album_detail_track_payload_preserves_editable_genre():
     assert detail["tracks"][0]["genre"] == "Progressive Rock"
 
 
+def test_cue_track_payload_uses_opaque_segment_reference_without_a_path():
+    from music_app.services.library import _track_to_dict
+
+    track = Track(
+        path=None, title="Virtual track", duration_seconds=2,
+        cue_segment_ref="cue:logical", source_kind="external",
+    )
+
+    payload = _track_to_dict(track)
+    assert payload["path"] is None
+    assert payload["cue_segment_ref"] == "cue:logical"
+    assert payload["source_kind"] == "external"
+
+
 def test_album_preview_to_dict_cache_signature_tracks_visible_album_notes_changes():
     album = SimpleNamespace(
         key="album-1",

@@ -102,14 +102,45 @@ class PlaybackReferenceService:
         row["media_path"] = Path(resolved)
         return row
 
+    @staticmethod
+    def _segment(connection, library_id, *, track_key):
+        row = connection.execute(
+            """/* cue_issue_segment */
+            select s.track_id, s.program_id, s.media_source_id, s.start_frame, s.end_frame,
+                   m.private_path, m.sample_rate, p.revision_sha256, r.root_path
+            from library.cue_track_segments s
+            join library.local_tracks t on t.id = s.track_id
+            join library.cue_programs p on p.id = s.program_id
+            join library.cue_media_sources m on m.id = s.media_source_id
+            join library.library_roots r on r.id = m.library_root_id
+            where t.library_id = %s and t.track_key = %s
+              and p.library_id = t.library_id and p.is_active is true and p.is_valid is true
+              and m.library_id = t.library_id and r.library_id = t.library_id and r.is_active is true""",
+            (library_id, track_key),
+        ).fetchone()
+        if row is None:
+            raise PlaybackContractError(404)
+        resolved = resolve_configured_media_path(
+            {}, row["private_path"], configured_root_paths=[Path(row["root_path"])]
+        )
+        if resolved is None:
+            raise PlaybackContractError(404)
+        row["media_path"] = Path(resolved)
+        return row
+
     def issue_batch(self, actor, tracks, *, on_media=None):
         """References for [tracks]; [on_media] hears each track's media path, to prepare its stream."""
         if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
             raise PlaybackContractError()
         for track in tracks:
-            if not isinstance(track, dict) or set(track) != {"clientKey", "path"} or any(
-                not isinstance(track.get(key), str) or not track[key] or len(track[key]) > limit
-                for key, limit in (("clientKey", 128), ("path", 32768))
+            source_key = "path" if isinstance(track, dict) and "path" in track else "cueSegmentRef"
+            if (
+                not isinstance(track, dict)
+                or set(track) != {"clientKey", source_key}
+                or any(
+                    not isinstance(track.get(key), str) or not track[key] or len(track[key]) > limit
+                    for key, limit in (("clientKey", 128), (source_key, 32768))
+                )
             ):
                 raise PlaybackContractError()
         expires = self._clock() + timedelta(hours=24)
@@ -117,16 +148,36 @@ class PlaybackReferenceService:
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
             for track in tracks:
-                row = self._file(connection, library_id, path=track["path"])
+                is_segment = "cueSegmentRef" in track
+                row = (
+                    self._segment(connection, library_id, track_key=track["cueSegmentRef"])
+                    if is_segment
+                    else self._file(connection, library_id, path=track["path"])
+                )
                 if on_media is not None:
                     on_media(row["media_path"])
-                results.append({"clientKey": track["clientKey"],
-                    "playbackRef": self._reference(library_id, row["id"], expires),
-                    "resumeToken": self._sign(_RESUME_DOMAIN, [1, self._version, account_id, library_id, row["id"]])})
+                result = {
+                    "clientKey": track["clientKey"],
+                    "playbackRef": (
+                        self._segment_reference(library_id, row, expires)
+                        if is_segment else self._reference(library_id, row["id"], expires)
+                    ),
+                }
+                if not is_segment:
+                    result["resumeToken"] = self._sign(
+                        _RESUME_DOMAIN, [1, self._version, account_id, library_id, row["id"]]
+                    )
+                results.append(result)
         return {"protocol": 1, "expiresAt": expires.isoformat(), "tracks": results}
 
     def _reference(self, library_id, file_id, expires):
         return self._sign(_REFERENCE_DOMAIN, [1, self._version, library_id, file_id, int(expires.timestamp())])
+
+    def _segment_reference(self, library_id, row, expires):
+        return self._sign(_REFERENCE_DOMAIN, [
+            1, self._version, library_id, 2, row["track_id"], row["program_id"],
+            row["media_source_id"], row["start_frame"], row["end_frame"], int(expires.timestamp()),
+        ])
 
     def exchange_resume_tokens(self, actor, tracks):
         """Fresh references for tracks a native player persisted by resume token.
@@ -209,20 +260,70 @@ class PlaybackReferenceService:
 
     def resolve(self, actor, playback_ref):
         """The media file a reference names, for decoding."""
+        kind, _values = self._verified_reference(actor, playback_ref)
+        if kind == "segment":
+            return self.resolve_segment(actor, playback_ref)["source_path"]
         return self._resolve_file(actor, playback_ref)["media_path"]
+
+    def resolve_segment(self, actor, playback_ref):
+        kind, values = self._verified_reference(actor, playback_ref)
+        if kind != "segment":
+            raise PlaybackContractError(403)
+        _, _, library_id, _, track_id, program_id, media_source_id, start_frame, end_frame, _ = values
+        with self._connect(self._database_url) as connection:
+            require_playback_membership(connection, actor)
+            row = connection.execute(
+                """/* cue_resolve_segment */
+                select t.id track_id, p.id program_id, m.id media_source_id,
+                       m.private_path, m.sample_rate, p.revision_sha256, r.root_path
+                from library.local_tracks t
+                join library.cue_programs p on p.library_id = t.library_id
+                join library.cue_media_sources m on m.library_id = t.library_id
+                join library.library_roots r on r.id = m.library_root_id
+                where t.library_id = %s and t.id = %s and p.id = %s and m.id = %s
+                  and r.library_id = t.library_id and r.is_active is true""",
+                (library_id, track_id, program_id, media_source_id),
+            ).fetchone()
+            if row is None:
+                raise PlaybackContractError(404)
+            resolved = resolve_configured_media_path(
+                {}, row["private_path"], configured_root_paths=[Path(row["root_path"])]
+            )
+            if resolved is None:
+                raise PlaybackContractError(404)
+            return {
+                "source_path": Path(resolved),
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "sample_rate": row["sample_rate"],
+                "revision_sha256": row["revision_sha256"],
+                "track_id": track_id,
+            }
 
     def resolve_library_path(self, actor, playback_ref):
         """The inventory path the browser names the same track by, so listen history is identical."""
         return self._resolve_file(actor, playback_ref)["private_path"]
 
     def _resolve_file(self, actor, playback_ref):
-        _, library_id = playback_scope(actor)
-        try:
-            _, _, scope, file_id, expiry = self._verified(_REFERENCE_DOMAIN, playback_ref, 5)
-            if scope != library_id or file_id < 1 or expiry <= self._clock().timestamp():
-                raise ValueError()
-        except (ValueError, TypeError, UnicodeError):
-            raise PlaybackContractError(403) from None
+        kind, values = self._verified_reference(actor, playback_ref)
+        if kind != "file":
+            raise PlaybackContractError(403)
+        _, _, library_id, file_id, _expiry = values
         with self._connect(self._database_url) as connection:
             require_playback_membership(connection, actor)
             return self._file(connection, library_id, file_id=file_id)
+
+    def _verified_reference(self, actor, playback_ref):
+        _, library_id = playback_scope(actor)
+        for kind, length in (("segment", 10), ("file", 5)):
+            try:
+                values = self._verified(_REFERENCE_DOMAIN, playback_ref, length)
+            except (ValueError, TypeError, UnicodeError):
+                continue
+            if values[2] != library_id or values[-1] <= self._clock().timestamp():
+                continue
+            if kind == "segment" and values[3] == 2 and all(value >= 0 for value in values[4:9]):
+                return kind, values
+            if kind == "file" and values[3] > 0:
+                return kind, values
+        raise PlaybackContractError(403)

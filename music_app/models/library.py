@@ -4,7 +4,7 @@ from pathlib import Path
 
 @dataclass
 class Track:
-    path: Path
+    path: Path | None
     title: str
     track_number: int | None = None
     disc_number: int | None = None
@@ -37,6 +37,8 @@ class Track:
     library_root_id: str | None = None
     library_root_category: str | None = None
     root_provenance: dict[str, object] | None = None
+    cue_segment_ref: str | None = None
+    source_kind: str | None = None
 
 @dataclass
 class Album:

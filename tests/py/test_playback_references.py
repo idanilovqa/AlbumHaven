@@ -65,3 +65,54 @@ def test_resume_tokens_resolve_to_current_library_paths_in_one_authorized_batch(
         tokens[0]: str(paths[1]),
         tokens[1]: str(paths[0]),
     }
+
+
+def test_cue_segment_reference_resolves_an_immutable_authorized_boundary_snapshot(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    media = root / "image.flac"
+    media.touch()
+    actor = SimpleNamespace(
+        is_authenticated=True, account_id=8, current_library_id=23,
+        library_relationships=(SimpleNamespace(library_id=23),),
+    )
+
+    class Connection(_Connection):
+        def execute(self, sql, params):
+            if "library.library_memberships" in sql:
+                return _Cursor({"library_id": params[1]})
+            if "cue_issue_segment" in sql:
+                return _Cursor({
+                    "track_id": 41, "program_id": 51, "media_source_id": 61,
+                    "private_path": str(media), "root_path": str(root),
+                    "start_frame": 75, "end_frame": 225,
+                    "sample_rate": 44100, "revision_sha256": "a" * 64,
+                })
+            if "cue_resolve_segment" in sql:
+                return _Cursor({
+                    "track_id": params[1], "program_id": params[2],
+                    "media_source_id": params[3], "private_path": str(media),
+                    "root_path": str(root), "sample_rate": 44100,
+                    "revision_sha256": "a" * 64,
+                })
+            return super().execute(sql, params)
+
+    service = PlaybackReferenceService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused",
+         "hmac": {"secret": "x" * 32, "key_version": 1}},
+        connect=lambda _url: Connection([]),
+    )
+
+    issued = service.issue_batch(actor, [{"clientKey": "cue-1", "cueSegmentRef": "cue:logical"}])
+    playback_ref = issued["tracks"][0]["playbackRef"]
+
+    assert "resumeToken" not in issued["tracks"][0]
+    assert service.resolve_segment(actor, playback_ref) == {
+        "source_path": media,
+        "start_frame": 75,
+        "end_frame": 225,
+        "sample_rate": 44100,
+        "revision_sha256": "a" * 64,
+        "track_id": 41,
+    }
+    assert service.resolve(actor, playback_ref) == media

@@ -564,7 +564,7 @@ def _contextual_album_containers(
 
 def _track_to_dict(track: Track) -> dict[str, object]:
     return {
-        "path": str(track.path),
+        "path": str(track.path) if track.path is not None else None,
         "title": track.title,
         "track_number": track.track_number,
         "disc_number": track.disc_number,
@@ -594,6 +594,8 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "remote_cover_width": getattr(track, "remote_cover_width", None),
         "remote_cover_height": getattr(track, "remote_cover_height", None),
         "duration_seconds": track.duration_seconds,
+        "cue_segment_ref": getattr(track, "cue_segment_ref", None),
+        "source_kind": getattr(track, "source_kind", None),
         "track_preference_overlay": getattr(track, "track_preference_overlay", None),
         "playback_state_overlay": getattr(track, "playback_state_overlay", None),
         "track_scrobble_count": getattr(track, "track_scrobble_count", None),
